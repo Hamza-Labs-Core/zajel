@@ -9,6 +9,33 @@ env:
   FLUTTER_VERSION: '3.24.0'
 
 jobs:
+  # Run tests first - all builds depend on this
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Analyze code
+        run: flutter analyze
+
+      - name: Run tests
+        run: flutter test --coverage
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/lcov.info
+          if-no-files-found: ignore
+
   # Generate changelog from commits since last tag
   changelog:
     runs-on: ubuntu-latest
@@ -52,7 +79,7 @@ jobs:
   # Build Android APK and AAB
   build-android:
     runs-on: ubuntu-latest
-    needs: changelog
+    needs: [test, changelog]
     steps:
       - uses: actions/checkout@v4
 
@@ -90,7 +117,7 @@ jobs:
   # Build iOS
   build-ios:
     runs-on: macos-latest
-    needs: changelog
+    needs: [test, changelog]
     steps:
       - uses: actions/checkout@v4
 
@@ -121,7 +148,7 @@ jobs:
   # Build macOS
   build-macos:
     runs-on: macos-latest
-    needs: changelog
+    needs: [test, changelog]
     steps:
       - uses: actions/checkout@v4
 
@@ -165,7 +192,7 @@ jobs:
   # Build Windows
   build-windows:
     runs-on: windows-latest
-    needs: changelog
+    needs: [test, changelog]
     steps:
       - uses: actions/checkout@v4
 
@@ -193,7 +220,7 @@ jobs:
   # Build Linux
   build-linux:
     runs-on: ubuntu-latest
-    needs: changelog
+    needs: [test, changelog]
     steps:
       - uses: actions/checkout@v4
 
@@ -226,7 +253,7 @@ jobs:
 
   # Create GitHub Release with all artifacts
   release:
-    needs: [changelog, build-android, build-ios, build-macos, build-windows, build-linux]
+    needs: [test, changelog, build-android, build-ios, build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
