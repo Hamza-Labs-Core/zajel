@@ -160,6 +160,9 @@ jobs:
       - name: Enable macOS desktop
         run: flutter config --enable-macos-desktop
 
+      - name: Ensure macOS project exists
+        run: flutter create --platforms=macos .
+
       - name: Get dependencies
         run: flutter pub get
 
