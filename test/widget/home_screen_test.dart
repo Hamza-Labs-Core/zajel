@@ -311,4 +311,7 @@ class FakeSharedPreferences implements SharedPreferences {
 
   @override
   Future<void> reload() async {}
+
+  @override
+  Future<bool> commit() async => true;
 }
