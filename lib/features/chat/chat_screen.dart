@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/models/models.dart';
@@ -166,11 +167,29 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         return Column(
           children: [
             if (showDate) _buildDateDivider(message.timestamp),
-            _MessageBubble(message: message),
+            _MessageBubble(
+              message: message,
+              onOpenFile: message.attachmentPath != null
+                  ? () => _openFile(message.attachmentPath!)
+                  : null,
+            ),
           ],
         );
       },
     );
+  }
+
+  Future<void> _openFile(String filePath) async {
+    try {
+      final file = XFile(filePath);
+      await Share.shareXFiles([file]);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open file: $e')),
+        );
+      }
+    }
   }
 
   Widget _buildDateDivider(DateTime date) {
@@ -427,8 +446,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
 class _MessageBubble extends StatelessWidget {
   final Message message;
+  final VoidCallback? onOpenFile;
 
-  const _MessageBubble({required this.message});
+  const _MessageBubble({required this.message, this.onOpenFile});
 
   @override
   Widget build(BuildContext context) {
@@ -489,11 +509,13 @@ class _MessageBubble extends StatelessWidget {
   }
 
   Widget _buildFileContent(BuildContext context, bool isOutgoing) {
+    final hasFile = message.attachmentPath != null;
+
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Icon(
-          Icons.insert_drive_file,
+          hasFile ? Icons.insert_drive_file : Icons.hourglass_empty,
           color: isOutgoing ? Colors.white : null,
         ),
         const SizedBox(width: 8),
@@ -522,6 +544,17 @@ class _MessageBubble extends StatelessWidget {
             ],
           ),
         ),
+        // Show open button for received files
+        if (!isOutgoing && hasFile) ...[
+          const SizedBox(width: 8),
+          IconButton(
+            icon: const Icon(Icons.open_in_new, size: 20),
+            onPressed: onOpenFile,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ],
       ],
     );
   }

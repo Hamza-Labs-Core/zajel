@@ -12,6 +12,9 @@ import '../models/peer.dart';
 typedef OnMessageCallback = void Function(String peerId, String message);
 typedef OnFileChunkCallback = void Function(
     String peerId, String fileId, Uint8List chunk, int chunkIndex, int total);
+typedef OnFileStartCallback = void Function(
+    String peerId, String fileId, String fileName, int totalSize, int totalChunks);
+typedef OnFileCompleteCallback = void Function(String peerId, String fileId);
 typedef OnConnectionStateCallback = void Function(
     String peerId, PeerConnectionState state);
 typedef OnSignalingMessageCallback = void Function(
@@ -43,6 +46,8 @@ class WebRTCService {
   // Callbacks
   OnMessageCallback? onMessage;
   OnFileChunkCallback? onFileChunk;
+  OnFileStartCallback? onFileStart;
+  OnFileCompleteCallback? onFileComplete;
   OnConnectionStateCallback? onConnectionStateChange;
   OnSignalingMessageCallback? onSignalingMessage;
 
@@ -395,7 +400,16 @@ class WebRTCService {
       final type = json['type'] as String;
       final fileId = json['fileId'] as String;
 
-      if (type == 'file_chunk') {
+      if (type == 'file_start') {
+        // Store metadata
+        _connections[peerId]?.fileMetadata[fileId] = json;
+
+        // Notify listeners
+        final fileName = json['fileName'] as String;
+        final totalSize = json['totalSize'] as int;
+        final totalChunks = json['totalChunks'] as int;
+        onFileStart?.call(peerId, fileId, fileName, totalSize, totalChunks);
+      } else if (type == 'file_chunk') {
         final encryptedData = json['data'] as String;
         final chunkIndex = json['chunkIndex'] as int;
 
@@ -409,12 +423,16 @@ class WebRTCService {
         final totalChunks = metadata?['totalChunks'] as int? ?? 0;
 
         onFileChunk?.call(peerId, fileId, chunk, chunkIndex, totalChunks);
-      } else if (type == 'file_start') {
-        // Store metadata
-        _connections[peerId]?.fileMetadata[fileId] = json;
+      } else if (type == 'file_complete') {
+        // Notify listeners that transfer is complete
+        onFileComplete?.call(peerId, fileId);
+
+        // Clean up metadata
+        _connections[peerId]?.fileMetadata.remove(fileId);
       }
     } catch (e) {
       // Handle error
+      print('[WebRTCService] Error handling file data: $e');
     }
   }
 

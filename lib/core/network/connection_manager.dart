@@ -36,6 +36,10 @@ class ConnectionManager {
       StreamController<(String peerId, String message)>.broadcast();
   final _fileChunksController =
       StreamController<(String peerId, String fileId, Uint8List chunk, int index, int total)>.broadcast();
+  final _fileStartController =
+      StreamController<(String peerId, String fileId, String fileName, int totalSize, int totalChunks)>.broadcast();
+  final _fileCompleteController =
+      StreamController<(String peerId, String fileId)>.broadcast();
 
   StreamSubscription? _discoverySubscription;
   StreamSubscription? _signalingSubscription;
@@ -59,6 +63,14 @@ class ConnectionManager {
   /// Stream of incoming file chunks.
   Stream<(String, String, Uint8List, int, int)> get fileChunks =>
       _fileChunksController.stream;
+
+  /// Stream of file transfer starts.
+  Stream<(String, String, String, int, int)> get fileStarts =>
+      _fileStartController.stream;
+
+  /// Stream of file transfer completions.
+  Stream<(String, String)> get fileCompletes =>
+      _fileCompleteController.stream;
 
   /// Current list of peers.
   List<Peer> get currentPeers => _peers.values.toList();
@@ -246,6 +258,8 @@ class ConnectionManager {
     await _peersController.close();
     await _messagesController.close();
     await _fileChunksController.close();
+    await _fileStartController.close();
+    await _fileCompleteController.close();
   }
 
   // Private methods
@@ -257,6 +271,14 @@ class ConnectionManager {
 
     _webrtcService.onFileChunk = (peerId, fileId, chunk, index, total) {
       _fileChunksController.add((peerId, fileId, chunk, index, total));
+    };
+
+    _webrtcService.onFileStart = (peerId, fileId, fileName, totalSize, totalChunks) {
+      _fileStartController.add((peerId, fileId, fileName, totalSize, totalChunks));
+    };
+
+    _webrtcService.onFileComplete = (peerId, fileId) {
+      _fileCompleteController.add((peerId, fileId));
     };
 
     _webrtcService.onConnectionStateChange = (peerId, state) {
