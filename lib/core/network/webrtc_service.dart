@@ -432,13 +432,12 @@ class _PeerConnection {
   final RTCPeerConnection pc;
   RTCDataChannel? messageChannel;
   RTCDataChannel? fileChannel;
-  PeerConnectionState state;
+  PeerConnectionState state = PeerConnectionState.disconnected;
   Map<String, Map<String, dynamic>> fileMetadata = {};
 
   _PeerConnection({
     required this.peerId,
     required this.pc,
-    this.state = PeerConnectionState.disconnected,
   });
 }
 
