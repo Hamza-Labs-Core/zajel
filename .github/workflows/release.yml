@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 env:
-  FLUTTER_VERSION: '3.38.1'
+  FLUTTER_VERSION: '3.38.5'
 
 jobs:
   # Run tests first - all builds depend on this
