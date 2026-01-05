@@ -39,6 +39,11 @@ zajel/
 - **Maximum Privacy Mode**: Ephemeral keys, minimal metadata
 - **Zero-Knowledge Server**: Signaling server only routes WebRTC setup, never sees content
 
+## Documentation
+
+- **[User Guide](docs/USER_GUIDE.md)** - How to use Zajel, troubleshooting, FAQ
+- **[Architecture](#architecture)** - Technical overview
+
 ## Getting Started
 
 ### Prerequisites

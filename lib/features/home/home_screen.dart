@@ -250,10 +250,20 @@ class _PeerCard extends ConsumerWidget {
           ),
         ),
         trailing: isConnecting
-            ? const SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(strokeWidth: 2),
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton(
+                    onPressed: () => _cancelConnection(ref),
+                    child: const Text('Cancel'),
+                  ),
+                ],
               )
             : isConnected
                 ? IconButton(
@@ -314,6 +324,15 @@ class _PeerCard extends ConsumerWidget {
       } else {
         await connectionManager.connectToExternalPeer(peer.id);
       }
+    } catch (e) {
+      // Handle error
+    }
+  }
+
+  Future<void> _cancelConnection(WidgetRef ref) async {
+    final connectionManager = ref.read(connectionManagerProvider);
+    try {
+      await connectionManager.cancelConnection(peer.id);
     } catch (e) {
       // Handle error
     }

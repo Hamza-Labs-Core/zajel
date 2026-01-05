@@ -18,7 +18,7 @@ class DiscoveryService {
 
   final String _instanceId;
   final String _displayName;
-  final int _port;
+  int _port;
 
   BonsoirBroadcast? _broadcast;
   BonsoirDiscovery? _discovery;
@@ -45,6 +45,18 @@ class DiscoveryService {
 
   /// Our instance ID for identification.
   String get instanceId => _instanceId;
+
+  /// The port being advertised.
+  int get port => _port;
+
+  /// Update the port and restart broadcasting.
+  Future<void> updatePort(int newPort) async {
+    _port = newPort;
+    if (_isRunning) {
+      await _stopBroadcast();
+      await _startBroadcast();
+    }
+  }
 
   /// Whether the service is currently running.
   bool get isRunning => _isRunning;
@@ -184,13 +196,9 @@ class DiscoveryService {
     if (peerId == null) return;
 
     // Get resolved service details
-    String? ipAddress;
-    int port = service.port;
-
-    // Try to get the host/IP from the resolved service
-    if (service.attributes.containsKey('host')) {
-      ipAddress = service.attributes['host'];
-    }
+    // The host property is populated when the service is resolved
+    final ipAddress = service.host;
+    final port = service.port;
 
     final peer = Peer(
       id: peerId,

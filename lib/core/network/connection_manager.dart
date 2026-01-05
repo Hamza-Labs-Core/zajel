@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 import '../crypto/crypto_service.dart';
 import '../models/models.dart';
 import 'discovery_service.dart';
+import 'local_signaling_server.dart';
 import 'signaling_client.dart';
 import 'webrtc_service.dart';
 
@@ -22,6 +23,9 @@ class ConnectionManager {
   final CryptoService _cryptoService;
   final DiscoveryService _discoveryService;
   final WebRTCService _webrtcService;
+
+  LocalSignalingServer? _localSignalingServer;
+  StreamSubscription? _localSignalingSubscription;
 
   SignalingClient? _signalingClient;
   String? _externalPairingCode;
@@ -66,12 +70,26 @@ class ConnectionManager {
   Future<void> initialize() async {
     await _cryptoService.initialize();
 
+    // Start local signaling server
+    _localSignalingServer = LocalSignalingServer();
+    final signalingPort = await _localSignalingServer!.start();
+    print('[ConnectionManager] Local signaling server started on port $signalingPort');
+
+    // Update discovery service with actual signaling port
+    await _discoveryService.updatePort(signalingPort);
+
+    // Listen to local signaling messages
+    _localSignalingSubscription = _localSignalingServer!.messages.listen(_handleLocalSignalingMessage);
+
     // Listen to discovered peers
     _discoverySubscription = _discoveryService.peers.listen(_handleDiscoveredPeers);
 
     // Start local discovery
     await _discoveryService.start();
   }
+
+  /// Get the local signaling port.
+  int? get localSignalingPort => _localSignalingServer?.actualPort;
 
   /// Connect to signaling server for external connections.
   Future<String> enableExternalConnections({
@@ -108,26 +126,56 @@ class ConnectionManager {
       throw ConnectionException('Unknown peer: $peerId');
     }
 
+    if (peer.ipAddress == null || peer.port == null) {
+      throw ConnectionException('Peer $peerId has no address information');
+    }
+
     _updatePeerState(peerId, PeerConnectionState.connecting);
 
     try {
-      // Create WebRTC offer
-      // TODO: For local peers, implement direct HTTP/socket signaling
-      // to exchange offers without the external signaling server.
-      // For now, local peers can use external signaling as a fallback.
-      await _webrtcService.createOffer(peerId);
-
-      // For local peers, we need a direct signaling mechanism
-      // This could be via HTTP or a local socket
-      // For now, we'll use the WebRTC signaling callback
+      // Set up signaling callback to send messages to peer
       _webrtcService.onSignalingMessage = (targetPeerId, message) {
-        // In a full implementation, send this to the peer via local network
-        // For now, we rely on external signaling for demonstration
+        _sendLocalSignal(targetPeerId, message);
       };
+
+      // Create and send WebRTC offer
+      final offer = await _webrtcService.createOffer(peerId);
+
+      // Send offer to peer via local HTTP signaling
+      final sent = await sendLocalSignal(
+        targetHost: peer.ipAddress!,
+        targetPort: peer.port!,
+        fromPeerId: _discoveryService.instanceId,
+        type: 'offer',
+        payload: offer,
+      );
+
+      if (!sent) {
+        throw ConnectionException('Failed to send offer to peer');
+      }
+
+      print('[ConnectionManager] Sent offer to ${peer.ipAddress}:${peer.port}');
     } catch (e) {
       _updatePeerState(peerId, PeerConnectionState.failed);
       rethrow;
     }
+  }
+
+  /// Send a signaling message to a local peer.
+  Future<void> _sendLocalSignal(String peerId, Map<String, dynamic> message) async {
+    final peer = _peers[peerId];
+    if (peer == null || peer.ipAddress == null || peer.port == null) {
+      print('[ConnectionManager] Cannot send signal to $peerId: no address');
+      return;
+    }
+
+    await sendLocalSignal(
+      targetHost: peer.ipAddress!,
+      targetPort: peer.port!,
+      fromPeerId: _discoveryService.instanceId,
+      type: message['type'] as String,
+      payload: message,
+    );
   }
 
   /// Connect to an external peer using their pairing code.
@@ -180,10 +228,18 @@ class ConnectionManager {
     _updatePeerState(peerId, PeerConnectionState.disconnected);
   }
 
+  /// Cancel an ongoing connection attempt.
+  Future<void> cancelConnection(String peerId) async {
+    await _webrtcService.closeConnection(peerId);
+    _updatePeerState(peerId, PeerConnectionState.disconnected);
+  }
+
   /// Dispose resources.
   Future<void> dispose() async {
     await _discoverySubscription?.cancel();
     await _signalingSubscription?.cancel();
+    await _localSignalingSubscription?.cancel();
+    await _localSignalingServer?.dispose();
     await _discoveryService.dispose();
     await _webrtcService.dispose();
     await _signalingClient?.dispose();
@@ -206,6 +262,63 @@ class ConnectionManager {
     _webrtcService.onConnectionStateChange = (peerId, state) {
       _updatePeerState(peerId, state);
     };
+  }
+
+  /// Handle incoming local signaling messages.
+  void _handleLocalSignalingMessage(LocalSignalingMessage message) async {
+    final fromPeerId = message.fromPeerId;
+    print('[ConnectionManager] Received ${message.type} from $fromPeerId');
+
+    // Find or create peer entry
+    if (!_peers.containsKey(fromPeerId)) {
+      // Look for this peer in discovered peers by matching the ID
+      final existingPeer = _peers.values.firstWhere(
+        (p) => p.id == fromPeerId,
+        orElse: () => Peer(
+          id: fromPeerId,
+          displayName: 'Local Peer',
+          connectionState: PeerConnectionState.connecting,
+          lastSeen: DateTime.now(),
+          isLocal: true,
+        ),
+      );
+      _peers[fromPeerId] = existingPeer;
+    }
+
+    switch (message.type) {
+      case 'offer':
+        _updatePeerState(fromPeerId, PeerConnectionState.connecting);
+
+        // Set up signaling callback for response
+        _webrtcService.onSignalingMessage = (targetPeerId, msg) {
+          _sendLocalSignal(targetPeerId, msg);
+        };
+
+        // Handle offer and create answer
+        final answer = await _webrtcService.handleOffer(fromPeerId, message.payload);
+
+        // Send answer back
+        final peer = _peers[fromPeerId];
+        if (peer?.ipAddress != null && peer?.port != null) {
+          await sendLocalSignal(
+            targetHost: peer!.ipAddress!,
+            targetPort: peer.port!,
+            fromPeerId: _discoveryService.instanceId,
+            type: 'answer',
+            payload: answer,
+          );
+          print('[ConnectionManager] Sent answer to ${peer.ipAddress}:${peer.port}');
+        }
+        break;
+
+      case 'answer':
+        await _webrtcService.handleAnswer(fromPeerId, message.payload);
+        break;
+
+      case 'ice_candidate':
+        await _webrtcService.addIceCandidate(fromPeerId, message.payload);
+        break;
+    }
   }
 
   void _handleDiscoveredPeers(List<Peer> discoveredPeers) {
