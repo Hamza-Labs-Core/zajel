@@ -152,7 +152,8 @@ void main() {
       await tester.pumpWidget(createTestWidget(peers: peers));
       await tester.pump();
 
-      expect(find.text('Connect'), findsOneWidget);
+      // There may be multiple "Connect" texts (peer tile + FAB)
+      expect(find.text('Connect'), findsWidgets);
     });
 
     testWidgets('shows chat icon for connected peers', (tester) async {
