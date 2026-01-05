@@ -93,6 +93,20 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
 
+      - name: Decode keystore
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/upload-keystore.jks
+
+      - name: Create key.properties
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        run: |
+          cat > android/key.properties << EOF
+          storeFile=upload-keystore.jks
+          storePassword=${{ secrets.ANDROID_STORE_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          EOF
+
       - name: Get dependencies
         run: flutter pub get
 
@@ -114,6 +128,16 @@ jobs:
           name: android-aab
           path: build/app/outputs/bundle/release/app-release.aab
 
+      - name: Upload to Play Store (internal track)
+        if: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON != '' }}
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+          packageName: com.zajel.zajel
+          releaseFiles: build/app/outputs/bundle/release/app-release.aab
+          track: internal
+          status: draft
+
   # Build iOS
   build-ios:
     runs-on: macos-latest
@@ -126,14 +150,51 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
 
+      - name: Install Apple certificate
+        if: ${{ secrets.IOS_CERTIFICATE_BASE64 != '' }}
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ github.run_id }}
+        run: |
+          # Create variables
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          # Import certificate from secret
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
+
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # Import certificate to keychain
+          security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+      - name: Install provisioning profile
+        if: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 != '' }}
+        env:
+          PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+          echo -n "$PROVISIONING_PROFILE_BASE64" | base64 --decode -o $PP_PATH
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles
+
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Build iOS (no codesign)
-        run: flutter build ios --release --no-codesign
+      - name: Build iOS (signed for App Store)
+        if: ${{ secrets.IOS_CERTIFICATE_BASE64 != '' }}
+        run: flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
 
-      - name: Create IPA
+      - name: Build iOS (unsigned for GitHub release)
+        if: ${{ secrets.IOS_CERTIFICATE_BASE64 == '' }}
         run: |
+          flutter build ios --release --no-codesign
           cd build/ios/iphoneos
           mkdir Payload
           cp -r Runner.app Payload/
@@ -143,7 +204,22 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ios-build
-          path: zajel-ios.ipa
+          path: |
+            build/ios/ipa/*.ipa
+            zajel-ios.ipa
+          if-no-files-found: ignore
+
+      - name: Upload to TestFlight
+        if: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 != '' }}
+        env:
+          API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+          API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo -n "$API_KEY_BASE64" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_${API_KEY_ID}.p8
+          xcrun altool --upload-app -f build/ios/ipa/*.ipa -t ios \
+            --apiKey "$API_KEY_ID" --apiIssuer "$API_ISSUER_ID"
 
   # Build macOS
   build-macos:
@@ -217,11 +293,25 @@ jobs:
         run: |
           Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath zajel-windows.zip
 
+      - name: Decode certificate
+        if: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        run: |
+          $cert = [System.Convert]::FromBase64String("${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}")
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\certificate.pfx", $cert)
+
+      - name: Create MSIX
+        if: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        run: |
+          dart run msix:create --certificate-path "$env:RUNNER_TEMP\certificate.pfx" --certificate-password "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}"
+
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: zajel-windows.zip
+          path: |
+            zajel-windows.zip
+            build/windows/x64/runner/Release/*.msix
+          if-no-files-found: ignore
 
   # Build Linux
   build-linux:
@@ -281,13 +371,14 @@ jobs:
           # Android
           cp artifacts/android-apk/app-release.apk "release-files/zajel-${VERSION}-android.apk"
           cp artifacts/android-aab/app-release.aab "release-files/zajel-${VERSION}-android.aab"
-          # iOS
-          cp artifacts/ios-build/zajel-ios.ipa "release-files/zajel-${VERSION}-ios.ipa" || true
+          # iOS (try signed IPA first, then unsigned)
+          find artifacts/ios-build -name "*.ipa" -exec cp {} "release-files/zajel-${VERSION}-ios.ipa" \; 2>/dev/null || true
           # macOS
           cp artifacts/macos-build/zajel-macos.dmg "release-files/zajel-${VERSION}-macos.dmg" 2>/dev/null || \
           cp artifacts/macos-build/zajel-macos.zip "release-files/zajel-${VERSION}-macos.zip" 2>/dev/null || true
-          # Windows
+          # Windows (zip and optionally msix)
           cp artifacts/windows-build/zajel-windows.zip "release-files/zajel-${VERSION}-windows.zip"
+          find artifacts/windows-build -name "*.msix" -exec cp {} "release-files/zajel-${VERSION}-windows.msix" \; 2>/dev/null || true
           # Linux
           cp artifacts/linux-build/zajel-linux.tar.gz "release-files/zajel-${VERSION}-linux.tar.gz"
 
