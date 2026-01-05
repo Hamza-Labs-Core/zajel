@@ -58,6 +58,16 @@ final peersProvider = StreamProvider<List<Peer>>((ref) {
   return connectionManager.peers;
 });
 
+/// Provider for visible peers (excluding blocked).
+final visiblePeersProvider = Provider<AsyncValue<List<Peer>>>((ref) {
+  final peersAsync = ref.watch(peersProvider);
+  final blockedPeers = ref.watch(blockedPeersProvider);
+
+  return peersAsync.whenData((peers) {
+    return peers.where((peer) => !blockedPeers.contains(peer.id)).toList();
+  });
+});
+
 /// Provider for incoming messages.
 final messagesStreamProvider = StreamProvider<(String, String)>((ref) {
   final connectionManager = ref.watch(connectionManagerProvider);
@@ -95,6 +105,63 @@ class ChatMessagesNotifier extends StateNotifier<List<Message>> {
 
 /// Provider for the currently selected peer.
 final selectedPeerProvider = StateProvider<Peer?>((ref) => null);
+
+/// Provider for blocked peer IDs (for efficient lookup).
+final blockedPeersProvider =
+    StateNotifierProvider<BlockedPeersNotifier, Set<String>>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return BlockedPeersNotifier(prefs);
+});
+
+/// Provider for blocked peer details (id -> name mapping).
+final blockedPeerDetailsProvider = StateProvider<Map<String, String>>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  final detailsJson = prefs.getStringList('blockedPeerDetails') ?? [];
+  final Map<String, String> details = {};
+  for (final entry in detailsJson) {
+    final parts = entry.split('::');
+    if (parts.length == 2) {
+      details[parts[0]] = parts[1];
+    }
+  }
+  return details;
+});
+
+/// Notifier for managing blocked peers with persistence.
+class BlockedPeersNotifier extends StateNotifier<Set<String>> {
+  final SharedPreferences _prefs;
+
+  BlockedPeersNotifier(this._prefs) : super(_load(_prefs));
+
+  static Set<String> _load(SharedPreferences prefs) {
+    final blocked = prefs.getStringList('blockedPeers') ?? [];
+    return blocked.toSet();
+  }
+
+  Future<void> block(String peerId, {String? displayName}) async {
+    state = {...state, peerId};
+    await _prefs.setStringList('blockedPeers', state.toList());
+
+    // Store display name if provided
+    if (displayName != null) {
+      final details = _prefs.getStringList('blockedPeerDetails') ?? [];
+      details.add('$peerId::$displayName');
+      await _prefs.setStringList('blockedPeerDetails', details);
+    }
+  }
+
+  Future<void> unblock(String peerId) async {
+    state = {...state}..remove(peerId);
+    await _prefs.setStringList('blockedPeers', state.toList());
+
+    // Remove from details
+    final details = _prefs.getStringList('blockedPeerDetails') ?? [];
+    details.removeWhere((entry) => entry.startsWith('$peerId::'));
+    await _prefs.setStringList('blockedPeerDetails', details);
+  }
+
+  bool isBlocked(String peerId) => state.contains(peerId);
+}
 
 /// Provider for external connection status.
 final externalConnectionEnabledProvider = StateProvider<bool>((ref) => false);

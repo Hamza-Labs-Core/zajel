@@ -37,6 +37,7 @@ dependencies:
   permission_handler: ^11.4.0
   share_plus: ^10.1.4
   go_router: ^15.1.2
+  url_launcher: ^6.2.5
 
 dev_dependencies:
   flutter_test:

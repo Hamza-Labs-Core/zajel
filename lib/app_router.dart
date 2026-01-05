@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'features/chat/chat_screen.dart';
 import 'features/connection/connect_screen.dart';
 import 'features/home/home_screen.dart';
+import 'features/settings/blocked_peers_screen.dart';
 import 'features/settings/settings_screen.dart';
 
 /// App router configuration.
@@ -28,6 +29,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/settings',
       builder: (context, state) => const SettingsScreen(),
+    ),
+    GoRoute(
+      path: '/settings/blocked',
+      builder: (context, state) => const BlockedPeersScreen(),
     ),
   ],
   errorBuilder: (context, state) => Scaffold(

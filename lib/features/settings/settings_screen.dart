@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/providers/app_providers.dart';
 
@@ -81,6 +83,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   // TODO: Implement auto-delete
                 },
               ),
+              ListTile(
+                leading: const Icon(Icons.block),
+                title: const Text('Blocked Users'),
+                subtitle: const Text('Manage blocked peers'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push('/settings/blocked'),
+              ),
             ],
           ),
           const SizedBox(height: 24),
@@ -121,17 +130,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 leading: const Icon(Icons.code),
                 title: const Text('Source Code'),
                 subtitle: const Text('Open source and auditable'),
-                onTap: () {
-                  // TODO: Open GitHub link
-                },
+                trailing: const Icon(Icons.open_in_new),
+                onTap: () => _launchUrl('https://github.com/Hamza-Labs-Core/zajel'),
               ),
               ListTile(
                 leading: const Icon(Icons.privacy_tip_outlined),
                 title: const Text('Privacy Policy'),
                 subtitle: const Text('Your data stays on your device'),
-                onTap: () {
-                  // TODO: Show privacy policy
-                },
+                trailing: const Icon(Icons.open_in_new),
+                onTap: () => _launchUrl(
+                  'https://github.com/Hamza-Labs-Core/zajel/blob/main/PRIVACY.md',
+                ),
               ),
             ],
           ),
@@ -328,6 +337,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const SnackBar(content: Text('Keys regenerated')),
         );
       }
+    }
+  }
+
+  Future<void> _launchUrl(String urlString) async {
+    final url = Uri.parse(urlString);
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open $urlString')),
+      );
     }
   }
 

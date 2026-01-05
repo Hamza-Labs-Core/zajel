@@ -11,7 +11,7 @@ class HomeScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final peersAsync = ref.watch(peersProvider);
+    final peersAsync = ref.watch(visiblePeersProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -249,34 +249,55 @@ class _PeerCard extends ConsumerWidget {
             color: isConnected ? Colors.green : null,
           ),
         ),
-        trailing: isConnecting
-            ? Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  const SizedBox(width: 8),
-                  TextButton(
-                    onPressed: () => _cancelConnection(ref),
-                    child: const Text('Cancel'),
-                  ),
-                ],
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (isConnecting) ...[
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: () => _cancelConnection(ref),
+                child: const Text('Cancel'),
+              ),
+            ] else if (isConnected)
+              IconButton(
+                icon: const Icon(Icons.chat),
+                onPressed: () {
+                  ref.read(selectedPeerProvider.notifier).state = peer;
+                  context.push('/chat/${peer.id}');
+                },
               )
-            : isConnected
-                ? IconButton(
-                    icon: const Icon(Icons.chat),
-                    onPressed: () {
-                      ref.read(selectedPeerProvider.notifier).state = peer;
-                      context.push('/chat/${peer.id}');
-                    },
-                  )
-                : TextButton(
-                    onPressed: () => _connect(ref),
-                    child: const Text('Connect'),
+            else
+              TextButton(
+                onPressed: () => _connect(ref),
+                child: const Text('Connect'),
+              ),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert),
+              onSelected: (value) {
+                if (value == 'block') {
+                  _showBlockDialog(context, ref);
+                }
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'block',
+                  child: Row(
+                    children: [
+                      Icon(Icons.block, color: Colors.red),
+                      SizedBox(width: 8),
+                      Text('Block'),
+                    ],
                   ),
+                ),
+              ],
+            ),
+          ],
+        ),
         onTap: isConnected
             ? () {
                 ref.read(selectedPeerProvider.notifier).state = peer;
@@ -285,6 +306,44 @@ class _PeerCard extends ConsumerWidget {
             : null,
       ),
     );
+  }
+
+  Future<void> _showBlockDialog(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Block User?'),
+        content: Text(
+          'Block ${peer.displayName}? They won\'t be able to connect to you.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Block'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await ref.read(blockedPeersProvider.notifier).block(
+            peer.id,
+            displayName: peer.displayName,
+          );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${peer.displayName} blocked')),
+        );
+      }
+    }
   }
 
   Color _getStatusColor() {
