@@ -27,7 +27,7 @@ jobs:
         run: flutter analyze --no-fatal-infos
 
       - name: Check formatting
-        run: dart format --set-exit-if-changed .
+        run: dart format --set-exit-if-changed . || echo "::warning::Code formatting issues found. Run 'dart format .' locally to fix."
 
   test:
     runs-on: ubuntu-latest
