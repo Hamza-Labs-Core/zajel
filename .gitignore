@@ -27,11 +27,13 @@ migrate_working_dir/
 **/doc/api/
 **/ios/Flutter/.last_build_id
 .dart_tool/
+.flutter-plugins
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
-/build/
-/coverage/
+build/
+coverage/
+.metadata
 
 # Symbolication related
 app.*.symbols
@@ -40,9 +42,9 @@ app.*.symbols
 app.*.map.json
 
 # Android Studio will place build artifacts here
-/android/app/debug
-/android/app/profile
-/android/app/release
+**/android/app/debug
+**/android/app/profile
+**/android/app/release
 
 # Signing keys
 *.keystore
@@ -53,15 +55,34 @@ key.properties
 *.xcuserstate
 *.xcworkspace
 !*.xcworkspace/contents.xcworkspacedata
+**/Pods/
 
 # Linux/Windows build
-/linux/flutter/ephemeral/
-/windows/flutter/ephemeral/
+**/linux/flutter/ephemeral/
+**/windows/flutter/ephemeral/
 
 # Web
-/web/.last_build_id
+**/web/.last_build_id
 
 # Secrets
 .env
 .env.*
 secrets/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Cloudflare
+.wrangler/
+.dev.vars
+
+# React Router / Vite
+.react-router/
+dist/
+
+# Claude Code / Serena
+.claude/
+.serena/

@@ -1,4 +1,4 @@
-name: Release
+name: Release - App
 
 on:
   push:
@@ -9,9 +9,43 @@ env:
   FLUTTER_VERSION: '3.38.5'
 
 jobs:
+  # Check if app code changed since last tag
+  check-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      app_changed: ${{ steps.check.outputs.app_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if app files changed
+        id: check
+        run: |
+          # Get the previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          if [ -z "$PREV_TAG" ]; then
+            # First release - consider app changed
+            echo "app_changed=true" >> $GITHUB_OUTPUT
+          else
+            # Check if any files in packages/app changed
+            CHANGED=$(git diff --name-only ${PREV_TAG}..HEAD -- packages/app/ | wc -l)
+            if [ "$CHANGED" -gt 0 ]; then
+              echo "app_changed=true" >> $GITHUB_OUTPUT
+            else
+              echo "app_changed=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+
   # Run tests first - all builds depend on this
   test:
     runs-on: ubuntu-latest
+    needs: check-changes
+    if: needs.check-changes.outputs.app_changed == 'true'
+    defaults:
+      run:
+        working-directory: packages/app
     steps:
       - uses: actions/checkout@v4
 
@@ -33,12 +67,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage
-          path: coverage/lcov.info
+          path: packages/app/coverage/lcov.info
           if-no-files-found: ignore
 
   # Generate changelog from commits since last tag
   changelog:
     runs-on: ubuntu-latest
+    needs: check-changes
+    if: needs.check-changes.outputs.app_changed == 'true'
     outputs:
       changelog: ${{ steps.changelog.outputs.changelog }}
       version: ${{ steps.version.outputs.version }}
@@ -53,6 +89,9 @@ jobs:
 
       - name: Generate changelog
         id: changelog
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
           # Get the previous tag
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
@@ -72,14 +111,18 @@ jobs:
             echo ""
             echo "$COMMITS"
             echo ""
-            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${GITHUB_REF_NAME}"
+            echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${GITHUB_REF_NAME}"
             echo 'EOF'
           } >> $GITHUB_OUTPUT
 
   # Build Android APK and AAB
   build-android:
     runs-on: ubuntu-latest
-    needs: [test, changelog]
+    needs: [check-changes, test, changelog]
+    if: needs.check-changes.outputs.app_changed == 'true'
+    defaults:
+      run:
+        working-directory: packages/app
     steps:
       - uses: actions/checkout@v4
 
@@ -94,17 +137,24 @@ jobs:
           channel: 'stable'
 
       - name: Decode keystore
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
-        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/upload-keystore.jks
+        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
 
       - name: Create key.properties
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           cat > android/key.properties << EOF
           storeFile=upload-keystore.jks
-          storePassword=${{ secrets.ANDROID_STORE_PASSWORD }}
-          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
-          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          storePassword=$ANDROID_STORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
           EOF
 
       - name: Get dependencies
@@ -120,28 +170,34 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: packages/app/build/app/outputs/flutter-apk/app-release.apk
 
       - name: Upload AAB
         uses: actions/upload-artifact@v4
         with:
           name: android-aab
-          path: build/app/outputs/bundle/release/app-release.aab
+          path: packages/app/build/app/outputs/bundle/release/app-release.aab
 
       - name: Upload to Play Store (internal track)
-        if: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON != '' }}
+        if: ${{ env.PLAY_STORE_SERVICE_ACCOUNT_JSON != '' }}
         uses: r0adkll/upload-google-play@v1
+        env:
+          PLAY_STORE_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
           packageName: com.zajel.zajel
-          releaseFiles: build/app/outputs/bundle/release/app-release.aab
+          releaseFiles: packages/app/build/app/outputs/bundle/release/app-release.aab
           track: internal
           status: draft
 
   # Build iOS
   build-ios:
     runs-on: macos-latest
-    needs: [test, changelog]
+    needs: [check-changes, test, changelog]
+    if: needs.check-changes.outputs.app_changed == 'true'
+    defaults:
+      run:
+        working-directory: packages/app
     steps:
       - uses: actions/checkout@v4
 
@@ -151,9 +207,10 @@ jobs:
           channel: 'stable'
 
       - name: Install Apple certificate
-        if: ${{ secrets.IOS_CERTIFICATE_BASE64 != '' }}
+        if: ${{ env.IOS_CERTIFICATE_BASE64 != '' }}
         env:
           BUILD_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
           P12_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ github.run_id }}
         run: |
@@ -175,9 +232,10 @@ jobs:
           security list-keychain -d user -s $KEYCHAIN_PATH
 
       - name: Install provisioning profile
-        if: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 != '' }}
+        if: ${{ env.IOS_PROVISIONING_PROFILE_BASE64 != '' }}
         env:
           PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
         run: |
           PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
           echo -n "$PROVISIONING_PROFILE_BASE64" | base64 --decode -o $PP_PATH
@@ -188,11 +246,15 @@ jobs:
         run: flutter pub get
 
       - name: Build iOS (signed for App Store)
-        if: ${{ secrets.IOS_CERTIFICATE_BASE64 != '' }}
+        if: ${{ env.IOS_CERTIFICATE_BASE64 != '' }}
+        env:
+          IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
         run: flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
 
       - name: Build iOS (unsigned for GitHub release)
-        if: ${{ secrets.IOS_CERTIFICATE_BASE64 == '' }}
+        if: ${{ env.IOS_CERTIFICATE_BASE64 == '' }}
+        env:
+          IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
         run: |
           flutter build ios --release --no-codesign
           cd build/ios/iphoneos
@@ -205,14 +267,15 @@ jobs:
         with:
           name: ios-build
           path: |
-            build/ios/ipa/*.ipa
-            zajel-ios.ipa
+            packages/app/build/ios/ipa/*.ipa
+            packages/app/zajel-ios.ipa
           if-no-files-found: ignore
 
       - name: Upload to TestFlight
-        if: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 != '' }}
+        if: ${{ env.APP_STORE_CONNECT_API_KEY_BASE64 != '' }}
         env:
           API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
           API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
         run: |
@@ -224,7 +287,11 @@ jobs:
   # Build macOS
   build-macos:
     runs-on: macos-latest
-    needs: [test, changelog]
+    needs: [check-changes, test, changelog]
+    if: needs.check-changes.outputs.app_changed == 'true'
+    defaults:
+      run:
+        working-directory: packages/app
     steps:
       - uses: actions/checkout@v4
 
@@ -267,14 +334,18 @@ jobs:
         with:
           name: macos-build
           path: |
-            zajel-macos.dmg
-            zajel-macos.zip
+            packages/app/zajel-macos.dmg
+            packages/app/zajel-macos.zip
           if-no-files-found: ignore
 
   # Build Windows
   build-windows:
     runs-on: windows-latest
-    needs: [test, changelog]
+    needs: [check-changes, test, changelog]
+    if: needs.check-changes.outputs.app_changed == 'true'
+    defaults:
+      run:
+        working-directory: packages/app
     steps:
       - uses: actions/checkout@v4
 
@@ -294,29 +365,38 @@ jobs:
           Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath zajel-windows.zip
 
       - name: Decode certificate
-        if: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
         run: |
-          $cert = [System.Convert]::FromBase64String("${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}")
+          $cert = [System.Convert]::FromBase64String("$env:WINDOWS_CERTIFICATE_BASE64")
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\certificate.pfx", $cert)
 
       - name: Create MSIX
-        if: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
-          dart run msix:create --certificate-path "$env:RUNNER_TEMP\certificate.pfx" --certificate-password "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}"
+          dart run msix:create --certificate-path "$env:RUNNER_TEMP\certificate.pfx" --certificate-password "$env:WINDOWS_CERTIFICATE_PASSWORD"
 
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
           path: |
-            zajel-windows.zip
-            build/windows/x64/runner/Release/*.msix
+            packages/app/zajel-windows.zip
+            packages/app/build/windows/x64/runner/Release/*.msix
           if-no-files-found: ignore
 
   # Build Linux
   build-linux:
     runs-on: ubuntu-latest
-    needs: [test, changelog]
+    needs: [check-changes, test, changelog]
+    if: needs.check-changes.outputs.app_changed == 'true'
+    defaults:
+      run:
+        working-directory: packages/app
     steps:
       - uses: actions/checkout@v4
 
@@ -324,6 +404,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libsecret-1-dev
+        working-directory: .
 
       - uses: subosito/flutter-action@v2
         with:
@@ -345,12 +426,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-build
-          path: zajel-linux.tar.gz
+          path: packages/app/zajel-linux.tar.gz
 
   # Create GitHub Release with all artifacts
   release:
-    needs: [test, changelog, build-android, build-ios, build-macos, build-windows, build-linux]
-    if: ${{ always() && needs.test.result == 'success' && needs.changelog.result == 'success' }}
+    needs: [check-changes, test, changelog, build-android, build-ios, build-macos, build-windows, build-linux]
+    if: ${{ always() && needs.check-changes.outputs.app_changed == 'true' && needs.test.result == 'success' && needs.changelog.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -392,3 +473,12 @@ jobs:
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Skip notification when no app changes
+  skip-release:
+    runs-on: ubuntu-latest
+    needs: check-changes
+    if: needs.check-changes.outputs.app_changed == 'false'
+    steps:
+      - name: No app changes
+        run: echo "Skipping release - no changes in packages/app since last tag"

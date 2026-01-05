@@ -1,0 +1,22 @@
+{
+  "name": "zajel-signaling",
+  "version": "1.0.0",
+  "description": "Zajel WebRTC signaling server (Cloudflare Worker)",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  },
+  "keywords": [
+    "zajel",
+    "webrtc",
+    "signaling",
+    "cloudflare-workers"
+  ],
+  "license": "MIT"
+}
