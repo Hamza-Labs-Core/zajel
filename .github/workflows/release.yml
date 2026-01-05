@@ -157,6 +157,9 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
 
+      - name: Enable macOS desktop
+        run: flutter config --enable-macos-desktop
+
       - name: Get dependencies
         run: flutter pub get
 
@@ -254,6 +257,7 @@ jobs:
   # Create GitHub Release with all artifacts
   release:
     needs: [test, changelog, build-android, build-ios, build-macos, build-windows, build-linux]
+    if: ${{ always() && needs.test.result == 'success' && needs.changelog.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
