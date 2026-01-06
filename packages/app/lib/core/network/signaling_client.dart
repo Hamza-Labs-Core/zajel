@@ -115,6 +115,13 @@ class SignalingClient {
     });
   }
 
+  /// Send a generic message to the signaling server.
+  ///
+  /// Used by RelayClient for load reporting and other relay-specific messages.
+  Future<void> send(Map<String, dynamic> message) async {
+    _send(message);
+  }
+
   /// Dispose resources.
   Future<void> dispose() async {
     await disconnect();

@@ -43,6 +43,39 @@ class CryptoService {
     return base64Encode(bytes);
   }
 
+  /// Get our public key as raw bytes.
+  Future<Uint8List> getPublicKeyBytes() async {
+    if (_identityKeyPair == null) {
+      await _loadOrGenerateIdentityKeys();
+    }
+    final publicKey = await _identityKeyPair!.extractPublicKey();
+    return Uint8List.fromList(publicKey.bytes);
+  }
+
+  /// Get session key bytes for a peer (for deriving meeting points).
+  ///
+  /// Returns null if no session is established with the peer.
+  Future<Uint8List?> getSessionKeyBytes(String peerId) async {
+    final sessionKey = await _getSessionKey(peerId);
+    if (sessionKey == null) return null;
+    final bytes = await sessionKey.extractBytes();
+    return Uint8List.fromList(bytes);
+  }
+
+  /// Encrypt data specifically for a peer using their session key.
+  ///
+  /// This is an alias for [encrypt] with a different name for clarity.
+  Future<String> encryptForPeer(String peerId, String plaintext) async {
+    return encrypt(peerId, plaintext);
+  }
+
+  /// Decrypt data from a specific peer using their session key.
+  ///
+  /// This is an alias for [decrypt] with a different name for clarity.
+  Future<String> decryptFromPeer(String peerId, String ciphertextBase64) async {
+    return decrypt(peerId, ciphertextBase64);
+  }
+
   /// Perform X25519 key exchange with a peer's public key.
   ///
   /// Returns a base64-encoded shared secret suitable for deriving session keys.

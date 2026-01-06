@@ -5,8 +5,14 @@ import '../crypto/crypto_service.dart';
 import '../models/models.dart';
 import '../network/connection_manager.dart';
 import '../network/discovery_service.dart';
+import '../network/meeting_point_service.dart';
+import '../network/peer_reconnection_service.dart';
+import '../network/relay_client.dart';
+import '../network/signaling_client.dart';
 import '../network/webrtc_service.dart';
 import '../storage/file_receive_service.dart';
+import '../storage/trusted_peers_storage.dart';
+import '../storage/trusted_peers_storage_impl.dart';
 
 /// Provider for shared preferences.
 final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
@@ -37,6 +43,48 @@ final discoveryServiceProvider = Provider<DiscoveryService>((ref) {
 final webrtcServiceProvider = Provider<WebRTCService>((ref) {
   final cryptoService = ref.watch(cryptoServiceProvider);
   return WebRTCService(cryptoService: cryptoService);
+});
+
+/// Provider for trusted peers storage.
+final trustedPeersStorageProvider = Provider<TrustedPeersStorage>((ref) {
+  return SecureTrustedPeersStorage();
+});
+
+/// Provider for meeting point service.
+final meetingPointServiceProvider = Provider<MeetingPointService>((ref) {
+  return MeetingPointService();
+});
+
+/// Provider for the signaling client (created lazily when external connections are enabled).
+final signalingClientProvider = StateProvider<SignalingClient?>((ref) => null);
+
+/// Provider for relay client (created lazily when signaling is connected).
+final relayClientProvider = Provider<RelayClient?>((ref) {
+  final signalingClient = ref.watch(signalingClientProvider);
+  if (signalingClient == null) return null;
+
+  final webrtcService = ref.watch(webrtcServiceProvider);
+  return RelayClient(
+    webrtcService: webrtcService,
+    signalingClient: signalingClient,
+  );
+});
+
+/// Provider for peer reconnection service (created lazily when relay is available).
+final peerReconnectionServiceProvider = Provider<PeerReconnectionService?>((ref) {
+  final relayClient = ref.watch(relayClientProvider);
+  if (relayClient == null) return null;
+
+  final cryptoService = ref.watch(cryptoServiceProvider);
+  final trustedPeers = ref.watch(trustedPeersStorageProvider);
+  final meetingPointService = ref.watch(meetingPointServiceProvider);
+
+  return PeerReconnectionService(
+    cryptoService: cryptoService,
+    trustedPeers: trustedPeers,
+    meetingPointService: meetingPointService,
+    relayClient: relayClient,
+  );
 });
 
 /// Provider for connection manager.
