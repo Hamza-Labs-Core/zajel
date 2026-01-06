@@ -6,12 +6,18 @@ compatibility_date = "2024-01-01"
 # Durable Objects for WebSocket state management
 [durable_objects]
 bindings = [
-  { name = "SIGNALING_ROOM", class_name = "SignalingRoom" }
+  { name = "SIGNALING_ROOM", class_name = "SignalingRoom" },
+  { name = "RELAY_REGISTRY", class_name = "RelayRegistryDO" }
 ]
 
+# Migrations for Durable Objects
 [[migrations]]
 tag = "v1"
 new_classes = ["SignalingRoom"]
+
+[[migrations]]
+tag = "v2"
+new_classes = ["RelayRegistryDO"]
 
 # Development settings
 [dev]
