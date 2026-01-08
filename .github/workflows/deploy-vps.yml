@@ -136,6 +136,19 @@ jobs:
               pm2 start dist/index.js --name zajel-server --max-memory-restart 512M --exp-backoff-restart-delay=100
             fi
             pm2 save
-            sleep 5
-            curl -sf http://localhost:9000/health || exit 1
-            echo "Deployment successful!"
+
+            # Wait for server to be ready (retry up to 30 seconds)
+            echo "Waiting for server to start..."
+            for i in {1..6}; do
+              if curl -sf http://localhost:9000/health; then
+                echo "Health check passed!"
+                exit 0
+              fi
+              echo "Attempt $i failed, waiting 5 seconds..."
+              sleep 5
+            done
+
+            # If we get here, show logs and fail
+            echo "Health check failed after 30 seconds"
+            pm2 logs zajel-server --lines 50 --nostream
+            exit 1
