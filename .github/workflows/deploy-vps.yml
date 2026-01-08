@@ -64,7 +64,7 @@ jobs:
           name: server-vps-dist
           path: deploy
 
-      - name: Deploy to server
+      - name: Setup server environment
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -73,7 +73,35 @@ jobs:
           port: ${{ secrets.VPS_PORT }}
           script: |
             set -e
-            mkdir -p /opt/zajel/server-vps
+
+            # Install Node.js 20 if not present
+            if ! command -v node &> /dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
+              echo "Installing Node.js 20..."
+              curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+              sudo apt-get install -y nodejs
+            fi
+            echo "Node.js version: $(node -v)"
+
+            # Install PM2 if not present
+            if ! command -v pm2 &> /dev/null; then
+              echo "Installing PM2..."
+              sudo npm install -g pm2
+            fi
+            echo "PM2 version: $(pm2 -v)"
+
+            # Setup app directory
+            sudo mkdir -p /opt/zajel/server-vps
+            sudo chown -R $USER:$USER /opt/zajel
+
+      - name: Prepare deployment
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            set -e
             cd /opt/zajel/server-vps
             if [ -d "dist" ]; then
               rm -rf dist.backup
