@@ -1,0 +1,113 @@
+name: Deploy VPS Server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/server-vps/**'
+      - '.github/workflows/deploy-vps.yml'
+  workflow_dispatch:
+    inputs:
+      server:
+        description: 'Server to deploy to (all, srv1, srv2, srv3)'
+        required: false
+        default: 'all'
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: packages/server-vps/package-lock.json
+
+      - name: Install dependencies
+        working-directory: packages/server-vps
+        run: npm ci
+
+      - name: Run tests
+        working-directory: packages/server-vps
+        run: npm test -- --run
+
+      - name: Build
+        working-directory: packages/server-vps
+        run: npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-vps-dist
+          path: |
+            packages/server-vps/dist
+            packages/server-vps/package.json
+            packages/server-vps/package-lock.json
+            packages/server-vps/migrations
+          retention-days: 1
+
+  deploy-srv1:
+    needs: build
+    runs-on: ubuntu-latest
+    if: inputs.server == 'all' || inputs.server == 'srv1' || inputs.server == ''
+    environment: production-srv1
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: server-vps-dist
+          path: deploy
+
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            set -e
+            mkdir -p /opt/zajel/server-vps
+            cd /opt/zajel/server-vps
+            if [ -d "dist" ]; then
+              rm -rf dist.backup
+              mv dist dist.backup
+            fi
+
+      - name: Copy files to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          source: "deploy/*"
+          target: "/opt/zajel/server-vps"
+          strip_components: 1
+
+      - name: Start server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            set -e
+            cd /opt/zajel/server-vps
+            npm ci --production
+            if pm2 describe zajel-server > /dev/null 2>&1; then
+              pm2 restart zajel-server
+            else
+              pm2 start dist/index.js --name zajel-server --max-memory-restart 512M --exp-backoff-restart-delay=100
+            fi
+            pm2 save
+            sleep 5
+            curl -sf http://localhost:9000/health || exit 1
+            echo "Deployment successful!"
