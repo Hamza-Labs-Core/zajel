@@ -136,11 +136,7 @@ jobs:
             npm ci --omit=dev
 
             # Create .env file (overwrite to ensure correct format)
-            cat > .env << 'ENVFILE'
-ZAJEL_PORT=9000
-ZAJEL_KEY_PATH=./data/server.key
-ZAJEL_DB_PATH=./data/zajel.db
-ENVFILE
+            printf 'ZAJEL_PORT=9000\nZAJEL_KEY_PATH=./data/server.key\nZAJEL_DB_PATH=./data/zajel.db\n' > .env
 
             echo "=== .env file contents ==="
             cat .env
