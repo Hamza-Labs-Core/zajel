@@ -156,6 +156,15 @@ jobs:
 
             # Check PM2 status
             pm2 list
+            sleep 2
+            pm2 list
+
+            # Check if process crashed
+            if ! pm2 show zajel-server | grep -q "online"; then
+              echo "Server crashed! Showing logs:"
+              pm2 logs zajel-server --lines 100 --nostream
+              exit 1
+            fi
 
             # Wait for server to be ready (retry up to 30 seconds)
             echo "Waiting for server to start..."
