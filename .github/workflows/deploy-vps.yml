@@ -135,45 +135,24 @@ jobs:
 
             npm ci --omit=dev
 
-            # Create .env file (overwrite to ensure correct format)
-            printf 'ZAJEL_PORT=9000\nZAJEL_KEY_PATH=./data/server.key\nZAJEL_DB_PATH=./data/zajel.db\n' > .env
-
-            echo "=== .env file contents ==="
-            cat .env
-            echo "=========================="
-
-            echo "=== Directory contents ==="
-            ls -la
-            ls -la dist/ || echo "No dist directory!"
-            echo "=========================="
-
-            # Check if port is in use
-            echo "=== Checking port 9000 ==="
-            netstat -tlnp 2>/dev/null | grep 9000 || echo "Port 9000 is free"
-            echo "=========================="
+            # Create startup script with embedded env vars
+            printf '#!/bin/bash\nexport ZAJEL_PORT=9000\nexport ZAJEL_KEY_PATH=./data/server.key\nexport ZAJEL_DB_PATH=./data/zajel.db\ncd /opt/zajel/server-vps\nexec node dist/index.js\n' > start.sh
+            chmod +x start.sh
+            cat start.sh
 
             # Stop existing if running
             pm2 delete zajel-server 2>/dev/null || true
 
-            # Test run the server directly first (timeout after 5s)
-            echo "=== Testing server startup directly ==="
-            timeout 5s node dist/index.js 2>&1 || true
-            echo "=== End direct test ==="
-
-            # Now start with PM2
-            pm2 start dist/index.js --name zajel-server \
-              --cwd /opt/zajel/server-vps \
-              --max-memory-restart 512M \
-              --exp-backoff-restart-delay=100
+            # Start with PM2 using the wrapper script
+            pm2 start start.sh --name zajel-server --interpreter bash --cwd /opt/zajel/server-vps --max-memory-restart 512M --exp-backoff-restart-delay=100
             pm2 save
 
             # Check PM2 status
             pm2 list
             sleep 3
-            pm2 list
 
-            # Check port again
-            echo "=== Checking port 9000 after PM2 start ==="
+            # Check port
+            echo "=== Checking port 9000 ==="
             netstat -tlnp 2>/dev/null | grep 9000 || ss -tlnp | grep 9000 || echo "Port 9000 not listening"
             echo "=========================="
 
@@ -182,17 +161,16 @@ jobs:
             for i in {1..6}; do
               if curl -sf http://localhost:9000/health; then
                 echo "Health check passed!"
+                pm2 logs zajel-server --lines 20 --nostream || true
                 exit 0
               fi
               echo "Attempt $i failed, waiting 5 seconds..."
-              pm2 logs zajel-server --lines 10 --nostream 2>/dev/null || true
+              pm2 logs zajel-server --lines 5 --nostream 2>/dev/null || true
               sleep 5
             done
 
             # If we get here, show logs and fail
             echo "Health check failed after 30 seconds"
-            echo "=== Full PM2 logs ==="
             pm2 logs zajel-server --lines 100 --nostream
-            echo "=== PM2 show details ==="
             pm2 show zajel-server
             exit 1
