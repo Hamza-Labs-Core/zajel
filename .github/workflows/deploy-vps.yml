@@ -129,13 +129,33 @@ jobs:
           script: |
             set -e
             cd /opt/zajel/server-vps
+
+            # Create data directory
+            mkdir -p data
+
             npm ci --production
-            if pm2 describe zajel-server > /dev/null 2>&1; then
-              pm2 restart zajel-server
-            else
-              pm2 start dist/index.js --name zajel-server --max-memory-restart 512M --exp-backoff-restart-delay=100
+
+            # Create .env file if it doesn't exist
+            if [ ! -f .env ]; then
+              cat > .env << 'ENVFILE'
+            ZAJEL_PORT=9000
+            ZAJEL_KEY_PATH=./data/server.key
+            ZAJEL_DB_PATH=./data/zajel.db
+            ENVFILE
             fi
+
+            # Stop existing if running
+            pm2 delete zajel-server 2>/dev/null || true
+
+            # Start fresh with current directory as cwd
+            pm2 start dist/index.js --name zajel-server \
+              --cwd /opt/zajel/server-vps \
+              --max-memory-restart 512M \
+              --exp-backoff-restart-delay=100
             pm2 save
+
+            # Check PM2 status
+            pm2 list
 
             # Wait for server to be ready (retry up to 30 seconds)
             echo "Waiting for server to start..."
