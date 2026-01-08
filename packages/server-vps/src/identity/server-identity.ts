@@ -176,6 +176,20 @@ export async function loadOrGenerateIdentity(
 }
 
 /**
+ * Encode bytes to base64 string
+ */
+export function base64Encode(data: Uint8Array): string {
+  return Buffer.from(data).toString('base64');
+}
+
+/**
+ * Decode base64 string to bytes
+ */
+export function base64Decode(data: string): Uint8Array {
+  return new Uint8Array(Buffer.from(data, 'base64'));
+}
+
+/**
  * Create a signature payload for server-to-server authentication
  */
 export function createAuthPayload(
