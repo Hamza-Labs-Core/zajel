@@ -13,6 +13,7 @@ import { loadConfig, type ServerConfig } from './config.js';
 import { loadOrGenerateIdentity, type ServerIdentity } from './identity/server-identity.js';
 import { SQLiteStorage } from './storage/sqlite.js';
 import { FederationManager, type FederationConfig } from './federation/federation-manager.js';
+import { createBootstrapClient, type BootstrapClient } from './federation/bootstrap-client.js';
 import { RelayRegistry } from './registry/relay-registry.js';
 import { RendezvousRegistry } from './registry/rendezvous-registry.js';
 import { DistributedRendezvous } from './registry/distributed-rendezvous.js';
@@ -22,6 +23,7 @@ export interface ZajelServer {
   httpServer: HttpServer;
   wss: WebSocketServer;
   federation: FederationManager;
+  bootstrap: BootstrapClient;
   clientHandler: ClientHandler;
   config: ServerConfig;
   identity: ServerIdentity;
@@ -52,6 +54,9 @@ export async function createZajelServer(
   );
   console.log(`[Zajel] Server ID: ${identity.serverId}`);
   console.log(`[Zajel] Node ID: ${identity.nodeId}`);
+
+  // Create bootstrap client for CF Workers discovery
+  const bootstrap = createBootstrapClient(config, identity);
 
   // Create HTTP server
   const httpServer = createServer((req, res) => {
@@ -204,9 +209,29 @@ export async function createZajelServer(
     });
   });
 
+  // Register with CF Workers bootstrap server and get peers
+  try {
+    await bootstrap.register();
+    const discoveredPeers = await bootstrap.getServers();
+    if (discoveredPeers.length > 0) {
+      console.log(`[Zajel] Discovered ${discoveredPeers.length} peers from bootstrap server`);
+      // Add discovered peers to federation config
+      for (const peer of discoveredPeers) {
+        if (!federationConfig.bootstrap.nodes.includes(peer.endpoint)) {
+          federationConfig.bootstrap.nodes.push(peer.endpoint);
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('[Zajel] Bootstrap registration failed, continuing without:', error);
+  }
+
   // Start federation
   await federation.start(federationWss);
   console.log('[Zajel] Federation started');
+
+  // Start bootstrap heartbeat
+  bootstrap.startHeartbeat();
 
   // Set up cleanup interval
   const cleanupInterval = setInterval(async () => {
@@ -247,6 +272,10 @@ export async function createZajelServer(
 
     clearInterval(cleanupInterval);
 
+    // Stop bootstrap heartbeat and unregister
+    bootstrap.stopHeartbeat();
+    await bootstrap.unregister();
+
     await clientHandler.shutdown();
     await federation.shutdown();
 
@@ -275,6 +304,7 @@ export async function createZajelServer(
     httpServer,
     wss,
     federation,
+    bootstrap,
     clientHandler,
     config,
     identity,

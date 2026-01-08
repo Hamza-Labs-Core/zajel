@@ -22,7 +22,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   void initState() {
     super.initState();
     _displayNameController.text = ref.read(displayNameProvider);
-    _serverUrlController.text = ref.read(signalingServerUrlProvider);
+    _serverUrlController.text = ref.read(bootstrapServerUrlProvider);
   }
 
   @override
@@ -108,11 +108,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 value: externalEnabled,
                 onChanged: (value) => _toggleExternalConnections(value),
               ),
+              _buildSelectedServerTile(),
               ListTile(
                 leading: const Icon(Icons.dns),
-                title: const Text('Signaling Server'),
-                subtitle: Text(ref.watch(signalingServerUrlProvider)),
-                onTap: () => _showServerUrlDialog(context),
+                title: const Text('Bootstrap Server'),
+                subtitle: Text(ref.watch(bootstrapServerUrlProvider)),
+                onTap: () => _showBootstrapUrlDialog(context),
               ),
             ],
           ),
@@ -241,21 +242,57 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
-  Future<void> _showServerUrlDialog(BuildContext context) async {
-    _serverUrlController.text = ref.read(signalingServerUrlProvider);
+  Widget _buildSelectedServerTile() {
+    final selectedServer = ref.watch(selectedServerProvider);
+    final externalEnabled = ref.watch(externalConnectionEnabledProvider);
+
+    if (!externalEnabled || selectedServer == null) {
+      return const SizedBox.shrink();
+    }
+
+    return ListTile(
+      leading: const Icon(Icons.cloud_done),
+      title: const Text('Connected Server'),
+      subtitle: Text(
+        '${selectedServer.region} - ${selectedServer.endpoint}',
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
+
+  Future<void> _showBootstrapUrlDialog(BuildContext context) async {
+    _serverUrlController.text = ref.read(bootstrapServerUrlProvider);
 
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Signaling Server'),
-        content: TextField(
-          controller: _serverUrlController,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'wss://your-server.com',
-          ),
+        title: const Text('Bootstrap Server'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'The bootstrap server helps discover available VPS servers. '
+              'Only change this if you know what you\'re doing.',
+              style: TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _serverUrlController,
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: 'https://bootstrap.example.com',
+              ),
+            ),
+          ],
         ),
         actions: [
+          TextButton(
+            onPressed: () {
+              _serverUrlController.text = defaultBootstrapUrl;
+            },
+            child: const Text('Reset'),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Cancel'),
@@ -271,9 +308,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
 
     if (result != null && result.isNotEmpty) {
-      ref.read(signalingServerUrlProvider.notifier).state = result;
+      ref.read(bootstrapServerUrlProvider.notifier).state = result;
       final prefs = ref.read(sharedPreferencesProvider);
-      await prefs.setString('signalingServerUrl', result);
+      await prefs.setString('bootstrapServerUrl', result);
     }
   }
 
@@ -282,7 +319,25 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
     if (enabled) {
       try {
-        final serverUrl = ref.read(signalingServerUrlProvider);
+        // Discover and select a VPS server
+        final discoveryService = ref.read(serverDiscoveryServiceProvider);
+        final selectedServer = await discoveryService.selectServer();
+
+        if (selectedServer == null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('No servers available. Please try again later.')),
+            );
+          }
+          return;
+        }
+
+        // Store the selected server
+        ref.read(selectedServerProvider.notifier).state = selectedServer;
+
+        // Get the WebSocket URL for the selected server
+        final serverUrl = discoveryService.getWebSocketUrl(selectedServer);
+
         final code = await connectionManager.enableExternalConnections(
           serverUrl: serverUrl,
         );
@@ -299,6 +354,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       await connectionManager.disableExternalConnections();
       ref.read(externalConnectionEnabledProvider.notifier).state = false;
       ref.read(pairingCodeProvider.notifier).state = null;
+      ref.read(selectedServerProvider.notifier).state = null;
     }
   }
 

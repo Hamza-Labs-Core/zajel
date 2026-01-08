@@ -229,7 +229,9 @@ export interface ServerConfig {
     region?: string;
   };
   bootstrap: {
-    nodes: string[];
+    serverUrl: string;          // CF Workers bootstrap server URL
+    heartbeatInterval: number;  // How often to ping CF
+    nodes: string[];            // Legacy: direct peer nodes
     retryInterval: number;
     maxRetries: number;
   };

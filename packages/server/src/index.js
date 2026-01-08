@@ -1,30 +1,26 @@
 /**
- * Zajel Signaling Server - Cloudflare Worker
+ * Zajel Bootstrap Server - Cloudflare Worker
  *
- * A WebSocket server that facilitates WebRTC connection establishment
- * and provides relay/rendezvous services for peer discovery.
+ * A simple server registry that helps VPS servers discover each other.
+ * This is the ONLY purpose of the CF Worker - all client functionality
+ * is handled by the federated VPS servers.
  *
- * This server:
- * - Manages relay peer registration and load balancing
- * - Provides meeting point (rendezvous) services for peer discovery
- * - Routes SDP offers/answers between peers
- * - Routes ICE candidates
- * - Never sees actual message content (end-to-end encrypted)
- * - Uses Durable Objects for stateful WebSocket management
+ * Endpoints:
+ * - POST /servers - Register a VPS server
+ * - GET /servers - List all active VPS servers
+ * - DELETE /servers/:id - Unregister a server
+ * - POST /servers/heartbeat - Keep-alive for registered servers
  */
 
-// Export Durable Objects
-export { SignalingRoom } from './signaling-room.js';
-export { RelayRegistryDO } from './durable-objects/relay-registry-do.js';
+export { ServerRegistryDO } from './durable-objects/server-registry-do.js';
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // CORS headers for all responses
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
     };
 
@@ -38,7 +34,7 @@ export default {
       return new Response(
         JSON.stringify({
           status: 'ok',
-          service: 'zajel-signaling',
+          service: 'zajel-bootstrap',
           timestamp: new Date().toISOString(),
         }),
         {
@@ -51,23 +47,19 @@ export default {
     }
 
     // API info
-    if (url.pathname === '/api/info') {
+    if (url.pathname === '/' || url.pathname === '/api/info') {
       return new Response(
         JSON.stringify({
-          name: 'Zajel Signaling Server',
-          version: '2.0.0',
+          name: 'Zajel Bootstrap Server',
+          version: '3.0.0',
+          description: 'VPS server discovery service',
           endpoints: {
-            websocket: '/ws',
-            relay: '/relay',
-            health: '/health',
-            stats: '/stats',
+            health: 'GET /health',
+            listServers: 'GET /servers',
+            registerServer: 'POST /servers',
+            unregisterServer: 'DELETE /servers/:serverId',
+            heartbeat: 'POST /servers/heartbeat',
           },
-          features: [
-            'relay-registry',
-            'rendezvous-points',
-            'dead-drops',
-            'webrtc-signaling',
-          ],
         }),
         {
           headers: {
@@ -78,49 +70,23 @@ export default {
       );
     }
 
-    // Stats endpoint - proxy to Durable Object
-    if (url.pathname === '/stats') {
-      const id = env.RELAY_REGISTRY.idFromName('global');
-      const stub = env.RELAY_REGISTRY.get(id);
-      const statsUrl = new URL(request.url);
-      statsUrl.pathname = '/stats';
-      return stub.fetch(statsUrl.toString());
-    }
-
-    // WebSocket upgrade for relay registry (includes rendezvous)
-    if (url.pathname === '/relay' || url.pathname === '/ws') {
-      const upgradeHeader = request.headers.get('Upgrade');
-      if (upgradeHeader !== 'websocket') {
-        return new Response('Expected WebSocket', { status: 426 });
-      }
-
-      // Use a single Durable Object instance for all connections
-      const id = env.RELAY_REGISTRY.idFromName('global');
-      const stub = env.RELAY_REGISTRY.get(id);
-
+    // All /servers/* routes go to the ServerRegistry Durable Object
+    if (url.pathname.startsWith('/servers')) {
+      const id = env.SERVER_REGISTRY.idFromName('global');
+      const stub = env.SERVER_REGISTRY.get(id);
       return stub.fetch(request);
     }
 
-    // Legacy signaling room support (for backward compatibility)
-    if (url.pathname === '/signaling') {
-      const upgradeHeader = request.headers.get('Upgrade');
-      if (upgradeHeader !== 'websocket') {
-        return new Response('Expected WebSocket', { status: 426 });
-      }
-
-      const id = env.SIGNALING_ROOM.idFromName('global');
-      const room = env.SIGNALING_ROOM.get(id);
-
-      return room.fetch(request);
-    }
-
-    // Default response
+    // Default - not found
     return new Response(
-      'Zajel Signaling Server. Connect via WebSocket at /ws or /relay',
+      JSON.stringify({
+        error: 'Not Found',
+        hint: 'Use GET /servers to list VPS servers',
+      }),
       {
-        status: 200,
+        status: 404,
         headers: {
-          'Content-Type': 'text/plain',
+          'Content-Type': 'application/json',
           ...corsHeaders,
         },
       }

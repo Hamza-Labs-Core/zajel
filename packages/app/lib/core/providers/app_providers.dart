@@ -8,6 +8,7 @@ import '../network/discovery_service.dart';
 import '../network/meeting_point_service.dart';
 import '../network/peer_reconnection_service.dart';
 import '../network/relay_client.dart';
+import '../network/server_discovery_service.dart';
 import '../network/signaling_client.dart';
 import '../network/webrtc_service.dart';
 import '../storage/file_receive_service.dart';
@@ -214,10 +215,39 @@ class BlockedPeersNotifier extends StateNotifier<Set<String>> {
 /// Provider for external connection status.
 final externalConnectionEnabledProvider = StateProvider<bool>((ref) => false);
 
-/// Provider for the signaling server URL.
-final signalingServerUrlProvider = StateProvider<String>((ref) {
+/// Default bootstrap server URL (CF Workers).
+const defaultBootstrapUrl = 'https://zajel-signaling.mahmoud-s-darwish.workers.dev';
+
+/// Provider for the bootstrap server URL.
+final bootstrapServerUrlProvider = StateProvider<String>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
-  return prefs.getString('signalingServerUrl') ?? 'wss://zajel-signaling.example.com';
+  return prefs.getString('bootstrapServerUrl') ?? defaultBootstrapUrl;
+});
+
+/// Provider for server discovery service.
+final serverDiscoveryServiceProvider = Provider<ServerDiscoveryService>((ref) {
+  final bootstrapUrl = ref.watch(bootstrapServerUrlProvider);
+  final service = ServerDiscoveryService(bootstrapUrl: bootstrapUrl);
+  ref.onDispose(() => service.dispose());
+  return service;
+});
+
+/// Provider for discovered servers.
+final discoveredServersProvider = FutureProvider<List<DiscoveredServer>>((ref) async {
+  final service = ref.watch(serverDiscoveryServiceProvider);
+  return service.fetchServers();
+});
+
+/// Provider for the currently selected VPS server.
+final selectedServerProvider = StateProvider<DiscoveredServer?>((ref) => null);
+
+/// Provider for the signaling server URL (from selected VPS server).
+final signalingServerUrlProvider = Provider<String?>((ref) {
+  final selectedServer = ref.watch(selectedServerProvider);
+  if (selectedServer == null) return null;
+
+  final service = ref.watch(serverDiscoveryServiceProvider);
+  return service.getWebSocketUrl(selectedServer);
 });
 
 /// Provider for our external pairing code.

@@ -41,6 +41,11 @@ export function loadConfig(): ServerConfig {
     },
 
     bootstrap: {
+      // CF Workers bootstrap server URL
+      serverUrl: envString('ZAJEL_BOOTSTRAP_URL', 'https://zajel-signaling.mahmoud-s-darwish.workers.dev'),
+      // Heartbeat interval (how often to ping CF)
+      heartbeatInterval: envNumber('ZAJEL_BOOTSTRAP_HEARTBEAT', 60000), // 1 minute
+      // Legacy: direct peer nodes (optional, for manual configuration)
       nodes: envArray('ZAJEL_BOOTSTRAP_NODES', []),
       retryInterval: envNumber('ZAJEL_BOOTSTRAP_RETRY_INTERVAL', 5000),
       maxRetries: envNumber('ZAJEL_BOOTSTRAP_MAX_RETRIES', 10),

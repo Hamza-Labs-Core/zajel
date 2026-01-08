@@ -32,9 +32,23 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
   Future<void> _enableExternalConnections() async {
     try {
-      final connectionManager = ref.read(connectionManagerProvider);
-      final serverUrl = ref.read(signalingServerUrlProvider);
+      // First, discover and select a VPS server
+      final discoveryService = ref.read(serverDiscoveryServiceProvider);
+      final selectedServer = await discoveryService.selectServer();
 
+      if (selectedServer == null) {
+        setState(() => _error = 'No servers available. Please try again later.');
+        return;
+      }
+
+      // Store the selected server
+      ref.read(selectedServerProvider.notifier).state = selectedServer;
+
+      // Get the WebSocket URL for the selected server
+      final serverUrl = discoveryService.getWebSocketUrl(selectedServer);
+
+      // Now connect to the VPS server
+      final connectionManager = ref.read(connectionManagerProvider);
       final code = await connectionManager.enableExternalConnections(
         serverUrl: serverUrl,
       );

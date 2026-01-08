@@ -1,13 +1,13 @@
-# Zajel Signaling Server - Cloudflare Worker Configuration
+# Zajel Bootstrap Server - Cloudflare Worker Configuration
+# Purpose: VPS server discovery service ONLY
 name = "zajel-signaling"
 main = "src/index.js"
 compatibility_date = "2024-01-01"
 
-# Durable Objects for WebSocket state management
+# Durable Object for server registry
 [durable_objects]
 bindings = [
-  { name = "SIGNALING_ROOM", class_name = "SignalingRoom" },
-  { name = "RELAY_REGISTRY", class_name = "RelayRegistryDO" }
+  { name = "SERVER_REGISTRY", class_name = "ServerRegistryDO" }
 ]
 
 # Migrations for Durable Objects
@@ -19,12 +19,12 @@ new_classes = ["SignalingRoom"]
 tag = "v2"
 new_classes = ["RelayRegistryDO"]
 
+[[migrations]]
+tag = "v3"
+new_classes = ["ServerRegistryDO"]
+deleted_classes = ["SignalingRoom", "RelayRegistryDO"]
+
 # Development settings
 [dev]
 port = 8080
 local_protocol = "http"
-
-# Production settings (uncomment and configure for deployment)
-# [env.production]
-# workers_dev = false
-# route = { pattern = "signaling.zajel.app/*", zone_name = "zajel.app" }
