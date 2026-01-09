@@ -1,10 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:mocktail/mocktail.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:zajel/core/crypto/crypto_service.dart';
 import 'package:zajel/core/network/connection_manager.dart';
 import 'package:zajel/core/network/meeting_point_service.dart';
 import 'package:zajel/core/network/rendezvous_service.dart';
+import 'package:zajel/core/network/signaling_client.dart';
 import 'package:zajel/core/network/webrtc_service.dart';
 import 'package:zajel/core/storage/trusted_peers_storage.dart';
 
@@ -22,6 +26,124 @@ class MockTrustedPeersStorage extends Mock implements TrustedPeersStorage {}
 class MockRendezvousService extends Mock implements RendezvousService {}
 
 class MockWebRTCService extends Mock implements WebRTCService {}
+
+class MockSignalingClient extends Mock implements SignalingClient {}
+
+class MockWebSocketChannel extends Mock implements WebSocketChannel {}
+
+class MockWebSocketSink extends Mock implements WebSocketSink {}
+
+/// A fake WebSocket channel for testing that allows controlling message flow
+class FakeWebSocketChannel implements WebSocketChannel {
+  final _streamController = StreamController<dynamic>.broadcast();
+  final _sinkController = StreamController<dynamic>();
+  late final FakeWebSocketSink _sink;
+  bool _isReady = true;
+  Object? _readyError;
+
+  FakeWebSocketChannel() {
+    _sink = FakeWebSocketSink(_sinkController);
+  }
+
+  /// Simulate receiving a message from the server
+  void addMessage(dynamic message) {
+    _streamController.add(message);
+  }
+
+  /// Simulate an error
+  void addError(Object error) {
+    _streamController.addError(error);
+  }
+
+  /// Simulate connection close
+  void simulateClose() {
+    _streamController.close();
+  }
+
+  /// Set whether the channel is ready
+  void setReady(bool ready, [Object? error]) {
+    _isReady = ready;
+    _readyError = error;
+  }
+
+  /// Get sent messages from the sink
+  List<dynamic> get sentMessages => _sink.sentMessages;
+
+  @override
+  Stream get stream => _streamController.stream;
+
+  @override
+  WebSocketSink get sink => _sink;
+
+  @override
+  Future<void> get ready async {
+    if (!_isReady) {
+      throw _readyError ?? Exception('WebSocket not ready');
+    }
+  }
+
+  @override
+  int? get closeCode => null;
+
+  @override
+  String? get closeReason => null;
+
+  @override
+  String? get protocol => null;
+
+  // StreamChannel interface methods - not needed for our tests
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    // Handle StreamChannel methods that we don't need for testing
+    final methodName = invocation.memberName.toString();
+    if (methodName.contains('cast') ||
+        methodName.contains('changeSink') ||
+        methodName.contains('changeStream') ||
+        methodName.contains('pipe') ||
+        methodName.contains('transform')) {
+      throw UnimplementedError('$methodName not implemented in FakeWebSocketChannel');
+    }
+    return super.noSuchMethod(invocation);
+  }
+
+  void dispose() {
+    _streamController.close();
+    _sinkController.close();
+  }
+}
+
+class FakeWebSocketSink implements WebSocketSink {
+  final StreamController<dynamic> _controller;
+  final List<dynamic> sentMessages = [];
+
+  FakeWebSocketSink(this._controller);
+
+  @override
+  void add(dynamic data) {
+    sentMessages.add(data);
+    _controller.add(data);
+  }
+
+  @override
+  void addError(Object error, [StackTrace? stackTrace]) {
+    _controller.addError(error, stackTrace);
+  }
+
+  @override
+  Future addStream(Stream stream) async {
+    await for (final data in stream) {
+      add(data);
+    }
+  }
+
+  @override
+  Future close([int? closeCode, String? closeReason]) async {
+    await _controller.close();
+  }
+
+  @override
+  Future get done => _controller.done;
+}
 
 /// In-memory implementation of FlutterSecureStorage for testing
 class FakeSecureStorage implements FlutterSecureStorage {
