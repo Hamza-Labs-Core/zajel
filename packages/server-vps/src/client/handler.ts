@@ -491,6 +491,24 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
+    // Validate public key format (must be valid base64)
+    if (!/^[A-Za-z0-9+/]+=*$/.test(publicKey)) {
+      this.sendError(ws, 'Invalid public key format');
+      return;
+    }
+
+    // Validate public key length (X25519 keys are 32 bytes)
+    try {
+      const decoded = Buffer.from(publicKey, 'base64');
+      if (decoded.length !== 32) {
+        this.sendError(ws, 'Invalid public key length');
+        return;
+      }
+    } catch {
+      this.sendError(ws, 'Invalid public key encoding');
+      return;
+    }
+
     // Store pairing code -> WebSocket and public key mappings
     this.pairingCodeToWs.set(pairingCode, ws);
     this.wsToPairingCode.set(ws, pairingCode);

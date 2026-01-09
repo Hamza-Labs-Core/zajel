@@ -78,8 +78,8 @@ describe('CryptoService', () => {
       // Should only contain hex chars and spaces
       expect(fingerprint).toMatch(/^[0-9A-F ]+$/);
 
-      // Should be 32 hex chars (128 bits / 4 bits per char)
-      expect(fingerprint.replace(/ /g, '').length).toBe(32);
+      // Should be 64 hex chars (256 bits / 4 bits per char)
+      expect(fingerprint.replace(/ /g, '').length).toBe(64);
     });
 
     it('getPublicKeyHex should return valid hex string', async () => {
@@ -316,8 +316,8 @@ describe('CryptoService', () => {
       // Should only contain hex chars and spaces
       expect(fingerprint).toMatch(/^[0-9A-F ]+$/);
 
-      // Should be 32 hex chars (128 bits / 4 bits per char)
-      expect(fingerprint.replace(/ /g, '').length).toBe(32);
+      // Should be 64 hex chars (256 bits / 4 bits per char)
+      expect(fingerprint.replace(/ /g, '').length).toBe(64);
     });
 
     it('should throw on invalid base64', () => {

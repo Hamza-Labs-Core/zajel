@@ -56,13 +56,15 @@ export class CryptoService {
    * Users can compare fingerprints through a trusted channel (in person, phone call, etc.)
    * to verify they're communicating with the intended party and not a MITM attacker.
    *
+   * Uses the full 256-bit hash for collision resistance (birthday bound at 2^128).
+   *
    * @returns A human-readable fingerprint string (uppercase hex, space-separated)
    */
   getPublicKeyFingerprint(): string {
     if (!this.keyPair) throw new Error('CryptoService not initialized');
     const hash = sha256(this.keyPair.publicKey);
-    // Use first 16 bytes (128 bits) for a reasonable fingerprint length
-    return formatFingerprint(bytesToHex(hash.slice(0, 16)));
+    // Use full 256-bit hash for collision resistance
+    return formatFingerprint(bytesToHex(hash));
   }
 
   /**
@@ -88,8 +90,8 @@ export class CryptoService {
     }
 
     const hash = sha256(peerPublicKey);
-    // Use first 16 bytes (128 bits) for a reasonable fingerprint length
-    return formatFingerprint(bytesToHex(hash.slice(0, 16)));
+    // Use full 256-bit hash for collision resistance
+    return formatFingerprint(bytesToHex(hash));
   }
 
   // TODO: Implement proper key verification to prevent MITM attacks.

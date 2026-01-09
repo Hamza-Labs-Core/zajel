@@ -5,7 +5,8 @@ import type {
 } from './protocol';
 
 const PING_INTERVAL = 25000; // 25 seconds
-const RECONNECT_DELAY = 3000;
+const RECONNECT_DELAY_BASE = 1000; // Start with 1 second
+const RECONNECT_DELAY_MAX = 30000; // Cap at 30 seconds
 const PAIRING_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const PAIRING_CODE_LENGTH = 6;
 const PAIRING_CODE_REGEX = new RegExp(`^[${PAIRING_CODE_CHARS}]{${PAIRING_CODE_LENGTH}}$`);
@@ -39,6 +40,7 @@ export class SignalingClient {
   private myPublicKey: string = '';
   private pingInterval: number | null = null;
   private reconnectTimeout: number | null = null;
+  private reconnectAttempts: number = 0;
   private state: ConnectionState = 'disconnected';
   private events: SignalingEvents;
 
@@ -138,12 +140,20 @@ export class SignalingClient {
 
   private scheduleReconnect(): void {
     if (this.reconnectTimeout) return;
+
+    // Exponential backoff: delay = base * 2^attempts, capped at max
+    const delay = Math.min(
+      RECONNECT_DELAY_BASE * Math.pow(2, this.reconnectAttempts),
+      RECONNECT_DELAY_MAX
+    );
+    this.reconnectAttempts++;
+
     this.reconnectTimeout = window.setTimeout(() => {
       this.reconnectTimeout = null;
       if (this.state === 'disconnected' && this.myPublicKey) {
         this.connect(this.myPublicKey);
       }
-    }, RECONNECT_DELAY);
+    }, delay);
   }
 
   private startPing(): void {
@@ -175,6 +185,7 @@ export class SignalingClient {
   private handleMessage(message: ServerMessage): void {
     switch (message.type) {
       case 'registered':
+        this.reconnectAttempts = 0; // Reset backoff on successful connection
         this.setState('registered');
         break;
 
