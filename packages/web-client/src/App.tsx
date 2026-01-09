@@ -14,6 +14,8 @@ import { StatusIndicator } from './components/StatusIndicator';
 
 const SIGNALING_URL = import.meta.env.VITE_SIGNALING_URL || 'wss://zajel-signaling.example.com';
 const CHUNK_SIZE = 16 * 1024; // 16KB chunks
+const MAX_MESSAGES = 1000; // Maximum number of messages to keep in memory
+const MAX_TRANSFERS = 100; // Maximum number of file transfers to keep in memory
 
 export function App() {
   const [state, setState] = useState<ConnectionState>('disconnected');
@@ -115,24 +117,41 @@ export function App() {
               sender: 'peer',
               timestamp: new Date(),
             };
-            setMessages((prev) => [...prev, msg]);
+            setMessages((prev) => {
+              const updated = [...prev, msg];
+              // Remove oldest messages if limit exceeded
+              if (updated.length > MAX_MESSAGES) {
+                return updated.slice(updated.length - MAX_MESSAGES);
+              }
+              return updated;
+            });
           } catch (e) {
             console.error('Failed to decrypt message:', e);
           }
         },
         onFileStart: (fileId, fileName, totalSize, totalChunks) => {
-          setTransfers((prev) => [
-            ...prev,
-            {
-              id: fileId,
-              fileName,
-              totalSize,
-              totalChunks,
-              receivedChunks: 0,
-              status: 'receiving',
-              data: [],
-            },
-          ]);
+          setTransfers((prev) => {
+            const updated = [
+              ...prev,
+              {
+                id: fileId,
+                fileName,
+                totalSize,
+                totalChunks,
+                receivedChunks: 0,
+                status: 'receiving' as const,
+                data: [],
+              },
+            ];
+            // Remove oldest completed transfers if limit exceeded
+            if (updated.length > MAX_TRANSFERS) {
+              const activeTransfers = updated.filter(t => t.status !== 'complete');
+              const completedTransfers = updated.filter(t => t.status === 'complete');
+              const toKeep = MAX_TRANSFERS - activeTransfers.length;
+              return [...completedTransfers.slice(-Math.max(0, toKeep)), ...activeTransfers];
+            }
+            return updated;
+          });
         },
         onFileChunk: (fileId, chunkIndex, encryptedData) => {
           const currentPeerCode = peerCodeRef.current;
@@ -232,7 +251,14 @@ export function App() {
         sender: 'me',
         timestamp: new Date(),
       };
-      setMessages((prev) => [...prev, msg]);
+      setMessages((prev) => {
+        const updated = [...prev, msg];
+        // Remove oldest messages if limit exceeded
+        if (updated.length > MAX_MESSAGES) {
+          return updated.slice(updated.length - MAX_MESSAGES);
+        }
+        return updated;
+      });
     },
     [peerCode]
   );
@@ -249,17 +275,27 @@ export function App() {
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
       // Add to transfers
-      setTransfers((prev) => [
-        ...prev,
-        {
-          id: fileId,
-          fileName: file.name,
-          totalSize: file.size,
-          totalChunks,
-          receivedChunks: 0,
-          status: 'receiving',
-        },
-      ]);
+      setTransfers((prev) => {
+        const updated = [
+          ...prev,
+          {
+            id: fileId,
+            fileName: file.name,
+            totalSize: file.size,
+            totalChunks,
+            receivedChunks: 0,
+            status: 'receiving' as const,
+          },
+        ];
+        // Remove oldest completed transfers if limit exceeded
+        if (updated.length > MAX_TRANSFERS) {
+          const activeTransfers = updated.filter(t => t.status !== 'complete');
+          const completedTransfers = updated.filter(t => t.status === 'complete');
+          const toKeep = MAX_TRANSFERS - activeTransfers.length;
+          return [...completedTransfers.slice(-Math.max(0, toKeep)), ...activeTransfers];
+        }
+        return updated;
+      });
 
       // Send file start
       webrtcRef.current.sendFileStart(fileId, file.name, file.size, totalChunks);

@@ -1,6 +1,6 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { readFile, stat } from 'fs/promises';
-import { join, extname } from 'path';
+import { join, extname, resolve } from 'path';
 import open from 'open';
 
 const PORT = parseInt(process.env.PORT || '3847', 10);
@@ -22,6 +22,16 @@ const MIME_TYPES: Record<string, string> = {
   '.ttf': 'font/ttf',
 };
 
+// Resolve DIST to absolute path for security checks
+const DIST_RESOLVED = resolve(DIST);
+
+// Security headers
+const SECURITY_HEADERS: Record<string, string> = {
+  'X-Frame-Options': 'DENY',
+  'X-Content-Type-Options': 'nosniff',
+  'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'none';",
+};
+
 async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = req.url || '/';
   let filePath = url === '/' ? '/index.html' : url;
@@ -29,14 +39,24 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
   // Remove query string
   filePath = filePath.split('?')[0];
 
-  // Security: prevent directory traversal
-  if (filePath.includes('..')) {
-    res.writeHead(403);
-    res.end('Forbidden');
+  // Decode URL to handle encoded characters (e.g., %2e%2e for ..)
+  try {
+    filePath = decodeURIComponent(filePath);
+  } catch {
+    res.writeHead(400, SECURITY_HEADERS);
+    res.end('Bad Request');
     return;
   }
 
-  const fullPath = join(DIST, filePath);
+  // Security: prevent directory traversal using path resolution
+  const fullPath = resolve(DIST_RESOLVED, '.' + filePath);
+
+  // Verify resolved path is within DIST directory
+  if (!fullPath.startsWith(DIST_RESOLVED + '/') && fullPath !== DIST_RESOLVED) {
+    res.writeHead(403, SECURITY_HEADERS);
+    res.end('Forbidden');
+    return;
+  }
 
   try {
     // Check if file exists
@@ -46,6 +66,7 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
     const mimeType = MIME_TYPES[ext] || 'application/octet-stream';
 
     res.writeHead(200, {
+      ...SECURITY_HEADERS,
       'Content-Type': mimeType,
       'Cache-Control': 'no-cache',
     });
@@ -55,12 +76,13 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
     try {
       const index = await readFile(join(DIST, 'index.html'));
       res.writeHead(200, {
+        ...SECURITY_HEADERS,
         'Content-Type': 'text/html; charset=utf-8',
         'Cache-Control': 'no-cache',
       });
       res.end(index);
     } catch {
-      res.writeHead(404);
+      res.writeHead(404, SECURITY_HEADERS);
       res.end('Not Found');
     }
   }

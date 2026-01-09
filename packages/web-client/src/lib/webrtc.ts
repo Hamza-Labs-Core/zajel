@@ -8,6 +8,8 @@ const ICE_SERVERS: RTCIceServer[] = [
 
 const MESSAGE_CHANNEL = 'messages';
 const FILE_CHANNEL = 'files';
+const MAX_DATA_CHANNEL_MESSAGE_SIZE = 1024 * 1024; // 1MB limit for data channel messages
+const MAX_PENDING_ICE_CANDIDATES = 100; // Limit ICE candidate queue size
 
 export interface WebRTCEvents {
   onStateChange: (state: RTCPeerConnectionState) => void;
@@ -105,7 +107,11 @@ export class WebRTCService {
 
   async handleIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
     if (!this.pc) {
-      // Queue candidate if connection not ready
+      // Queue candidate if connection not ready, but limit queue size
+      if (this.pendingCandidates.length >= MAX_PENDING_ICE_CANDIDATES) {
+        console.warn('ICE candidate queue full, dropping oldest candidate');
+        this.pendingCandidates.shift();
+      }
       this.pendingCandidates.push(candidate);
       return;
     }
@@ -124,6 +130,15 @@ export class WebRTCService {
 
     channel.onmessage = (event) => {
       try {
+        // Check data size before processing
+        const dataSize = typeof event.data === 'string'
+          ? event.data.length
+          : event.data.byteLength || 0;
+        if (dataSize > MAX_DATA_CHANNEL_MESSAGE_SIZE) {
+          console.error('Rejected message channel data: exceeds 1MB size limit');
+          return;
+        }
+
         // Check if it's a handshake message
         const data = JSON.parse(event.data);
         if (data.type === 'handshake') {
@@ -146,6 +161,15 @@ export class WebRTCService {
   private setupFileChannel(channel: RTCDataChannel): void {
     channel.onmessage = (event) => {
       try {
+        // Check data size before processing
+        const dataSize = typeof event.data === 'string'
+          ? event.data.length
+          : event.data.byteLength || 0;
+        if (dataSize > MAX_DATA_CHANNEL_MESSAGE_SIZE) {
+          console.error('Rejected file channel data: exceeds 1MB size limit');
+          return;
+        }
+
         const data = JSON.parse(event.data);
         switch (data.type) {
           case 'file_start':

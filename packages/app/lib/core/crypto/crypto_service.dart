@@ -247,6 +247,9 @@ class CryptoService {
   Future<void> regenerateIdentityKeys() async {
     _identityKeyPair = await _x25519.newKeyPair();
     await _persistIdentityKeys();
+    // Update the cache with the new public key
+    final publicKey = await _identityKeyPair!.extractPublicKey();
+    _publicKeyBase64Cache = base64Encode(Uint8List.fromList(publicKey.bytes));
   }
 
   // Private methods

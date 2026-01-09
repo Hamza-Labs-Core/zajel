@@ -7,6 +7,7 @@ import type {
 const PING_INTERVAL = 25000; // 25 seconds
 const RECONNECT_DELAY = 3000;
 const PAIRING_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const MAX_MESSAGE_SIZE = 1024 * 1024; // 1MB limit for WebSocket messages
 
 export interface SignalingEvents {
   onStateChange: (state: ConnectionState) => void;
@@ -74,6 +75,15 @@ export class SignalingClient {
 
     this.ws.onmessage = (event) => {
       try {
+        // Check message size before processing
+        const messageSize = typeof event.data === 'string'
+          ? event.data.length
+          : event.data.byteLength || 0;
+        if (messageSize > MAX_MESSAGE_SIZE) {
+          console.error('Rejected WebSocket message: exceeds 1MB size limit');
+          return;
+        }
+
         const message = JSON.parse(event.data) as ServerMessage;
         this.handleMessage(message);
       } catch (e) {

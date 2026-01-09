@@ -79,6 +79,8 @@ class SignalingClient {
       // Start heartbeat
       _startHeartbeat();
     } catch (e) {
+      // Clean up resources on connection error
+      await _cleanupConnection();
       _connectionStateController.add(SignalingConnectionState.failed);
       rethrow;
     }
@@ -86,12 +88,22 @@ class SignalingClient {
 
   /// Disconnect from the signaling server.
   Future<void> disconnect() async {
-    _stopHeartbeat();
-    await _subscription?.cancel();
-    await _channel?.sink.close();
-    _channel = null;
-    _isConnected = false;
+    await _cleanupConnection();
     _connectionStateController.add(SignalingConnectionState.disconnected);
+  }
+
+  /// Clean up WebSocket connection resources.
+  Future<void> _cleanupConnection() async {
+    _stopHeartbeat();
+    _isConnected = false;
+
+    final subscription = _subscription;
+    _subscription = null;
+    await subscription?.cancel();
+
+    final channel = _channel;
+    _channel = null;
+    await channel?.sink.close();
   }
 
   /// Send an offer to a peer via the signaling server.
@@ -249,13 +261,14 @@ class SignalingClient {
   }
 
   void _handleError(Object error) {
+    // Clean up resources on WebSocket error
+    _cleanupConnection();
     _connectionStateController.add(SignalingConnectionState.failed);
-    _isConnected = false;
   }
 
   void _handleDisconnect() {
-    _isConnected = false;
-    _stopHeartbeat();
+    // Clean up resources on disconnect
+    _cleanupConnection();
     _connectionStateController.add(SignalingConnectionState.disconnected);
   }
 

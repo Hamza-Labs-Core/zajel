@@ -34,6 +34,7 @@ class ConnectionManager {
       StreamController<(String peerId, String fileId)>.broadcast();
 
   StreamSubscription? _signalingSubscription;
+  bool _signalingCallbackConfigured = false;
 
   ConnectionManager({
     required CryptoService cryptoService,
@@ -84,6 +85,10 @@ class ConnectionManager {
     required String serverUrl,
     String? pairingCode,
   }) async {
+    // Cancel existing subscription to prevent leaks if called multiple times
+    await _signalingSubscription?.cancel();
+    _signalingSubscription = null;
+
     _externalPairingCode = pairingCode ?? _generatePairingCode();
 
     _signalingClient = SignalingClient(
@@ -104,8 +109,10 @@ class ConnectionManager {
   Future<void> disableExternalConnections() async {
     await _signalingClient?.disconnect();
     await _signalingSubscription?.cancel();
+    _signalingSubscription = null;
     _signalingClient = null;
     _externalPairingCode = null;
+    _signalingCallbackConfigured = false;
   }
 
   /// Request to connect to an external peer using their pairing code.
@@ -146,12 +153,9 @@ class ConnectionManager {
     // Store peer's public key for handshake verification
     _cryptoService.setPeerPublicKey(peerCode, peerPublicKey);
 
-    // Set up signaling message forwarding
-    _webrtcService.onSignalingMessage = (targetPeerId, message) {
-      if (message['type'] == 'ice_candidate') {
-        _signalingClient!.sendIceCandidate(targetPeerId, message);
-      }
-    };
+    // Set up signaling message forwarding (only once to avoid race conditions)
+    // This single callback routes all signaling messages by peer ID
+    _configureSignalingCallback();
 
     if (isInitiator) {
       // We're the initiator - create and send offer
@@ -159,6 +163,21 @@ class ConnectionManager {
       _signalingClient!.sendOffer(peerCode, offer);
     }
     // If not initiator, wait for offer from the other peer
+  }
+
+  /// Configure the signaling callback once to handle all peers.
+  /// This avoids race conditions from overwriting the callback per-peer.
+  void _configureSignalingCallback() {
+    if (_signalingCallbackConfigured) return;
+    _signalingCallbackConfigured = true;
+
+    _webrtcService.onSignalingMessage = (targetPeerId, message) {
+      if (_signalingClient == null || !_signalingClient!.isConnected) return;
+
+      if (message['type'] == 'ice_candidate') {
+        _signalingClient!.sendIceCandidate(targetPeerId, message);
+      }
+    };
   }
 
   /// Send a message to a peer.
@@ -191,6 +210,8 @@ class ConnectionManager {
   /// Dispose resources.
   Future<void> dispose() async {
     await _signalingSubscription?.cancel();
+    _signalingSubscription = null;
+    _signalingCallbackConfigured = false;
     await _webrtcService.dispose();
     await _signalingClient?.dispose();
     await _peersController.close();
@@ -278,16 +299,12 @@ class ConnectionManager {
           _notifyPeersChanged();
         }
 
+        // Set up ICE candidate forwarding (only once to avoid race conditions)
+        _configureSignalingCallback();
+
         // Handle offer and create answer
         final answer = await _webrtcService.handleOffer(from, payload);
         _signalingClient!.sendAnswer(from, answer);
-
-        // Set up ICE candidate forwarding
-        _webrtcService.onSignalingMessage = (targetPeerId, msg) {
-          if (msg['type'] == 'ice_candidate') {
-            _signalingClient!.sendIceCandidate(targetPeerId, msg);
-          }
-        };
         break;
 
       case SignalingAnswer(from: final from, payload: final payload):

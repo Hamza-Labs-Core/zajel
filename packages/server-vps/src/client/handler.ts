@@ -115,6 +115,12 @@ interface PendingPairRequest {
   timestamp: number;
 }
 
+// Rate limiting tracking per WebSocket connection
+interface RateLimitInfo {
+  messageCount: number;
+  windowStart: number;
+}
+
 type ClientMessage =
   | RegisterMessage
   | UpdateLoadMessage
@@ -145,6 +151,16 @@ export class ClientHandler extends EventEmitter {
   // Pending pair requests: targetCode -> list of pending requests
   private pendingPairRequests: Map<string, PendingPairRequest[]> = new Map();
   private static readonly PAIR_REQUEST_TIMEOUT = 60000; // 60 seconds
+  private static readonly MAX_PENDING_REQUESTS_PER_TARGET = 10; // Limit pending requests per target
+
+  // Timer references for pair request expiration (to prevent memory leaks)
+  // Key: "requesterCode:targetCode"
+  private pairRequestTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+
+  // Rate limiting
+  private static readonly RATE_LIMIT_WINDOW_MS = 60000; // 1 minute window
+  private static readonly RATE_LIMIT_MAX_MESSAGES = 100; // Max 100 messages per minute
+  private wsRateLimits: Map<WebSocket, RateLimitInfo> = new Map();
 
   constructor(
     identity: ServerIdentity,
@@ -185,9 +201,49 @@ export class ClientHandler extends EventEmitter {
   }
 
   /**
+   * Check and update rate limit for a WebSocket connection
+   * Returns true if the message should be allowed, false if rate limited
+   */
+  private checkRateLimit(ws: WebSocket): boolean {
+    const now = Date.now();
+    let rateLimitInfo = this.wsRateLimits.get(ws);
+
+    if (!rateLimitInfo) {
+      // First message from this connection
+      rateLimitInfo = { messageCount: 1, windowStart: now };
+      this.wsRateLimits.set(ws, rateLimitInfo);
+      return true;
+    }
+
+    // Check if we're in a new window
+    if (now - rateLimitInfo.windowStart >= ClientHandler.RATE_LIMIT_WINDOW_MS) {
+      // Reset the window
+      rateLimitInfo.messageCount = 1;
+      rateLimitInfo.windowStart = now;
+      return true;
+    }
+
+    // Increment message count
+    rateLimitInfo.messageCount++;
+
+    // Check if over limit
+    if (rateLimitInfo.messageCount > ClientHandler.RATE_LIMIT_MAX_MESSAGES) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
    * Handle incoming WebSocket message
    */
   async handleMessage(ws: WebSocket, data: string): Promise<void> {
+    // Rate limiting check
+    if (!this.checkRateLimit(ws)) {
+      this.sendError(ws, 'Rate limit exceeded. Please slow down.');
+      return;
+    }
+
     let message: ClientMessage;
 
     try {
@@ -468,25 +524,57 @@ export class ClientHandler extends EventEmitter {
     }
 
     if (targetCode === requesterCode) {
+      // Use generic error to prevent enumeration attacks
       this.send(ws, {
         type: 'pair_error',
-        error: 'Cannot pair with yourself',
+        error: 'Pair request could not be processed',
       });
       return;
     }
 
     const targetWs = this.pairingCodeToWs.get(targetCode);
+    // SECURITY: Use generic error message to prevent enumeration attacks
+    // Don't reveal whether the target code exists or not
     if (!targetWs) {
       this.send(ws, {
         type: 'pair_error',
-        error: `Peer not found: ${targetCode}`,
+        error: 'Pair request could not be processed',
       });
       return;
     }
 
     const requesterPublicKey = this.pairingCodeToPublicKey.get(requesterCode);
     if (!requesterPublicKey) {
-      this.sendError(ws, 'Public key not found for requester');
+      // Use generic error to prevent information leakage
+      this.send(ws, {
+        type: 'pair_error',
+        error: 'Pair request could not be processed',
+      });
+      return;
+    }
+
+    // Check for DoS: limit pending requests per target
+    const pending = this.pendingPairRequests.get(targetCode) || [];
+
+    // Remove any existing request from the same requester (in-place modification)
+    const existingIndex = pending.findIndex(r => r.requesterCode === requesterCode);
+    if (existingIndex !== -1) {
+      // Clear the existing timer for this request
+      const timerKey = `${requesterCode}:${targetCode}`;
+      const existingTimer = this.pairRequestTimers.get(timerKey);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+        this.pairRequestTimers.delete(timerKey);
+      }
+      pending.splice(existingIndex, 1);
+    }
+
+    // SECURITY: Limit pending requests per target to prevent DoS
+    if (pending.length >= ClientHandler.MAX_PENDING_REQUESTS_PER_TARGET) {
+      this.send(ws, {
+        type: 'pair_error',
+        error: 'Pair request could not be processed',
+      });
       return;
     }
 
@@ -499,12 +587,6 @@ export class ClientHandler extends EventEmitter {
     };
 
     // Store pending request
-    const pending = this.pendingPairRequests.get(targetCode) || [];
-    // Remove any existing request from the same requester (in-place modification)
-    const existingIndex = pending.findIndex(r => r.requesterCode === requesterCode);
-    if (existingIndex !== -1) {
-      pending.splice(existingIndex, 1);
-    }
     pending.push(request);
     this.pendingPairRequests.set(targetCode, pending);
 
@@ -517,10 +599,13 @@ export class ClientHandler extends EventEmitter {
 
     console.log(`[ClientHandler] Pair request: ${requesterCode} -> ${targetCode}`);
 
-    // Set timeout for this request
-    setTimeout(() => {
+    // Set timeout for this request and store the timer reference
+    const timerKey = `${requesterCode}:${targetCode}`;
+    const timer = setTimeout(() => {
       this.expirePairRequest(requesterCode, targetCode);
+      this.pairRequestTimers.delete(timerKey);
     }, ClientHandler.PAIR_REQUEST_TIMEOUT);
+    this.pairRequestTimers.set(timerKey, timer);
   }
 
   /**
@@ -549,6 +634,14 @@ export class ClientHandler extends EventEmitter {
 
     // We know request exists because requestIndex !== -1
     const request = pending[requestIndex]!;
+
+    // Clear the timer for this request
+    const timerKey = `${targetCode}:${responderCode}`;
+    const existingTimer = this.pairRequestTimers.get(timerKey);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      this.pairRequestTimers.delete(timerKey);
+    }
 
     // Remove the request from pending
     pending.splice(requestIndex, 1);
@@ -682,17 +775,43 @@ export class ClientHandler extends EventEmitter {
    * Handle WebSocket disconnect
    */
   async handleDisconnect(ws: WebSocket): Promise<void> {
+    // Clean up rate limiting tracking
+    this.wsRateLimits.delete(ws);
+
     // Clean up pairing code mappings (for signaling clients)
     const pairingCode = this.wsToPairingCode.get(ws);
     if (pairingCode) {
       this.pairingCodeToWs.delete(pairingCode);
       this.wsToPairingCode.delete(ws);
       this.pairingCodeToPublicKey.delete(pairingCode);
-      // Clean up any pending pair requests involving this peer
+
+      // Clean up timers for requests where this peer was the target
+      const pendingAsTarget = this.pendingPairRequests.get(pairingCode) || [];
+      for (const request of pendingAsTarget) {
+        const timerKey = `${request.requesterCode}:${pairingCode}`;
+        const timer = this.pairRequestTimers.get(timerKey);
+        if (timer) {
+          clearTimeout(timer);
+          this.pairRequestTimers.delete(timerKey);
+        }
+      }
       this.pendingPairRequests.delete(pairingCode);
-      // Also remove requests where this peer was the requester
+
+      // Also remove requests where this peer was the requester and clean up timers
       for (const [targetCode, requests] of this.pendingPairRequests) {
-        const filtered = requests.filter(r => r.requesterCode !== pairingCode);
+        const filtered = requests.filter(r => {
+          if (r.requesterCode === pairingCode) {
+            // Clear the timer for this request
+            const timerKey = `${pairingCode}:${targetCode}`;
+            const timer = this.pairRequestTimers.get(timerKey);
+            if (timer) {
+              clearTimeout(timer);
+              this.pairRequestTimers.delete(timerKey);
+            }
+            return false;
+          }
+          return true;
+        });
         if (filtered.length === 0) {
           this.pendingPairRequests.delete(targetCode);
         } else if (filtered.length !== requests.length) {
@@ -840,6 +959,15 @@ export class ClientHandler extends EventEmitter {
    * Shutdown - disconnect all clients
    */
   async shutdown(): Promise<void> {
+    // Clear all pair request timers to prevent memory leaks
+    for (const timer of this.pairRequestTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.pairRequestTimers.clear();
+
+    // Clear rate limiting data
+    this.wsRateLimits.clear();
+
     // Close all relay clients
     for (const [peerId, client] of this.clients) {
       try {

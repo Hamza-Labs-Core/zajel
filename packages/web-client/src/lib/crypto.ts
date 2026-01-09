@@ -7,6 +7,14 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 const STORAGE_KEY = 'zajel_identity';
 const NONCE_SIZE = 12;
 
+/**
+ * Formats a key fingerprint for human-readable display.
+ * Groups hex bytes into 4-character chunks separated by spaces.
+ */
+function formatFingerprint(hex: string): string {
+  return hex.match(/.{1,4}/g)?.join(' ').toUpperCase() || hex.toUpperCase();
+}
+
 export interface KeyPair {
   privateKey: Uint8Array;
   publicKey: Uint8Array;
@@ -37,6 +45,15 @@ export class CryptoService {
     this.keyPair = { privateKey, publicKey };
 
     // Store for persistence
+    // SECURITY WARNING: Storing private keys in localStorage is vulnerable to XSS attacks.
+    // Any JavaScript running on this origin can access the private key.
+    // Alternatives to consider for production:
+    // 1. Use IndexedDB with encryption (still XSS vulnerable but harder to exfiltrate)
+    // 2. Use Web Crypto API's non-extractable keys (CryptoKey objects)
+    // 3. Store keys in a secure backend with proper authentication
+    // 4. Use hardware security keys (WebAuthn) for key derivation
+    // For now, we accept this risk as the app is designed for ephemeral messaging
+    // and the keys are only used for the duration of the session.
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({ privateKey: bytesToHex(privateKey) })
@@ -53,6 +70,45 @@ export class CryptoService {
     return bytesToHex(this.keyPair.publicKey);
   }
 
+  /**
+   * Returns a SHA-256 fingerprint of our public key for out-of-band verification.
+   * Users can compare fingerprints through a trusted channel (in person, phone call, etc.)
+   * to verify they're communicating with the intended party and not a MITM attacker.
+   *
+   * @returns A human-readable fingerprint string (uppercase hex, space-separated)
+   */
+  getPublicKeyFingerprint(): string {
+    if (!this.keyPair) throw new Error('CryptoService not initialized');
+    const hash = sha256(this.keyPair.publicKey);
+    // Use first 16 bytes (128 bits) for a reasonable fingerprint length
+    return formatFingerprint(bytesToHex(hash.slice(0, 16)));
+  }
+
+  /**
+   * Returns a SHA-256 fingerprint of a peer's public key for out-of-band verification.
+   * Compare this with what the peer reports to detect MITM attacks.
+   *
+   * @param peerPublicKeyBase64 - The peer's public key in base64 format
+   * @returns A human-readable fingerprint string (uppercase hex, space-separated)
+   */
+  getPeerPublicKeyFingerprint(peerPublicKeyBase64: string): string {
+    const peerPublicKey = Uint8Array.from(atob(peerPublicKeyBase64), (c) =>
+      c.charCodeAt(0)
+    );
+    const hash = sha256(peerPublicKey);
+    // Use first 16 bytes (128 bits) for a reasonable fingerprint length
+    return formatFingerprint(bytesToHex(hash.slice(0, 16)));
+  }
+
+  // TODO: Implement proper key verification to prevent MITM attacks.
+  // Current implementation trusts the signaling server completely, which means:
+  // 1. A compromised signaling server could substitute its own public key
+  // 2. Users have no way to verify they're talking to the intended peer
+  // Recommended improvements:
+  // - Display key fingerprints in the UI for out-of-band verification
+  // - Implement Safety Numbers (like Signal) for visual verification
+  // - Add QR code scanning for in-person key verification
+  // - Consider implementing a Trust On First Use (TOFU) model with warnings on key changes
   establishSession(peerId: string, peerPublicKeyBase64: string): void {
     if (!this.keyPair) throw new Error('CryptoService not initialized');
 
