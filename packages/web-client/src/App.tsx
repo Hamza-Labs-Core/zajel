@@ -12,7 +12,14 @@ import { ChatView } from './components/ChatView';
 import { FileTransfer as FileTransferUI } from './components/FileTransfer';
 import { StatusIndicator } from './components/StatusIndicator';
 
-const SIGNALING_URL = import.meta.env.VITE_SIGNALING_URL || 'wss://zajel-signaling.example.com';
+// Signaling server URL must be configured via environment variable
+const SIGNALING_URL = import.meta.env.VITE_SIGNALING_URL;
+if (!SIGNALING_URL) {
+  throw new Error(
+    'VITE_SIGNALING_URL environment variable is required. ' +
+    'Set it in .env file or pass via command line.'
+  );
+}
 const CHUNK_SIZE = 16 * 1024; // 16KB chunks
 const MAX_MESSAGES = 1000; // Maximum number of messages to keep in memory
 const MAX_TRANSFERS = 100; // Maximum number of file transfers to keep in memory
