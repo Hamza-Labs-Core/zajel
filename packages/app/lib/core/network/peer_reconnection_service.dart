@@ -84,6 +84,7 @@ class PeerReconnectionService {
     _signalingClient = SignalingClient(
       serverUrl: serverUrl,
       pairingCode: _relayClient.mySourceId, // Use our source ID as pairing code
+      publicKey: _cryptoService.publicKeyBase64,
     );
 
     await _signalingClient!.connect();

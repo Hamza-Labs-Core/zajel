@@ -4,28 +4,20 @@ import 'dart:typed_data';
 import 'package:uuid/uuid.dart';
 
 import '../crypto/crypto_service.dart';
-import '../logging/logger_service.dart';
 import '../models/models.dart';
-import 'discovery_service.dart';
-import 'local_signaling_server.dart';
 import 'signaling_client.dart';
 import 'webrtc_service.dart';
 
 /// Central manager for all peer connections.
 ///
 /// Coordinates:
-/// - Local peer discovery via mDNS
-/// - External peer connections via signaling server
+/// - External peer connections via VPS signaling server
 /// - WebRTC connection establishment
 /// - Cryptographic handshakes
 /// - Message and file routing
 class ConnectionManager {
   final CryptoService _cryptoService;
-  final DiscoveryService _discoveryService;
   final WebRTCService _webrtcService;
-
-  LocalSignalingServer? _localSignalingServer;
-  StreamSubscription? _localSignalingSubscription;
 
   SignalingClient? _signalingClient;
   String? _externalPairingCode;
@@ -41,15 +33,12 @@ class ConnectionManager {
   final _fileCompleteController =
       StreamController<(String peerId, String fileId)>.broadcast();
 
-  StreamSubscription? _discoverySubscription;
   StreamSubscription? _signalingSubscription;
 
   ConnectionManager({
     required CryptoService cryptoService,
-    required DiscoveryService discoveryService,
     required WebRTCService webrtcService,
   })  : _cryptoService = cryptoService,
-        _discoveryService = discoveryService,
         _webrtcService = webrtcService {
     _setupCallbacks();
   }
@@ -81,27 +70,7 @@ class ConnectionManager {
   /// Initialize the connection manager.
   Future<void> initialize() async {
     await _cryptoService.initialize();
-
-    // Start local signaling server
-    _localSignalingServer = LocalSignalingServer();
-    final signalingPort = await _localSignalingServer!.start();
-    logger.info('ConnectionManager', 'Local signaling server started on port $signalingPort');
-
-    // Update discovery service with actual signaling port
-    await _discoveryService.updatePort(signalingPort);
-
-    // Listen to local signaling messages
-    _localSignalingSubscription = _localSignalingServer!.messages.listen(_handleLocalSignalingMessage);
-
-    // Listen to discovered peers
-    _discoverySubscription = _discoveryService.peers.listen(_handleDiscoveredPeers);
-
-    // Start local discovery
-    await _discoveryService.start();
   }
-
-  /// Get the local signaling port.
-  int? get localSignalingPort => _localSignalingServer?.actualPort;
 
   /// Stream of incoming pair requests for UI to show approval dialog.
   final _pairRequestController =
@@ -139,65 +108,6 @@ class ConnectionManager {
     _externalPairingCode = null;
   }
 
-  /// Connect to a local peer (discovered via mDNS).
-  Future<void> connectToLocalPeer(String peerId) async {
-    final peer = _peers[peerId];
-    if (peer == null) {
-      throw ConnectionException('Unknown peer: $peerId');
-    }
-
-    if (peer.ipAddress == null || peer.port == null) {
-      throw ConnectionException('Peer $peerId has no address information');
-    }
-
-    _updatePeerState(peerId, PeerConnectionState.connecting);
-
-    try {
-      // Set up signaling callback to send messages to peer
-      _webrtcService.onSignalingMessage = (targetPeerId, message) {
-        _sendLocalSignal(targetPeerId, message);
-      };
-
-      // Create and send WebRTC offer
-      final offer = await _webrtcService.createOffer(peerId);
-
-      // Send offer to peer via local HTTP signaling
-      final sent = await sendLocalSignal(
-        targetHost: peer.ipAddress!,
-        targetPort: peer.port!,
-        fromPeerId: _discoveryService.instanceId,
-        type: 'offer',
-        payload: offer,
-      );
-
-      if (!sent) {
-        throw ConnectionException('Failed to send offer to peer');
-      }
-
-      logger.debug('ConnectionManager', 'Sent offer to ${peer.ipAddress}:${peer.port}');
-    } catch (e) {
-      _updatePeerState(peerId, PeerConnectionState.failed);
-      rethrow;
-    }
-  }
-
-  /// Send a signaling message to a local peer.
-  Future<void> _sendLocalSignal(String peerId, Map<String, dynamic> message) async {
-    final peer = _peers[peerId];
-    if (peer == null || peer.ipAddress == null || peer.port == null) {
-      logger.warning('ConnectionManager', 'Cannot send signal to $peerId: no address');
-      return;
-    }
-
-    await sendLocalSignal(
-      targetHost: peer.ipAddress!,
-      targetPort: peer.port!,
-      fromPeerId: _discoveryService.instanceId,
-      type: message['type'] as String,
-      payload: message,
-    );
-  }
-
   /// Request to connect to an external peer using their pairing code.
   /// This sends a pair request that the peer must approve.
   Future<void> connectToExternalPeer(String pairingCode) async {
@@ -208,7 +118,7 @@ class ConnectionManager {
     // Create a placeholder peer (waiting for approval)
     final peer = Peer(
       id: pairingCode,
-      displayName: 'External Peer',
+      displayName: 'Peer $pairingCode',
       connectionState: PeerConnectionState.connecting,
       lastSeen: DateTime.now(),
       isLocal: false,
@@ -280,11 +190,7 @@ class ConnectionManager {
 
   /// Dispose resources.
   Future<void> dispose() async {
-    await _discoverySubscription?.cancel();
     await _signalingSubscription?.cancel();
-    await _localSignalingSubscription?.cancel();
-    await _localSignalingServer?.dispose();
-    await _discoveryService.dispose();
     await _webrtcService.dispose();
     await _signalingClient?.dispose();
     await _peersController.close();
@@ -319,86 +225,6 @@ class ConnectionManager {
     };
   }
 
-  /// Handle incoming local signaling messages.
-  void _handleLocalSignalingMessage(LocalSignalingMessage message) async {
-    final fromPeerId = message.fromPeerId;
-    logger.debug('ConnectionManager', 'Received ${message.type} from $fromPeerId');
-
-    // Find or create peer entry
-    if (!_peers.containsKey(fromPeerId)) {
-      // Look for this peer in discovered peers by matching the ID
-      final existingPeer = _peers.values.firstWhere(
-        (p) => p.id == fromPeerId,
-        orElse: () => Peer(
-          id: fromPeerId,
-          displayName: 'Local Peer',
-          connectionState: PeerConnectionState.connecting,
-          lastSeen: DateTime.now(),
-          isLocal: true,
-        ),
-      );
-      _peers[fromPeerId] = existingPeer;
-    }
-
-    switch (message.type) {
-      case 'offer':
-        _updatePeerState(fromPeerId, PeerConnectionState.connecting);
-
-        // Set up signaling callback for response
-        _webrtcService.onSignalingMessage = (targetPeerId, msg) {
-          _sendLocalSignal(targetPeerId, msg);
-        };
-
-        // Handle offer and create answer
-        final answer = await _webrtcService.handleOffer(fromPeerId, message.payload);
-
-        // Send answer back
-        final peer = _peers[fromPeerId];
-        if (peer?.ipAddress != null && peer?.port != null) {
-          await sendLocalSignal(
-            targetHost: peer!.ipAddress!,
-            targetPort: peer.port!,
-            fromPeerId: _discoveryService.instanceId,
-            type: 'answer',
-            payload: answer,
-          );
-          logger.debug('ConnectionManager', 'Sent answer to ${peer.ipAddress}:${peer.port}');
-        }
-        break;
-
-      case 'answer':
-        await _webrtcService.handleAnswer(fromPeerId, message.payload);
-        break;
-
-      case 'ice_candidate':
-        await _webrtcService.addIceCandidate(fromPeerId, message.payload);
-        break;
-    }
-  }
-
-  void _handleDiscoveredPeers(List<Peer> discoveredPeers) {
-    // Update peers map with discovered peers
-    for (final peer in discoveredPeers) {
-      if (!_peers.containsKey(peer.id)) {
-        _peers[peer.id] = peer;
-      } else {
-        // Update existing peer info but preserve connection state
-        _peers[peer.id] = peer.copyWith(
-          connectionState: _peers[peer.id]!.connectionState,
-        );
-      }
-    }
-
-    // Remove peers that are no longer discovered (and not connected)
-    final discoveredIds = discoveredPeers.map((p) => p.id).toSet();
-    _peers.removeWhere((id, peer) =>
-        !discoveredIds.contains(id) &&
-        peer.isLocal &&
-        peer.connectionState == PeerConnectionState.disconnected);
-
-    _notifyPeersChanged();
-  }
-
   void _handleSignalingMessage(SignalingMessage message) async {
     switch (message) {
       case SignalingPairIncoming(fromCode: final fromCode, fromPublicKey: final fromPublicKey):
@@ -411,7 +237,7 @@ class ConnectionManager {
         if (!_peers.containsKey(peerCode)) {
           _peers[peerCode] = Peer(
             id: peerCode,
-            displayName: 'External Peer',
+            displayName: 'Peer $peerCode',
             connectionState: PeerConnectionState.connecting,
             lastSeen: DateTime.now(),
             isLocal: false,
@@ -444,7 +270,7 @@ class ConnectionManager {
         if (!_peers.containsKey(from)) {
           _peers[from] = Peer(
             id: from,
-            displayName: 'External Peer',
+            displayName: 'Peer $from',
             connectionState: PeerConnectionState.connecting,
             lastSeen: DateTime.now(),
             isLocal: false,

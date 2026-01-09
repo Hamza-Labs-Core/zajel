@@ -5,7 +5,6 @@ import '../crypto/crypto_service.dart';
 import '../logging/logger_service.dart';
 import '../models/models.dart';
 import '../network/connection_manager.dart';
-import '../network/discovery_service.dart';
 import '../network/meeting_point_service.dart';
 import '../network/peer_reconnection_service.dart';
 import '../network/relay_client.dart';
@@ -30,15 +29,6 @@ final displayNameProvider = StateProvider<String>((ref) {
 /// Provider for crypto service.
 final cryptoServiceProvider = Provider<CryptoService>((ref) {
   return CryptoService();
-});
-
-/// Provider for discovery service.
-final discoveryServiceProvider = Provider<DiscoveryService>((ref) {
-  final displayName = ref.watch(displayNameProvider);
-  return DiscoveryService(
-    displayName: displayName,
-    port: 42424, // Default port for Zajel
-  );
 });
 
 /// Provider for WebRTC service.
@@ -92,12 +82,10 @@ final peerReconnectionServiceProvider = Provider<PeerReconnectionService?>((ref)
 /// Provider for connection manager.
 final connectionManagerProvider = Provider<ConnectionManager>((ref) {
   final cryptoService = ref.watch(cryptoServiceProvider);
-  final discoveryService = ref.watch(discoveryServiceProvider);
   final webrtcService = ref.watch(webrtcServiceProvider);
 
   return ConnectionManager(
     cryptoService: cryptoService,
-    discoveryService: discoveryService,
     webrtcService: webrtcService,
   );
 });

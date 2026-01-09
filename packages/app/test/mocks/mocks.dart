@@ -3,7 +3,6 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:zajel/core/crypto/crypto_service.dart';
 import 'package:zajel/core/network/connection_manager.dart';
-import 'package:zajel/core/network/discovery_service.dart';
 import 'package:zajel/core/network/meeting_point_service.dart';
 import 'package:zajel/core/network/rendezvous_service.dart';
 import 'package:zajel/core/storage/trusted_peers_storage.dart';
@@ -14,8 +13,6 @@ class MockFlutterSecureStorage extends Mock implements FlutterSecureStorage {}
 class MockCryptoService extends Mock implements CryptoService {}
 
 class MockConnectionManager extends Mock implements ConnectionManager {}
-
-class MockDiscoveryService extends Mock implements DiscoveryService {}
 
 class MockMeetingPointService extends Mock implements MeetingPointService {}
 

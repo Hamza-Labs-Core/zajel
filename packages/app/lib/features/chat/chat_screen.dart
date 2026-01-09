@@ -402,8 +402,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             if (peer.ipAddress != null)
               _InfoRow(label: 'IP', value: peer.ipAddress!),
             _InfoRow(
-              label: 'Type',
-              value: peer.isLocal ? 'Local Network' : 'External',
+              label: 'Connection',
+              value: 'End-to-end encrypted',
             ),
             _InfoRow(
               label: 'Last Seen',

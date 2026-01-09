@@ -221,7 +221,7 @@ class _PeerCard extends ConsumerWidget {
                   ? Colors.green.shade100
                   : Theme.of(context).colorScheme.surfaceContainerHighest,
               child: Icon(
-                peer.isLocal ? Icons.computer : Icons.public,
+                Icons.person,
                 color: isConnected
                     ? Colors.green
                     : Theme.of(context).colorScheme.onSurfaceVariant,
@@ -371,18 +371,14 @@ class _PeerCard extends ConsumerWidget {
       case PeerConnectionState.failed:
         return 'Connection failed';
       default:
-        return peer.isLocal ? 'On local network' : 'External peer';
+        return 'Tap to connect';
     }
   }
 
   Future<void> _connect(BuildContext context, WidgetRef ref) async {
     final connectionManager = ref.read(connectionManagerProvider);
     try {
-      if (peer.isLocal) {
-        await connectionManager.connectToLocalPeer(peer.id);
-      } else {
-        await connectionManager.connectToExternalPeer(peer.id);
-      }
+      await connectionManager.connectToExternalPeer(peer.id);
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
