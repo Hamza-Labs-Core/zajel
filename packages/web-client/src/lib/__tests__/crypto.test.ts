@@ -634,41 +634,17 @@ describe('CryptoService', () => {
     });
 
     it('should reject messages with old sequence numbers', () => {
-      // Send and receive many messages to advance the counter
-      for (let i = 0; i < 15; i++) {
-        const msg = alice.encrypt(sharedRoomId, `Message ${i}`);
-        bob.decrypt(sharedRoomId, msg);
-      }
-
-      // Create a new session for Alice (to reset her counter) but keep Bob's counter
-      const aliceStorage2 = createMockStorage();
-      Object.defineProperty(globalThis, 'sessionStorage', {
-        value: aliceStorage2,
-        writable: true,
-        configurable: true,
-      });
-      const aliceNew = new CryptoService();
-      // Manually set up a session that would produce low sequence numbers
-      // This simulates an attacker trying to replay old captured messages
-
-      // For simplicity, we just capture an early message before sending many
-      // Reset and test differently:
-      // Re-establish the session for fresh test
-      alice.clearSession(sharedRoomId);
-      bob.clearSession(sharedRoomId);
-      alice.establishSession(sharedRoomId, bob.getPublicKeyBase64());
-      bob.establishSession(sharedRoomId, alice.getPublicKeyBase64());
-
       // Capture message at seq 1
       const earlyMessage = alice.encrypt(sharedRoomId, 'Early message');
 
-      // Send and receive many more messages to advance counter beyond window
-      for (let i = 0; i < 15; i++) {
+      // Send and receive many more messages to advance counter beyond window (64)
+      for (let i = 0; i < 70; i++) {
         const msg = alice.encrypt(sharedRoomId, `Message ${i}`);
         bob.decrypt(sharedRoomId, msg);
       }
 
       // Now try to replay the early message - should fail as too old
+      // seq 1 is outside window: 71 - 1 = 70 >= 64
       expect(() => bob.decrypt(sharedRoomId, earlyMessage)).toThrow(
         'Replay attack detected: sequence too old'
       );
@@ -687,9 +663,11 @@ describe('CryptoService', () => {
       // Message 3 (seq 3) - should work (skipping ahead is fine)
       expect(bob.decrypt(sharedRoomId, msg3)).toBe('Message 3');
 
-      // Message 2 (seq 2) - would fail because we track highest seen (3)
-      // and 2 < 3, so it's treated as duplicate/old
-      // Note: This is a trade-off in the current implementation
+      // Message 2 (seq 2) - should now work with sliding window implementation
+      // seq 2 is within the window (3 - 2 = 1 < 64) and hasn't been seen yet
+      expect(bob.decrypt(sharedRoomId, msg2)).toBe('Message 2');
+
+      // But replaying msg2 again should fail
       expect(() => bob.decrypt(sharedRoomId, msg2)).toThrow(
         'Replay attack detected: duplicate sequence number'
       );

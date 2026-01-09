@@ -46,6 +46,7 @@ export function App() {
   const [myFingerprint, setMyFingerprint] = useState('');
   const [peerFingerprint, setPeerFingerprint] = useState('');
   const [showSecurityInfo, setShowSecurityInfo] = useState(false);
+  const [showSecurityReminder, setShowSecurityReminder] = useState(false);
   const [keyChangeWarning, setKeyChangeWarning] = useState<{
     peerCode: string;
     peerPublicKey: string;
@@ -155,6 +156,8 @@ export function App() {
           // Verify the key matches what we got from signaling
           // For simplicity, we trust the signaling server's key exchange
           setState('connected');
+          // Show security reminder on first connection
+          setShowSecurityReminder(true);
         },
         onMessage: (encryptedData) => {
           try {
@@ -477,6 +480,7 @@ export function App() {
     setPeerFingerprint('');
     setMessages([]);
     setTransfers([]);
+    setShowSecurityReminder(false);
     setState('registered');
   }, [peerCode]);
 
@@ -584,6 +588,77 @@ export function App() {
           >
             Close
           </button>
+        </div>
+      )}
+
+      {/* One-time Security Reminder on Connection */}
+      {showSecurityReminder && state === 'connected' && peerFingerprint && (
+        <div class="card" style={{
+          background: 'linear-gradient(135deg, #dc2626, #b91c1c)',
+          marginBottom: '16px',
+          border: '2px solid #fca5a5'
+        }}>
+          <h3 style={{ margin: '0 0 8px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            ⚠️ Verify Your Connection
+          </h3>
+          <p style={{ margin: '0 0 12px 0', fontSize: '14px' }}>
+            <strong>Warning:</strong> Without verification, a man-in-the-middle attack could intercept your messages.
+            Compare fingerprints with your peer through a trusted channel (phone call, in person).
+          </p>
+          <div style={{
+            background: 'rgba(0,0,0,0.2)',
+            padding: '12px',
+            borderRadius: '8px',
+            marginBottom: '12px'
+          }}>
+            <div style={{ marginBottom: '8px' }}>
+              <strong style={{ fontSize: '12px' }}>Your Fingerprint:</strong>
+              <code style={{
+                display: 'block',
+                fontSize: '11px',
+                marginTop: '4px',
+                wordBreak: 'break-all',
+                background: 'rgba(255,255,255,0.1)',
+                padding: '4px',
+                borderRadius: '4px'
+              }}>
+                {myFingerprint}
+              </code>
+            </div>
+            <div>
+              <strong style={{ fontSize: '12px' }}>Peer Fingerprint ({peerCode}):</strong>
+              <code style={{
+                display: 'block',
+                fontSize: '11px',
+                marginTop: '4px',
+                wordBreak: 'break-all',
+                background: 'rgba(255,255,255,0.1)',
+                padding: '4px',
+                borderRadius: '4px'
+              }}>
+                {peerFingerprint}
+              </code>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              class="btn btn-sm"
+              style={{ background: 'rgba(255,255,255,0.2)', flex: 1 }}
+              onClick={() => setShowSecurityReminder(false)}
+            >
+              I'll Verify Later
+            </button>
+            <button
+              class="btn btn-sm"
+              style={{ background: '#16a34a', flex: 1 }}
+              onClick={() => {
+                setShowSecurityReminder(false);
+                setShowSecurityInfo(true);
+              }}
+            >
+              ✓ Verified
+            </button>
+          </div>
         </div>
       )}
 

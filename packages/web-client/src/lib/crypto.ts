@@ -62,13 +62,15 @@ export interface KeyPair {
 }
 
 // Replay protection constants
-const SEQUENCE_WINDOW = 10; // Allow messages up to 10 behind current to handle out-of-order delivery
+const SEQUENCE_WINDOW = 64; // Size of sliding window for out-of-order delivery
 
 export class CryptoService {
   private keyPair: KeyPair | null = null;
   private sessionKeys = new Map<string, Uint8Array>();
   private sendCounters = new Map<string, number>();
   private receiveCounters = new Map<string, number>();
+  // Track seen sequences within the window using a Set per peer
+  private seenSequences = new Map<string, Set<number>>();
 
   async initialize(): Promise<void> {
     const storage = getStorage();
@@ -210,6 +212,7 @@ export class CryptoService {
     this.sessionKeys.delete(peerId);
     this.sendCounters.delete(peerId);
     this.receiveCounters.delete(peerId);
+    this.seenSequences.delete(peerId);
   }
 
   encrypt(peerId: string, plaintext: string): string {
@@ -259,17 +262,37 @@ export class CryptoService {
     const seq = new DataView(combined.buffer, combined.byteOffset, 4).getUint32(0, false);
     const lastSeq = this.receiveCounters.get(peerId) || 0;
 
-    // Check for replay attacks
-    if (seq <= lastSeq) {
-      // Allow small window for out-of-order delivery
-      if (lastSeq - seq < SEQUENCE_WINDOW) {
-        throw new Error('Replay attack detected: duplicate sequence number');
-      }
-      throw new Error('Replay attack detected: sequence too old');
+    // Get or create the seen sequences set for this peer
+    let seen = this.seenSequences.get(peerId);
+    if (!seen) {
+      seen = new Set<number>();
+      this.seenSequences.set(peerId, seen);
     }
 
-    // Update the receive counter to the highest seen sequence
-    this.receiveCounters.set(peerId, seq);
+    // Check for replay attacks using sliding window
+    if (seq > lastSeq) {
+      // New highest sequence - advance the window
+      // Clear sequences that are now outside the window
+      const newWindowStart = seq - SEQUENCE_WINDOW;
+      for (const oldSeq of seen) {
+        if (oldSeq <= newWindowStart) {
+          seen.delete(oldSeq);
+        }
+      }
+      // Update the counter and mark as seen
+      this.receiveCounters.set(peerId, seq);
+      seen.add(seq);
+    } else if (seq <= lastSeq - SEQUENCE_WINDOW) {
+      // Sequence is too old (outside the window)
+      throw new Error('Replay attack detected: sequence too old');
+    } else {
+      // Sequence is within the window - check if already seen
+      if (seen.has(seq)) {
+        throw new Error('Replay attack detected: duplicate sequence number');
+      }
+      // Mark as seen (allow out-of-order delivery within window)
+      seen.add(seq);
+    }
 
     // Extract plaintext (skip 4-byte sequence number)
     const plaintextBytes = combined.slice(4);
