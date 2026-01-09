@@ -1,84 +1,18 @@
 /**
  * CryptoService Tests
  *
- * Tests for X25519 key exchange, ChaCha20-Poly1305 encryption,
- * and key storage management.
+ * Tests for X25519 key exchange and ChaCha20-Poly1305 encryption.
+ * Keys are ephemeral (memory-only) - no storage tests needed.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import {
-  CryptoService,
-  setStorageMode,
-  getStorageMode,
-  isEphemeralStorage,
-  type StorageMode,
-} from '../crypto';
-
-// Mock storage
-const createMockStorage = (): Storage => {
-  const store = new Map<string, string>();
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => store.set(key, value),
-    removeItem: (key: string) => store.delete(key),
-    clear: () => store.clear(),
-    key: (index: number) => Array.from(store.keys())[index] ?? null,
-    get length() {
-      return store.size;
-    },
-  };
-};
-
-// Store original globals
-const originalSessionStorage = globalThis.sessionStorage;
-const originalLocalStorage = globalThis.localStorage;
+import { describe, it, expect, beforeEach } from 'vitest';
+import { CryptoService } from '../crypto';
 
 describe('CryptoService', () => {
-  let mockSessionStorage: Storage;
-  let mockLocalStorage: Storage;
-
-  beforeEach(() => {
-    // Create fresh mock storages for each test
-    mockSessionStorage = createMockStorage();
-    mockLocalStorage = createMockStorage();
-
-    // Replace global storage objects
-    Object.defineProperty(globalThis, 'sessionStorage', {
-      value: mockSessionStorage,
-      writable: true,
-      configurable: true,
-    });
-    Object.defineProperty(globalThis, 'localStorage', {
-      value: mockLocalStorage,
-      writable: true,
-      configurable: true,
-    });
-
-    // Reset storage mode to default
-    setStorageMode('session');
-  });
-
-  afterEach(() => {
-    // Restore original storage objects
-    Object.defineProperty(globalThis, 'sessionStorage', {
-      value: originalSessionStorage,
-      writable: true,
-      configurable: true,
-    });
-    Object.defineProperty(globalThis, 'localStorage', {
-      value: originalLocalStorage,
-      writable: true,
-      configurable: true,
-    });
-  });
-
   describe('Initialization', () => {
-    it('should generate keys on first init', async () => {
+    it('should generate keys on init', async () => {
       const service = new CryptoService();
       await service.initialize();
-
-      // Should have stored the key
-      expect(mockSessionStorage.getItem('zajel_identity')).not.toBeNull();
 
       // Should be able to get public key
       const publicKey = service.getPublicKeyBase64();
@@ -86,30 +20,17 @@ describe('CryptoService', () => {
       expect(typeof publicKey).toBe('string');
     });
 
-    it('should load existing keys from storage', async () => {
-      // First service generates keys
+    it('each instance should generate different keys (ephemeral)', async () => {
       const service1 = new CryptoService();
       await service1.initialize();
       const publicKey1 = service1.getPublicKeyBase64();
 
-      // Second service should load the same keys
       const service2 = new CryptoService();
       await service2.initialize();
       const publicKey2 = service2.getPublicKeyBase64();
 
-      expect(publicKey1).toBe(publicKey2);
-    });
-
-    it('should regenerate keys if stored data is invalid', async () => {
-      // Store invalid data
-      mockSessionStorage.setItem('zajel_identity', 'invalid-json');
-
-      const service = new CryptoService();
-      await service.initialize();
-
-      // Should still work with new keys
-      const publicKey = service.getPublicKeyBase64();
-      expect(publicKey).toBeTruthy();
+      // Different instances should have different keys
+      expect(publicKey1).not.toBe(publicKey2);
     });
 
     it('should throw when getting public key before initialization', () => {
@@ -151,13 +72,13 @@ describe('CryptoService', () => {
       // Should be uppercase
       expect(fingerprint).toBe(fingerprint.toUpperCase());
 
-      // Should have spaces (groups of 4 characters)
+      // Should contain spaces (formatted)
       expect(fingerprint).toContain(' ');
 
-      // Should only contain hex characters and spaces
+      // Should only contain hex chars and spaces
       expect(fingerprint).toMatch(/^[0-9A-F ]+$/);
 
-      // 16 bytes = 32 hex chars + 7 spaces (8 groups of 4)
+      // Should be 32 hex chars (128 bits / 4 bits per char)
       expect(fingerprint.replace(/ /g, '').length).toBe(32);
     });
 
@@ -167,320 +88,206 @@ describe('CryptoService', () => {
 
       const hexKey = service.getPublicKeyHex();
 
-      // Should be lowercase hex
-      expect(hexKey).toMatch(/^[0-9a-f]+$/);
-
-      // Should be 64 hex chars (32 bytes)
+      // Should be 64 hex chars (32 bytes * 2)
       expect(hexKey.length).toBe(64);
+
+      // Should only contain hex chars
+      expect(hexKey).toMatch(/^[0-9a-f]+$/);
     });
   });
 
   describe('Session Establishment', () => {
-    let service: CryptoService;
-    let peerService: CryptoService;
+    it('establishSession should create session key', async () => {
+      const alice = new CryptoService();
+      const bob = new CryptoService();
+      await alice.initialize();
+      await bob.initialize();
 
-    beforeEach(async () => {
-      service = new CryptoService();
-      await service.initialize();
+      // Establish session using Bob's public key
+      alice.establishSession('bob', bob.getPublicKeyBase64());
 
-      // Create a peer with separate storage
-      const peerStorage = createMockStorage();
-      Object.defineProperty(globalThis, 'sessionStorage', {
-        value: peerStorage,
-        writable: true,
-        configurable: true,
-      });
-
-      peerService = new CryptoService();
-      await peerService.initialize();
-
-      // Restore original mock storage for main service
-      Object.defineProperty(globalThis, 'sessionStorage', {
-        value: mockSessionStorage,
-        writable: true,
-        configurable: true,
-      });
+      expect(alice.hasSession('bob')).toBe(true);
+      expect(alice.hasSession('charlie')).toBe(false);
     });
 
-    it('establishSession should create session key', () => {
-      const peerId = 'peer-123';
-      const peerPublicKey = peerService.getPublicKeyBase64();
+    it('should throw on invalid base64 public key', async () => {
+      const alice = new CryptoService();
+      await alice.initialize();
 
-      expect(service.hasSession(peerId)).toBe(false);
-
-      service.establishSession(peerId, peerPublicKey);
-
-      expect(service.hasSession(peerId)).toBe(true);
-    });
-
-    it('should throw on invalid base64 public key', () => {
-      const peerId = 'peer-123';
-
-      expect(() => service.establishSession(peerId, 'not-valid-base64!!!')).toThrow(
+      expect(() => alice.establishSession('bob', 'not-valid-base64!!!')).toThrow(
         'Invalid peer public key: malformed base64'
       );
     });
 
-    it('should throw on wrong key length (not 32 bytes)', () => {
-      const peerId = 'peer-123';
+    it('should throw on wrong key length (not 32 bytes)', async () => {
+      const alice = new CryptoService();
+      await alice.initialize();
+
       // Create a 16-byte key (too short)
       const shortKey = btoa(String.fromCharCode(...new Uint8Array(16)));
 
-      expect(() => service.establishSession(peerId, shortKey)).toThrow(
+      expect(() => alice.establishSession('bob', shortKey)).toThrow(
         'Invalid peer public key: expected 32 bytes, got 16'
       );
     });
 
-    it('should throw on key too long', () => {
-      const peerId = 'peer-123';
+    it('should throw on key too long', async () => {
+      const alice = new CryptoService();
+      await alice.initialize();
+
       // Create a 64-byte key (too long)
       const longKey = btoa(String.fromCharCode(...new Uint8Array(64)));
 
-      expect(() => service.establishSession(peerId, longKey)).toThrow(
+      expect(() => alice.establishSession('bob', longKey)).toThrow(
         'Invalid peer public key: expected 32 bytes, got 64'
       );
     });
 
-    it('hasSession should return correct state', () => {
-      const peerId = 'peer-123';
-      const peerPublicKey = peerService.getPublicKeyBase64();
+    it('hasSession should return correct state', async () => {
+      const alice = new CryptoService();
+      const bob = new CryptoService();
+      await alice.initialize();
+      await bob.initialize();
 
-      expect(service.hasSession(peerId)).toBe(false);
-      expect(service.hasSession('other-peer')).toBe(false);
+      expect(alice.hasSession('bob')).toBe(false);
 
-      service.establishSession(peerId, peerPublicKey);
+      alice.establishSession('bob', bob.getPublicKeyBase64());
 
-      expect(service.hasSession(peerId)).toBe(true);
-      expect(service.hasSession('other-peer')).toBe(false);
+      expect(alice.hasSession('bob')).toBe(true);
     });
 
-    it('clearSession should remove session', () => {
-      const peerId = 'peer-123';
-      const peerPublicKey = peerService.getPublicKeyBase64();
+    it('clearSession should remove session', async () => {
+      const alice = new CryptoService();
+      const bob = new CryptoService();
+      await alice.initialize();
+      await bob.initialize();
 
-      service.establishSession(peerId, peerPublicKey);
-      expect(service.hasSession(peerId)).toBe(true);
+      alice.establishSession('bob', bob.getPublicKeyBase64());
+      expect(alice.hasSession('bob')).toBe(true);
 
-      service.clearSession(peerId);
-      expect(service.hasSession(peerId)).toBe(false);
+      alice.clearSession('bob');
+      expect(alice.hasSession('bob')).toBe(false);
     });
 
     it('should throw when establishing session before initialization', () => {
-      const uninitializedService = new CryptoService();
-      const peerPublicKey = peerService.getPublicKeyBase64();
+      const alice = new CryptoService();
 
-      expect(() =>
-        uninitializedService.establishSession('peer-123', peerPublicKey)
-      ).toThrow('CryptoService not initialized');
+      // Create a valid 32-byte key
+      const validKey = btoa(String.fromCharCode(...new Uint8Array(32)));
+
+      expect(() => alice.establishSession('bob', validKey)).toThrow(
+        'CryptoService not initialized'
+      );
     });
   });
 
   describe('Encryption/Decryption', () => {
-    let service: CryptoService;
-    let peerService: CryptoService;
-    // Use the same peerId on both sides since HKDF includes peerId in key derivation
-    // In the real app, both parties use the same room/session identifier
-    const sessionId = 'shared-session-123';
+    let alice: CryptoService;
+    let bob: CryptoService;
+    const sharedRoomId = 'room123';
 
     beforeEach(async () => {
-      service = new CryptoService();
-      await service.initialize();
+      alice = new CryptoService();
+      bob = new CryptoService();
+      await alice.initialize();
+      await bob.initialize();
 
-      // Create a peer with separate storage
-      const peerStorage = createMockStorage();
-      Object.defineProperty(globalThis, 'sessionStorage', {
-        value: peerStorage,
-        writable: true,
-        configurable: true,
-      });
-
-      peerService = new CryptoService();
-      await peerService.initialize();
-
-      // Restore original mock storage
-      Object.defineProperty(globalThis, 'sessionStorage', {
-        value: mockSessionStorage,
-        writable: true,
-        configurable: true,
-      });
-
-      // Establish sessions on both sides with the same session ID
-      // Both sides use the same ID because HKDF derives the key using:
-      // hkdf(sha256, sharedSecret, undefined, `zajel_session_${peerId}`, 32)
-      // For the same derived key, both parties need the same peerId
-      service.establishSession(sessionId, peerService.getPublicKeyBase64());
-      peerService.establishSession(sessionId, service.getPublicKeyBase64());
+      // Establish sessions
+      alice.establishSession(sharedRoomId, bob.getPublicKeyBase64());
+      bob.establishSession(sharedRoomId, alice.getPublicKeyBase64());
     });
 
     it('encrypt should return base64 string', () => {
-      const plaintext = 'Hello, World!';
-      const ciphertext = service.encrypt(sessionId, plaintext);
+      const encrypted = alice.encrypt(sharedRoomId, 'Hello');
 
-      expect(typeof ciphertext).toBe('string');
-      // Should be valid base64
-      expect(() => atob(ciphertext)).not.toThrow();
+      expect(typeof encrypted).toBe('string');
+      expect(() => atob(encrypted)).not.toThrow();
     });
 
     it('decrypt should recover original message', () => {
-      const originalMessage = 'Hello, secure world!';
+      const message = 'Hello, Bob!';
+      const encrypted = alice.encrypt(sharedRoomId, message);
+      const decrypted = bob.decrypt(sharedRoomId, encrypted);
 
-      const ciphertext = service.encrypt(sessionId, originalMessage);
-      const decrypted = peerService.decrypt(sessionId, ciphertext);
-
-      expect(decrypted).toBe(originalMessage);
+      expect(decrypted).toBe(message);
     });
 
     it('should handle unicode messages', () => {
-      const originalMessage = 'Hello 123';
+      const message = 'Hello! こんにちは! 🎉';
+      const encrypted = alice.encrypt(sharedRoomId, message);
+      const decrypted = bob.decrypt(sharedRoomId, encrypted);
 
-      const ciphertext = service.encrypt(sessionId, originalMessage);
-      const decrypted = peerService.decrypt(sessionId, ciphertext);
-
-      expect(decrypted).toBe(originalMessage);
+      expect(decrypted).toBe(message);
     });
 
     it('should handle empty messages', () => {
-      const originalMessage = '';
+      const message = '';
+      const encrypted = alice.encrypt(sharedRoomId, message);
+      const decrypted = bob.decrypt(sharedRoomId, encrypted);
 
-      const ciphertext = service.encrypt(sessionId, originalMessage);
-      const decrypted = peerService.decrypt(sessionId, ciphertext);
-
-      expect(decrypted).toBe(originalMessage);
+      expect(decrypted).toBe(message);
     });
 
     it('same plaintext should produce different ciphertext (random nonce)', () => {
-      const plaintext = 'Same message twice';
+      const message = 'Hello';
+      const encrypted1 = alice.encrypt(sharedRoomId, message);
+      const encrypted2 = alice.encrypt(sharedRoomId, message);
 
-      const ciphertext1 = service.encrypt(sessionId, plaintext);
-      const ciphertext2 = service.encrypt(sessionId, plaintext);
+      // Ciphertexts should be different due to random nonce
+      expect(encrypted1).not.toBe(encrypted2);
 
-      // Should be different due to random nonce
-      expect(ciphertext1).not.toBe(ciphertext2);
-
-      // But both should decrypt to the same plaintext
-      const decrypted1 = peerService.decrypt(sessionId, ciphertext1);
-      const decrypted2 = peerService.decrypt(sessionId, ciphertext2);
-
-      expect(decrypted1).toBe(plaintext);
-      expect(decrypted2).toBe(plaintext);
+      // But both should decrypt to the same message
+      expect(bob.decrypt(sharedRoomId, encrypted1)).toBe(message);
+      expect(bob.decrypt(sharedRoomId, encrypted2)).toBe(message);
     });
 
-    it('should throw when encrypting without session', () => {
-      const serviceWithoutSession = new CryptoService();
+    it('should throw when encrypting without session', async () => {
+      const charlie = new CryptoService();
+      await charlie.initialize();
 
-      // Initialize but don't establish session
-      return serviceWithoutSession.initialize().then(() => {
-        expect(() =>
-          serviceWithoutSession.encrypt('unknown-peer', 'test')
-        ).toThrow('No session for peer: unknown-peer');
-      });
+      expect(() => charlie.encrypt('unknown', 'Hello')).toThrow(
+        'No session for peer: unknown'
+      );
     });
 
-    it('should throw when decrypting without session', () => {
-      const serviceWithoutSession = new CryptoService();
+    it('should throw when decrypting without session', async () => {
+      const charlie = new CryptoService();
+      await charlie.initialize();
 
-      return serviceWithoutSession.initialize().then(() => {
-        expect(() =>
-          serviceWithoutSession.decrypt('unknown-peer', 'dGVzdA==')
-        ).toThrow('No session for peer: unknown-peer');
-      });
+      const encrypted = alice.encrypt(sharedRoomId, 'Hello');
+
+      expect(() => charlie.decrypt('unknown', encrypted)).toThrow(
+        'No session for peer: unknown'
+      );
     });
 
     it('encryptBytes should return Uint8Array', () => {
       const data = new Uint8Array([1, 2, 3, 4, 5]);
-      const encrypted = service.encryptBytes(sessionId, data);
+      const encrypted = alice.encryptBytes(sharedRoomId, data);
 
       expect(encrypted).toBeInstanceOf(Uint8Array);
-      // Should be longer than input (nonce + ciphertext + tag)
-      expect(encrypted.length).toBeGreaterThan(data.length);
+      expect(encrypted.length).toBeGreaterThan(data.length); // Includes nonce + tag
     });
 
     it('decryptBytes should recover original bytes', () => {
-      const originalData = new Uint8Array([10, 20, 30, 40, 50]);
+      const data = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      const encrypted = alice.encryptBytes(sharedRoomId, data);
+      const decrypted = bob.decryptBytes(sharedRoomId, encrypted);
 
-      const encrypted = service.encryptBytes(sessionId, originalData);
-      const decrypted = peerService.decryptBytes(sessionId, encrypted);
-
-      expect(decrypted).toEqual(originalData);
+      expect(decrypted).toEqual(data);
     });
 
     it('should handle large binary data', () => {
-      const largeData = new Uint8Array(10000);
-      crypto.getRandomValues(largeData);
+      const data = new Uint8Array(1024 * 50); // 50KB (within 65KB limit)
+      // Fill with predictable pattern instead of random
+      for (let i = 0; i < data.length; i++) {
+        data[i] = i % 256;
+      }
 
-      const encrypted = service.encryptBytes(sessionId, largeData);
-      const decrypted = peerService.decryptBytes(sessionId, encrypted);
+      const encrypted = alice.encryptBytes(sharedRoomId, data);
+      const decrypted = bob.decryptBytes(sharedRoomId, encrypted);
 
-      expect(decrypted).toEqual(largeData);
-    });
-  });
-
-  describe('Storage Configuration', () => {
-    it('isEphemeralStorage should return true by default', () => {
-      // Reset to default state
-      setStorageMode('session');
-      expect(isEphemeralStorage()).toBe(true);
-    });
-
-    it('setStorageMode should change storage type', () => {
-      setStorageMode('persistent');
-      expect(isEphemeralStorage()).toBe(false);
-      expect(getStorageMode()).toBe('persistent');
-
-      setStorageMode('session');
-      expect(isEphemeralStorage()).toBe(true);
-      expect(getStorageMode()).toBe('session');
-    });
-
-    it('getStorageMode should return current mode', () => {
-      setStorageMode('session');
-      expect(getStorageMode()).toBe('session');
-
-      setStorageMode('persistent');
-      expect(getStorageMode()).toBe('persistent');
-    });
-
-    it('should use sessionStorage when mode is session', async () => {
-      setStorageMode('session');
-
-      const service = new CryptoService();
-      await service.initialize();
-
-      expect(mockSessionStorage.getItem('zajel_identity')).not.toBeNull();
-      expect(mockLocalStorage.getItem('zajel_identity')).toBeNull();
-    });
-
-    it('should use localStorage when mode is persistent', async () => {
-      setStorageMode('persistent');
-
-      const service = new CryptoService();
-      await service.initialize();
-
-      expect(mockLocalStorage.getItem('zajel_identity')).not.toBeNull();
-      expect(mockSessionStorage.getItem('zajel_identity')).toBeNull();
-    });
-
-    it('should load keys from correct storage based on mode', async () => {
-      // First, create keys in persistent storage
-      setStorageMode('persistent');
-      const persistentService = new CryptoService();
-      await persistentService.initialize();
-      const persistentKey = persistentService.getPublicKeyBase64();
-
-      // Now create keys in session storage
-      setStorageMode('session');
-      const sessionService = new CryptoService();
-      await sessionService.initialize();
-      const sessionKey = sessionService.getPublicKeyBase64();
-
-      // Keys should be different (different storage, different keys)
-      expect(persistentKey).not.toBe(sessionKey);
-
-      // Switching back should load the persistent key
-      setStorageMode('persistent');
-      const reloadedService = new CryptoService();
-      await reloadedService.initialize();
-      expect(reloadedService.getPublicKeyBase64()).toBe(persistentKey);
+      expect(decrypted).toEqual(data);
     });
   });
 
@@ -503,13 +310,13 @@ describe('CryptoService', () => {
       // Should be uppercase
       expect(fingerprint).toBe(fingerprint.toUpperCase());
 
-      // Should have spaces (groups of 4 characters)
+      // Should contain spaces (formatted)
       expect(fingerprint).toContain(' ');
 
-      // Should only contain hex characters and spaces
+      // Should only contain hex chars and spaces
       expect(fingerprint).toMatch(/^[0-9A-F ]+$/);
 
-      // 16 bytes = 32 hex chars + 7 spaces
+      // Should be 32 hex chars (128 bits / 4 bits per char)
       expect(fingerprint.replace(/ /g, '').length).toBe(32);
     });
 
@@ -521,7 +328,6 @@ describe('CryptoService', () => {
 
     it('should throw on wrong key length (too short)', () => {
       const shortKey = btoa(String.fromCharCode(...new Uint8Array(16)));
-
       expect(() => service.getPeerPublicKeyFingerprint(shortKey)).toThrow(
         'Invalid peer public key: expected 32 bytes, got 16'
       );
@@ -529,7 +335,6 @@ describe('CryptoService', () => {
 
     it('should throw on wrong key length (too long)', () => {
       const longKey = btoa(String.fromCharCode(...new Uint8Array(64)));
-
       expect(() => service.getPeerPublicKeyFingerprint(longKey)).toThrow(
         'Invalid peer public key: expected 32 bytes, got 64'
       );
@@ -580,40 +385,23 @@ describe('CryptoService', () => {
     const sharedRoomId = 'room-replay-test';
 
     beforeEach(async () => {
-      // Create Alice
-      const aliceStorage = createMockStorage();
-      Object.defineProperty(globalThis, 'sessionStorage', {
-        value: aliceStorage,
-        writable: true,
-        configurable: true,
-      });
       alice = new CryptoService();
-      await alice.initialize();
-
-      // Create Bob
-      const bobStorage = createMockStorage();
-      Object.defineProperty(globalThis, 'sessionStorage', {
-        value: bobStorage,
-        writable: true,
-        configurable: true,
-      });
       bob = new CryptoService();
+      await alice.initialize();
       await bob.initialize();
-
-      // Establish sessions
       alice.establishSession(sharedRoomId, bob.getPublicKeyBase64());
       bob.establishSession(sharedRoomId, alice.getPublicKeyBase64());
     });
 
     it('sequence numbers should increment with each message', () => {
-      const message1 = alice.encrypt(sharedRoomId, 'Message 1');
-      const message2 = alice.encrypt(sharedRoomId, 'Message 2');
-      const message3 = alice.encrypt(sharedRoomId, 'Message 3');
+      const msg1 = alice.encrypt(sharedRoomId, 'Message 1');
+      const msg2 = alice.encrypt(sharedRoomId, 'Message 2');
+      const msg3 = alice.encrypt(sharedRoomId, 'Message 3');
 
       // All messages should decrypt successfully in order
-      const decrypted1 = bob.decrypt(sharedRoomId, message1);
-      const decrypted2 = bob.decrypt(sharedRoomId, message2);
-      const decrypted3 = bob.decrypt(sharedRoomId, message3);
+      const decrypted1 = bob.decrypt(sharedRoomId, msg1);
+      const decrypted2 = bob.decrypt(sharedRoomId, msg2);
+      const decrypted3 = bob.decrypt(sharedRoomId, msg3);
 
       expect(decrypted1).toBe('Message 1');
       expect(decrypted2).toBe('Message 2');
@@ -691,63 +479,43 @@ describe('CryptoService', () => {
     });
 
     it('each peer should have independent counters', () => {
-      // Alice sends to Bob
-      const aliceMsg = alice.encrypt(sharedRoomId, 'From Alice');
-      bob.decrypt(sharedRoomId, aliceMsg);
+      // Alice sends 5 messages
+      for (let i = 0; i < 5; i++) {
+        const msg = alice.encrypt(sharedRoomId, `Alice ${i}`);
+        bob.decrypt(sharedRoomId, msg);
+      }
 
-      // Bob sends to Alice - should work with its own counter
-      const bobMsg = bob.encrypt(sharedRoomId, 'From Bob');
-      alice.decrypt(sharedRoomId, bobMsg);
-
-      // Both should be able to continue sending
-      const aliceMsg2 = alice.encrypt(sharedRoomId, 'From Alice 2');
-      bob.decrypt(sharedRoomId, aliceMsg2);
-
-      const bobMsg2 = bob.encrypt(sharedRoomId, 'From Bob 2');
-      alice.decrypt(sharedRoomId, bobMsg2);
+      // Bob can still send his first message (Bob's counter is independent)
+      const bobMsg = bob.encrypt(sharedRoomId, 'Bob first message');
+      const decrypted = alice.decrypt(sharedRoomId, bobMsg);
+      expect(decrypted).toBe('Bob first message');
     });
   });
 
   describe('Bidirectional Communication', () => {
     it('should allow both parties to encrypt and decrypt', async () => {
-      // Create Alice
-      const aliceStorage = createMockStorage();
-      Object.defineProperty(globalThis, 'sessionStorage', {
-        value: aliceStorage,
-        writable: true,
-        configurable: true,
-      });
       const alice = new CryptoService();
-      await alice.initialize();
-
-      // Create Bob
-      const bobStorage = createMockStorage();
-      Object.defineProperty(globalThis, 'sessionStorage', {
-        value: bobStorage,
-        writable: true,
-        configurable: true,
-      });
       const bob = new CryptoService();
+      await alice.initialize();
       await bob.initialize();
 
-      // Establish sessions with the same session ID (e.g., a shared room)
-      // Both parties use the same session ID because the HKDF key derivation
-      // includes the peerId in the info parameter
-      const sharedRoomId = 'room-abc-123';
-      alice.establishSession(sharedRoomId, bob.getPublicKeyBase64());
-      bob.establishSession(sharedRoomId, alice.getPublicKeyBase64());
+      const roomId = 'bidirectional-test';
+      alice.establishSession(roomId, bob.getPublicKeyBase64());
+      bob.establishSession(roomId, alice.getPublicKeyBase64());
 
       // Alice sends to Bob
-      const aliceMessage = 'Hello Bob!';
-      const aliceCiphertext = alice.encrypt(sharedRoomId, aliceMessage);
-      const bobReceived = bob.decrypt(sharedRoomId, aliceCiphertext);
-      expect(bobReceived).toBe(aliceMessage);
+      const aliceMsg = alice.encrypt(roomId, 'Hello from Alice');
+      expect(bob.decrypt(roomId, aliceMsg)).toBe('Hello from Alice');
 
       // Bob sends to Alice
-      const bobMessage = 'Hello Alice!';
-      const bobCiphertext = bob.encrypt(sharedRoomId, bobMessage);
-      const aliceReceived = alice.decrypt(sharedRoomId, bobCiphertext);
-      expect(aliceReceived).toBe(bobMessage);
+      const bobMsg = bob.encrypt(roomId, 'Hello from Bob');
+      expect(alice.decrypt(roomId, bobMsg)).toBe('Hello from Bob');
+
+      // Multiple messages back and forth
+      const a2 = alice.encrypt(roomId, 'Message 2 from Alice');
+      const b2 = bob.encrypt(roomId, 'Message 2 from Bob');
+      expect(bob.decrypt(roomId, a2)).toBe('Message 2 from Alice');
+      expect(alice.decrypt(roomId, b2)).toBe('Message 2 from Bob');
     });
   });
 });

@@ -2,51 +2,9 @@ import { x25519 } from '@noble/curves/ed25519';
 import { chacha20poly1305 } from '@noble/ciphers/chacha';
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha256';
-import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
+import { bytesToHex } from '@noble/hashes/utils';
 
-const STORAGE_KEY = 'zajel_identity';
 const NONCE_SIZE = 12;
-
-/**
- * Storage configuration for identity keys.
- * - 'session': Keys stored in sessionStorage (cleared when tab closes) - MORE SECURE
- * - 'persistent': Keys stored in localStorage (persist across sessions) - LESS SECURE
- *
- * Default is 'session' for security. XSS attacks have a smaller window to exfiltrate keys.
- */
-export type StorageMode = 'session' | 'persistent';
-
-let storageMode: StorageMode = 'session';
-
-/**
- * Configure the storage mode for identity keys.
- * Must be called before initialize() if you want to change from the default.
- *
- * WARNING: Using 'persistent' mode stores private keys in localStorage which is
- * accessible to any JavaScript running on this origin. An XSS vulnerability could
- * lead to key theft. Only use if you understand and accept this risk.
- */
-export function setStorageMode(mode: StorageMode): void {
-  storageMode = mode;
-}
-
-/**
- * Returns the current storage mode.
- */
-export function getStorageMode(): StorageMode {
-  return storageMode;
-}
-
-/**
- * Returns true if keys are stored in session-only storage (more secure).
- */
-export function isEphemeralStorage(): boolean {
-  return storageMode === 'session';
-}
-
-function getStorage(): Storage {
-  return storageMode === 'session' ? sessionStorage : localStorage;
-}
 
 /**
  * Formats a key fingerprint for human-readable display.
@@ -73,44 +31,14 @@ export class CryptoService {
   private seenSequences = new Map<string, Set<number>>();
 
   async initialize(): Promise<void> {
-    const storage = getStorage();
-
-    // Try to load existing keys
-    const stored = storage.getItem(STORAGE_KEY);
-    if (stored) {
-      try {
-        const { privateKey } = JSON.parse(stored);
-        const privateKeyBytes = hexToBytes(privateKey);
-        const publicKey = x25519.getPublicKey(privateKeyBytes);
-        this.keyPair = { privateKey: privateKeyBytes, publicKey };
-        return;
-      } catch {
-        // Invalid stored data, generate new
-      }
-    }
-
-    // Generate new key pair
+    // Generate ephemeral key pair - keys live only in memory
+    // This is the most secure approach for ephemeral messaging:
+    // - No storage means no XSS exfiltration from storage APIs
+    // - Keys die when the page closes
+    // - Page refresh requires re-pairing anyway (WebRTC connection dies)
     const privateKey = x25519.utils.randomPrivateKey();
     const publicKey = x25519.getPublicKey(privateKey);
     this.keyPair = { privateKey, publicKey };
-
-    // Store for persistence within the session (or across sessions if persistent mode)
-    //
-    // SECURITY NOTE: Even with sessionStorage (default), private keys are accessible
-    // to any JavaScript running on this origin during the session. An XSS attack
-    // could exfiltrate keys, though the attack window is smaller than with localStorage.
-    //
-    // For maximum security, consider:
-    // 1. Use Web Crypto API's non-extractable CryptoKey objects
-    // 2. Store keys in a secure backend with proper authentication
-    // 3. Use hardware security keys (WebAuthn) for key derivation
-    //
-    // The default sessionStorage mode is a reasonable trade-off for ephemeral messaging:
-    // keys are cleared when the tab closes, limiting exposure.
-    storage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ privateKey: bytesToHex(privateKey) })
-    );
   }
 
   getPublicKeyBase64(): string {
@@ -327,52 +255,4 @@ export class CryptoService {
 }
 
 // Singleton instance
-
-// TOFU (Trust On First Use) storage prefix
-const TOFU_PREFIX = 'zajel_tofu_';
-
-/**
- * Stores a peer's public key on first connection.
- * Uses sessionStorage for ephemeral storage mode, localStorage for persistent.
- * @param peerCode - The peer's pairing code
- * @param publicKeyBase64 - The peer's public key in base64 format
- */
-export function storePeerKey(peerCode: string, publicKeyBase64: string): void {
-  const storage = getStorage();
-  storage.setItem(TOFU_PREFIX + peerCode, publicKeyBase64);
-}
-
-/**
- * Retrieves a stored peer public key.
- * @param peerCode - The peer's pairing code
- * @returns The stored public key in base64, or null if not found
- */
-export function getStoredPeerKey(peerCode: string): string | null {
-  const storage = getStorage();
-  return storage.getItem(TOFU_PREFIX + peerCode);
-}
-
-/**
- * Clears a stored peer public key.
- * Call this when the user accepts a new key after being warned.
- * @param peerCode - The peer's pairing code
- */
-export function clearStoredPeerKey(peerCode: string): void {
-  const storage = getStorage();
-  storage.removeItem(TOFU_PREFIX + peerCode);
-}
-
-/**
- * Checks if a peer's public key has changed from what was stored.
- * Returns true if there is a stored key AND it differs from the new key.
- * Returns false if no key is stored (first connection) or keys match.
- * @param peerCode - The peer's pairing code
- * @param newPublicKey - The peer's new public key in base64
- * @returns true if the key has changed, false otherwise
- */
-export function checkKeyChanged(peerCode: string, newPublicKey: string): boolean {
-  const stored = getStoredPeerKey(peerCode);
-  return stored !== null && stored !== newPublicKey;
-}
-
 export const cryptoService = new CryptoService();

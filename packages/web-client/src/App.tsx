@@ -1,12 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
-import {
-  cryptoService,
-  isEphemeralStorage,
-  storePeerKey,
-  getStoredPeerKey,
-  checkKeyChanged,
-  clearStoredPeerKey,
-} from './lib/crypto';
+import { cryptoService } from './lib/crypto';
 import { SignalingClient } from './lib/signaling';
 import { WebRTCService } from './lib/webrtc';
 import type { ConnectionState, ChatMessage, FileTransfer } from './lib/protocol';
@@ -18,7 +11,6 @@ import { PendingApproval } from './components/PendingApproval';
 import { ChatView } from './components/ChatView';
 import { FileTransfer as FileTransferUI } from './components/FileTransfer';
 import { StatusIndicator } from './components/StatusIndicator';
-import { KeyChangeWarning } from './components/KeyChangeWarning';
 
 // Signaling server URL must be configured via environment variable
 const SIGNALING_URL = import.meta.env.VITE_SIGNALING_URL;
@@ -47,13 +39,6 @@ export function App() {
   const [peerFingerprint, setPeerFingerprint] = useState('');
   const [showSecurityInfo, setShowSecurityInfo] = useState(false);
   const [showSecurityReminder, setShowSecurityReminder] = useState(false);
-  const [keyChangeWarning, setKeyChangeWarning] = useState<{
-    peerCode: string;
-    peerPublicKey: string;
-    oldFingerprint: string;
-    newFingerprint: string;
-    isInitiator: boolean;
-  } | null>(null);
 
   const signalingRef = useRef<SignalingClient | null>(null);
   const webrtcRef = useRef<WebRTCService | null>(null);
@@ -84,30 +69,7 @@ export function App() {
         onPairMatched: async (peerCode, peerPublicKey, isInitiator) => {
           setPeerCode(peerCode);
           setIncomingRequest(null);
-
-          // TOFU check: verify if peer's key has changed
-          if (checkKeyChanged(peerCode, peerPublicKey)) {
-            // Key has changed - show warning dialog
-            const storedKey = getStoredPeerKey(peerCode);
-            const oldFingerprint = storedKey
-              ? cryptoService.getPeerPublicKeyFingerprint(storedKey)
-              : '';
-            const newFingerprint = cryptoService.getPeerPublicKeyFingerprint(peerPublicKey);
-            setKeyChangeWarning({
-              peerCode,
-              peerPublicKey,
-              oldFingerprint,
-              newFingerprint,
-              isInitiator,
-            });
-            return; // Don't proceed until user decides
-          }
-
-          // First connection or key matches - proceed normally
           setState('webrtc_connecting');
-
-          // Store the peer's key for future TOFU checks (first use)
-          storePeerKey(peerCode, peerPublicKey);
 
           // Establish crypto session and set peer fingerprint
           cryptoService.establishSession(peerCode, peerPublicKey);
@@ -338,34 +300,6 @@ export function App() {
     setPeerCode('');
   }, []);
 
-  const handleAcceptNewKey = useCallback(async () => {
-    if (!keyChangeWarning) return;
-
-    const { peerCode, peerPublicKey, isInitiator } = keyChangeWarning;
-
-    // Clear old key and store the new one
-    clearStoredPeerKey(peerCode);
-    storePeerKey(peerCode, peerPublicKey);
-
-    // Clear warning state
-    setKeyChangeWarning(null);
-
-    // Proceed with connection
-    setState('webrtc_connecting');
-    cryptoService.establishSession(peerCode, peerPublicKey);
-    setPeerFingerprint(cryptoService.getPeerPublicKeyFingerprint(peerPublicKey));
-    await webrtcRef.current?.connect(peerCode, isInitiator);
-  }, [keyChangeWarning]);
-
-  const handleRejectNewKey = useCallback(() => {
-    if (!keyChangeWarning) return;
-
-    // Clear warning and disconnect
-    setKeyChangeWarning(null);
-    setPeerCode('');
-    setState('registered');
-  }, [keyChangeWarning]);
-
   const handleSendMessage = useCallback(
     (content: string) => {
       if (!peerCode) return;
@@ -557,9 +491,7 @@ export function App() {
         <div class="card" style={{ background: 'var(--warning, #f59e0b)', marginBottom: '16px', color: '#000' }}>
           <h3 style={{ margin: '0 0 8px 0' }}>Security Information</h3>
           <p style={{ margin: '0 0 8px 0', fontSize: '14px' }}>
-            {isEphemeralStorage()
-              ? '✓ Keys stored in session-only storage (cleared when tab closes)'
-              : '⚠ Keys stored persistently - vulnerable to XSS attacks'}
+            ✓ Keys are ephemeral (memory-only, never stored)
           </p>
           {myFingerprint && (
             <div style={{ marginTop: '12px' }}>
@@ -682,16 +614,6 @@ export function App() {
           peerCode={incomingRequest.code}
           onAccept={handleAcceptPairing}
           onReject={handleRejectPairing}
-        />
-      )}
-
-      {keyChangeWarning && (
-        <KeyChangeWarning
-          peerCode={keyChangeWarning.peerCode}
-          oldFingerprint={keyChangeWarning.oldFingerprint}
-          newFingerprint={keyChangeWarning.newFingerprint}
-          onAccept={handleAcceptNewKey}
-          onDisconnect={handleRejectNewKey}
         />
       )}
     </div>
