@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
-import { cryptoService } from './lib/crypto';
+import { cryptoService, isEphemeralStorage } from './lib/crypto';
 import { SignalingClient } from './lib/signaling';
 import { WebRTCService } from './lib/webrtc';
 import type { ConnectionState, ChatMessage, FileTransfer } from './lib/protocol';
@@ -28,6 +28,9 @@ export function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [transfers, setTransfers] = useState<FileTransfer[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [myFingerprint, setMyFingerprint] = useState('');
+  const [peerFingerprint, setPeerFingerprint] = useState('');
+  const [showSecurityInfo, setShowSecurityInfo] = useState(false);
 
   const signalingRef = useRef<SignalingClient | null>(null);
   const webrtcRef = useRef<WebRTCService | null>(null);
@@ -43,6 +46,7 @@ export function App() {
   useEffect(() => {
     const init = async () => {
       await cryptoService.initialize();
+      setMyFingerprint(cryptoService.getPublicKeyFingerprint());
 
       const signaling = new SignalingClient(SIGNALING_URL, {
         onStateChange: (newState) => {
@@ -59,8 +63,9 @@ export function App() {
           setIncomingRequest(null);
           setState('webrtc_connecting');
 
-          // Establish crypto session
+          // Establish crypto session and set peer fingerprint
           cryptoService.establishSession(peerCode, peerPublicKey);
+          setPeerFingerprint(cryptoService.getPeerPublicKeyFingerprint(peerPublicKey));
 
           // Start WebRTC
           await webrtcRef.current?.connect(peerCode, isInitiator);
@@ -349,6 +354,7 @@ export function App() {
     webrtcRef.current?.close();
     cryptoService.clearSession(peerCode);
     setPeerCode('');
+    setPeerFingerprint('');
     setMessages([]);
     setTransfers([]);
     setState('registered');
@@ -404,7 +410,54 @@ export function App() {
       <header class="header">
         <h1>Zajel Web</h1>
         {state === 'connected' && <span class="status connected">Connected</span>}
+        <button
+          class="btn btn-sm"
+          style={{ marginLeft: 'auto', background: 'rgba(255,255,255,0.1)' }}
+          onClick={() => setShowSecurityInfo(!showSecurityInfo)}
+          aria-label="Show security information"
+        >
+          🔒
+        </button>
       </header>
+
+      {/* Security Warning Banner */}
+      {showSecurityInfo && (
+        <div class="card" style={{ background: 'var(--warning, #f59e0b)', marginBottom: '16px', color: '#000' }}>
+          <h3 style={{ margin: '0 0 8px 0' }}>Security Information</h3>
+          <p style={{ margin: '0 0 8px 0', fontSize: '14px' }}>
+            {isEphemeralStorage()
+              ? '✓ Keys stored in session-only storage (cleared when tab closes)'
+              : '⚠ Keys stored persistently - vulnerable to XSS attacks'}
+          </p>
+          {myFingerprint && (
+            <div style={{ marginTop: '12px' }}>
+              <strong style={{ fontSize: '12px' }}>Your Key Fingerprint:</strong>
+              <code style={{ display: 'block', fontSize: '11px', marginTop: '4px', wordBreak: 'break-all', background: 'rgba(0,0,0,0.1)', padding: '4px', borderRadius: '4px' }}>
+                {myFingerprint}
+              </code>
+            </div>
+          )}
+          {state === 'connected' && peerFingerprint && (
+            <div style={{ marginTop: '8px' }}>
+              <strong style={{ fontSize: '12px' }}>Peer Key Fingerprint ({peerCode}):</strong>
+              <code style={{ display: 'block', fontSize: '11px', marginTop: '4px', wordBreak: 'break-all', background: 'rgba(0,0,0,0.1)', padding: '4px', borderRadius: '4px' }}>
+                {peerFingerprint}
+              </code>
+              <p style={{ margin: '8px 0 0 0', fontSize: '12px' }}>
+                Compare these fingerprints with your peer through a trusted channel
+                (voice call, in person) to verify you're not being intercepted.
+              </p>
+            </div>
+          )}
+          <button
+            class="btn btn-sm"
+            style={{ marginTop: '12px', background: 'rgba(0,0,0,0.2)' }}
+            onClick={() => setShowSecurityInfo(false)}
+          >
+            Close
+          </button>
+        </div>
+      )}
 
       {error && (
         <div class="card" style={{ background: 'var(--error)', marginBottom: '16px' }}>

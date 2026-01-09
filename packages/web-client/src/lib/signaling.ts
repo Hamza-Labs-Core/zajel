@@ -7,7 +7,17 @@ import type {
 const PING_INTERVAL = 25000; // 25 seconds
 const RECONNECT_DELAY = 3000;
 const PAIRING_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const PAIRING_CODE_LENGTH = 6;
+const PAIRING_CODE_REGEX = new RegExp(`^[${PAIRING_CODE_CHARS}]{${PAIRING_CODE_LENGTH}}$`);
 const MAX_MESSAGE_SIZE = 1024 * 1024; // 1MB limit for WebSocket messages
+
+/**
+ * Validates a pairing code format.
+ * Pairing codes must be exactly 6 characters from the allowed character set.
+ */
+function isValidPairingCode(code: string): boolean {
+  return PAIRING_CODE_REGEX.test(code);
+}
 
 export interface SignalingEvents {
   onStateChange: (state: ConnectionState) => void;
@@ -221,6 +231,11 @@ export class SignalingClient {
 
   // Public methods for pairing
   requestPairing(targetCode: string): void {
+    // Validate pairing code format to prevent malformed requests
+    if (!isValidPairingCode(targetCode)) {
+      this.events.onError('Invalid pairing code format');
+      return;
+    }
     const sent = this.send({ type: 'pair_request', targetCode });
     if (sent) {
       this.setState('waiting_approval');
@@ -228,6 +243,11 @@ export class SignalingClient {
   }
 
   respondToPairing(targetCode: string, accepted: boolean): void {
+    // Validate pairing code format
+    if (!isValidPairingCode(targetCode)) {
+      this.events.onError('Invalid pairing code format');
+      return;
+    }
     this.send({ type: 'pair_response', targetCode, accepted });
     if (!accepted) {
       this.setState('registered');
