@@ -5,15 +5,19 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 /// Client for connecting to the signaling server for external peer connections.
 ///
-/// The signaling server only facilitates WebRTC connection establishment:
-/// 1. Register with a pairing code
-/// 2. Exchange SDP offers/answers
-/// 3. Exchange ICE candidates
+/// The signaling server facilitates WebRTC connection establishment with
+/// mutual approval pairing:
+/// 1. Register with a pairing code and public key
+/// 2. Request pairing with another peer's code
+/// 3. Peer approves/rejects the request
+/// 4. On approval, exchange SDP offers/answers
+/// 5. Exchange ICE candidates
 ///
 /// The server never sees actual message content - it only routes signaling data.
 class SignalingClient {
   final String serverUrl;
   final String _pairingCode;
+  final String _publicKey;
 
   WebSocketChannel? _channel;
   StreamSubscription? _subscription;
@@ -28,7 +32,9 @@ class SignalingClient {
   SignalingClient({
     required this.serverUrl,
     required String pairingCode,
-  }) : _pairingCode = pairingCode;
+    required String publicKey,
+  })  : _pairingCode = pairingCode,
+        _publicKey = publicKey;
 
   /// Stream of incoming signaling messages.
   Stream<SignalingMessage> get messages => _messageController.stream;
@@ -63,10 +69,11 @@ class SignalingClient {
       _isConnected = true;
       _connectionStateController.add(SignalingConnectionState.connected);
 
-      // Register with our pairing code
+      // Register with our pairing code and public key
       _send({
         'type': 'register',
         'pairingCode': _pairingCode,
+        'publicKey': _publicKey,
       });
 
       // Start heartbeat
@@ -112,6 +119,23 @@ class SignalingClient {
       'type': 'ice_candidate',
       'target': targetPairingCode,
       'payload': candidate,
+    });
+  }
+
+  /// Request to pair with another peer (requires their approval).
+  void requestPairing(String targetPairingCode) {
+    _send({
+      'type': 'pair_request',
+      'targetCode': targetPairingCode,
+    });
+  }
+
+  /// Respond to a pairing request (accept or reject).
+  void respondToPairing(String requesterPairingCode, {required bool accept}) {
+    _send({
+      'type': 'pair_response',
+      'targetCode': requesterPairingCode,
+      'accepted': accept,
     });
   }
 
@@ -175,6 +199,39 @@ class SignalingClient {
           ));
           break;
 
+        case 'pair_incoming':
+          _messageController.add(SignalingMessage.pairIncoming(
+            fromCode: json['fromCode'] as String,
+            fromPublicKey: json['fromPublicKey'] as String,
+          ));
+          break;
+
+        case 'pair_matched':
+          _messageController.add(SignalingMessage.pairMatched(
+            peerCode: json['peerCode'] as String,
+            peerPublicKey: json['peerPublicKey'] as String,
+            isInitiator: json['isInitiator'] as bool,
+          ));
+          break;
+
+        case 'pair_rejected':
+          _messageController.add(SignalingMessage.pairRejected(
+            peerCode: json['peerCode'] as String,
+          ));
+          break;
+
+        case 'pair_timeout':
+          _messageController.add(SignalingMessage.pairTimeout(
+            peerCode: json['peerCode'] as String,
+          ));
+          break;
+
+        case 'pair_error':
+          _messageController.add(SignalingMessage.pairError(
+            error: json['error'] as String,
+          ));
+          break;
+
         case 'error':
           _messageController.add(SignalingMessage.error(
             message: json['message'] as String,
@@ -182,7 +239,8 @@ class SignalingClient {
           break;
 
         case 'pong':
-          // Heartbeat response, ignore
+        case 'registered':
+          // Heartbeat and registration confirmation, ignore
           break;
       }
     } catch (e) {
@@ -240,6 +298,26 @@ sealed class SignalingMessage {
   factory SignalingMessage.peerLeft({required String peerId}) =
       SignalingPeerLeft;
 
+  factory SignalingMessage.pairIncoming({
+    required String fromCode,
+    required String fromPublicKey,
+  }) = SignalingPairIncoming;
+
+  factory SignalingMessage.pairMatched({
+    required String peerCode,
+    required String peerPublicKey,
+    required bool isInitiator,
+  }) = SignalingPairMatched;
+
+  factory SignalingMessage.pairRejected({required String peerCode}) =
+      SignalingPairRejected;
+
+  factory SignalingMessage.pairTimeout({required String peerCode}) =
+      SignalingPairTimeout;
+
+  factory SignalingMessage.pairError({required String error}) =
+      SignalingPairError;
+
   factory SignalingMessage.error({required String message}) = SignalingError;
 }
 
@@ -280,6 +358,46 @@ class SignalingError extends SignalingMessage {
   final String message;
 
   const SignalingError({required this.message});
+}
+
+class SignalingPairIncoming extends SignalingMessage {
+  final String fromCode;
+  final String fromPublicKey;
+
+  const SignalingPairIncoming({
+    required this.fromCode,
+    required this.fromPublicKey,
+  });
+}
+
+class SignalingPairMatched extends SignalingMessage {
+  final String peerCode;
+  final String peerPublicKey;
+  final bool isInitiator;
+
+  const SignalingPairMatched({
+    required this.peerCode,
+    required this.peerPublicKey,
+    required this.isInitiator,
+  });
+}
+
+class SignalingPairRejected extends SignalingMessage {
+  final String peerCode;
+
+  const SignalingPairRejected({required this.peerCode});
+}
+
+class SignalingPairTimeout extends SignalingMessage {
+  final String peerCode;
+
+  const SignalingPairTimeout({required this.peerCode});
+}
+
+class SignalingPairError extends SignalingMessage {
+  final String error;
+
+  const SignalingPairError({required this.error});
 }
 
 /// Connection state for the signaling client.

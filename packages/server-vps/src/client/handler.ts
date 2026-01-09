@@ -75,6 +75,18 @@ interface PingMessage {
 interface SignalingRegisterMessage {
   type: 'register';
   pairingCode: string;
+  publicKey: string;  // Public key for E2E encryption
+}
+
+interface PairRequestMessage {
+  type: 'pair_request';
+  targetCode: string;
+}
+
+interface PairResponseMessage {
+  type: 'pair_response';
+  targetCode: string;
+  accepted: boolean;
 }
 
 interface SignalingOfferMessage {
@@ -95,6 +107,14 @@ interface SignalingIceCandidateMessage {
   payload: Record<string, unknown>;
 }
 
+// Pending pair request tracking
+interface PendingPairRequest {
+  requesterCode: string;
+  requesterPublicKey: string;
+  targetCode: string;
+  timestamp: number;
+}
+
 type ClientMessage =
   | RegisterMessage
   | UpdateLoadMessage
@@ -103,6 +123,8 @@ type ClientMessage =
   | HeartbeatMessage
   | PingMessage
   | SignalingRegisterMessage
+  | PairRequestMessage
+  | PairResponseMessage
   | SignalingOfferMessage
   | SignalingAnswerMessage
   | SignalingIceCandidateMessage;
@@ -119,6 +141,10 @@ export class ClientHandler extends EventEmitter {
   // Pairing code-based client tracking for WebRTC signaling
   private pairingCodeToWs: Map<string, WebSocket> = new Map();
   private wsToPairingCode: Map<WebSocket, string> = new Map();
+  private pairingCodeToPublicKey: Map<string, string> = new Map();
+  // Pending pair requests: targetCode -> list of pending requests
+  private pendingPairRequests: Map<string, PendingPairRequest[]> = new Map();
+  private static readonly PAIR_REQUEST_TIMEOUT = 60000; // 60 seconds
 
   constructor(
     identity: ServerIdentity,
@@ -180,6 +206,14 @@ export class ClientHandler extends EventEmitter {
           } else {
             await this.handleRegister(ws, message);
           }
+          break;
+
+        case 'pair_request':
+          this.handlePairRequest(ws, message as PairRequestMessage);
+          break;
+
+        case 'pair_response':
+          this.handlePairResponse(ws, message as PairResponseMessage);
           break;
 
         case 'offer':
@@ -389,16 +423,22 @@ export class ClientHandler extends EventEmitter {
    * Handle pairing code registration (for WebRTC signaling)
    */
   private handlePairingCodeRegister(ws: WebSocket, message: SignalingRegisterMessage): void {
-    const { pairingCode } = message;
+    const { pairingCode, publicKey } = message;
 
     if (!pairingCode) {
       this.sendError(ws, 'Missing required field: pairingCode');
       return;
     }
 
-    // Store pairing code -> WebSocket mapping
+    if (!publicKey) {
+      this.sendError(ws, 'Missing required field: publicKey');
+      return;
+    }
+
+    // Store pairing code -> WebSocket and public key mappings
     this.pairingCodeToWs.set(pairingCode, ws);
     this.wsToPairingCode.set(ws, pairingCode);
+    this.pairingCodeToPublicKey.set(pairingCode, publicKey);
 
     console.log(`[ClientHandler] Registered pairing code: ${pairingCode}`);
 
@@ -408,6 +448,181 @@ export class ClientHandler extends EventEmitter {
       pairingCode,
       serverId: this.identity.serverId,
     });
+  }
+
+  /**
+   * Handle pair request (mutual approval flow)
+   */
+  private handlePairRequest(ws: WebSocket, message: PairRequestMessage): void {
+    const { targetCode } = message;
+    const requesterCode = this.wsToPairingCode.get(ws);
+
+    if (!requesterCode) {
+      this.sendError(ws, 'Not registered. Send register message first.');
+      return;
+    }
+
+    if (!targetCode) {
+      this.sendError(ws, 'Missing required field: targetCode');
+      return;
+    }
+
+    if (targetCode === requesterCode) {
+      this.send(ws, {
+        type: 'pair_error',
+        error: 'Cannot pair with yourself',
+      });
+      return;
+    }
+
+    const targetWs = this.pairingCodeToWs.get(targetCode);
+    if (!targetWs) {
+      this.send(ws, {
+        type: 'pair_error',
+        error: `Peer not found: ${targetCode}`,
+      });
+      return;
+    }
+
+    const requesterPublicKey = this.pairingCodeToPublicKey.get(requesterCode);
+    if (!requesterPublicKey) {
+      this.sendError(ws, 'Public key not found for requester');
+      return;
+    }
+
+    // Create pending pair request
+    const request: PendingPairRequest = {
+      requesterCode,
+      requesterPublicKey,
+      targetCode,
+      timestamp: Date.now(),
+    };
+
+    // Store pending request
+    const pending = this.pendingPairRequests.get(targetCode) || [];
+    // Remove any existing request from the same requester
+    const filtered = pending.filter(r => r.requesterCode !== requesterCode);
+    filtered.push(request);
+    this.pendingPairRequests.set(targetCode, filtered);
+
+    // Notify target about incoming pair request
+    this.send(targetWs, {
+      type: 'pair_incoming',
+      fromCode: requesterCode,
+      fromPublicKey: requesterPublicKey,
+    });
+
+    console.log(`[ClientHandler] Pair request: ${requesterCode} -> ${targetCode}`);
+
+    // Set timeout for this request
+    setTimeout(() => {
+      this.expirePairRequest(requesterCode, targetCode);
+    }, ClientHandler.PAIR_REQUEST_TIMEOUT);
+  }
+
+  /**
+   * Handle pair response (accept/reject)
+   */
+  private handlePairResponse(ws: WebSocket, message: PairResponseMessage): void {
+    const { targetCode, accepted } = message;
+    const responderCode = this.wsToPairingCode.get(ws);
+
+    if (!responderCode) {
+      this.sendError(ws, 'Not registered. Send register message first.');
+      return;
+    }
+
+    // Find the pending request
+    const pending = this.pendingPairRequests.get(responderCode) || [];
+    const requestIndex = pending.findIndex(r => r.requesterCode === targetCode);
+
+    if (requestIndex === -1) {
+      this.send(ws, {
+        type: 'pair_error',
+        error: 'No pending request from this peer',
+      });
+      return;
+    }
+
+    const request = pending[requestIndex];
+
+    // Remove the request from pending
+    pending.splice(requestIndex, 1);
+    if (pending.length === 0) {
+      this.pendingPairRequests.delete(responderCode);
+    } else {
+      this.pendingPairRequests.set(responderCode, pending);
+    }
+
+    const requesterWs = this.pairingCodeToWs.get(targetCode);
+
+    if (accepted) {
+      // Get responder's public key
+      const responderPublicKey = this.pairingCodeToPublicKey.get(responderCode);
+      if (!responderPublicKey) {
+        this.sendError(ws, 'Public key not found');
+        return;
+      }
+
+      // Notify both peers about the match
+      // The requester is the initiator (creates WebRTC offer)
+      if (requesterWs) {
+        this.send(requesterWs, {
+          type: 'pair_matched',
+          peerCode: responderCode,
+          peerPublicKey: responderPublicKey,
+          isInitiator: true,
+        });
+      }
+
+      this.send(ws, {
+        type: 'pair_matched',
+        peerCode: targetCode,
+        peerPublicKey: request.requesterPublicKey,
+        isInitiator: false,
+      });
+
+      console.log(`[ClientHandler] Pair matched: ${targetCode} <-> ${responderCode}`);
+    } else {
+      // Notify requester about rejection
+      if (requesterWs) {
+        this.send(requesterWs, {
+          type: 'pair_rejected',
+          peerCode: responderCode,
+        });
+      }
+
+      console.log(`[ClientHandler] Pair rejected: ${targetCode} <- ${responderCode}`);
+    }
+  }
+
+  /**
+   * Expire a pending pair request
+   */
+  private expirePairRequest(requesterCode: string, targetCode: string): void {
+    const pending = this.pendingPairRequests.get(targetCode) || [];
+    const requestIndex = pending.findIndex(r => r.requesterCode === requesterCode);
+
+    if (requestIndex !== -1) {
+      // Request is still pending, expire it
+      pending.splice(requestIndex, 1);
+      if (pending.length === 0) {
+        this.pendingPairRequests.delete(targetCode);
+      } else {
+        this.pendingPairRequests.set(targetCode, pending);
+      }
+
+      // Notify requester about timeout
+      const requesterWs = this.pairingCodeToWs.get(requesterCode);
+      if (requesterWs) {
+        this.send(requesterWs, {
+          type: 'pair_timeout',
+          peerCode: targetCode,
+        });
+      }
+
+      console.log(`[ClientHandler] Pair request expired: ${requesterCode} -> ${targetCode}`);
+    }
   }
 
   /**
@@ -468,6 +683,18 @@ export class ClientHandler extends EventEmitter {
     if (pairingCode) {
       this.pairingCodeToWs.delete(pairingCode);
       this.wsToPairingCode.delete(ws);
+      this.pairingCodeToPublicKey.delete(pairingCode);
+      // Clean up any pending pair requests involving this peer
+      this.pendingPairRequests.delete(pairingCode);
+      // Also remove requests where this peer was the requester
+      for (const [targetCode, requests] of this.pendingPairRequests) {
+        const filtered = requests.filter(r => r.requesterCode !== pairingCode);
+        if (filtered.length === 0) {
+          this.pendingPairRequests.delete(targetCode);
+        } else if (filtered.length !== requests.length) {
+          this.pendingPairRequests.set(targetCode, filtered);
+        }
+      }
       console.log(`[ClientHandler] Pairing code disconnected: ${pairingCode}`);
     }
 
@@ -630,6 +857,8 @@ export class ClientHandler extends EventEmitter {
     }
     this.pairingCodeToWs.clear();
     this.wsToPairingCode.clear();
+    this.pairingCodeToPublicKey.clear();
+    this.pendingPairRequests.clear();
   }
 
   /**

@@ -103,6 +103,13 @@ class ConnectionManager {
   /// Get the local signaling port.
   int? get localSignalingPort => _localSignalingServer?.actualPort;
 
+  /// Stream of incoming pair requests for UI to show approval dialog.
+  final _pairRequestController =
+      StreamController<(String code, String publicKey)>.broadcast();
+
+  /// Stream of incoming pair requests.
+  Stream<(String, String)> get pairRequests => _pairRequestController.stream;
+
   /// Connect to signaling server for external connections.
   Future<String> enableExternalConnections({
     required String serverUrl,
@@ -113,6 +120,7 @@ class ConnectionManager {
     _signalingClient = SignalingClient(
       serverUrl: serverUrl,
       pairingCode: _externalPairingCode!,
+      publicKey: _cryptoService.publicKeyBase64,
     );
 
     _signalingSubscription =
@@ -190,13 +198,14 @@ class ConnectionManager {
     );
   }
 
-  /// Connect to an external peer using their pairing code.
+  /// Request to connect to an external peer using their pairing code.
+  /// This sends a pair request that the peer must approve.
   Future<void> connectToExternalPeer(String pairingCode) async {
     if (_signalingClient == null || !_signalingClient!.isConnected) {
       throw ConnectionException('Not connected to signaling server');
     }
 
-    // Create a placeholder peer
+    // Create a placeholder peer (waiting for approval)
     final peer = Peer(
       id: pairingCode,
       displayName: 'External Peer',
@@ -207,9 +216,25 @@ class ConnectionManager {
     _peers[pairingCode] = peer;
     _notifyPeersChanged();
 
-    // Create and send WebRTC offer
-    final offer = await _webrtcService.createOffer(pairingCode);
-    _signalingClient!.sendOffer(pairingCode, offer);
+    // Request pairing (peer must approve before WebRTC starts)
+    _signalingClient!.requestPairing(pairingCode);
+  }
+
+  /// Respond to an incoming pair request.
+  void respondToPairRequest(String peerCode, {required bool accept}) {
+    _signalingClient?.respondToPairing(peerCode, accept: accept);
+
+    if (!accept) {
+      // Remove peer from list if rejected
+      _peers.remove(peerCode);
+      _notifyPeersChanged();
+    }
+  }
+
+  /// Start WebRTC connection after pairing is matched.
+  Future<void> _startWebRTCConnection(String peerCode, String peerPublicKey, bool isInitiator) async {
+    // Store peer's public key for handshake verification
+    _cryptoService.setPeerPublicKey(peerCode, peerPublicKey);
 
     // Set up signaling message forwarding
     _webrtcService.onSignalingMessage = (targetPeerId, message) {
@@ -217,6 +242,13 @@ class ConnectionManager {
         _signalingClient!.sendIceCandidate(targetPeerId, message);
       }
     };
+
+    if (isInitiator) {
+      // We're the initiator - create and send offer
+      final offer = await _webrtcService.createOffer(peerCode);
+      _signalingClient!.sendOffer(peerCode, offer);
+    }
+    // If not initiator, wait for offer from the other peer
   }
 
   /// Send a message to a peer.
@@ -260,6 +292,7 @@ class ConnectionManager {
     await _fileChunksController.close();
     await _fileStartController.close();
     await _fileCompleteController.close();
+    await _pairRequestController.close();
   }
 
   // Private methods
@@ -368,8 +401,46 @@ class ConnectionManager {
 
   void _handleSignalingMessage(SignalingMessage message) async {
     switch (message) {
+      case SignalingPairIncoming(fromCode: final fromCode, fromPublicKey: final fromPublicKey):
+        // Someone wants to pair with us - emit event for UI to show approval dialog
+        _pairRequestController.add((fromCode, fromPublicKey));
+        break;
+
+      case SignalingPairMatched(peerCode: final peerCode, peerPublicKey: final peerPublicKey, isInitiator: final isInitiator):
+        // Pairing approved by both sides - start WebRTC connection
+        if (!_peers.containsKey(peerCode)) {
+          _peers[peerCode] = Peer(
+            id: peerCode,
+            displayName: 'External Peer',
+            connectionState: PeerConnectionState.connecting,
+            lastSeen: DateTime.now(),
+            isLocal: false,
+          );
+          _notifyPeersChanged();
+        }
+        await _startWebRTCConnection(peerCode, peerPublicKey, isInitiator);
+        break;
+
+      case SignalingPairRejected(peerCode: final peerCode):
+        // Peer rejected our pairing request
+        _updatePeerState(peerCode, PeerConnectionState.failed);
+        _peers.remove(peerCode);
+        _notifyPeersChanged();
+        break;
+
+      case SignalingPairTimeout(peerCode: final peerCode):
+        // Pairing request timed out
+        _updatePeerState(peerCode, PeerConnectionState.failed);
+        _peers.remove(peerCode);
+        _notifyPeersChanged();
+        break;
+
+      case SignalingPairError(error: final _):
+        // Pairing error
+        break;
+
       case SignalingOffer(from: final from, payload: final payload):
-        // Add peer if not known
+        // Offer from matched peer (we're the non-initiator)
         if (!_peers.containsKey(from)) {
           _peers[from] = Peer(
             id: from,

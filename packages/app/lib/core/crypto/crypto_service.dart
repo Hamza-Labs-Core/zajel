@@ -21,7 +21,9 @@ class CryptoService {
   late final Hkdf _hkdf;
 
   SimpleKeyPair? _identityKeyPair;
+  String? _publicKeyBase64Cache;
   final Map<String, SecretKey> _sessionKeys = {};
+  final Map<String, String> _peerPublicKeys = {};
 
   CryptoService({FlutterSecureStorage? secureStorage})
       : _secureStorage = secureStorage ?? const FlutterSecureStorage() {
@@ -31,9 +33,32 @@ class CryptoService {
   /// Initialize the crypto service and generate/load identity keys.
   Future<void> initialize() async {
     await _loadOrGenerateIdentityKeys();
+    // Cache the public key for synchronous access
+    if (_identityKeyPair != null) {
+      final publicKey = await _identityKeyPair!.extractPublicKey();
+      _publicKeyBase64Cache = base64Encode(Uint8List.fromList(publicKey.bytes));
+    }
   }
 
-  /// Get our public key as a base64 string for sharing with peers.
+  /// Get our public key as a base64 string (synchronous, requires initialize() first).
+  String get publicKeyBase64 {
+    if (_publicKeyBase64Cache == null) {
+      throw CryptoException('CryptoService not initialized. Call initialize() first.');
+    }
+    return _publicKeyBase64Cache!;
+  }
+
+  /// Store a peer's public key for later verification.
+  void setPeerPublicKey(String peerId, String publicKeyBase64) {
+    _peerPublicKeys[peerId] = publicKeyBase64;
+  }
+
+  /// Get a stored peer's public key.
+  String? getPeerPublicKey(String peerId) {
+    return _peerPublicKeys[peerId];
+  }
+
+  /// Get our public key as a base64 string for sharing with peers (async version).
   Future<String> getPublicKeyBase64() async {
     if (_identityKeyPair == null) {
       await _loadOrGenerateIdentityKeys();
