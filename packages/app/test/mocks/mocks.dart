@@ -5,6 +5,7 @@ import 'package:zajel/core/crypto/crypto_service.dart';
 import 'package:zajel/core/network/connection_manager.dart';
 import 'package:zajel/core/network/meeting_point_service.dart';
 import 'package:zajel/core/network/rendezvous_service.dart';
+import 'package:zajel/core/network/webrtc_service.dart';
 import 'package:zajel/core/storage/trusted_peers_storage.dart';
 
 // Mock classes
@@ -19,6 +20,8 @@ class MockMeetingPointService extends Mock implements MeetingPointService {}
 class MockTrustedPeersStorage extends Mock implements TrustedPeersStorage {}
 
 class MockRendezvousService extends Mock implements RendezvousService {}
+
+class MockWebRTCService extends Mock implements WebRTCService {}
 
 /// In-memory implementation of FlutterSecureStorage for testing
 class FakeSecureStorage implements FlutterSecureStorage {

@@ -248,8 +248,9 @@ export class SignalingClient {
       this.events.onError('Invalid pairing code format');
       return;
     }
-    this.send({ type: 'pair_response', targetCode, accepted });
-    if (!accepted) {
+    const sent = this.send({ type: 'pair_response', targetCode, accepted });
+    // Only update state if send succeeded and request was rejected
+    if (sent && !accepted) {
       this.setState('registered');
     }
   }

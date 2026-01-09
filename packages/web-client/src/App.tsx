@@ -409,14 +409,18 @@ export function App() {
 
   const handleDisconnect = useCallback(() => {
     webrtcRef.current?.close();
-    cryptoService.clearSession(peerCode);
+    // Use ref to get current peerCode to avoid stale closure issues
+    const currentPeerCode = peerCodeRef.current;
+    if (currentPeerCode) {
+      cryptoService.clearSession(currentPeerCode);
+    }
     setPeerCode('');
     setPeerFingerprint('');
     setMessages([]);
     setTransfers([]);
     setShowSecurityReminder(false);
     setState('registered');
-  }, [peerCode]);
+  }, []);
 
   const clearError = useCallback(() => {
     setError(null);
