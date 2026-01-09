@@ -4,9 +4,10 @@ import type { FileTransfer as FileTransferType } from '../lib/protocol';
 interface FileTransferProps {
   transfers: FileTransferType[];
   onSendFile: (file: File) => void;
+  onDismiss: (transferId: string) => void;
 }
 
-export function FileTransfer({ transfers, onSendFile }: FileTransferProps) {
+export function FileTransfer({ transfers, onSendFile, onDismiss }: FileTransferProps) {
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -73,22 +74,50 @@ export function FileTransfer({ transfers, onSendFile }: FileTransferProps) {
       </div>
 
       {transfers.map((transfer) => (
-        <div key={transfer.id} class="file-progress">
-          <div class="name">
-            {transfer.fileName} ({formatSize(transfer.totalSize)})
+        <div
+          key={transfer.id}
+          class="file-progress"
+          style={transfer.status === 'failed' ? { borderColor: 'var(--error, #ef4444)' } : undefined}
+        >
+          <div class="name" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>
+              {transfer.fileName} ({formatSize(transfer.totalSize)})
+            </span>
+            {transfer.status === 'failed' && (
+              <button
+                class="btn btn-sm"
+                style={{
+                  background: 'var(--error, #ef4444)',
+                  padding: '2px 8px',
+                  fontSize: '11px',
+                }}
+                onClick={() => onDismiss(transfer.id)}
+              >
+                Dismiss
+              </button>
+            )}
           </div>
           <div class="bar">
             <div
               class="fill"
               style={{
                 width: `${(transfer.receivedChunks / transfer.totalChunks) * 100}%`,
+                background: transfer.status === 'failed' ? 'var(--error, #ef4444)' : undefined,
               }}
             />
           </div>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+          <div
+            style={{
+              fontSize: '12px',
+              color: transfer.status === 'failed' ? 'var(--error, #ef4444)' : 'var(--text-muted)',
+              marginTop: '4px',
+            }}
+          >
             {transfer.status === 'complete'
               ? 'Complete'
-              : `${transfer.receivedChunks}/${transfer.totalChunks} chunks`}
+              : transfer.status === 'failed'
+                ? transfer.error || 'Transfer failed'
+                : `${transfer.receivedChunks}/${transfer.totalChunks} chunks`}
           </div>
         </div>
       ))}

@@ -18,6 +18,7 @@ export interface WebRTCEvents {
   onFileStart: (fileId: string, fileName: string, totalSize: number, totalChunks: number) => void;
   onFileChunk: (fileId: string, chunkIndex: number, data: string) => void;
   onFileComplete: (fileId: string) => void;
+  onFileError: (fileId: string, error: string) => void;
 }
 
 export class WebRTCService {
@@ -186,6 +187,9 @@ export class WebRTCService {
           case 'file_complete':
             this.events.onFileComplete(data.fileId);
             break;
+          case 'file_error':
+            this.events.onFileError(data.fileId, data.error);
+            break;
         }
       } catch (e) {
         console.error('Failed to parse file message:', e);
@@ -241,6 +245,12 @@ export class WebRTCService {
   sendFileComplete(fileId: string): void {
     if (this.fileChannel?.readyState === 'open') {
       this.fileChannel.send(JSON.stringify({ type: 'file_complete', fileId }));
+    }
+  }
+
+  sendFileError(fileId: string, error: string): void {
+    if (this.fileChannel?.readyState === 'open') {
+      this.fileChannel.send(JSON.stringify({ type: 'file_error', fileId, error }));
     }
   }
 

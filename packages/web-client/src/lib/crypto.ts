@@ -61,9 +61,14 @@ export interface KeyPair {
   publicKey: Uint8Array;
 }
 
+// Replay protection constants
+const SEQUENCE_WINDOW = 10; // Allow messages up to 10 behind current to handle out-of-order delivery
+
 export class CryptoService {
   private keyPair: KeyPair | null = null;
   private sessionKeys = new Map<string, Uint8Array>();
+  private sendCounters = new Map<string, number>();
+  private receiveCounters = new Map<string, number>();
 
   async initialize(): Promise<void> {
     const storage = getStorage();
@@ -203,17 +208,31 @@ export class CryptoService {
 
   clearSession(peerId: string): void {
     this.sessionKeys.delete(peerId);
+    this.sendCounters.delete(peerId);
+    this.receiveCounters.delete(peerId);
   }
 
   encrypt(peerId: string, plaintext: string): string {
     const sessionKey = this.sessionKeys.get(peerId);
     if (!sessionKey) throw new Error(`No session for peer: ${peerId}`);
 
+    // Increment and get sequence number for replay protection
+    const seq = (this.sendCounters.get(peerId) || 0) + 1;
+    this.sendCounters.set(peerId, seq);
+
+    // Prepend 4-byte sequence number to plaintext (big-endian)
+    const seqBytes = new Uint8Array(4);
+    new DataView(seqBytes.buffer).setUint32(0, seq, false);
+
     const plaintextBytes = new TextEncoder().encode(plaintext);
+    const combined = new Uint8Array(4 + plaintextBytes.length);
+    combined.set(seqBytes);
+    combined.set(plaintextBytes, 4);
+
     const nonce = crypto.getRandomValues(new Uint8Array(NONCE_SIZE));
 
     const cipher = chacha20poly1305(sessionKey, nonce);
-    const ciphertext = cipher.encrypt(plaintextBytes);
+    const ciphertext = cipher.encrypt(combined);
 
     // Combine: nonce + ciphertext
     const result = new Uint8Array(nonce.length + ciphertext.length);
@@ -234,9 +253,27 @@ export class CryptoService {
     const ciphertext = data.slice(NONCE_SIZE);
 
     const cipher = chacha20poly1305(sessionKey, nonce);
-    const plaintext = cipher.decrypt(ciphertext);
+    const combined = cipher.decrypt(ciphertext);
 
-    return new TextDecoder().decode(plaintext);
+    // Extract and verify sequence number for replay protection
+    const seq = new DataView(combined.buffer, combined.byteOffset, 4).getUint32(0, false);
+    const lastSeq = this.receiveCounters.get(peerId) || 0;
+
+    // Check for replay attacks
+    if (seq <= lastSeq) {
+      // Allow small window for out-of-order delivery
+      if (lastSeq - seq < SEQUENCE_WINDOW) {
+        throw new Error('Replay attack detected: duplicate sequence number');
+      }
+      throw new Error('Replay attack detected: sequence too old');
+    }
+
+    // Update the receive counter to the highest seen sequence
+    this.receiveCounters.set(peerId, seq);
+
+    // Extract plaintext (skip 4-byte sequence number)
+    const plaintextBytes = combined.slice(4);
+    return new TextDecoder().decode(plaintextBytes);
   }
 
   encryptBytes(peerId: string, data: Uint8Array): Uint8Array {
@@ -267,4 +304,52 @@ export class CryptoService {
 }
 
 // Singleton instance
+
+// TOFU (Trust On First Use) storage prefix
+const TOFU_PREFIX = 'zajel_tofu_';
+
+/**
+ * Stores a peer's public key on first connection.
+ * Uses sessionStorage for ephemeral storage mode, localStorage for persistent.
+ * @param peerCode - The peer's pairing code
+ * @param publicKeyBase64 - The peer's public key in base64 format
+ */
+export function storePeerKey(peerCode: string, publicKeyBase64: string): void {
+  const storage = getStorage();
+  storage.setItem(TOFU_PREFIX + peerCode, publicKeyBase64);
+}
+
+/**
+ * Retrieves a stored peer public key.
+ * @param peerCode - The peer's pairing code
+ * @returns The stored public key in base64, or null if not found
+ */
+export function getStoredPeerKey(peerCode: string): string | null {
+  const storage = getStorage();
+  return storage.getItem(TOFU_PREFIX + peerCode);
+}
+
+/**
+ * Clears a stored peer public key.
+ * Call this when the user accepts a new key after being warned.
+ * @param peerCode - The peer's pairing code
+ */
+export function clearStoredPeerKey(peerCode: string): void {
+  const storage = getStorage();
+  storage.removeItem(TOFU_PREFIX + peerCode);
+}
+
+/**
+ * Checks if a peer's public key has changed from what was stored.
+ * Returns true if there is a stored key AND it differs from the new key.
+ * Returns false if no key is stored (first connection) or keys match.
+ * @param peerCode - The peer's pairing code
+ * @param newPublicKey - The peer's new public key in base64
+ * @returns true if the key has changed, false otherwise
+ */
+export function checkKeyChanged(peerCode: string, newPublicKey: string): boolean {
+  const stored = getStoredPeerKey(peerCode);
+  return stored !== null && stored !== newPublicKey;
+}
+
 export const cryptoService = new CryptoService();

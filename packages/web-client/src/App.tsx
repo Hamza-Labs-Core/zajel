@@ -1,5 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
-import { cryptoService, isEphemeralStorage } from './lib/crypto';
+import {
+  cryptoService,
+  isEphemeralStorage,
+  storePeerKey,
+  getStoredPeerKey,
+  checkKeyChanged,
+  clearStoredPeerKey,
+} from './lib/crypto';
 import { SignalingClient } from './lib/signaling';
 import { WebRTCService } from './lib/webrtc';
 import type { ConnectionState, ChatMessage, FileTransfer } from './lib/protocol';
@@ -11,6 +18,7 @@ import { PendingApproval } from './components/PendingApproval';
 import { ChatView } from './components/ChatView';
 import { FileTransfer as FileTransferUI } from './components/FileTransfer';
 import { StatusIndicator } from './components/StatusIndicator';
+import { KeyChangeWarning } from './components/KeyChangeWarning';
 
 // Signaling server URL must be configured via environment variable
 const SIGNALING_URL = import.meta.env.VITE_SIGNALING_URL;
@@ -38,6 +46,13 @@ export function App() {
   const [myFingerprint, setMyFingerprint] = useState('');
   const [peerFingerprint, setPeerFingerprint] = useState('');
   const [showSecurityInfo, setShowSecurityInfo] = useState(false);
+  const [keyChangeWarning, setKeyChangeWarning] = useState<{
+    peerCode: string;
+    peerPublicKey: string;
+    oldFingerprint: string;
+    newFingerprint: string;
+    isInitiator: boolean;
+  } | null>(null);
 
   const signalingRef = useRef<SignalingClient | null>(null);
   const webrtcRef = useRef<WebRTCService | null>(null);
@@ -68,7 +83,30 @@ export function App() {
         onPairMatched: async (peerCode, peerPublicKey, isInitiator) => {
           setPeerCode(peerCode);
           setIncomingRequest(null);
+
+          // TOFU check: verify if peer's key has changed
+          if (checkKeyChanged(peerCode, peerPublicKey)) {
+            // Key has changed - show warning dialog
+            const storedKey = getStoredPeerKey(peerCode);
+            const oldFingerprint = storedKey
+              ? cryptoService.getPeerPublicKeyFingerprint(storedKey)
+              : '';
+            const newFingerprint = cryptoService.getPeerPublicKeyFingerprint(peerPublicKey);
+            setKeyChangeWarning({
+              peerCode,
+              peerPublicKey,
+              oldFingerprint,
+              newFingerprint,
+              isInitiator,
+            });
+            return; // Don't proceed until user decides
+          }
+
+          // First connection or key matches - proceed normally
           setState('webrtc_connecting');
+
+          // Store the peer's key for future TOFU checks (first use)
+          storePeerKey(peerCode, peerPublicKey);
 
           // Establish crypto session and set peer fingerprint
           cryptoService.establishSession(peerCode, peerPublicKey);
@@ -171,6 +209,8 @@ export function App() {
           setTransfers((prev) =>
             prev.map((t) => {
               if (t.id !== fileId) return t;
+              // Skip if already failed
+              if (t.status === 'failed') return t;
 
               const data = t.data || [];
               // Decrypt chunk
@@ -178,15 +218,21 @@ export function App() {
                 const decrypted = cryptoService.decrypt(currentPeerCode, encryptedData);
                 const bytes = Uint8Array.from(atob(decrypted), (c) => c.charCodeAt(0));
                 data[chunkIndex] = bytes;
+                return {
+                  ...t,
+                  receivedChunks: t.receivedChunks + 1,
+                  data,
+                };
               } catch (e) {
                 console.error('Failed to decrypt chunk:', e);
+                // Mark transfer as failed and notify peer
+                webrtcRef.current?.sendFileError(fileId, 'Chunk decryption failed');
+                return {
+                  ...t,
+                  status: 'failed',
+                  error: `Failed to decrypt chunk ${chunkIndex + 1}`,
+                };
               }
-
-              return {
-                ...t,
-                receivedChunks: t.receivedChunks + 1,
-                data,
-              };
             })
           );
         },
@@ -194,9 +240,29 @@ export function App() {
           setTransfers((prev) =>
             prev.map((t) => {
               if (t.id !== fileId) return t;
+              // Skip if already failed
+              if (t.status === 'failed') return t;
 
-              // Combine chunks and download
+              // Check if any chunks are missing
               if (t.data) {
+                const missingChunks: number[] = [];
+                for (let i = 0; i < t.totalChunks; i++) {
+                  if (!t.data[i]) {
+                    missingChunks.push(i + 1);
+                  }
+                }
+                if (missingChunks.length > 0) {
+                  const missingStr = missingChunks.length > 3
+                    ? `${missingChunks.slice(0, 3).join(', ')}... (${missingChunks.length} total)`
+                    : missingChunks.join(', ');
+                  return {
+                    ...t,
+                    status: 'failed',
+                    error: `Missing chunks: ${missingStr}`,
+                  };
+                }
+
+                // All chunks present, combine and download
                 const blob = new Blob(t.data);
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -204,9 +270,28 @@ export function App() {
                 a.download = t.fileName;
                 a.click();
                 URL.revokeObjectURL(url);
+              } else {
+                // No data received at all
+                return {
+                  ...t,
+                  status: 'failed',
+                  error: 'No data received',
+                };
               }
 
               return { ...t, status: 'complete' };
+            })
+          );
+        },
+        onFileError: (fileId, error) => {
+          setTransfers((prev) =>
+            prev.map((t) => {
+              if (t.id !== fileId) return t;
+              return {
+                ...t,
+                status: 'failed',
+                error: `Peer error: ${error}`,
+              };
             })
           );
         },
@@ -249,6 +334,34 @@ export function App() {
     setState('registered');
     setPeerCode('');
   }, []);
+
+  const handleAcceptNewKey = useCallback(async () => {
+    if (!keyChangeWarning) return;
+
+    const { peerCode, peerPublicKey, isInitiator } = keyChangeWarning;
+
+    // Clear old key and store the new one
+    clearStoredPeerKey(peerCode);
+    storePeerKey(peerCode, peerPublicKey);
+
+    // Clear warning state
+    setKeyChangeWarning(null);
+
+    // Proceed with connection
+    setState('webrtc_connecting');
+    cryptoService.establishSession(peerCode, peerPublicKey);
+    setPeerFingerprint(cryptoService.getPeerPublicKeyFingerprint(peerPublicKey));
+    await webrtcRef.current?.connect(peerCode, isInitiator);
+  }, [keyChangeWarning]);
+
+  const handleRejectNewKey = useCallback(() => {
+    if (!keyChangeWarning) return;
+
+    // Clear warning and disconnect
+    setKeyChangeWarning(null);
+    setPeerCode('');
+    setState('registered');
+  }, [keyChangeWarning]);
 
   const handleSendMessage = useCallback(
     (content: string) => {
@@ -371,6 +484,10 @@ export function App() {
     setError(null);
   }, []);
 
+  const handleDismissTransfer = useCallback((transferId: string) => {
+    setTransfers((prev) => prev.filter((t) => t.id !== transferId));
+  }, []);
+
   // Render based on state
   const renderContent = () => {
     if (state === 'connected') {
@@ -384,7 +501,11 @@ export function App() {
             onSelectFile={handleSelectFile}
           />
           {transfers.length > 0 && (
-            <FileTransferUI transfers={transfers} onSendFile={handleSendFile} />
+            <FileTransferUI
+              transfers={transfers}
+              onSendFile={handleSendFile}
+              onDismiss={handleDismissTransfer}
+            />
           )}
           <input
             ref={fileInputRef}
@@ -486,6 +607,16 @@ export function App() {
           peerCode={incomingRequest.code}
           onAccept={handleAcceptPairing}
           onReject={handleRejectPairing}
+        />
+      )}
+
+      {keyChangeWarning && (
+        <KeyChangeWarning
+          peerCode={keyChangeWarning.peerCode}
+          oldFingerprint={keyChangeWarning.oldFingerprint}
+          newFingerprint={keyChangeWarning.newFingerprint}
+          onAccept={handleAcceptNewKey}
+          onDisconnect={handleRejectNewKey}
         />
       )}
     </div>

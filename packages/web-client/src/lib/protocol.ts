@@ -149,11 +149,18 @@ export interface FileCompleteMessage {
   fileId: string;
 }
 
+export interface FileErrorMessage {
+  type: 'file_error';
+  fileId: string;
+  error: string;
+}
+
 export type DataChannelMessage =
   | HandshakeMessage
   | FileStartMessage
   | FileChunkMessage
-  | FileCompleteMessage;
+  | FileCompleteMessage
+  | FileErrorMessage;
 
 // Connection state
 export type ConnectionState =
@@ -183,6 +190,7 @@ export interface FileTransfer {
   totalSize: number;
   totalChunks: number;
   receivedChunks: number;
-  status: 'receiving' | 'complete' | 'failed';
+  status: 'receiving' | 'sending' | 'complete' | 'failed';
+  error?: string;
   data?: Uint8Array[];
 }

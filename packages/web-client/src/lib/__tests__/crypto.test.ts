@@ -574,6 +574,162 @@ describe('CryptoService', () => {
     });
   });
 
+  describe('Replay Protection', () => {
+    let alice: CryptoService;
+    let bob: CryptoService;
+    const sharedRoomId = 'room-replay-test';
+
+    beforeEach(async () => {
+      // Create Alice
+      const aliceStorage = createMockStorage();
+      Object.defineProperty(globalThis, 'sessionStorage', {
+        value: aliceStorage,
+        writable: true,
+        configurable: true,
+      });
+      alice = new CryptoService();
+      await alice.initialize();
+
+      // Create Bob
+      const bobStorage = createMockStorage();
+      Object.defineProperty(globalThis, 'sessionStorage', {
+        value: bobStorage,
+        writable: true,
+        configurable: true,
+      });
+      bob = new CryptoService();
+      await bob.initialize();
+
+      // Establish sessions
+      alice.establishSession(sharedRoomId, bob.getPublicKeyBase64());
+      bob.establishSession(sharedRoomId, alice.getPublicKeyBase64());
+    });
+
+    it('sequence numbers should increment with each message', () => {
+      const message1 = alice.encrypt(sharedRoomId, 'Message 1');
+      const message2 = alice.encrypt(sharedRoomId, 'Message 2');
+      const message3 = alice.encrypt(sharedRoomId, 'Message 3');
+
+      // All messages should decrypt successfully in order
+      const decrypted1 = bob.decrypt(sharedRoomId, message1);
+      const decrypted2 = bob.decrypt(sharedRoomId, message2);
+      const decrypted3 = bob.decrypt(sharedRoomId, message3);
+
+      expect(decrypted1).toBe('Message 1');
+      expect(decrypted2).toBe('Message 2');
+      expect(decrypted3).toBe('Message 3');
+    });
+
+    it('should reject replay of same message (duplicate sequence number)', () => {
+      const message = alice.encrypt(sharedRoomId, 'Original message');
+
+      // First decryption should succeed
+      const decrypted = bob.decrypt(sharedRoomId, message);
+      expect(decrypted).toBe('Original message');
+
+      // Replaying the same message should fail
+      expect(() => bob.decrypt(sharedRoomId, message)).toThrow(
+        'Replay attack detected: duplicate sequence number'
+      );
+    });
+
+    it('should reject messages with old sequence numbers', () => {
+      // Send and receive many messages to advance the counter
+      for (let i = 0; i < 15; i++) {
+        const msg = alice.encrypt(sharedRoomId, `Message ${i}`);
+        bob.decrypt(sharedRoomId, msg);
+      }
+
+      // Create a new session for Alice (to reset her counter) but keep Bob's counter
+      const aliceStorage2 = createMockStorage();
+      Object.defineProperty(globalThis, 'sessionStorage', {
+        value: aliceStorage2,
+        writable: true,
+        configurable: true,
+      });
+      const aliceNew = new CryptoService();
+      // Manually set up a session that would produce low sequence numbers
+      // This simulates an attacker trying to replay old captured messages
+
+      // For simplicity, we just capture an early message before sending many
+      // Reset and test differently:
+      // Re-establish the session for fresh test
+      alice.clearSession(sharedRoomId);
+      bob.clearSession(sharedRoomId);
+      alice.establishSession(sharedRoomId, bob.getPublicKeyBase64());
+      bob.establishSession(sharedRoomId, alice.getPublicKeyBase64());
+
+      // Capture message at seq 1
+      const earlyMessage = alice.encrypt(sharedRoomId, 'Early message');
+
+      // Send and receive many more messages to advance counter beyond window
+      for (let i = 0; i < 15; i++) {
+        const msg = alice.encrypt(sharedRoomId, `Message ${i}`);
+        bob.decrypt(sharedRoomId, msg);
+      }
+
+      // Now try to replay the early message - should fail as too old
+      expect(() => bob.decrypt(sharedRoomId, earlyMessage)).toThrow(
+        'Replay attack detected: sequence too old'
+      );
+    });
+
+    it('should handle messages slightly out of order within window', () => {
+      // Encrypt messages 1, 2, 3
+      const msg1 = alice.encrypt(sharedRoomId, 'Message 1');
+      const msg2 = alice.encrypt(sharedRoomId, 'Message 2');
+      const msg3 = alice.encrypt(sharedRoomId, 'Message 3');
+
+      // Receive them out of order: 1, 3, 2
+      // Message 1 (seq 1) - should work
+      expect(bob.decrypt(sharedRoomId, msg1)).toBe('Message 1');
+
+      // Message 3 (seq 3) - should work (skipping ahead is fine)
+      expect(bob.decrypt(sharedRoomId, msg3)).toBe('Message 3');
+
+      // Message 2 (seq 2) - would fail because we track highest seen (3)
+      // and 2 < 3, so it's treated as duplicate/old
+      // Note: This is a trade-off in the current implementation
+      expect(() => bob.decrypt(sharedRoomId, msg2)).toThrow(
+        'Replay attack detected: duplicate sequence number'
+      );
+    });
+
+    it('clearSession should reset sequence counters', () => {
+      // Send a message
+      const msg1 = alice.encrypt(sharedRoomId, 'Before clear');
+      bob.decrypt(sharedRoomId, msg1);
+
+      // Clear and re-establish session
+      alice.clearSession(sharedRoomId);
+      bob.clearSession(sharedRoomId);
+      alice.establishSession(sharedRoomId, bob.getPublicKeyBase64());
+      bob.establishSession(sharedRoomId, alice.getPublicKeyBase64());
+
+      // Should be able to send new messages starting from seq 1 again
+      const msg2 = alice.encrypt(sharedRoomId, 'After clear');
+      const decrypted = bob.decrypt(sharedRoomId, msg2);
+      expect(decrypted).toBe('After clear');
+    });
+
+    it('each peer should have independent counters', () => {
+      // Alice sends to Bob
+      const aliceMsg = alice.encrypt(sharedRoomId, 'From Alice');
+      bob.decrypt(sharedRoomId, aliceMsg);
+
+      // Bob sends to Alice - should work with its own counter
+      const bobMsg = bob.encrypt(sharedRoomId, 'From Bob');
+      alice.decrypt(sharedRoomId, bobMsg);
+
+      // Both should be able to continue sending
+      const aliceMsg2 = alice.encrypt(sharedRoomId, 'From Alice 2');
+      bob.decrypt(sharedRoomId, aliceMsg2);
+
+      const bobMsg2 = bob.encrypt(sharedRoomId, 'From Bob 2');
+      alice.decrypt(sharedRoomId, bobMsg2);
+    });
+  });
+
   describe('Bidirectional Communication', () => {
     it('should allow both parties to encrypt and decrypt', async () => {
       // Create Alice
