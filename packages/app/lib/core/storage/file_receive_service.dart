@@ -4,6 +4,8 @@ import 'dart:typed_data';
 
 import 'package:path_provider/path_provider.dart';
 
+import '../logging/logger_service.dart';
+
 /// Status of a file transfer.
 enum FileTransferStatus {
   receiving,
@@ -105,14 +107,14 @@ class FileReceiveService {
     _transferController.add(transfer);
     _ensureTimeoutTimer();
 
-    print('[FileReceiveService] Started transfer: $fileId ($fileName, $totalChunks chunks)');
+    logger.info('FileReceiveService', 'Started transfer: $fileId ($fileName, $totalChunks chunks)');
   }
 
   /// Add a chunk to a transfer.
   void addChunk(String fileId, int chunkIndex, Uint8List chunk) {
     final transfer = _activeTransfers[fileId];
     if (transfer == null) {
-      print('[FileReceiveService] Received chunk for unknown transfer: $fileId');
+      logger.warning('FileReceiveService', 'Received chunk for unknown transfer: $fileId');
       return;
     }
 
@@ -120,14 +122,14 @@ class FileReceiveService {
     transfer.lastChunkTime = DateTime.now();
     _transferController.add(transfer);
 
-    print('[FileReceiveService] Chunk $chunkIndex/${transfer.totalChunks} for $fileId');
+    logger.debug('FileReceiveService', 'Chunk $chunkIndex/${transfer.totalChunks} for $fileId');
   }
 
   /// Complete a transfer - reassemble and save to disk.
   Future<String?> completeTransfer(String fileId) async {
     final transfer = _activeTransfers[fileId];
     if (transfer == null) {
-      print('[FileReceiveService] Complete called for unknown transfer: $fileId');
+      logger.warning('FileReceiveService', 'Complete called for unknown transfer: $fileId');
       return null;
     }
 
@@ -137,7 +139,7 @@ class FileReceiveService {
       transfer.status = FileTransferStatus.failed;
       transfer.error = 'Missing $missing chunks';
       _transferController.add(transfer);
-      print('[FileReceiveService] Transfer incomplete: $fileId ($missing missing)');
+      logger.warning('FileReceiveService', 'Transfer incomplete: $fileId ($missing missing)');
       return null;
     }
 
@@ -188,13 +190,13 @@ class FileReceiveService {
       transfer.receivedChunks.clear(); // Free memory
       _transferController.add(transfer);
 
-      print('[FileReceiveService] Transfer complete: $fileId -> $filePath');
+      logger.info('FileReceiveService', 'Transfer complete: $fileId -> $filePath');
       return filePath;
     } catch (e) {
       transfer.status = FileTransferStatus.failed;
       transfer.error = e.toString();
       _transferController.add(transfer);
-      print('[FileReceiveService] Transfer failed: $fileId - $e');
+      logger.error('FileReceiveService', 'Transfer failed: $fileId', e);
       return null;
     }
   }
@@ -211,7 +213,7 @@ class FileReceiveService {
           transfer.status = FileTransferStatus.failed;
           transfer.error = 'Transfer timed out';
           _transferController.add(transfer);
-          print('[FileReceiveService] Transfer timed out: ${transfer.fileId}');
+          logger.warning('FileReceiveService', 'Transfer timed out: ${transfer.fileId}');
         }
       }
     }

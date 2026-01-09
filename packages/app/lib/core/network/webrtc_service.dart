@@ -2,10 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../crypto/crypto_service.dart';
+import '../logging/logger_service.dart';
 import '../models/peer.dart';
 
 /// Callback types for WebRTC events.
@@ -432,7 +432,7 @@ class WebRTCService {
       }
     } catch (e) {
       // Handle error
-      print('[WebRTCService] Error handling file data: $e');
+      logger.error('WebRTCService', 'Error handling file data', e);
     }
   }
 
@@ -466,8 +466,3 @@ class WebRTCException implements Exception {
   @override
   String toString() => 'WebRTCException: $message';
 }
-
-/// Provider for WebRTC service.
-final webrtcServiceProvider = Provider<WebRTCService>((ref) {
-  throw UnimplementedError('Must be overridden in ProviderScope');
-});

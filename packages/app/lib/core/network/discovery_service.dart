@@ -1,9 +1,9 @@
 import 'dart:async';
 
 import 'package:bonsoir/bonsoir.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
+import '../logging/logger_service.dart';
 import '../models/peer.dart';
 
 /// Service for discovering peers on the local network using mDNS/DNS-SD.
@@ -68,13 +68,13 @@ class DiscoveryService {
     try {
       await _startBroadcast();
     } catch (e, stack) {
-      print('Broadcast failed: $e\n$stack');
+      logger.error('DiscoveryService', 'Broadcast failed', e, stack);
     }
 
     try {
       await _startDiscovery();
     } catch (e, stack) {
-      print('Discovery failed: $e\n$stack');
+      logger.error('DiscoveryService', 'Discovery failed', e, stack);
     }
 
     _isRunning = true;
@@ -200,6 +200,16 @@ class DiscoveryService {
     final ipAddress = service.host;
     final port = service.port;
 
+    // Log resolution details for debugging
+    logger.debug('DiscoveryService', 'Resolved service: ${service.name}');
+    logger.debug('DiscoveryService', '- Host: $ipAddress, Port: $port, Attrs: ${service.attributes}');
+
+    // Warn if host is null (common on some desktop platforms)
+    if (ipAddress == null) {
+      logger.warning('DiscoveryService', 'Host is null for ${service.name}. '
+          'mDNS resolution may have failed on this platform.');
+    }
+
     final peer = Peer(
       id: peerId,
       displayName: service.name,
@@ -226,14 +236,3 @@ class DiscoveryService {
     _peersController.add(_discoveredPeers.values.toList());
   }
 }
-
-/// Provider for the discovery service.
-final discoveryServiceProvider = Provider<DiscoveryService>((ref) {
-  throw UnimplementedError('Must be overridden in ProviderScope');
-});
-
-/// Provider for the stream of discovered peers.
-final discoveredPeersProvider = StreamProvider<List<Peer>>((ref) {
-  final discoveryService = ref.watch(discoveryServiceProvider);
-  return discoveryService.peers;
-});

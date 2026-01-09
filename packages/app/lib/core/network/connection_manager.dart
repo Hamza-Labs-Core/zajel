@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../crypto/crypto_service.dart';
+import '../logging/logger_service.dart';
 import '../models/models.dart';
 import 'discovery_service.dart';
 import 'local_signaling_server.dart';
@@ -85,7 +85,7 @@ class ConnectionManager {
     // Start local signaling server
     _localSignalingServer = LocalSignalingServer();
     final signalingPort = await _localSignalingServer!.start();
-    print('[ConnectionManager] Local signaling server started on port $signalingPort');
+    logger.info('ConnectionManager', 'Local signaling server started on port $signalingPort');
 
     // Update discovery service with actual signaling port
     await _discoveryService.updatePort(signalingPort);
@@ -166,7 +166,7 @@ class ConnectionManager {
         throw ConnectionException('Failed to send offer to peer');
       }
 
-      print('[ConnectionManager] Sent offer to ${peer.ipAddress}:${peer.port}');
+      logger.debug('ConnectionManager', 'Sent offer to ${peer.ipAddress}:${peer.port}');
     } catch (e) {
       _updatePeerState(peerId, PeerConnectionState.failed);
       rethrow;
@@ -177,7 +177,7 @@ class ConnectionManager {
   Future<void> _sendLocalSignal(String peerId, Map<String, dynamic> message) async {
     final peer = _peers[peerId];
     if (peer == null || peer.ipAddress == null || peer.port == null) {
-      print('[ConnectionManager] Cannot send signal to $peerId: no address');
+      logger.warning('ConnectionManager', 'Cannot send signal to $peerId: no address');
       return;
     }
 
@@ -289,7 +289,7 @@ class ConnectionManager {
   /// Handle incoming local signaling messages.
   void _handleLocalSignalingMessage(LocalSignalingMessage message) async {
     final fromPeerId = message.fromPeerId;
-    print('[ConnectionManager] Received ${message.type} from $fromPeerId');
+    logger.debug('ConnectionManager', 'Received ${message.type} from $fromPeerId');
 
     // Find or create peer entry
     if (!_peers.containsKey(fromPeerId)) {
@@ -329,7 +329,7 @@ class ConnectionManager {
             type: 'answer',
             payload: answer,
           );
-          print('[ConnectionManager] Sent answer to ${peer.ipAddress}:${peer.port}');
+          logger.debug('ConnectionManager', 'Sent answer to ${peer.ipAddress}:${peer.port}');
         }
         break;
 
@@ -456,8 +456,3 @@ class ConnectionException implements Exception {
   @override
   String toString() => 'ConnectionException: $message';
 }
-
-/// Provider for the connection manager.
-final connectionManagerProvider = Provider<ConnectionManager>((ref) {
-  throw UnimplementedError('Must be overridden in ProviderScope');
-});

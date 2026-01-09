@@ -71,13 +71,41 @@ interface PingMessage {
   type: 'ping';
 }
 
+// WebRTC signaling messages (for pairing code-based connections)
+interface SignalingRegisterMessage {
+  type: 'register';
+  pairingCode: string;
+}
+
+interface SignalingOfferMessage {
+  type: 'offer';
+  target: string;  // Target pairing code
+  payload: Record<string, unknown>;
+}
+
+interface SignalingAnswerMessage {
+  type: 'answer';
+  target: string;
+  payload: Record<string, unknown>;
+}
+
+interface SignalingIceCandidateMessage {
+  type: 'ice_candidate';
+  target: string;
+  payload: Record<string, unknown>;
+}
+
 type ClientMessage =
   | RegisterMessage
   | UpdateLoadMessage
   | RegisterRendezvousMessage
   | GetRelaysMessage
   | HeartbeatMessage
-  | PingMessage;
+  | PingMessage
+  | SignalingRegisterMessage
+  | SignalingOfferMessage
+  | SignalingAnswerMessage
+  | SignalingIceCandidateMessage;
 
 export class ClientHandler extends EventEmitter {
   private identity: ServerIdentity;
@@ -88,6 +116,9 @@ export class ClientHandler extends EventEmitter {
   private distributedRendezvous: DistributedRendezvous;
   private clients: Map<string, ClientInfo> = new Map();
   private wsToClient: Map<WebSocket, string> = new Map();
+  // Pairing code-based client tracking for WebRTC signaling
+  private pairingCodeToWs: Map<string, WebSocket> = new Map();
+  private wsToPairingCode: Map<WebSocket, string> = new Map();
 
   constructor(
     identity: ServerIdentity,
@@ -143,7 +174,24 @@ export class ClientHandler extends EventEmitter {
     try {
       switch (message.type) {
         case 'register':
-          await this.handleRegister(ws, message);
+          // Check if this is a pairing code registration or a peerId registration
+          if ('pairingCode' in message) {
+            this.handlePairingCodeRegister(ws, message as SignalingRegisterMessage);
+          } else {
+            await this.handleRegister(ws, message);
+          }
+          break;
+
+        case 'offer':
+          this.handleSignalingForward(ws, message as SignalingOfferMessage);
+          break;
+
+        case 'answer':
+          this.handleSignalingForward(ws, message as SignalingAnswerMessage);
+          break;
+
+        case 'ice_candidate':
+          this.handleSignalingForward(ws, message as SignalingIceCandidateMessage);
           break;
 
         case 'update_load':
@@ -338,9 +386,92 @@ export class ClientHandler extends EventEmitter {
   }
 
   /**
+   * Handle pairing code registration (for WebRTC signaling)
+   */
+  private handlePairingCodeRegister(ws: WebSocket, message: SignalingRegisterMessage): void {
+    const { pairingCode } = message;
+
+    if (!pairingCode) {
+      this.sendError(ws, 'Missing required field: pairingCode');
+      return;
+    }
+
+    // Store pairing code -> WebSocket mapping
+    this.pairingCodeToWs.set(pairingCode, ws);
+    this.wsToPairingCode.set(ws, pairingCode);
+
+    console.log(`[ClientHandler] Registered pairing code: ${pairingCode}`);
+
+    // Send confirmation
+    this.send(ws, {
+      type: 'registered',
+      pairingCode,
+      serverId: this.identity.serverId,
+    });
+  }
+
+  /**
+   * Handle signaling message forwarding (offer, answer, ice_candidate)
+   */
+  private handleSignalingForward(
+    ws: WebSocket,
+    message: SignalingOfferMessage | SignalingAnswerMessage | SignalingIceCandidateMessage
+  ): void {
+    const { type, target, payload } = message;
+    const senderPairingCode = this.wsToPairingCode.get(ws);
+
+    if (!senderPairingCode) {
+      this.sendError(ws, 'Not registered. Send register message first.');
+      return;
+    }
+
+    if (!target) {
+      this.sendError(ws, 'Missing required field: target');
+      return;
+    }
+
+    // Find target WebSocket
+    const targetWs = this.pairingCodeToWs.get(target);
+
+    if (!targetWs) {
+      console.log(`[ClientHandler] Target not found for ${type}: ${target}`);
+      this.send(ws, {
+        type: 'error',
+        message: `Peer not found: ${target}`,
+      });
+      return;
+    }
+
+    // Forward the message to target with sender info
+    const forwarded = this.send(targetWs, {
+      type,
+      from: senderPairingCode,
+      payload,
+    });
+
+    if (forwarded) {
+      console.log(`[ClientHandler] Forwarded ${type} from ${senderPairingCode} to ${target}`);
+    } else {
+      this.send(ws, {
+        type: 'error',
+        message: `Failed to forward ${type} to ${target}`,
+      });
+    }
+  }
+
+  /**
    * Handle WebSocket disconnect
    */
   async handleDisconnect(ws: WebSocket): Promise<void> {
+    // Clean up pairing code mappings (for signaling clients)
+    const pairingCode = this.wsToPairingCode.get(ws);
+    if (pairingCode) {
+      this.pairingCodeToWs.delete(pairingCode);
+      this.wsToPairingCode.delete(ws);
+      console.log(`[ClientHandler] Pairing code disconnected: ${pairingCode}`);
+    }
+
+    // Clean up peerId mappings (for relay clients)
     const peerId = this.wsToClient.get(ws);
     if (!peerId) return;
 
@@ -478,6 +609,7 @@ export class ClientHandler extends EventEmitter {
    * Shutdown - disconnect all clients
    */
   async shutdown(): Promise<void> {
+    // Close all relay clients
     for (const [peerId, client] of this.clients) {
       try {
         client.ws.close(1001, 'Server shutting down');
@@ -487,5 +619,23 @@ export class ClientHandler extends EventEmitter {
     }
     this.clients.clear();
     this.wsToClient.clear();
+
+    // Close all signaling clients
+    for (const [pairingCode, ws] of this.pairingCodeToWs) {
+      try {
+        ws.close(1001, 'Server shutting down');
+      } catch {
+        // Ignore close errors
+      }
+    }
+    this.pairingCodeToWs.clear();
+    this.wsToPairingCode.clear();
+  }
+
+  /**
+   * Get signaling client count
+   */
+  get signalingClientCount(): number {
+    return this.pairingCodeToWs.size;
   }
 }

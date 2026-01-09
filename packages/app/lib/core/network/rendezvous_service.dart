@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import '../crypto/crypto_service.dart';
+import '../logging/logger_service.dart';
 import '../storage/trusted_peers_storage.dart';
 import 'connection_info.dart';
 import 'dead_drop.dart';
@@ -90,7 +91,7 @@ class RendezvousService {
       } catch (e) {
         // Log error but continue with other peers
         // In production, this should use a proper logger
-        print('[RendezvousService] Failed to create registration for $peerId: $e');
+        logger.error('RendezvousService', 'Failed to create registration for $peerId', e);
       }
     }
 
@@ -180,7 +181,7 @@ class RendezvousService {
   Future<void> processRendezvousResult(String peerId, RendezvousResult result) async {
     if (!result.success) {
       // Log the error but don't throw
-      print('[RendezvousService] Rendezvous failed for $peerId: ${result.error}');
+      logger.error('RendezvousService', 'Rendezvous failed for $peerId: ${result.error}');
       return;
     }
 

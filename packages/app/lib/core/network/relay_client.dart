@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
+import '../logging/logger_service.dart';
 import 'relay_models.dart';
 import 'relay_exceptions.dart';
 import 'signaling_client.dart';
@@ -118,7 +119,7 @@ class RelayClient {
       try {
         await _connectToRelay(relay);
       } catch (e) {
-        print('[RelayClient] Failed to connect to relay ${relay.peerId}: $e');
+        logger.error('RelayClient', 'Failed to connect to relay ${relay.peerId}', e);
         _stateController.add(RelayStateEvent(
           relayId: relay.peerId,
           state: RelayConnectionState.failed,
@@ -399,7 +400,7 @@ class RelayClient {
           break;
       }
     } catch (e) {
-      print('[RelayClient] Error handling relay message: $e');
+      logger.error('RelayClient', 'Error handling relay message', e);
     }
   }
 

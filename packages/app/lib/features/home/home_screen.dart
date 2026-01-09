@@ -273,7 +273,7 @@ class _PeerCard extends ConsumerWidget {
               )
             else
               TextButton(
-                onPressed: () => _connect(ref),
+                onPressed: () => _connect(context, ref),
                 child: const Text('Connect'),
               ),
             PopupMenuButton<String>(
@@ -375,7 +375,7 @@ class _PeerCard extends ConsumerWidget {
     }
   }
 
-  Future<void> _connect(WidgetRef ref) async {
+  Future<void> _connect(BuildContext context, WidgetRef ref) async {
     final connectionManager = ref.read(connectionManagerProvider);
     try {
       if (peer.isLocal) {
@@ -384,7 +384,14 @@ class _PeerCard extends ConsumerWidget {
         await connectionManager.connectToExternalPeer(peer.id);
       }
     } catch (e) {
-      // Handle error
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Connection failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 

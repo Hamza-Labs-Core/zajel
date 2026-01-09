@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import '../crypto/crypto_service.dart';
+import '../logging/logger_service.dart';
 import '../storage/trusted_peers_storage.dart';
 import 'connection_info.dart';
 import 'meeting_point_service.dart';
@@ -239,7 +240,7 @@ class PeerReconnectionService {
       final encrypted = await _cryptoService.encryptForPeer(peerId, plaintext);
       return encrypted;
     } catch (e) {
-      print('[PeerReconnection] Failed to create dead drop for $peerId: $e');
+      logger.error('PeerReconnection', 'Failed to create dead drop for $peerId', e);
       return null;
     }
   }
@@ -250,7 +251,7 @@ class PeerReconnectionService {
       final plaintext = await _cryptoService.decryptFromPeer(peerId, encryptedData);
       return ConnectionInfo.fromJsonString(plaintext);
     } catch (e) {
-      print('[PeerReconnection] Failed to decrypt dead drop from $peerId: $e');
+      logger.error('PeerReconnection', 'Failed to decrypt dead drop from $peerId', e);
       return null;
     }
   }
@@ -295,7 +296,7 @@ class PeerReconnectionService {
         );
         return;
       } catch (e) {
-        print('[PeerReconnection] Primary relay failed: $e');
+        logger.warning('PeerReconnection', 'Primary relay failed: $e');
       }
     }
 
@@ -310,7 +311,7 @@ class PeerReconnectionService {
         );
         return; // Success, don't try more fallbacks
       } catch (e) {
-        print('[PeerReconnection] Fallback relay $fallbackRelay failed: $e');
+        logger.warning('PeerReconnection', 'Fallback relay $fallbackRelay failed: $e');
         continue;
       }
     }
@@ -334,7 +335,7 @@ class PeerReconnectionService {
         ));
       }
     } catch (e) {
-      print('[PeerReconnection] Failed to process dead drop: $e');
+      logger.error('PeerReconnection', 'Failed to process dead drop', e);
     }
   }
 

@@ -1,9 +1,12 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/logging/logger_service.dart';
 import '../../core/providers/app_providers.dart';
 
 /// Settings screen for app configuration.
@@ -114,6 +117,36 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 title: const Text('Bootstrap Server'),
                 subtitle: Text(ref.watch(bootstrapServerUrlProvider)),
                 onTap: () => _showBootstrapUrlDialog(context),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          _buildSection(
+            context,
+            title: 'Debugging',
+            children: [
+              ListTile(
+                leading: const Icon(Icons.description),
+                title: const Text('Export Logs'),
+                subtitle: Text(
+                  logger.logDirectoryPath ?? 'Logs not initialized',
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: const Icon(Icons.share),
+                onTap: () => _exportLogs(context),
+              ),
+              ListTile(
+                leading: const Icon(Icons.visibility),
+                title: const Text('View Logs'),
+                subtitle: const Text('View recent log entries'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _showLogViewer(context),
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline),
+                title: const Text('Clear Logs'),
+                subtitle: const Text('Delete all log files'),
+                onTap: () => _showClearLogsDialog(context),
               ),
             ],
           ),
@@ -444,6 +477,144 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('All data cleared')),
+        );
+      }
+    }
+  }
+
+  Future<void> _exportLogs(BuildContext context) async {
+    try {
+      // Show loading indicator
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Row(
+              children: [
+                SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                SizedBox(width: 12),
+                Text('Preparing logs...'),
+              ],
+            ),
+            duration: Duration(seconds: 1),
+          ),
+        );
+      }
+
+      await logger.exportLogs();
+      logger.info('Settings', 'Logs exported successfully');
+    } catch (e) {
+      logger.error('Settings', 'Failed to export logs', e);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to export logs: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _showLogViewer(BuildContext context) async {
+    final logContent = await logger.getCurrentLogContent();
+
+    if (!mounted) return;
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.3,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (context, scrollController) => Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(16),
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.description),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'Log Viewer',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: SingleChildScrollView(
+                controller: scrollController,
+                padding: const EdgeInsets.all(16),
+                child: SelectableText(
+                  logContent.isEmpty ? 'No logs available' : logContent,
+                  style: TextStyle(
+                    fontFamily: Platform.isIOS || Platform.isMacOS
+                        ? 'Menlo'
+                        : 'monospace',
+                    fontSize: 11,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showClearLogsDialog(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear Logs?'),
+        content: const Text(
+          'This will delete all log files. This action cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await logger.clearLogs();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Logs cleared')),
         );
       }
     }

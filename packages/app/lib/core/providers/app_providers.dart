@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../crypto/crypto_service.dart';
+import '../logging/logger_service.dart';
 import '../models/models.dart';
 import '../network/connection_manager.dart';
 import '../network/discovery_service.dart';
@@ -282,4 +283,10 @@ final fileChunksStreamProvider = StreamProvider<(String, String, dynamic, int, i
 final fileCompletesStreamProvider = StreamProvider<(String, String)>((ref) {
   final connectionManager = ref.watch(connectionManagerProvider);
   return connectionManager.fileCompletes;
+});
+
+/// Provider for the logger service.
+final loggerServiceProvider = Provider<LoggerService>((ref) {
+  // Uses the singleton instance
+  return LoggerService.instance;
 });
