@@ -500,10 +500,13 @@ export class ClientHandler extends EventEmitter {
 
     // Store pending request
     const pending = this.pendingPairRequests.get(targetCode) || [];
-    // Remove any existing request from the same requester
-    const filtered = pending.filter(r => r.requesterCode !== requesterCode);
-    filtered.push(request);
-    this.pendingPairRequests.set(targetCode, filtered);
+    // Remove any existing request from the same requester (in-place modification)
+    const existingIndex = pending.findIndex(r => r.requesterCode === requesterCode);
+    if (existingIndex !== -1) {
+      pending.splice(existingIndex, 1);
+    }
+    pending.push(request);
+    this.pendingPairRequests.set(targetCode, pending);
 
     // Notify target about incoming pair request
     this.send(targetWs, {
@@ -544,7 +547,8 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
-    const request = pending[requestIndex];
+    // We know request exists because requestIndex !== -1
+    const request = pending[requestIndex]!;
 
     // Remove the request from pending
     pending.splice(requestIndex, 1);

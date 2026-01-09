@@ -30,6 +30,12 @@ export function App() {
   const signalingRef = useRef<SignalingClient | null>(null);
   const webrtcRef = useRef<WebRTCService | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const peerCodeRef = useRef<string>('');
+
+  // Keep peerCodeRef in sync with peerCode state
+  useEffect(() => {
+    peerCodeRef.current = peerCode;
+  }, [peerCode]);
 
   // Initialize crypto and signaling
   useEffect(() => {
@@ -100,7 +106,9 @@ export function App() {
         },
         onMessage: (encryptedData) => {
           try {
-            const content = cryptoService.decrypt(peerCode, encryptedData);
+            const currentPeerCode = peerCodeRef.current;
+            if (!currentPeerCode) return;
+            const content = cryptoService.decrypt(currentPeerCode, encryptedData);
             const msg: ChatMessage = {
               id: crypto.randomUUID(),
               content,
@@ -127,6 +135,8 @@ export function App() {
           ]);
         },
         onFileChunk: (fileId, chunkIndex, encryptedData) => {
+          const currentPeerCode = peerCodeRef.current;
+          if (!currentPeerCode) return;
           setTransfers((prev) =>
             prev.map((t) => {
               if (t.id !== fileId) return t;
@@ -134,7 +144,7 @@ export function App() {
               const data = t.data || [];
               // Decrypt chunk
               try {
-                const decrypted = cryptoService.decrypt(peerCode, encryptedData);
+                const decrypted = cryptoService.decrypt(currentPeerCode, encryptedData);
                 const bytes = Uint8Array.from(atob(decrypted), (c) => c.charCodeAt(0));
                 data[chunkIndex] = bytes;
               } catch (e) {

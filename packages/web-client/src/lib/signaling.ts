@@ -140,10 +140,16 @@ export class SignalingClient {
     }
   }
 
-  private send(message: ClientMessage): void {
+  private send(message: ClientMessage): boolean {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(message));
+      try {
+        this.ws.send(JSON.stringify(message));
+        return true;
+      } catch {
+        return false;
+      }
     }
+    return false;
   }
 
   private handleMessage(message: ServerMessage): void {
@@ -205,8 +211,10 @@ export class SignalingClient {
 
   // Public methods for pairing
   requestPairing(targetCode: string): void {
-    this.setState('waiting_approval');
-    this.send({ type: 'pair_request', targetCode });
+    const sent = this.send({ type: 'pair_request', targetCode });
+    if (sent) {
+      this.setState('waiting_approval');
+    }
   }
 
   respondToPairing(targetCode: string, accepted: boolean): void {

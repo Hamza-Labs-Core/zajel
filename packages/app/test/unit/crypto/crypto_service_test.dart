@@ -24,6 +24,30 @@ void main() {
         expect(() => base64Decode(publicKey), returnsNormally);
       });
 
+      test('publicKeyBase64 sync getter works after initialization', () async {
+        await cryptoService.initialize();
+
+        // Sync getter should return the same key as async method
+        final syncKey = cryptoService.publicKeyBase64;
+        final asyncKey = await cryptoService.getPublicKeyBase64();
+
+        expect(syncKey, isNotEmpty);
+        expect(syncKey, asyncKey);
+        expect(() => base64Decode(syncKey), returnsNormally);
+      });
+
+      test('publicKeyBase64 sync getter throws before initialization', () {
+        // Should throw when called before initialize()
+        expect(
+          () => cryptoService.publicKeyBase64,
+          throwsA(isA<CryptoException>().having(
+            (e) => e.message,
+            'message',
+            contains('not initialized'),
+          )),
+        );
+      });
+
       test('initialize loads existing keys from storage', () async {
         // First initialization - generates keys
         await cryptoService.initialize();
