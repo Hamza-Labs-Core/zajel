@@ -12,8 +12,8 @@
     "test:watch": "vitest"
   },
   "devDependencies": {
-    "vitest": "^1.0.0",
-    "wrangler": "^3.0.0"
+    "vitest": "^4.0.16",
+    "wrangler": "^4.58.0"
   },
   "keywords": [
     "zajel",
@@ -21,5 +21,8 @@
     "signaling",
     "cloudflare-workers"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "vite": "^7.3.1"
+  }
 }
