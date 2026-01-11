@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:uuid/uuid.dart';
@@ -7,6 +8,64 @@ import '../crypto/crypto_service.dart';
 import '../models/models.dart';
 import 'signaling_client.dart';
 import 'webrtc_service.dart';
+
+/// Character set for pairing codes.
+/// 32 characters (power of 2) chosen to avoid modulo bias with byte values (256 / 32 = 8 exactly).
+/// Excludes ambiguous characters: 0, O, 1, I to improve readability.
+const _pairingCodeChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const _pairingCodeLength = 6;
+
+/// Generates an unbiased random character from the given character set using rejection sampling.
+///
+/// This avoids modulo bias by rejecting random bytes that would cause uneven distribution.
+/// For a character set of length N, we calculate the largest multiple of N that fits in 256
+/// and reject any bytes >= that value.
+///
+/// Uses [Random.secure()] for cryptographically secure random number generation.
+String _getUnbiasedRandomChar(String chars, Random secureRandom) {
+  final charsetLength = chars.length;
+  // Calculate the largest multiple of charsetLength that fits in 256 (byte range)
+  final maxValid = (256 ~/ charsetLength) * charsetLength;
+
+  int byte;
+  do {
+    byte = secureRandom.nextInt(256);
+  } while (byte >= maxValid);
+
+  return chars[byte % charsetLength];
+}
+
+/// Generates a random pairing code using unbiased random character selection.
+///
+/// Uses rejection sampling to ensure each character has exactly equal probability,
+/// protecting against modulo bias even if the character set is changed in the future.
+String _generateSecurePairingCode() {
+  final secureRandom = Random.secure();
+  final buffer = StringBuffer();
+
+  for (var i = 0; i < _pairingCodeLength; i++) {
+    buffer.write(_getUnbiasedRandomChar(_pairingCodeChars, secureRandom));
+  }
+
+  return buffer.toString();
+}
+
+/// Sealed class representing the signaling connection state.
+///
+/// Using a sealed class ensures exhaustive pattern matching and
+/// eliminates the need for unsafe null assertions.
+sealed class SignalingState {}
+
+/// Signaling is disconnected - no client available.
+class SignalingDisconnected extends SignalingState {}
+
+/// Signaling is connected with an active client and pairing code.
+class SignalingConnected extends SignalingState {
+  final SignalingClient client;
+  final String pairingCode;
+
+  SignalingConnected({required this.client, required this.pairingCode});
+}
 
 /// Central manager for all peer connections.
 ///
@@ -19,8 +78,8 @@ class ConnectionManager {
   final CryptoService _cryptoService;
   final WebRTCService _webrtcService;
 
-  SignalingClient? _signalingClient;
-  String? _externalPairingCode;
+  /// Current signaling state - uses sealed class for type-safe null handling.
+  SignalingState _signalingState = SignalingDisconnected();
 
   final Map<String, Peer> _peers = {};
   final _peersController = StreamController<List<Peer>>.broadcast();
@@ -34,7 +93,13 @@ class ConnectionManager {
       StreamController<(String peerId, String fileId)>.broadcast();
 
   StreamSubscription? _signalingSubscription;
-  bool _signalingCallbackConfigured = false;
+
+  /// Subscription to WebRTC signaling events (ICE candidates, etc.).
+  /// Uses stream-based approach to avoid race conditions when multiple
+  /// connections are attempted simultaneously. This replaces the previous
+  /// callback-based approach (`onSignalingMessage`) that was vulnerable
+  /// to being overwritten by each new connection.
+  StreamSubscription? _signalingEventsSubscription;
 
   ConnectionManager({
     required CryptoService cryptoService,
@@ -66,7 +131,10 @@ class ConnectionManager {
   List<Peer> get currentPeers => _peers.values.toList();
 
   /// Our external pairing code (for sharing).
-  String? get externalPairingCode => _externalPairingCode;
+  String? get externalPairingCode => switch (_signalingState) {
+    SignalingConnected(pairingCode: final code) => code,
+    SignalingDisconnected() => null,
+  };
 
   /// Initialize the connection manager.
   Future<void> initialize() async {
@@ -85,40 +153,68 @@ class ConnectionManager {
     required String serverUrl,
     String? pairingCode,
   }) async {
-    // Cancel existing subscription to prevent leaks if called multiple times
+    // Cancel existing subscriptions to prevent leaks if called multiple times
     await _signalingSubscription?.cancel();
     _signalingSubscription = null;
+    await _signalingEventsSubscription?.cancel();
+    _signalingEventsSubscription = null;
 
-    _externalPairingCode = pairingCode ?? _generatePairingCode();
+    // Use local variables to avoid null assertions - Pattern 5 from research
+    final code = pairingCode ?? _generatePairingCode();
 
-    _signalingClient = SignalingClient(
+    final client = SignalingClient(
       serverUrl: serverUrl,
-      pairingCode: _externalPairingCode!,
+      pairingCode: code,
       publicKey: _cryptoService.publicKeyBase64,
     );
 
-    _signalingSubscription =
-        _signalingClient!.messages.listen(_handleSignalingMessage);
+    // Update state with sealed class - guaranteed non-null access
+    _signalingState = SignalingConnected(client: client, pairingCode: code);
 
-    await _signalingClient!.connect();
+    _signalingSubscription = client.messages.listen(_handleSignalingMessage);
 
-    return _externalPairingCode!;
+    // Subscribe to WebRTC signaling events (ICE candidates, etc.) using
+    // the stream-based approach. This eliminates the race condition that
+    // occurred when the callback was overwritten by each new connection.
+    // The stream subscription is set up once and handles all peers.
+    _signalingEventsSubscription = _webrtcService.signalingEvents.listen((event) {
+      // Check if we're still connected before sending
+      final state = _signalingState;
+      if (state is! SignalingConnected || !state.client.isConnected) return;
+
+      if (event.message['type'] == 'ice_candidate') {
+        state.client.sendIceCandidate(event.peerId, event.message);
+      }
+    });
+
+    await client.connect();
+
+    return code;
   }
 
   /// Disable external connections.
   Future<void> disableExternalConnections() async {
-    await _signalingClient?.disconnect();
+    // Cancel signaling events subscription first to prevent stale callbacks
+    await _signalingEventsSubscription?.cancel();
+    _signalingEventsSubscription = null;
     await _signalingSubscription?.cancel();
     _signalingSubscription = null;
-    _signalingClient = null;
-    _externalPairingCode = null;
-    _signalingCallbackConfigured = false;
+
+    // Safely access client through pattern matching
+    // Use dispose() instead of disconnect() to properly close StreamControllers
+    final state = _signalingState;
+    if (state is SignalingConnected) {
+      await state.client.dispose();
+    }
+    _signalingState = SignalingDisconnected();
   }
 
   /// Request to connect to an external peer using their pairing code.
   /// This sends a pair request that the peer must approve.
   Future<void> connectToExternalPeer(String pairingCode) async {
-    if (_signalingClient == null || !_signalingClient!.isConnected) {
+    // Pattern 2: Guard with early return using local variable capture
+    final state = _signalingState;
+    if (state is! SignalingConnected || !state.client.isConnected) {
       throw ConnectionException('Not connected to signaling server');
     }
 
@@ -134,12 +230,17 @@ class ConnectionManager {
     _notifyPeersChanged();
 
     // Request pairing (peer must approve before WebRTC starts)
-    _signalingClient!.requestPairing(pairingCode);
+    // Using captured state.client - guaranteed non-null by pattern match
+    state.client.requestPairing(pairingCode);
   }
 
   /// Respond to an incoming pair request.
   void respondToPairRequest(String peerCode, {required bool accept}) {
-    _signalingClient?.respondToPairing(peerCode, accept: accept);
+    // Safe access using pattern matching
+    final state = _signalingState;
+    if (state is SignalingConnected) {
+      state.client.respondToPairing(peerCode, accept: accept);
+    }
 
     if (!accept) {
       // Remove peer from list if rejected
@@ -150,34 +251,39 @@ class ConnectionManager {
 
   /// Start WebRTC connection after pairing is matched.
   Future<void> _startWebRTCConnection(String peerCode, String peerPublicKey, bool isInitiator) async {
+    // Pattern 1: Capture signaling client before async operations (HIGH risk fix)
+    final state = _signalingState;
+    if (state is! SignalingConnected || !state.client.isConnected) {
+      _updatePeerState(peerCode, PeerConnectionState.failed);
+      return;
+    }
+    final client = state.client;
+
     // Store peer's public key for handshake verification
     _cryptoService.setPeerPublicKey(peerCode, peerPublicKey);
 
-    // Set up signaling message forwarding (only once to avoid race conditions)
-    // This single callback routes all signaling messages by peer ID
-    _configureSignalingCallback();
+    // No need to configure signaling callback here anymore!
+    // The stream-based approach in enableExternalConnections() handles all
+    // signaling events for all peers, eliminating the race condition.
 
     if (isInitiator) {
       // We're the initiator - create and send offer
-      final offer = await _webrtcService.createOffer(peerCode);
-      _signalingClient!.sendOffer(peerCode, offer);
+      try {
+        final offer = await _webrtcService.createOffer(peerCode);
+
+        // Re-verify client is still connected after async operation
+        // This prevents crash if disableExternalConnections() was called during await
+        if (client.isConnected) {
+          client.sendOffer(peerCode, offer);
+        } else {
+          _updatePeerState(peerCode, PeerConnectionState.failed);
+        }
+      } catch (e) {
+        _updatePeerState(peerCode, PeerConnectionState.failed);
+        rethrow;
+      }
     }
     // If not initiator, wait for offer from the other peer
-  }
-
-  /// Configure the signaling callback once to handle all peers.
-  /// This avoids race conditions from overwriting the callback per-peer.
-  void _configureSignalingCallback() {
-    if (_signalingCallbackConfigured) return;
-    _signalingCallbackConfigured = true;
-
-    _webrtcService.onSignalingMessage = (targetPeerId, message) {
-      if (_signalingClient == null || !_signalingClient!.isConnected) return;
-
-      if (message['type'] == 'ice_candidate') {
-        _signalingClient!.sendIceCandidate(targetPeerId, message);
-      }
-    };
   }
 
   /// Send a message to a peer.
@@ -209,11 +315,21 @@ class ConnectionManager {
 
   /// Dispose resources.
   Future<void> dispose() async {
+    // Cancel signaling events subscription
+    await _signalingEventsSubscription?.cancel();
+    _signalingEventsSubscription = null;
     await _signalingSubscription?.cancel();
     _signalingSubscription = null;
-    _signalingCallbackConfigured = false;
+
     await _webrtcService.dispose();
-    await _signalingClient?.dispose();
+
+    // Safe disposal using pattern matching
+    final state = _signalingState;
+    if (state is SignalingConnected) {
+      await state.client.dispose();
+    }
+    _signalingState = SignalingDisconnected();
+
     await _peersController.close();
     await _messagesController.close();
     await _fileChunksController.close();
@@ -287,6 +403,14 @@ class ConnectionManager {
         break;
 
       case SignalingOffer(from: final from, payload: final payload):
+        // Pattern 6: Capture client reference before async operation (HIGH risk fix)
+        final signalingState = _signalingState;
+        if (signalingState is! SignalingConnected) {
+          // Connection was closed, cannot process offer
+          return;
+        }
+        final client = signalingState.client;
+
         // Offer from matched peer (we're the non-initiator)
         if (!_peers.containsKey(from)) {
           _peers[from] = Peer(
@@ -299,12 +423,17 @@ class ConnectionManager {
           _notifyPeersChanged();
         }
 
-        // Set up ICE candidate forwarding (only once to avoid race conditions)
-        _configureSignalingCallback();
+        // No need to configure signaling callback here anymore!
+        // The stream-based approach handles all signaling events.
 
         // Handle offer and create answer
         final answer = await _webrtcService.handleOffer(from, payload);
-        _signalingClient!.sendAnswer(from, answer);
+
+        // Check if client is still valid and connected after async operation
+        // This prevents crash if disableExternalConnections() was called during await
+        if (client.isConnected) {
+          client.sendAnswer(from, answer);
+        }
         break;
 
       case SignalingAnswer(from: final from, payload: final payload):
@@ -330,8 +459,10 @@ class ConnectionManager {
   }
 
   void _updatePeerState(String peerId, PeerConnectionState state) {
-    if (_peers.containsKey(peerId)) {
-      _peers[peerId] = _peers[peerId]!.copyWith(
+    // Pattern 4: Map value extraction - safer than containsKey + !
+    final peer = _peers[peerId];
+    if (peer != null) {
+      _peers[peerId] = peer.copyWith(
         connectionState: state,
         lastSeen: DateTime.now(),
       );
@@ -349,17 +480,7 @@ class ConnectionManager {
   }
 
   String _generatePairingCode() {
-    // Generate a 6-character alphanumeric code
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    final uuid = const Uuid().v4().replaceAll('-', '');
-    final buffer = StringBuffer();
-
-    for (var i = 0; i < 6; i++) {
-      final index = int.parse(uuid.substring(i * 2, i * 2 + 2), radix: 16);
-      buffer.write(chars[index % chars.length]);
-    }
-
-    return buffer.toString();
+    return _generateSecurePairingCode();
   }
 }
 

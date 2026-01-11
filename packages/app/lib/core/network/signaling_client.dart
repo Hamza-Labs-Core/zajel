@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import '../constants.dart';
 
 /// Client for connecting to the signaling server for external peer connections.
 ///
@@ -14,6 +16,57 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 /// 5. Exchange ICE candidates
 ///
 /// The server never sees actual message content - it only routes signaling data.
+///
+/// ## Security Model
+///
+/// This client uses WSS (WebSocket Secure) but does NOT implement certificate
+/// pinning. This is a deliberate design decision based on the following:
+///
+/// ### Why No Certificate Pinning?
+///
+/// 1. **Flutter Web Limitation**: Certificate pinning via `SecurityContext` is
+///    not possible on the web platform where this client may run.
+///
+/// 2. **web_socket_channel Limitation**: The package used for WebSocket
+///    connections does not expose certificate pinning configuration.
+///
+/// 3. **Maintenance Burden**: Certificate rotation would require app updates,
+///    risking user lockouts if certificates expire before users update.
+///
+/// ### How Security Is Maintained Without Pinning
+///
+/// The lack of certificate pinning is mitigated by multiple security layers:
+///
+/// 1. **End-to-End Encryption (E2E)**: All message content is encrypted using
+///    X25519 key exchange and ChaCha20-Poly1305. Even if the signaling server
+///    is compromised, message content remains encrypted and unreadable.
+///
+/// 2. **Public Key Fingerprint Verification**: Users can verify each other's
+///    public key fingerprints through an out-of-band channel (phone call,
+///    in person) to detect MITM attacks during key exchange.
+///
+/// 3. **WebRTC DTLS Protection**: Once WebRTC is established, DTLS-SRTP
+///    provides additional encryption and certificate fingerprint verification.
+///
+/// 4. **Ephemeral Keys**: New key pairs are generated per session (on mobile)
+///    or per page load (on web), limiting exposure if keys are compromised.
+///
+/// ### Threat Model
+///
+/// The signaling server is treated as an **untrusted relay**. It only
+/// facilitates connection establishment and never sees decrypted content.
+/// The real security comes from E2E encryption with verified key fingerprints.
+///
+/// For high-security scenarios, users SHOULD verify key fingerprints out-of-band.
+///
+/// ### Future Considerations (Native Mobile Only)
+///
+/// For native Android/iOS builds (not Flutter Web), certificate pinning could
+/// be implemented using platform-specific code:
+/// - Android: Network Security Configuration or OkHttp CertificatePinner
+/// - iOS: TrustKit or URLSession delegate with custom trust evaluation
+///
+/// See: /SECURITY.md for full security architecture documentation.
 class SignalingClient {
   final String serverUrl;
   final String _pairingCode;
@@ -256,7 +309,10 @@ class SignalingClient {
           break;
       }
     } catch (e) {
-      // Invalid message format
+      // Intentionally silenced: Malformed messages from server are dropped.
+      // This handles JSON parse errors, missing fields, type mismatches.
+      // Server message validation failures are non-fatal - connection continues.
+      debugPrint('[SignalingClient] Invalid message format: $e');
     }
   }
 
@@ -273,7 +329,7 @@ class SignalingClient {
   }
 
   void _startHeartbeat() {
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+    _heartbeatTimer = Timer.periodic(SignalingConstants.heartbeatInterval, (_) {
       if (_isConnected) {
         _send({'type': 'ping'});
       }

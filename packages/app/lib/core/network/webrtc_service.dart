@@ -8,6 +8,7 @@ import '../crypto/crypto_service.dart';
 import '../logging/logger_service.dart';
 import '../models/peer.dart';
 
+import '../constants.dart';
 /// Callback types for WebRTC events.
 typedef OnMessageCallback = void Function(String peerId, String message);
 typedef OnFileChunkCallback = void Function(
@@ -19,6 +20,16 @@ typedef OnConnectionStateCallback = void Function(
     String peerId, PeerConnectionState state);
 typedef OnSignalingMessageCallback = void Function(
     String peerId, Map<String, dynamic> message);
+
+/// Signaling event for stream-based signaling message delivery.
+/// This replaces the callback-based approach to avoid race conditions
+/// when multiple connections are attempted simultaneously.
+class SignalingEvent {
+  final String peerId;
+  final Map<String, dynamic> message;
+
+  SignalingEvent({required this.peerId, required this.message});
+}
 
 /// WebRTC service for establishing peer-to-peer connections.
 ///
@@ -32,8 +43,8 @@ typedef OnSignalingMessageCallback = void Function(
 /// 3. Perform cryptographic handshake over data channel
 /// 4. Exchange encrypted messages
 class WebRTCService {
-  static const String _messageChannelLabel = 'messages';
-  static const String _fileChannelLabel = 'files';
+  static const String _messageChannelLabel = WebRTCConstants.messageChannelLabel;
+  static const String _fileChannelLabel = WebRTCConstants.fileChannelLabel;
 
   final CryptoService _cryptoService;
 
@@ -43,12 +54,23 @@ class WebRTCService {
   // Active connections
   final Map<String, _PeerConnection> _connections = {};
 
-  // Callbacks
+  // Stream-based signaling events to avoid race conditions
+  // when multiple connections are attempted simultaneously.
+  // Uses a broadcast stream so multiple listeners can subscribe.
+  final _signalingController = StreamController<SignalingEvent>.broadcast();
+
+  /// Stream of signaling events (ICE candidates, etc.) for all peers.
+  /// Subscribe to this stream to receive signaling messages that need
+  /// to be forwarded to the signaling server.
+  Stream<SignalingEvent> get signalingEvents => _signalingController.stream;
+
+  // Callbacks (kept for backward compatibility, but signalingEvents stream is preferred)
   OnMessageCallback? onMessage;
   OnFileChunkCallback? onFileChunk;
   OnFileStartCallback? onFileStart;
   OnFileCompleteCallback? onFileComplete;
   OnConnectionStateCallback? onConnectionStateChange;
+  @Deprecated('Use signalingEvents stream instead to avoid race conditions')
   OnSignalingMessageCallback? onSignalingMessage;
 
   WebRTCService({
@@ -162,7 +184,7 @@ class WebRTCService {
       throw WebRTCException('No connection to peer: $peerId');
     }
 
-    const chunkSize = 16384; // 16KB chunks
+    const chunkSize = FileTransferConstants.chunkSize;
     final totalChunks = (data.length / chunkSize).ceil();
 
     // Send file metadata first
@@ -238,6 +260,8 @@ class WebRTCService {
     for (final peerId in _connections.keys.toList()) {
       await closeConnection(peerId);
     }
+    // Close the signaling stream controller
+    await _signalingController.close();
   }
 
   /// Get connection state for a peer.
@@ -269,15 +293,22 @@ class WebRTCService {
   void _setupConnectionHandlers(_PeerConnection connection) {
     final peerId = connection.peerId;
 
-    // ICE candidate handler
+    // ICE candidate handler - emit to stream for race-condition-free handling
     connection.pc.onIceCandidate = (candidate) {
       if (candidate.candidate != null) {
-        onSignalingMessage?.call(peerId, {
+        final message = {
           'type': 'ice_candidate',
           'candidate': candidate.candidate,
           'sdpMid': candidate.sdpMid,
           'sdpMLineIndex': candidate.sdpMLineIndex,
-        });
+        };
+
+        // Emit to stream (preferred approach - no race conditions)
+        _signalingController.add(SignalingEvent(peerId: peerId, message: message));
+
+        // Also call deprecated callback for backward compatibility
+        // ignore: deprecated_member_use_from_same_package
+        onSignalingMessage?.call(peerId, message);
       }
     };
 
@@ -381,7 +412,8 @@ class WebRTCService {
         return;
       }
     } catch (_) {
-      // Not a JSON message, try to decrypt as regular message
+      // Intentionally silent: Non-JSON data is expected for encrypted messages.
+      // We try to decrypt it as a regular message below.
     }
 
     // Decrypt and deliver message
@@ -389,7 +421,10 @@ class WebRTCService {
       final plaintext = await _cryptoService.decrypt(peerId, text);
       onMessage?.call(peerId, plaintext);
     } catch (e) {
-      // Decryption failed - might be unencrypted handshake or error
+      // Intentionally silenced for connection resilience.
+      // Decryption failures may occur during handshake transitions or
+      // when receiving malformed data. Logging for debugging only.
+      logger.debug('WebRTCService', 'Message decryption failed for $peerId: $e');
     }
   }
 
