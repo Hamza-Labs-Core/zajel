@@ -16,6 +16,26 @@ import { RelayRegistry } from '../../src/registry/relay-registry.js';
 import { DistributedRendezvous } from '../../src/registry/distributed-rendezvous.js';
 import type { ServerIdentity } from '../../src/types.js';
 
+// Valid 32-byte base64-encoded public keys for testing
+// The handler now validates that public keys are valid base64-encoded 32-byte values
+const VALID_PUBKEY_1 = 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDE='; // 32 bytes of '0' + '1'
+const VALID_PUBKEY_2 = 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDI='; // 32 bytes of '0' + '2'
+const VALID_PUBKEY_3 = 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDM='; // 32 bytes of '0' + '3'
+
+// Array of valid public keys for loop-based testing (indices 0-9)
+const VALID_PUBKEYS: string[] = [
+  'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTA=', // index 0: '...10'
+  'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTE=', // index 1: '...11'
+  'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTI=', // index 2: '...12'
+  'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTM=', // index 3: '...13'
+  'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTQ=', // index 4: '...14'
+  'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTU=', // index 5: '...15'
+  'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTY=', // index 6: '...16'
+  'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTc=', // index 7: '...17'
+  'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTg=', // index 8: '...18'
+  'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTk=', // index 9: '...19'
+];
+
 // Mock WebSocket implementation
 class MockWebSocket extends EventEmitter {
   readyState: number = 1; // OPEN
@@ -72,6 +92,8 @@ describe('ClientHandler Pairing Logic', () => {
 
     identity = {
       serverId: 'test-server-1',
+      nodeId: 'test-node-1',
+      ephemeralId: 'srv-test-1',
       publicKey: new Uint8Array(32).fill(1),
       privateKey: new Uint8Array(64).fill(2),
     };
@@ -80,6 +102,8 @@ describe('ClientHandler Pairing Logic', () => {
       heartbeatInterval: 30000,
       heartbeatTimeout: 90000,
       maxConnectionsPerPeer: 20,
+      pairRequestTimeout: 120000, // 2 minutes (Issue #35)
+      pairRequestWarningTime: 30000, // 30 seconds before timeout
     };
 
     relayRegistry = new RelayRegistry();
@@ -102,12 +126,12 @@ describe('ClientHandler Pairing Logic', () => {
   /**
    * Helper to create and register a mock WebSocket client with a pairing code
    */
-  function createAndRegisterClient(pairingCode: string, publicKey: string): MockWebSocket {
+  async function createAndRegisterClient(pairingCode: string, publicKey: string): Promise<MockWebSocket> {
     const ws = new MockWebSocket();
     handler.handleConnection(ws as any);
     ws.clearMessages(); // Clear server_info message
 
-    handler.handleMessage(ws as any, JSON.stringify({
+    await handler.handleMessage(ws as any, JSON.stringify({
       type: 'register',
       pairingCode,
       publicKey,
@@ -119,26 +143,27 @@ describe('ClientHandler Pairing Logic', () => {
 
   describe('Pair Request Handling', () => {
     it('should store pending request correctly', async () => {
-      const requesterWs = createAndRegisterClient('requester-code', 'requester-pubkey');
-      const targetWs = createAndRegisterClient('target-code', 'target-pubkey');
+      const requesterWs = await createAndRegisterClient('requester-code', VALID_PUBKEY_1);
+      const targetWs = await createAndRegisterClient('target-code', VALID_PUBKEY_2);
 
       await handler.handleMessage(requesterWs as any, JSON.stringify({
         type: 'pair_request',
         targetCode: 'target-code',
       }));
 
-      // Target should receive pair_incoming
+      // Target should receive pair_incoming with expiresIn field
       const targetMsg = targetWs.getLastMessage();
       expect(targetMsg).toEqual({
         type: 'pair_incoming',
         fromCode: 'requester-code',
-        fromPublicKey: 'requester-pubkey',
+        fromPublicKey: VALID_PUBKEY_1,
+        expiresIn: 120000, // 2 minutes timeout for fingerprint verification
       });
     });
 
     it('should notify target client with pair_incoming', async () => {
-      const requesterWs = createAndRegisterClient('req-1', 'req-pubkey-1');
-      const targetWs = createAndRegisterClient('tgt-1', 'tgt-pubkey-1');
+      const requesterWs = await createAndRegisterClient('req-1', VALID_PUBKEY_1);
+      const targetWs = await createAndRegisterClient('tgt-1', VALID_PUBKEY_2);
 
       await handler.handleMessage(requesterWs as any, JSON.stringify({
         type: 'pair_request',
@@ -148,12 +173,13 @@ describe('ClientHandler Pairing Logic', () => {
       expect(targetWs.sentMessages).toContainEqual({
         type: 'pair_incoming',
         fromCode: 'req-1',
-        fromPublicKey: 'req-pubkey-1',
+        fromPublicKey: VALID_PUBKEY_1,
+        expiresIn: 120000, // 2 minutes timeout for fingerprint verification
       });
     });
 
     it('should return error for non-existent target code', async () => {
-      const requesterWs = createAndRegisterClient('requester', 'pubkey');
+      const requesterWs = await createAndRegisterClient('requester', VALID_PUBKEY_1);
 
       await handler.handleMessage(requesterWs as any, JSON.stringify({
         type: 'pair_request',
@@ -166,12 +192,12 @@ describe('ClientHandler Pairing Logic', () => {
     });
 
     it('should limit pending requests per target (max 10)', async () => {
-      const targetWs = createAndRegisterClient('target', 'target-pubkey');
+      const targetWs = await createAndRegisterClient('target', VALID_PUBKEY_2);
 
       // Create 10 requesters and send pair requests
       const requesters: MockWebSocket[] = [];
       for (let i = 0; i < 10; i++) {
-        const ws = createAndRegisterClient(`requester-${i}`, `pubkey-${i}`);
+        const ws = await createAndRegisterClient(`requester-${i}`, VALID_PUBKEYS[i]);
         requesters.push(ws);
         await handler.handleMessage(ws as any, JSON.stringify({
           type: 'pair_request',
@@ -183,7 +209,7 @@ describe('ClientHandler Pairing Logic', () => {
       expect(targetWs.sentMessages.filter(m => m.type === 'pair_incoming')).toHaveLength(10);
 
       // 11th request should fail
-      const extraRequester = createAndRegisterClient('extra-requester', 'extra-pubkey');
+      const extraRequester = await createAndRegisterClient('extra-requester', VALID_PUBKEY_3);
       await handler.handleMessage(extraRequester as any, JSON.stringify({
         type: 'pair_request',
         targetCode: 'target',
@@ -195,7 +221,7 @@ describe('ClientHandler Pairing Logic', () => {
     });
 
     it('should reject pair request to self', async () => {
-      const ws = createAndRegisterClient('self-code', 'self-pubkey');
+      const ws = await createAndRegisterClient('self-code', VALID_PUBKEY_1);
 
       await handler.handleMessage(ws as any, JSON.stringify({
         type: 'pair_request',
@@ -223,8 +249,8 @@ describe('ClientHandler Pairing Logic', () => {
     });
 
     it('should replace existing request from same requester', async () => {
-      const requesterWs = createAndRegisterClient('requester', 'req-pubkey');
-      const targetWs = createAndRegisterClient('target', 'tgt-pubkey');
+      const requesterWs = await createAndRegisterClient('requester', VALID_PUBKEY_1);
+      const targetWs = await createAndRegisterClient('target', VALID_PUBKEY_2);
 
       // First request
       await handler.handleMessage(requesterWs as any, JSON.stringify({
@@ -259,8 +285,8 @@ describe('ClientHandler Pairing Logic', () => {
 
   describe('Pair Response Handling', () => {
     it('should send pair_matched to both when accepted', async () => {
-      const requesterWs = createAndRegisterClient('requester', 'requester-pubkey');
-      const targetWs = createAndRegisterClient('target', 'target-pubkey');
+      const requesterWs = await createAndRegisterClient('requester', VALID_PUBKEY_1);
+      const targetWs = await createAndRegisterClient('target', VALID_PUBKEY_2);
 
       // Send pair request
       await handler.handleMessage(requesterWs as any, JSON.stringify({
@@ -285,21 +311,21 @@ describe('ClientHandler Pairing Logic', () => {
       expect(requesterMatched).toEqual({
         type: 'pair_matched',
         peerCode: 'target',
-        peerPublicKey: 'target-pubkey',
+        peerPublicKey: VALID_PUBKEY_2,
         isInitiator: true,
       });
 
       expect(targetMatched).toEqual({
         type: 'pair_matched',
         peerCode: 'requester',
-        peerPublicKey: 'requester-pubkey',
+        peerPublicKey: VALID_PUBKEY_1,
         isInitiator: false,
       });
     });
 
     it('should send pair_rejected to requester when rejected', async () => {
-      const requesterWs = createAndRegisterClient('requester', 'requester-pubkey');
-      const targetWs = createAndRegisterClient('target', 'target-pubkey');
+      const requesterWs = await createAndRegisterClient('requester', VALID_PUBKEY_1);
+      const targetWs = await createAndRegisterClient('target', VALID_PUBKEY_2);
 
       // Send pair request
       await handler.handleMessage(requesterWs as any, JSON.stringify({
@@ -328,8 +354,8 @@ describe('ClientHandler Pairing Logic', () => {
     });
 
     it('should clear pending request after response', async () => {
-      const requesterWs = createAndRegisterClient('requester', 'requester-pubkey');
-      const targetWs = createAndRegisterClient('target', 'target-pubkey');
+      const requesterWs = await createAndRegisterClient('requester', VALID_PUBKEY_1);
+      const targetWs = await createAndRegisterClient('target', VALID_PUBKEY_2);
 
       // Send pair request
       await handler.handleMessage(requesterWs as any, JSON.stringify({
@@ -359,7 +385,7 @@ describe('ClientHandler Pairing Logic', () => {
     });
 
     it('should return error for non-existent pending request', async () => {
-      const targetWs = createAndRegisterClient('target', 'target-pubkey');
+      const targetWs = await createAndRegisterClient('target', VALID_PUBKEY_2);
 
       // Try to respond to non-existent request
       await handler.handleMessage(targetWs as any, JSON.stringify({
@@ -376,8 +402,8 @@ describe('ClientHandler Pairing Logic', () => {
 
   describe('Timeout Handling', () => {
     it('should send pair_timeout for expired requests', async () => {
-      const requesterWs = createAndRegisterClient('requester', 'requester-pubkey');
-      createAndRegisterClient('target', 'target-pubkey');
+      const requesterWs = await createAndRegisterClient('requester', VALID_PUBKEY_1);
+      await createAndRegisterClient('target', VALID_PUBKEY_2);
 
       // Send pair request
       await handler.handleMessage(requesterWs as any, JSON.stringify({
@@ -387,8 +413,8 @@ describe('ClientHandler Pairing Logic', () => {
 
       requesterWs.clearMessages();
 
-      // Advance time past the timeout (60 seconds)
-      vi.advanceTimersByTime(60001);
+      // Advance time past the timeout (120 seconds - Issue #35)
+      vi.advanceTimersByTime(120001);
 
       // Requester should receive pair_timeout
       const timeoutMsg = requesterWs.sentMessages.find(m => m.type === 'pair_timeout');
@@ -398,9 +424,68 @@ describe('ClientHandler Pairing Logic', () => {
       });
     });
 
+    it('should send pair_expiring warning before timeout (Issue #35)', async () => {
+      const requesterWs = await createAndRegisterClient('requester', VALID_PUBKEY_1);
+      const targetWs = await createAndRegisterClient('target', VALID_PUBKEY_2);
+
+      // Send pair request
+      await handler.handleMessage(requesterWs as any, JSON.stringify({
+        type: 'pair_request',
+        targetCode: 'target',
+      }));
+
+      requesterWs.clearMessages();
+      targetWs.clearMessages();
+
+      // Advance time to just before the warning (90 seconds = 120s - 30s warning)
+      vi.advanceTimersByTime(89999);
+
+      // Neither should have received pair_expiring yet
+      let requesterWarning = requesterWs.sentMessages.find(m => m.type === 'pair_expiring');
+      let targetWarning = targetWs.sentMessages.find(m => m.type === 'pair_expiring');
+      expect(requesterWarning).toBeUndefined();
+      expect(targetWarning).toBeUndefined();
+
+      // Advance time to trigger the warning
+      vi.advanceTimersByTime(2);
+
+      // Both should receive pair_expiring warning
+      requesterWarning = requesterWs.sentMessages.find(m => m.type === 'pair_expiring');
+      targetWarning = targetWs.sentMessages.find(m => m.type === 'pair_expiring');
+
+      expect(requesterWarning).toEqual({
+        type: 'pair_expiring',
+        peerCode: 'target',
+        remainingSeconds: 30,
+      });
+      expect(targetWarning).toEqual({
+        type: 'pair_expiring',
+        peerCode: 'requester',
+        remainingSeconds: 30,
+      });
+    });
+
+    it('should include expiresIn in pair_incoming message (Issue #35)', async () => {
+      const requesterWs = await createAndRegisterClient('requester', VALID_PUBKEY_1);
+      const targetWs = await createAndRegisterClient('target', VALID_PUBKEY_2);
+
+      targetWs.clearMessages();
+
+      // Send pair request
+      await handler.handleMessage(requesterWs as any, JSON.stringify({
+        type: 'pair_request',
+        targetCode: 'target',
+      }));
+
+      // Target should receive pair_incoming with expiresIn field
+      const pairIncoming = targetWs.sentMessages.find(m => m.type === 'pair_incoming');
+      expect(pairIncoming).toBeDefined();
+      expect(pairIncoming.expiresIn).toBe(120000); // 120 seconds
+    });
+
     it('should clear pending request after timeout', async () => {
-      const requesterWs = createAndRegisterClient('requester', 'requester-pubkey');
-      const targetWs = createAndRegisterClient('target', 'target-pubkey');
+      const requesterWs = await createAndRegisterClient('requester', VALID_PUBKEY_1);
+      const targetWs = await createAndRegisterClient('target', VALID_PUBKEY_2);
 
       // Send pair request
       await handler.handleMessage(requesterWs as any, JSON.stringify({
@@ -409,7 +494,7 @@ describe('ClientHandler Pairing Logic', () => {
       }));
 
       // Advance time past the timeout
-      vi.advanceTimersByTime(60001);
+      vi.advanceTimersByTime(120001);
 
       targetWs.clearMessages();
 
@@ -426,8 +511,8 @@ describe('ClientHandler Pairing Logic', () => {
     });
 
     it('should not send timeout if request was accepted before timeout', async () => {
-      const requesterWs = createAndRegisterClient('requester', 'requester-pubkey');
-      const targetWs = createAndRegisterClient('target', 'target-pubkey');
+      const requesterWs = await createAndRegisterClient('requester', VALID_PUBKEY_1);
+      const targetWs = await createAndRegisterClient('target', VALID_PUBKEY_2);
 
       // Send pair request
       await handler.handleMessage(requesterWs as any, JSON.stringify({
@@ -445,7 +530,7 @@ describe('ClientHandler Pairing Logic', () => {
       requesterWs.clearMessages();
 
       // Advance time past the timeout
-      vi.advanceTimersByTime(60001);
+      vi.advanceTimersByTime(120001);
 
       // Requester should NOT receive pair_timeout
       const timeoutMsg = requesterWs.sentMessages.find(m => m.type === 'pair_timeout');
@@ -455,7 +540,7 @@ describe('ClientHandler Pairing Logic', () => {
 
   describe('Rate Limiting', () => {
     it('should allow messages under limit (100/min)', async () => {
-      const ws = createAndRegisterClient('client', 'pubkey');
+      const ws = await createAndRegisterClient('client', VALID_PUBKEY_1);
 
       // Send 100 messages (1 was already sent for registration)
       for (let i = 0; i < 99; i++) {
@@ -478,7 +563,7 @@ describe('ClientHandler Pairing Logic', () => {
       await handler.handleMessage(ws as any, JSON.stringify({
         type: 'register',
         pairingCode: 'client',
-        publicKey: 'pubkey',
+        publicKey: VALID_PUBKEY_1,
       }));
 
       for (let i = 0; i < 100; i++) {
@@ -493,7 +578,7 @@ describe('ClientHandler Pairing Logic', () => {
     });
 
     it('should reset after time window', async () => {
-      const ws = createAndRegisterClient('client', 'pubkey');
+      const ws = await createAndRegisterClient('client', VALID_PUBKEY_1);
 
       // Send 100 messages to hit the limit
       for (let i = 0; i < 100; i++) {
@@ -510,7 +595,7 @@ describe('ClientHandler Pairing Logic', () => {
       }));
       expect(ws.getLastMessage().type).toBe('error');
 
-      // Advance time past the window (60 seconds)
+      // Advance time past the window (60 seconds for rate limiting)
       vi.advanceTimersByTime(60001);
 
       ws.clearMessages();
@@ -525,8 +610,8 @@ describe('ClientHandler Pairing Logic', () => {
 
   describe('Cleanup on Disconnect', () => {
     it('should clear pending requests when target disconnects', async () => {
-      const requesterWs = createAndRegisterClient('requester', 'requester-pubkey');
-      const targetWs = createAndRegisterClient('target', 'target-pubkey');
+      const requesterWs = await createAndRegisterClient('requester', VALID_PUBKEY_1);
+      const targetWs = await createAndRegisterClient('target', VALID_PUBKEY_2);
 
       // Send pair request
       await handler.handleMessage(requesterWs as any, JSON.stringify({
@@ -542,7 +627,7 @@ describe('ClientHandler Pairing Logic', () => {
       requesterWs.clearMessages();
 
       // Advance time past the timeout - should not fire since request was cleared
-      vi.advanceTimersByTime(60001);
+      vi.advanceTimersByTime(120001);
 
       // No timeout message because cleanup cleared the timer
       const timeoutMsg = requesterWs.sentMessages.find(m => m.type === 'pair_timeout');
@@ -550,8 +635,8 @@ describe('ClientHandler Pairing Logic', () => {
     });
 
     it('should clear pending requests when requester disconnects', async () => {
-      const requesterWs = createAndRegisterClient('requester', 'requester-pubkey');
-      const targetWs = createAndRegisterClient('target', 'target-pubkey');
+      const requesterWs = await createAndRegisterClient('requester', VALID_PUBKEY_1);
+      const targetWs = await createAndRegisterClient('target', VALID_PUBKEY_2);
 
       // Send pair request
       await handler.handleMessage(requesterWs as any, JSON.stringify({
@@ -577,8 +662,8 @@ describe('ClientHandler Pairing Logic', () => {
     });
 
     it('should clear timers for disconnected client', async () => {
-      const requesterWs = createAndRegisterClient('requester', 'requester-pubkey');
-      createAndRegisterClient('target', 'target-pubkey');
+      const requesterWs = await createAndRegisterClient('requester', VALID_PUBKEY_1);
+      await createAndRegisterClient('target', VALID_PUBKEY_2);
 
       // Send pair request (starts a timer)
       await handler.handleMessage(requesterWs as any, JSON.stringify({
@@ -590,7 +675,7 @@ describe('ClientHandler Pairing Logic', () => {
       await handler.handleDisconnect(requesterWs as any);
 
       // Advance time past the timeout
-      vi.advanceTimersByTime(60001);
+      vi.advanceTimersByTime(120001);
 
       // No error should occur - timer should have been cleared
       // If timer wasn't cleared, it would try to send to closed socket
@@ -598,7 +683,7 @@ describe('ClientHandler Pairing Logic', () => {
     });
 
     it('should clear rate limiting data for disconnected client', async () => {
-      const ws = createAndRegisterClient('client', 'pubkey');
+      const ws = await createAndRegisterClient('client', VALID_PUBKEY_1);
 
       // Send some messages
       for (let i = 0; i < 50; i++) {
@@ -611,7 +696,7 @@ describe('ClientHandler Pairing Logic', () => {
       await handler.handleDisconnect(ws as any);
 
       // Reconnect with same pairing code
-      const ws2 = createAndRegisterClient('client', 'pubkey');
+      const ws2 = await createAndRegisterClient('client', VALID_PUBKEY_1);
 
       // Should be able to send messages without being rate limited
       // (rate limit was cleared on disconnect)
@@ -627,10 +712,10 @@ describe('ClientHandler Pairing Logic', () => {
     });
 
     it('should clear pairing code mappings on disconnect', async () => {
-      const ws = createAndRegisterClient('disconnect-test', 'pubkey');
+      const ws = await createAndRegisterClient('disconnect-test', VALID_PUBKEY_1);
 
       // Verify client is registered by sending a signaling message
-      const otherWs = createAndRegisterClient('other', 'other-pubkey');
+      const otherWs = await createAndRegisterClient('other', VALID_PUBKEY_3);
 
       // Should be able to send to disconnect-test
       await handler.handleMessage(otherWs as any, JSON.stringify({
@@ -659,8 +744,8 @@ describe('ClientHandler Pairing Logic', () => {
     });
 
     it('should update signalingClientCount on disconnect', async () => {
-      const ws1 = createAndRegisterClient('client-1', 'pubkey-1');
-      createAndRegisterClient('client-2', 'pubkey-2');
+      const ws1 = await createAndRegisterClient('client-1', VALID_PUBKEY_1);
+      await createAndRegisterClient('client-2', VALID_PUBKEY_2);
 
       expect(handler.signalingClientCount).toBe(2);
 
@@ -672,7 +757,7 @@ describe('ClientHandler Pairing Logic', () => {
 
   describe('Edge Cases', () => {
     it('should handle missing targetCode in pair request', async () => {
-      const ws = createAndRegisterClient('client', 'pubkey');
+      const ws = await createAndRegisterClient('client', VALID_PUBKEY_1);
 
       await handler.handleMessage(ws as any, JSON.stringify({
         type: 'pair_request',
@@ -717,9 +802,9 @@ describe('ClientHandler Pairing Logic', () => {
     });
 
     it('should handle multiple pair requests to same target from different requesters', async () => {
-      const targetWs = createAndRegisterClient('target', 'target-pubkey');
-      const requester1 = createAndRegisterClient('req-1', 'pubkey-1');
-      const requester2 = createAndRegisterClient('req-2', 'pubkey-2');
+      const targetWs = await createAndRegisterClient('target', VALID_PUBKEY_2);
+      const requester1 = await createAndRegisterClient('req-1', VALID_PUBKEY_1);
+      const requester2 = await createAndRegisterClient('req-2', VALID_PUBKEY_2);
 
       // Both send pair requests
       await handler.handleMessage(requester1 as any, JSON.stringify({

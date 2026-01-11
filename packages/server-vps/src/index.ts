@@ -10,6 +10,7 @@ import { createServer, type Server as HttpServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
 import { loadConfig, type ServerConfig } from './config.js';
+import { WEBSOCKET } from './constants.js';
 import { loadOrGenerateIdentity, type ServerIdentity } from './identity/server-identity.js';
 import { SQLiteStorage } from './storage/sqlite.js';
 import { FederationManager, type FederationConfig } from './federation/federation-manager.js';
@@ -18,6 +19,7 @@ import { RelayRegistry } from './registry/relay-registry.js';
 import { RendezvousRegistry } from './registry/rendezvous-registry.js';
 import { DistributedRendezvous } from './registry/distributed-rendezvous.js';
 import { ClientHandler, type ClientHandlerConfig } from './client/handler.js';
+import { logger } from './utils/logger.js';
 
 export interface ZajelServer {
   httpServer: HttpServer;
@@ -52,11 +54,14 @@ export async function createZajelServer(
     config.identity.keyPath,
     config.identity.ephemeralIdPrefix
   );
-  console.log(`[Zajel] Server ID: ${identity.serverId}`);
-  console.log(`[Zajel] Node ID: ${identity.nodeId}`);
+  logger.info(`[Zajel] Server ID: ${logger.serverId(identity.serverId)}`);
+  logger.info(`[Zajel] Node ID: ${logger.serverId(identity.nodeId)}`);
 
   // Create bootstrap client for CF Workers discovery
   const bootstrap = createBootstrapClient(config, identity);
+
+  // Mutable reference for clientHandler (set after creation, used in HTTP handlers)
+  let clientHandlerRef: ClientHandler | null = null;
 
   // Create HTTP server
   const httpServer = createServer((req, res) => {
@@ -87,14 +92,47 @@ export async function createZajelServer(
       return;
     }
 
+    // Metrics endpoint (Issue #41: Pairing code entropy monitoring)
+    if (req.url === '/metrics') {
+      const handler = clientHandlerRef;
+      if (!handler) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Server not fully initialized' }));
+        return;
+      }
+
+      const entropyMetrics = handler.getEntropyMetrics();
+      const metrics = {
+        serverId: identity.serverId,
+        uptime: process.uptime(),
+        connections: {
+          relay: handler.clientCount,
+          signaling: handler.signalingClientCount,
+        },
+        pairingCodeEntropy: entropyMetrics,
+      };
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(metrics));
+      return;
+    }
+
     // Default response
     res.writeHead(404);
     res.end('Not Found');
   });
 
   // Create WebSocket servers (separate for clients and federation)
-  const wss = new WebSocketServer({ noServer: true });
-  const federationWss = new WebSocketServer({ noServer: true });
+  // maxPayload enforces size limits at the protocol level before buffering
+  // Messages exceeding the limit are rejected with close code 1009 ("Message Too Big")
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: WEBSOCKET.MAX_MESSAGE_SIZE,
+  });
+  const federationWss = new WebSocketServer({
+    noServer: true,
+    maxPayload: WEBSOCKET.MAX_MESSAGE_SIZE,
+  });
 
   // Federation configuration
   const federationConfig: FederationConfig = {
@@ -168,6 +206,9 @@ export async function createZajelServer(
     metadata
   );
 
+  // Set the reference for HTTP handler (used by /metrics endpoint)
+  clientHandlerRef = clientHandler;
+
   // Handle WebSocket upgrades
   httpServer.on('upgrade', (request: IncomingMessage, socket, head) => {
     const pathname = new URL(request.url || '/', `http://${request.headers.host}`).pathname;
@@ -188,7 +229,7 @@ export async function createZajelServer(
   // Handle client WebSocket connections
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     const clientIp = req.socket.remoteAddress || 'unknown';
-    console.log(`[Zajel] Client connected from ${clientIp}`);
+    logger.clientConnection('connected', clientIp);
 
     // Send server info
     clientHandler.handleConnection(ws);
@@ -201,7 +242,7 @@ export async function createZajelServer(
     // Handle disconnect
     ws.on('close', async () => {
       await clientHandler.handleDisconnect(ws);
-      console.log(`[Zajel] Client disconnected from ${clientIp}`);
+      logger.clientConnection('disconnected', clientIp);
     });
 
     ws.on('error', (error) => {
@@ -259,11 +300,11 @@ export async function createZajelServer(
   });
 
   federation.on('member-join', (entry) => {
-    console.log(`[Zajel] Server joined: ${entry.serverId}`);
+    logger.federationEvent('joined', entry.serverId);
   });
 
   federation.on('member-failed', (entry) => {
-    console.log(`[Zajel] Server failed: ${entry.serverId}`);
+    logger.federationEvent('failed', entry.serverId);
   });
 
   // Shutdown function

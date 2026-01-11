@@ -12,11 +12,16 @@ import type { ServerIdentity, ServerMetadata } from '../types.js';
 import { RelayRegistry } from '../registry/relay-registry.js';
 import { DistributedRendezvous, type PartialResult } from '../registry/distributed-rendezvous.js';
 import type { DeadDropResult, LiveMatchResult } from '../registry/rendezvous-registry.js';
+import { logger } from '../utils/logger.js';
+
+import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, ENTROPY } from '../constants.js';
 
 export interface ClientHandlerConfig {
   heartbeatInterval: number;   // Expected heartbeat interval from clients
   heartbeatTimeout: number;    // Time before considering client dead
   maxConnectionsPerPeer: number;
+  pairRequestTimeout?: number; // Timeout for pair request approval (default: 120000ms / 2 minutes)
+  pairRequestWarningTime?: number; // Time before timeout to send warning (default: 30000ms / 30 seconds)
 }
 
 export interface ClientInfo {
@@ -121,6 +126,15 @@ interface RateLimitInfo {
   windowStart: number;
 }
 
+// Entropy metrics for pairing code monitoring (Issue #41)
+interface EntropyMetrics {
+  activeCodes: number;
+  peakActiveCodes: number;
+  totalRegistrations: number;
+  collisionAttempts: number;
+  collisionRisk: 'low' | 'medium' | 'high';
+}
+
 type ClientMessage =
   | RegisterMessage
   | UpdateLoadMessage
@@ -150,17 +164,32 @@ export class ClientHandler extends EventEmitter {
   private pairingCodeToPublicKey: Map<string, string> = new Map();
   // Pending pair requests: targetCode -> list of pending requests
   private pendingPairRequests: Map<string, PendingPairRequest[]> = new Map();
-  private static readonly PAIR_REQUEST_TIMEOUT = 60000; // 60 seconds
-  private static readonly MAX_PENDING_REQUESTS_PER_TARGET = 10; // Limit pending requests per target
+  // Default timeout: 120 seconds (2 minutes) to allow for fingerprint verification
+  // Default warning time: 30 seconds before timeout
+
+  // Configurable timeout values (set in constructor from config)
+  private readonly pairRequestTimeout: number;
+  private readonly pairRequestWarningTime: number;
 
   // Timer references for pair request expiration (to prevent memory leaks)
   // Key: "requesterCode:targetCode"
   private pairRequestTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  // Timer references for pair request warnings (sent before timeout)
+  // Key: "requesterCode:targetCode"
+  private pairRequestWarningTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   // Rate limiting
-  private static readonly RATE_LIMIT_WINDOW_MS = 60000; // 1 minute window
-  private static readonly RATE_LIMIT_MAX_MESSAGES = 100; // Max 100 messages per minute
   private wsRateLimits: Map<WebSocket, RateLimitInfo> = new Map();
+
+  // Entropy monitoring thresholds (Issue #41)
+  // Based on birthday paradox analysis: collision risk increases at ~33k active codes
+
+  // Entropy metrics tracking
+  private entropyMetrics = {
+    peakActiveCodes: 0,
+    totalRegistrations: 0,
+    collisionAttempts: 0,
+  };
 
   constructor(
     identity: ServerIdentity,
@@ -177,6 +206,10 @@ export class ClientHandler extends EventEmitter {
     this.relayRegistry = relayRegistry;
     this.distributedRendezvous = distributedRendezvous;
     this.metadata = metadata;
+
+    // Initialize configurable timeout values
+    this.pairRequestTimeout = config.pairRequestTimeout ?? PAIRING.DEFAULT_REQUEST_TIMEOUT;
+    this.pairRequestWarningTime = config.pairRequestWarningTime ?? PAIRING.DEFAULT_REQUEST_WARNING_TIME;
 
     // Forward match notifications to clients
     this.distributedRendezvous.on('match', (peerId, match) => {
@@ -216,7 +249,7 @@ export class ClientHandler extends EventEmitter {
     }
 
     // Check if we're in a new window
-    if (now - rateLimitInfo.windowStart >= ClientHandler.RATE_LIMIT_WINDOW_MS) {
+    if (now - rateLimitInfo.windowStart >= RATE_LIMIT.WINDOW_MS) {
       // Reset the window
       rateLimitInfo.messageCount = 1;
       rateLimitInfo.windowStart = now;
@@ -227,7 +260,7 @@ export class ClientHandler extends EventEmitter {
     rateLimitInfo.messageCount++;
 
     // Check if over limit
-    if (rateLimitInfo.messageCount > ClientHandler.RATE_LIMIT_MAX_MESSAGES) {
+    if (rateLimitInfo.messageCount > RATE_LIMIT.MAX_MESSAGES) {
       return false;
     }
 
@@ -238,6 +271,15 @@ export class ClientHandler extends EventEmitter {
    * Handle incoming WebSocket message
    */
   async handleMessage(ws: WebSocket, data: string): Promise<void> {
+    // Size validation (defense in depth - primary limit is at WebSocket level)
+    // This catches any messages that slip through or are used in testing
+    if (data.length > WEBSOCKET.MAX_MESSAGE_SIZE) {
+      console.warn(`[Security] Rejected oversized message: ${data.length} bytes (limit: ${WEBSOCKET.MAX_MESSAGE_SIZE})`);
+      this.sendError(ws, 'Message too large');
+      ws.close(1009, 'Message Too Big');
+      return;
+    }
+
     // Rate limiting check
     if (!this.checkRateLimit(ws)) {
       this.sendError(ws, 'Rate limit exceeded. Please slow down.');
@@ -500,12 +542,28 @@ export class ClientHandler extends EventEmitter {
     // Validate public key length (X25519 keys are 32 bytes)
     try {
       const decoded = Buffer.from(publicKey, 'base64');
-      if (decoded.length !== 32) {
+      if (decoded.length !== CRYPTO.X25519_KEY_SIZE) {
         this.sendError(ws, 'Invalid public key length');
         return;
       }
-    } catch {
+    } catch (error) {
+      // Base64 decoding failed - log for debugging, send generic error to client
+      console.warn('[ClientHandler] Invalid public key base64 encoding:', error);
       this.sendError(ws, 'Invalid public key encoding');
+      return;
+    }
+
+    // Issue #41: Collision detection
+    // Check if pairing code already exists (collision)
+    if (this.pairingCodeToWs.has(pairingCode)) {
+      this.entropyMetrics.collisionAttempts++;
+      logger.warn(`Pairing code collision detected: ${pairingCode} (total collisions: ${this.entropyMetrics.collisionAttempts})`);
+
+      // Notify client to regenerate code and reconnect
+      this.send(ws, {
+        type: 'code_collision',
+        message: 'Pairing code already in use. Please reconnect with a new code.',
+      });
       return;
     }
 
@@ -514,7 +572,25 @@ export class ClientHandler extends EventEmitter {
     this.wsToPairingCode.set(ws, pairingCode);
     this.pairingCodeToPublicKey.set(pairingCode, publicKey);
 
-    console.log(`[ClientHandler] Registered pairing code: ${pairingCode}`);
+    // Issue #41: Update entropy metrics
+    this.entropyMetrics.totalRegistrations++;
+    const currentActiveCount = this.pairingCodeToWs.size;
+
+    // Track peak active codes
+    if (currentActiveCount > this.entropyMetrics.peakActiveCodes) {
+      this.entropyMetrics.peakActiveCodes = currentActiveCount;
+    }
+
+    // Log warnings at threshold crossings
+    if (currentActiveCount === ENTROPY.COLLISION_HIGH_THRESHOLD) {
+      logger.warn(`HIGH collision risk: ${currentActiveCount} active codes - consider extending code length`);
+    } else if (currentActiveCount === ENTROPY.COLLISION_MEDIUM_THRESHOLD) {
+      logger.warn(`MEDIUM collision risk: ${currentActiveCount} active codes - monitor closely`);
+    } else if (currentActiveCount === ENTROPY.COLLISION_LOW_THRESHOLD) {
+      logger.info(`Approaching collision threshold: ${currentActiveCount} active codes`);
+    }
+
+    logger.pairingEvent('registered', { code: pairingCode, activeCodes: currentActiveCount });
 
     // Send confirmation
     this.send(ws, {
@@ -588,7 +664,7 @@ export class ClientHandler extends EventEmitter {
     }
 
     // SECURITY: Limit pending requests per target to prevent DoS
-    if (pending.length >= ClientHandler.MAX_PENDING_REQUESTS_PER_TARGET) {
+    if (pending.length >= PAIRING.MAX_PENDING_REQUESTS_PER_TARGET) {
       this.send(ws, {
         type: 'pair_error',
         error: 'Pair request could not be processed',
@@ -608,22 +684,69 @@ export class ClientHandler extends EventEmitter {
     pending.push(request);
     this.pendingPairRequests.set(targetCode, pending);
 
-    // Notify target about incoming pair request
+    // Notify target about incoming pair request (include timeout for UI countdown)
     this.send(targetWs, {
       type: 'pair_incoming',
       fromCode: requesterCode,
       fromPublicKey: requesterPublicKey,
+      expiresIn: this.pairRequestTimeout, // Include timeout for client-side countdown
     });
 
-    console.log(`[ClientHandler] Pair request: ${requesterCode} -> ${targetCode}`);
+    logger.pairingEvent('request', { requester: requesterCode, target: targetCode });
 
     // Set timeout for this request and store the timer reference
     const timerKey = `${requesterCode}:${targetCode}`;
     const timer = setTimeout(() => {
       this.expirePairRequest(requesterCode, targetCode);
       this.pairRequestTimers.delete(timerKey);
-    }, ClientHandler.PAIR_REQUEST_TIMEOUT);
+      // Also clean up warning timer if it exists
+      const warningTimer = this.pairRequestWarningTimers.get(timerKey);
+      if (warningTimer) {
+        clearTimeout(warningTimer);
+        this.pairRequestWarningTimers.delete(timerKey);
+      }
+    }, this.pairRequestTimeout);
     this.pairRequestTimers.set(timerKey, timer);
+
+    // Set warning timer (fires before timeout to warn users)
+    // Only set if warning time is less than total timeout
+    if (this.pairRequestWarningTime < this.pairRequestTimeout) {
+      const warningDelay = this.pairRequestTimeout - this.pairRequestWarningTime;
+      const warningTimer = setTimeout(() => {
+        this.sendPairExpiringWarning(requesterCode, targetCode);
+        this.pairRequestWarningTimers.delete(timerKey);
+      }, warningDelay);
+      this.pairRequestWarningTimers.set(timerKey, warningTimer);
+    }
+  }
+
+  /**
+   * Send warning to both peers that the pair request is about to expire
+   */
+  private sendPairExpiringWarning(requesterCode: string, targetCode: string): void {
+    const remainingSeconds = Math.ceil(this.pairRequestWarningTime / 1000);
+
+    // Warn the requester (who is waiting for approval)
+    const requesterWs = this.pairingCodeToWs.get(requesterCode);
+    if (requesterWs) {
+      this.send(requesterWs, {
+        type: 'pair_expiring',
+        peerCode: targetCode,
+        remainingSeconds,
+      });
+    }
+
+    // Warn the target (who needs to approve)
+    const targetWs = this.pairingCodeToWs.get(targetCode);
+    if (targetWs) {
+      this.send(targetWs, {
+        type: 'pair_expiring',
+        peerCode: requesterCode,
+        remainingSeconds,
+      });
+    }
+
+    logger.debug(`[Pairing] expiring warning`, { remainingSeconds });
   }
 
   /**
@@ -662,6 +785,13 @@ export class ClientHandler extends EventEmitter {
     }
 
     // Remove the request from pending
+
+    // Clear the warning timer for this request
+    const existingWarningTimer = this.pairRequestWarningTimers.get(timerKey);
+    if (existingWarningTimer) {
+      clearTimeout(existingWarningTimer);
+      this.pairRequestWarningTimers.delete(timerKey);
+    }
     pending.splice(requestIndex, 1);
     if (pending.length === 0) {
       this.pendingPairRequests.delete(responderCode);
@@ -697,7 +827,7 @@ export class ClientHandler extends EventEmitter {
         isInitiator: false,
       });
 
-      console.log(`[ClientHandler] Pair matched: ${targetCode} <-> ${responderCode}`);
+      logger.pairingEvent('matched', { requester: targetCode, target: responderCode });
     } else {
       // Notify requester about rejection
       if (requesterWs) {
@@ -707,7 +837,7 @@ export class ClientHandler extends EventEmitter {
         });
       }
 
-      console.log(`[ClientHandler] Pair rejected: ${targetCode} <- ${responderCode}`);
+      logger.pairingEvent('rejected', { requester: targetCode, target: responderCode });
     }
   }
 
@@ -736,7 +866,7 @@ export class ClientHandler extends EventEmitter {
         });
       }
 
-      console.log(`[ClientHandler] Pair request expired: ${requesterCode} -> ${targetCode}`);
+      logger.pairingEvent('expired', { requester: requesterCode, target: targetCode });
     }
   }
 
@@ -764,7 +894,7 @@ export class ClientHandler extends EventEmitter {
     const targetWs = this.pairingCodeToWs.get(target);
 
     if (!targetWs) {
-      console.log(`[ClientHandler] Target not found for ${type}: ${target}`);
+      logger.pairingEvent('not_found', { target, type });
       this.send(ws, {
         type: 'error',
         message: `Peer not found: ${target}`,
@@ -780,7 +910,7 @@ export class ClientHandler extends EventEmitter {
     });
 
     if (forwarded) {
-      console.log(`[ClientHandler] Forwarded ${type} from ${senderPairingCode} to ${target}`);
+      logger.pairingEvent('forwarded', { requester: senderPairingCode, target, type });
     } else {
       this.send(ws, {
         type: 'error',
@@ -807,6 +937,7 @@ export class ClientHandler extends EventEmitter {
       const pendingAsTarget = this.pendingPairRequests.get(pairingCode) || [];
       for (const request of pendingAsTarget) {
         const timerKey = `${request.requesterCode}:${pairingCode}`;
+        
         const timer = this.pairRequestTimers.get(timerKey);
         if (timer) {
           clearTimeout(timer);
@@ -821,7 +952,8 @@ export class ClientHandler extends EventEmitter {
           if (r.requesterCode === pairingCode) {
             // Clear the timer for this request
             const timerKey = `${pairingCode}:${targetCode}`;
-            const timer = this.pairRequestTimers.get(timerKey);
+            
+        const timer = this.pairRequestTimers.get(timerKey);
             if (timer) {
               clearTimeout(timer);
               this.pairRequestTimers.delete(timerKey);
@@ -836,7 +968,7 @@ export class ClientHandler extends EventEmitter {
           this.pendingPairRequests.set(targetCode, filtered);
         }
       }
-      console.log(`[ClientHandler] Pairing code disconnected: ${pairingCode}`);
+      logger.pairingEvent('disconnected', { code: pairingCode });
     }
 
     // Clean up peerId mappings (for relay clients)
@@ -983,6 +1115,12 @@ export class ClientHandler extends EventEmitter {
     }
     this.pairRequestTimers.clear();
 
+    // Clear all pair request warning timers
+    for (const timer of this.pairRequestWarningTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.pairRequestWarningTimers.clear();
+
     // Clear rate limiting data
     this.wsRateLimits.clear();
 
@@ -991,7 +1129,8 @@ export class ClientHandler extends EventEmitter {
       try {
         client.ws.close(1001, 'Server shutting down');
       } catch {
-        // Ignore close errors
+        // Intentionally ignored: WebSocket may already be closed or in invalid state
+        // during shutdown. Best-effort cleanup is acceptable here.
       }
     }
     this.clients.clear();
@@ -1002,7 +1141,8 @@ export class ClientHandler extends EventEmitter {
       try {
         ws.close(1001, 'Server shutting down');
       } catch {
-        // Ignore close errors
+        // Intentionally ignored: WebSocket may already be closed or in invalid state
+        // during shutdown. Best-effort cleanup is acceptable here.
       }
     }
     this.pairingCodeToWs.clear();
@@ -1017,4 +1157,41 @@ export class ClientHandler extends EventEmitter {
   get signalingClientCount(): number {
     return this.pairingCodeToWs.size;
   }
+
+  /**
+   * Get entropy metrics for pairing codes (Issue #41)
+   *
+   * Returns metrics for monitoring pairing code entropy and collision risk.
+   * Based on birthday paradox analysis:
+   * - 30-bit entropy (6 chars from 32-char alphabet) = ~1 billion possible codes
+   * - Collision risk increases at ~33k active codes (birthday bound)
+   *
+   * Risk levels:
+   * - low: < 10,000 active codes (collision probability < 0.005%)
+   * - medium: 10,000 - 30,000 active codes (collision probability 0.005% - 0.05%)
+   * - high: > 30,000 active codes (collision probability > 0.05%)
+   */
+  getEntropyMetrics(): EntropyMetrics {
+    const activeCodes = this.pairingCodeToWs.size;
+
+    let collisionRisk: 'low' | 'medium' | 'high';
+    if (activeCodes >= ENTROPY.COLLISION_HIGH_THRESHOLD) {
+      collisionRisk = 'high';
+    } else if (activeCodes >= ENTROPY.COLLISION_LOW_THRESHOLD) {
+      collisionRisk = 'medium';
+    } else {
+      collisionRisk = 'low';
+    }
+
+    return {
+      activeCodes,
+      peakActiveCodes: this.entropyMetrics.peakActiveCodes,
+      totalRegistrations: this.entropyMetrics.totalRegistrations,
+      collisionAttempts: this.entropyMetrics.collisionAttempts,
+      collisionRisk,
+    };
+  }
 }
+
+// Export EntropyMetrics type for use in index.ts
+export type { EntropyMetrics };

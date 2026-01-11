@@ -75,6 +75,8 @@ export function loadConfig(): ServerConfig {
       maxConnectionsPerPeer: envNumber('ZAJEL_MAX_CONNECTIONS_PER_PEER', 20),
       heartbeatInterval: envNumber('ZAJEL_HEARTBEAT_INTERVAL', 30000),
       heartbeatTimeout: envNumber('ZAJEL_HEARTBEAT_TIMEOUT', 60000),
+      pairRequestTimeout: envNumber('ZAJEL_PAIR_REQUEST_TIMEOUT', 120000), // 2 minutes for fingerprint verification
+      pairRequestWarningTime: envNumber('ZAJEL_PAIR_REQUEST_WARNING_TIME', 30000), // Warning 30s before timeout
     },
 
     cleanup: {
