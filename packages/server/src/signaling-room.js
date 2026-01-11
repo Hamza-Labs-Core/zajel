@@ -6,12 +6,16 @@
  * signaling messages to other registered peers.
  */
 
+import { createLogger } from './logger.js';
+
 export class SignalingRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
     // Map of pairing codes to WebSocket connections
     this.clients = new Map();
+    // Create environment-aware logger
+    this.logger = createLogger(env);
   }
 
   async fetch(request) {
@@ -42,7 +46,7 @@ export class SignalingRoom {
     for (const [pairingCode, client] of this.clients.entries()) {
       if (client === ws) {
         this.clients.delete(pairingCode);
-        console.log(`Client disconnected: ${pairingCode}`);
+        this.logger.pairingEvent('disconnected', pairingCode);
         this.broadcastPeerLeft(pairingCode);
         break;
       }
@@ -103,7 +107,7 @@ export class SignalingRoom {
 
     // Register new code
     this.clients.set(pairingCode, ws);
-    console.log(`Client registered: ${pairingCode}`);
+    this.logger.pairingEvent('registered', pairingCode);
 
     // Send confirmation
     ws.send(JSON.stringify({
@@ -150,7 +154,7 @@ export class SignalingRoom {
       payload,
     }));
 
-    console.log(`Signaling ${type}: ${senderCode} -> ${target}`);
+    this.logger.pairingEvent('signaling', senderCode, target);
   }
 
   broadcastPeerJoined(pairingCode) {
