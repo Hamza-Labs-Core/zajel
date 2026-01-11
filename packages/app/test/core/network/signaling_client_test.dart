@@ -2,41 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:zajel/core/network/signaling_client.dart';
 
 import '../../mocks/mocks.dart';
-
-/// Testable subclass of SignalingClient that allows injecting a WebSocketChannel
-class TestableSignalingClient extends SignalingClient {
-  final WebSocketChannel Function()? _channelFactory;
-  WebSocketChannel? _testChannel;
-
-  TestableSignalingClient({
-    required super.serverUrl,
-    required super.pairingCode,
-    required super.publicKey,
-    WebSocketChannel Function()? channelFactory,
-  }) : _channelFactory = channelFactory;
-
-  /// For tests: directly set the channel and connection state
-  void injectChannel(WebSocketChannel channel) {
-    _testChannel = channel;
-  }
-
-  @override
-  Future<void> connect() async {
-    if (isConnected) return;
-
-    // Use injected channel factory if available
-    if (_channelFactory != null) {
-      // We can't override private members, so we test via the public interface
-      // This is a limitation of the current design
-    }
-
-    await super.connect();
-  }
-}
 
 void main() {
   group('SignalingClient', () {
