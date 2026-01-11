@@ -1,88 +1,159 @@
 # Issue #27: VPS Server Message Size Validation
 
+## Status: IMPLEMENTED
+
+**Last Updated**: January 2026
+**Implementation Status**: Complete
+**Risk Level**: Mitigated
+
 ## Summary
 
-The VPS server lacks message size validation before JSON parsing, while the web client enforces a 1MB limit. This asymmetry allows potential Denial of Service (DoS) attacks via large WebSocket messages.
+This issue tracked the need for message size validation in the VPS server to prevent DoS attacks via large WebSocket messages. **The fix has been fully implemented** with defense-in-depth at multiple layers.
 
-## Current Implementation Analysis
+## Implementation Verification
 
-### Client-Side Validation (web-client)
+### 1. WebSocket Server Level (Primary Protection)
 
-**File**: `/home/meywd/zajel/packages/web-client/src/lib/signaling.ts`
+**File**: `/home/meywd/zajel/packages/server-vps/src/index.ts` (lines 126-135)
 
-The client properly validates message size before processing:
-
-```typescript
-const MAX_MESSAGE_SIZE = 1024 * 1024; // 1MB limit for WebSocket messages
-
-// In onmessage handler (lines 88-100):
-ws.onmessage = (event) => {
-  try {
-    // Check message size before processing
-    const messageSize = typeof event.data === 'string'
-      ? event.data.length
-      : event.data.byteLength || 0;
-    if (messageSize > MAX_MESSAGE_SIZE) {
-      console.error('Rejected WebSocket message: exceeds 1MB size limit');
-      // Close connection to prevent potential attacks
-      this.disconnect();
-      this.events.onError('Connection closed: message too large');
-      return;
-    }
-
-    const message = JSON.parse(event.data) as ServerMessage;
-    this.handleMessage(message);
-  } catch (e) {
-    console.error('Failed to parse message:', e);
-  }
-};
-```
-
-### Server-Side Handling (server-vps)
-
-**File**: `/home/meywd/zajel/packages/server-vps/src/client/handler.ts`
-
-The server's `handleMessage` method (line 240) receives messages and parses them without any size validation:
+The WebSocket servers are now configured with `maxPayload`:
 
 ```typescript
-async handleMessage(ws: WebSocket, data: string): Promise<void> {
-  // Rate limiting check (only limits message frequency, not size)
-  if (!this.checkRateLimit(ws)) {
-    this.sendError(ws, 'Rate limit exceeded. Please slow down.');
-    return;
-  }
-
-  let message: ClientMessage;
-
-  try {
-    message = JSON.parse(data);  // <-- No size check before parsing!
-  } catch (e) {
-    this.sendError(ws, 'Invalid message format: JSON parse error');
-    return;
-  }
-  // ... message handling continues
-}
-```
-
-**File**: `/home/meywd/zajel/packages/server-vps/src/index.ts`
-
-The WebSocket server is created without `maxPayload` configuration:
-
-```typescript
-// Line 96 - No maxPayload specified
-const wss = new WebSocketServer({ noServer: true });
-
-// Line 197-199 - Messages are passed directly to handler
-ws.on('message', async (data) => {
-  await clientHandler.handleMessage(ws, data.toString());
+// maxPayload enforces size limits at the protocol level before buffering
+// Messages exceeding the limit are rejected with close code 1009 ("Message Too Big")
+const wss = new WebSocketServer({
+  noServer: true,
+  maxPayload: WEBSOCKET.MAX_MESSAGE_SIZE,
+});
+const federationWss = new WebSocketServer({
+  noServer: true,
+  maxPayload: WEBSOCKET.MAX_MESSAGE_SIZE,
 });
 ```
 
-The `ws` library default `maxPayload` is **100 MiB (104,857,600 bytes)**, which is 100x larger than the client's 1MB limit.
+### 2. Centralized Constants
 
-## DoS Attack Scenario
+**File**: `/home/meywd/zajel/packages/server-vps/src/constants.ts` (lines 12-15)
 
-### Attack Vector
+```typescript
+export const WEBSOCKET = {
+  /** Maximum message size (64KB) - matches WebSocket server config */
+  MAX_MESSAGE_SIZE: 64 * 1024,
+} as const;
+```
+
+### 3. Application-Level Validation (Defense in Depth)
+
+**File**: `/home/meywd/zajel/packages/server-vps/src/client/handler.ts` (lines 273-280)
+
+```typescript
+async handleMessage(ws: WebSocket, data: string): Promise<void> {
+  // Size validation (defense in depth - primary limit is at WebSocket level)
+  // This catches any messages that slip through or are used in testing
+  if (data.length > WEBSOCKET.MAX_MESSAGE_SIZE) {
+    console.warn(`[Security] Rejected oversized message: ${data.length} bytes (limit: ${WEBSOCKET.MAX_MESSAGE_SIZE})`);
+    this.sendError(ws, 'Message too large');
+    ws.close(1009, 'Message Too Big');
+    return;
+  }
+  // ... continues with rate limiting and message processing
+}
+```
+
+### 4. Federation Transport Validation
+
+**File**: `/home/meywd/zajel/packages/server-vps/src/federation/transport/server-connection.ts`
+
+Size validation is implemented in three locations:
+- Line 242: Outgoing connection handshake messages
+- Line 314: Incoming connection messages
+- Line 427: Established connection messages
+
+```typescript
+// Size validation (defense in depth)
+if (dataStr.length > WEBSOCKET.MAX_MESSAGE_SIZE) {
+  logger.warn(`[Security] Rejected oversized federation message`, { bytes: dataStr.length });
+  ws.close(1009, 'Message Too Big');
+  return;
+}
+```
+
+## Current Configuration
+
+| Component | Limit | Implementation |
+|-----------|-------|----------------|
+| WebSocket `maxPayload` | 64 KB | `ws` library config in index.ts |
+| Client handler validation | 64 KB | handler.ts defense in depth |
+| Federation transport validation | 64 KB | server-connection.ts defense in depth |
+| Rate limiting | 100 msg/min | handler.ts `checkRateLimit()` |
+
+## DoS Risk Assessment
+
+### Mitigated Attack Vectors
+
+1. **Memory Exhaustion Attack**: MITIGATED
+   - The `ws` library's `maxPayload` option rejects oversized messages at the frame level
+   - Memory is never allocated for messages exceeding 64 KB
+   - Connection closed with code 1009 before buffering
+
+2. **JSON Parse Attack**: MITIGATED
+   - Application-level validation runs before `JSON.parse()`
+   - Combined with 64 KB limit, CPU impact is minimal
+   - Rate limiting (100/min) further restricts total bandwidth
+
+3. **Federation Amplification**: MITIGATED
+   - Same 64 KB limit applies to server-to-server connections
+   - All three message paths in server-connection.ts are protected
+
+### Residual Risk
+
+- **Low**: An attacker could still send 100 messages x 64 KB = 6.4 MB per minute per connection
+- **Mitigation**: Rate limiting and connection management already in place
+- **Recommendation**: Consider connection-level bandwidth limits if abuse is observed
+
+## Comparison with Industry Standards
+
+### Discord
+- **Limit**: 15 KB payload
+- **Zajel**: 64 KB (4x larger but still conservative)
+
+### Slack
+- **Limit**: 16 KB for WebSocket messages, 4000 characters recommended
+- **Zajel**: 64 KB aligns with upper bound
+
+### Matrix/Synapse
+- **Limit**: 65 KB event size (spec mandated)
+- **Zajel**: 64 KB matches Matrix specification rationale
+
+### Signal
+- **Limit**: 64 KB (Jetty defaults)
+- **Zajel**: Identical to Signal's approach
+
+## Why 64 KB (not 1 MB)?
+
+The original issue mentioned a 1 MB client limit, but the implementation uses 64 KB for good reasons:
+
+1. **WebRTC signaling payloads are small**: SDP offers are typically 1-5 KB
+2. **Industry alignment**: Discord (15 KB), Matrix (65 KB), Signal (64 KB) all use similar limits
+3. **Memory efficiency**: Smaller limits reduce per-connection memory overhead
+4. **UDP datagram fit**: 65,507 bytes fits in a single UDP datagram without fragmentation
+
+## Original Issue Context (Historical)
+
+The original concern was that the server lacked message size validation while the client enforced a 1 MB limit. This asymmetry could allow DoS attacks. The implementation addressed this by:
+
+1. Adding `maxPayload` to WebSocket server configuration
+2. Choosing a more appropriate 64 KB limit (not 1 MB)
+3. Adding defense-in-depth validation at application level
+4. Ensuring consistent limits across client, server, and federation
+
+---
+
+## Appendix A: Original Attack Scenario (Now Mitigated)
+
+This section documents the original vulnerability that existed before the fix was implemented.
+
+### Attack Vector (Historical - Before Fix)
 
 1. **Attacker Setup**: A malicious client establishes a WebSocket connection to the VPS server.
 
@@ -102,53 +173,38 @@ The `ws` library default `maxPayload` is **100 MiB (104,857,600 bytes)**, which 
    - Degraded service for legitimate users
    - Potential cascading failures in the federated network
 
-### Attack Code Example
+### Attack Code Example (For Reference)
 
 ```javascript
-// Malicious client
+// This attack is now mitigated by the 64KB maxPayload limit
 const ws = new WebSocket('wss://target-vps-server.com');
 
 ws.onopen = () => {
-  // Create ~50MB payload (under 100MB default limit)
+  // This would have worked before the fix
   const hugePayload = JSON.stringify({
     type: 'register',
     peerId: 'attacker',
-    // Massive padding to inflate size
-    padding: 'x'.repeat(50 * 1024 * 1024)
+    padding: 'x'.repeat(50 * 1024 * 1024) // 50MB
   });
 
-  // Send multiple large messages (rate limit allows 100/minute)
-  for (let i = 0; i < 100; i++) {
-    ws.send(hugePayload);
-  }
+  // Now: Connection closed with code 1009 before payload is processed
+  ws.send(hugePayload);
 };
 ```
 
-## Proposed Fix
+---
 
-### 1. Configure maxPayload at WebSocket Server Level (Primary Fix)
+## Appendix B: Original Proposed Fix (Now Implemented)
 
-**File**: `/home/meywd/zajel/packages/server-vps/src/index.ts`
+**Note**: The implementation chose 64 KB instead of 1 MB for better security, based on industry research.
 
-```typescript
-// Add constant at top of file
-const MAX_MESSAGE_SIZE = 1024 * 1024; // 1MB - matches client limit
+### 1. Configure maxPayload at WebSocket Server Level (Primary Fix) - DONE
 
-// Update WebSocket server creation (around line 96)
-const wss = new WebSocketServer({
-  noServer: true,
-  maxPayload: MAX_MESSAGE_SIZE  // Enforce at protocol level
-});
+**Status**: Implemented in `/home/meywd/zajel/packages/server-vps/src/index.ts`
 
-const federationWss = new WebSocketServer({
-  noServer: true,
-  maxPayload: MAX_MESSAGE_SIZE  // Also protect federation connections
-});
-```
-
-This is the **most effective fix** because:
-- The `ws` library enforces this limit during message buffering
-- Messages exceeding the limit are rejected with WebSocket close code 1009 ("Message Too Big")
+The `ws` library `maxPayload` option:
+- Enforces this limit during message buffering (frame level)
+- Rejects with WebSocket close code 1009 ("Message Too Big")
 - Memory is never allocated for oversized messages
 - No application-level code runs for rejected messages
 
@@ -643,15 +699,28 @@ Based on this research, the following limits are recommended:
 
 ### References
 
-- [Signal WebSocket-Resources](https://github.com/signalapp/WebSocket-Resources)
+**Security Guidelines:**
+- [OWASP WebSocket Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/WebSocket_Security_Cheat_Sheet.html)
+- [VideoSDK WebSocket Security Guide 2025](https://www.videosdk.live/developer-hub/websocket/websocket-security)
+- [WebSocket.org Security Hardening Guide](https://websocket.org/guides/security/)
+
+**ws Library (Node.js):**
+- [ws Library Documentation](https://github.com/websockets/ws/blob/master/doc/ws.md)
+- [ws npm Package](https://www.npmjs.com/package/ws)
+- [ws Issue #513: Maximum message size limits](https://github.com/websockets/ws/issues/513)
+- [ws Issue #1526: maxPayload client behavior](https://github.com/websockets/ws/issues/1526)
+- [Snyk ws Vulnerability Analysis](https://snyk.io/node-js/ws)
+
+**Industry Implementations:**
+- [Discord Message Character Limits](https://support.discord.com/hc/en-us/articles/33694251638295-Discord-Account-Caps-Server-Caps-and-More)
+- [Slack Message Payload Reference](https://api.slack.com/reference/messaging/payload)
+- [Slack Rate Limits](https://docs.slack.dev/apis/web-api/rate-limits/)
 - [Matrix Synapse Configuration](https://matrix-org.github.io/synapse/latest/usage/configuration/config_documentation.html)
-- [Matrix Event Size Discussion](https://github.com/matrix-org/matrix-doc/issues/1021)
+- [Signal WebSocket-Resources](https://github.com/signalapp/WebSocket-Resources)
 - [Telegram MTProto](https://core.telegram.org/mtproto)
 - [Telegram Security Guidelines](https://core.telegram.org/mtproto/security_guidelines)
-- [Discord Gateway Documentation](https://github.com/discord/discord-api-docs/discussions/6620)
-- [ws Library Documentation](https://github.com/websockets/ws/blob/master/doc/ws.md)
-- [OWASP WebSocket Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/WebSocket_Security_Cheat_Sheet.html)
+
+**Infrastructure:**
 - [Kong WebSocket Size Limit Plugin](https://docs.konghq.com/hub/kong-inc/websocket-size-limit/)
 - [NGINX WebSocket Proxy Guide](https://websocket.org/guides/infrastructure/nginx/)
 - [Python websockets Memory Documentation](https://websockets.readthedocs.io/en/stable/topics/memory.html)
-- [WebSocket Backpressure Analysis](https://skylinecodes.substack.com/p/backpressure-in-websocket-streams)
