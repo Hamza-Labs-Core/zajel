@@ -17,6 +17,7 @@ import { GossipProtocol, type GossipConfig } from './gossip/protocol.js';
 import { ServerConnectionManager, type ServerConnectionConfig } from './transport/server-connection.js';
 import { HashRing, RoutingTable } from './dht/hash-ring.js';
 import type { Storage } from '../storage/interface.js';
+import { logger } from '../utils/logger.js';
 
 export interface FederationConfig {
   gossip: GossipConfig;
@@ -385,11 +386,11 @@ export class FederationManager extends EventEmitter {
   private setupTransportEvents(): void {
     this.transport.on('connected', (entry) => {
       // The gossip protocol will handle the membership update
-      console.log(`[Federation] Connected to ${entry.serverId}`);
+      logger.federationEvent('connected', entry.serverId);
     });
 
     this.transport.on('disconnected', (serverId, code, reason) => {
-      console.log(`[Federation] Disconnected from ${serverId}: ${code} ${reason}`);
+      logger.federationEvent('disconnected', serverId);
     });
 
     this.transport.on('message', async (serverId, message) => {
@@ -402,7 +403,7 @@ export class FederationManager extends EventEmitter {
     });
 
     this.transport.on('error', (serverId, error) => {
-      console.error(`[Federation] Transport error with ${serverId}:`, error);
+      logger.error(`[Federation] Transport error with ${logger.serverId(serverId)}`, error);
     });
   }
 

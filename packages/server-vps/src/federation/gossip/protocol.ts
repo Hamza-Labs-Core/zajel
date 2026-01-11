@@ -390,7 +390,10 @@ export class GossipProtocol extends EventEmitter {
       const messageStr = JSON.stringify(rest);
       const publicKey = publicKeyFromServerId(message.senderId);
       return await verifyMessage(messageStr, signature, publicKey);
-    } catch {
+    } catch (error) {
+      // Signature verification failure returns false rather than throwing
+      // This covers invalid serverId format, malformed signatures, etc.
+      console.debug('[Gossip] Signature verification failed:', error);
       return false;
     }
   }

@@ -256,6 +256,8 @@ export interface ServerConfig {
     maxConnectionsPerPeer: number;
     heartbeatInterval: number;
     heartbeatTimeout: number;
+    pairRequestTimeout: number;
+    pairRequestWarningTime: number;
   };
   cleanup: {
     interval: number;

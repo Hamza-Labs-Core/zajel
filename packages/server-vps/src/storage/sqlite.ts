@@ -598,7 +598,8 @@ export class SQLiteStorage implements Storage {
       const stats = statSync(this.dbPath);
       dbSizeBytes = stats.size;
     } catch {
-      // Ignore if can't get file size
+      // Intentionally ignored: dbSizeBytes is optional, stats may fail if file
+      // is locked or on certain filesystems. Returning undefined is acceptable.
     }
 
     return {

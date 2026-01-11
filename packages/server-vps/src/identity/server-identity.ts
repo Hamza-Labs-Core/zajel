@@ -88,6 +88,9 @@ export async function verify(
   try {
     return await ed.verifyAsync(signature, data, publicKey);
   } catch {
+    // Intentionally returns false: Invalid signatures, malformed keys, or
+    // verification errors should all result in verification failure, not exceptions.
+    // This is standard cryptographic API design.
     return false;
   }
 }
@@ -241,6 +244,9 @@ export async function verifyAuthPayload(
     const publicKey = publicKeyFromServerId(expectedFromServerId);
     return verifyMessage(payload, signature, publicKey);
   } catch {
+    // Intentionally returns false: Auth payload verification failure includes
+    // JSON parse errors, invalid serverIds, malformed signatures, etc.
+    // All should result in failed verification, not thrown exceptions.
     return false;
   }
 }

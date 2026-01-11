@@ -15,6 +15,8 @@ import type {
   ServerMetadata,
 } from '../../types.js';
 import { signMessage, verifyMessage, publicKeyFromServerId } from '../../identity/server-identity.js';
+import { WEBSOCKET } from '../../constants.js';
+import { logger } from '../../utils/logger.js';
 
 export interface ServerConnectionConfig {
   handshakeTimeout: number;     // Time to complete handshake (ms)
@@ -143,7 +145,7 @@ export class ServerConnectionManager extends EventEmitter {
       conn.ws.send(JSON.stringify(message));
       return true;
     } catch (error) {
-      console.error(`[Transport] Failed to send to ${serverId}:`, error);
+      logger.error(`[Transport] Failed to send to ${logger.serverId(serverId)}`, error);
       return false;
     }
   }
@@ -234,7 +236,19 @@ export class ServerConnectionManager extends EventEmitter {
 
       ws.on('message', async (data) => {
         try {
-          const message = JSON.parse(data.toString());
+          const dataStr = data.toString();
+
+          // Size validation (defense in depth)
+          if (dataStr.length > WEBSOCKET.MAX_MESSAGE_SIZE) {
+            logger.warn(`[Security] Rejected oversized federation message`, { bytes: dataStr.length, serverId: logger.serverId(entry.serverId) });
+            clearTimeout(handshakeTimer);
+            ws.close(1009, 'Message Too Big');
+            this.pendingOutgoing.delete(entry.serverId);
+            reject(new Error('Message too large'));
+            return;
+          }
+
+          const message = JSON.parse(dataStr);
 
           if (message.type === 'handshake_ack') {
             clearTimeout(handshakeTimer);
@@ -294,7 +308,17 @@ export class ServerConnectionManager extends EventEmitter {
 
     ws.on('message', async (data) => {
       try {
-        const message = JSON.parse(data.toString());
+        const dataStr = data.toString();
+
+        // Size validation (defense in depth)
+        if (dataStr.length > WEBSOCKET.MAX_MESSAGE_SIZE) {
+          console.warn(`[Security] Rejected oversized federation message: ${dataStr.length} bytes from ${remoteAddr}`);
+          clearTimeout(handshakeTimer);
+          ws.close(1009, 'Message Too Big');
+          return;
+        }
+
+        const message = JSON.parse(dataStr);
 
         if (message.type === 'handshake' && !serverId) {
           // Verify incoming handshake
@@ -397,7 +421,16 @@ export class ServerConnectionManager extends EventEmitter {
     // Setup message handler for established connection
     ws.on('message', (data: RawData) => {
       try {
-        const message = JSON.parse(data.toString());
+        const dataStr = data.toString();
+
+        // Size validation (defense in depth)
+        if (dataStr.length > WEBSOCKET.MAX_MESSAGE_SIZE) {
+          logger.warn(`[Security] Rejected oversized federation message`, { bytes: dataStr.length, serverId: logger.serverId(serverId) });
+          ws.close(1009, 'Message Too Big');
+          return;
+        }
+
+        const message = JSON.parse(dataStr);
         if (message.type === 'gossip') {
           this.emit('message', serverId, message);
         }
@@ -454,7 +487,7 @@ export class ServerConnectionManager extends EventEmitter {
       try {
         await this.connect(entry);
       } catch (error) {
-        console.error(`[Transport] Reconnect to ${entry.serverId} failed:`, error);
+        logger.error(`[Transport] Reconnect to ${logger.serverId(entry.serverId)} failed`, error);
       }
     }, delay);
   }
@@ -545,6 +578,9 @@ export class ServerConnectionManager extends EventEmitter {
       const publicKey = publicKeyFromServerId(message.serverId);
       return await verifyMessage(toVerify, signature, publicKey);
     } catch {
+      // Intentionally returns false: Handshake verification failure includes
+      // invalid serverIds, malformed signatures, missing fields, etc.
+      // All should result in failed handshake, not thrown exceptions.
       return false;
     }
   }
