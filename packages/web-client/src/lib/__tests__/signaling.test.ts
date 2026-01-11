@@ -96,6 +96,13 @@ const mockGetRandomValues = vi.fn((array: Uint8Array) => {
   return array;
 });
 
+// Valid test data that passes validation
+const VALID_PAIRING_CODE = 'ABC234';  // 6 chars from allowed charset (no 0, 1, I, O)
+const VALID_PEER_CODE = 'XYZ789';
+// Public keys need to be 32-256 chars
+const VALID_PUBLIC_KEY = 'test-public-key-123456789012345678901234567890';
+const VALID_PEER_PUBLIC_KEY = 'peer-public-key-123456789012345678901234567890';
+
 describe('SignalingClient', () => {
   let mockWs: MockWebSocket | null = null;
   let client: SignalingClient;
@@ -130,6 +137,7 @@ describe('SignalingClient', () => {
     events = {
       onStateChange: vi.fn(),
       onPairIncoming: vi.fn(),
+      onPairExpiring: vi.fn(),
       onPairMatched: vi.fn(),
       onPairRejected: vi.fn(),
       onPairTimeout: vi.fn(),
@@ -150,24 +158,22 @@ describe('SignalingClient', () => {
   });
 
   describe('Pairing code validation', () => {
-    const ALLOWED_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-
     it('should accept valid 6-char codes from allowed charset', () => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       mockWs!.simulateOpen();
-      mockWs!.simulateMessage({ type: 'registered', pairingCode: 'ABC123' });
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
       mockWs!.clearSentMessages();
 
       // Valid codes should work
-      client.requestPairing('ABC234');
+      client.requestPairing(VALID_PEER_CODE);
       expect(events.onError).not.toHaveBeenCalled();
       expect(mockWs!.getSentMessages()).toHaveLength(1);
     });
 
     it('should reject codes with wrong length', () => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       mockWs!.simulateOpen();
-      mockWs!.simulateMessage({ type: 'registered', pairingCode: 'ABC123' });
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
       mockWs!.clearSentMessages();
 
       // Too short
@@ -185,9 +191,9 @@ describe('SignalingClient', () => {
     });
 
     it('should reject codes with invalid characters', () => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       mockWs!.simulateOpen();
-      mockWs!.simulateMessage({ type: 'registered', pairingCode: 'ABC123' });
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
       mockWs!.clearSentMessages();
 
       // Contains 0 (not in allowed charset)
@@ -217,9 +223,9 @@ describe('SignalingClient', () => {
     });
 
     it('should reject lowercase codes', () => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       mockWs!.simulateOpen();
-      mockWs!.simulateMessage({ type: 'registered', pairingCode: 'ABC123' });
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
       mockWs!.clearSentMessages();
 
       client.requestPairing('abc234');
@@ -228,9 +234,9 @@ describe('SignalingClient', () => {
     });
 
     it('should validate code in requestPairing before sending', () => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       mockWs!.simulateOpen();
-      mockWs!.simulateMessage({ type: 'registered', pairingCode: 'ABC123' });
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
       mockWs!.clearSentMessages();
 
       // Invalid code - should not send message
@@ -241,15 +247,15 @@ describe('SignalingClient', () => {
       vi.mocked(events.onError).mockClear();
 
       // Valid code - should send message
-      client.requestPairing('ABC234');
+      client.requestPairing(VALID_PEER_CODE);
       expect(mockWs!.getSentMessages()).toHaveLength(1);
       expect(events.onError).not.toHaveBeenCalled();
     });
 
     it('should validate code in respondToPairing before sending', () => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       mockWs!.simulateOpen();
-      mockWs!.simulateMessage({ type: 'registered', pairingCode: 'ABC123' });
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
       mockWs!.clearSentMessages();
 
       // Invalid code - should not send message
@@ -260,7 +266,7 @@ describe('SignalingClient', () => {
       vi.mocked(events.onError).mockClear();
 
       // Valid code - should send message
-      client.respondToPairing('ABC234', true);
+      client.respondToPairing(VALID_PEER_CODE, true);
       expect(mockWs!.getSentMessages()).toHaveLength(1);
       expect(events.onError).not.toHaveBeenCalled();
     });
@@ -272,24 +278,24 @@ describe('SignalingClient', () => {
     });
 
     it('should change state to connecting on connect', () => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       expect(events.onStateChange).toHaveBeenCalledWith('connecting');
       expect(client.connectionState).toBe('connecting');
     });
 
     it('should change state to registered after successful registration', () => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       mockWs!.simulateOpen();
-      mockWs!.simulateMessage({ type: 'registered', pairingCode: 'ABC123' });
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
 
       expect(events.onStateChange).toHaveBeenCalledWith('registered');
       expect(client.connectionState).toBe('registered');
     });
 
     it('should change state to disconnected on disconnect', () => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       mockWs!.simulateOpen();
-      mockWs!.simulateMessage({ type: 'registered', pairingCode: 'ABC123' });
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
 
       client.disconnect();
 
@@ -298,7 +304,7 @@ describe('SignalingClient', () => {
     });
 
     it('should return generated pairing code via getter', () => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
 
       // The code is generated from mocked crypto.getRandomValues
       // With deterministic mock values [0, 10, 20, 30, 40, 50]
@@ -311,7 +317,7 @@ describe('SignalingClient', () => {
 
   describe('Message handling', () => {
     beforeEach(() => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       mockWs!.simulateOpen();
     });
 
@@ -330,7 +336,7 @@ describe('SignalingClient', () => {
     });
 
     it('should handle registered message', () => {
-      mockWs!.simulateMessage({ type: 'registered', pairingCode: 'ABC123' });
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
 
       expect(events.onStateChange).toHaveBeenCalledWith('registered');
       expect(client.connectionState).toBe('registered');
@@ -339,58 +345,59 @@ describe('SignalingClient', () => {
     it('should handle pair_incoming message', () => {
       mockWs!.simulateMessage({
         type: 'pair_incoming',
-        fromCode: 'XYZ789',
-        fromPublicKey: 'peer-public-key',
+        fromCode: VALID_PEER_CODE,
+        fromPublicKey: VALID_PEER_PUBLIC_KEY,
       });
 
       expect(events.onStateChange).toHaveBeenCalledWith('pending_approval');
-      expect(events.onPairIncoming).toHaveBeenCalledWith('XYZ789', 'peer-public-key');
+      // Third argument (expiresIn) is optional, may be undefined
+      expect(events.onPairIncoming).toHaveBeenCalledWith(VALID_PEER_CODE, VALID_PEER_PUBLIC_KEY, undefined);
     });
 
     it('should handle pair_matched message', () => {
       mockWs!.simulateMessage({
         type: 'pair_matched',
-        peerCode: 'XYZ789',
-        peerPublicKey: 'peer-public-key',
+        peerCode: VALID_PEER_CODE,
+        peerPublicKey: VALID_PEER_PUBLIC_KEY,
         isInitiator: true,
       });
 
       expect(events.onStateChange).toHaveBeenCalledWith('matched');
       expect(events.onPairMatched).toHaveBeenCalledWith(
-        'XYZ789',
-        'peer-public-key',
+        VALID_PEER_CODE,
+        VALID_PEER_PUBLIC_KEY,
         true
       );
     });
 
     it('should handle pair_rejected message', () => {
-      mockWs!.simulateMessage({ type: 'registered', pairingCode: 'ABC123' });
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
       vi.mocked(events.onStateChange).mockClear();
 
       mockWs!.simulateMessage({
         type: 'pair_rejected',
-        peerCode: 'XYZ789',
+        peerCode: VALID_PEER_CODE,
       });
 
       expect(events.onStateChange).toHaveBeenCalledWith('registered');
-      expect(events.onPairRejected).toHaveBeenCalledWith('XYZ789');
+      expect(events.onPairRejected).toHaveBeenCalledWith(VALID_PEER_CODE);
     });
 
     it('should handle pair_timeout message', () => {
-      mockWs!.simulateMessage({ type: 'registered', pairingCode: 'ABC123' });
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
       vi.mocked(events.onStateChange).mockClear();
 
       mockWs!.simulateMessage({
         type: 'pair_timeout',
-        peerCode: 'XYZ789',
+        peerCode: VALID_PEER_CODE,
       });
 
       expect(events.onStateChange).toHaveBeenCalledWith('registered');
-      expect(events.onPairTimeout).toHaveBeenCalledWith('XYZ789');
+      expect(events.onPairTimeout).toHaveBeenCalledWith(VALID_PEER_CODE);
     });
 
     it('should handle pair_error message', () => {
-      mockWs!.simulateMessage({ type: 'registered', pairingCode: 'ABC123' });
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
       vi.mocked(events.onStateChange).mockClear();
 
       mockWs!.simulateMessage({
@@ -406,33 +413,33 @@ describe('SignalingClient', () => {
       const offer: RTCSessionDescriptionInit = { type: 'offer', sdp: 'test-sdp' };
       mockWs!.simulateMessage({
         type: 'offer',
-        from: 'XYZ789',
+        from: VALID_PEER_CODE,
         payload: offer,
       });
 
-      expect(events.onOffer).toHaveBeenCalledWith('XYZ789', offer);
+      expect(events.onOffer).toHaveBeenCalledWith(VALID_PEER_CODE, offer);
     });
 
     it('should handle answer message', () => {
       const answer: RTCSessionDescriptionInit = { type: 'answer', sdp: 'test-sdp' };
       mockWs!.simulateMessage({
         type: 'answer',
-        from: 'XYZ789',
+        from: VALID_PEER_CODE,
         payload: answer,
       });
 
-      expect(events.onAnswer).toHaveBeenCalledWith('XYZ789', answer);
+      expect(events.onAnswer).toHaveBeenCalledWith(VALID_PEER_CODE, answer);
     });
 
     it('should handle ice_candidate message', () => {
       const candidate: RTCIceCandidateInit = { candidate: 'test-candidate' };
       mockWs!.simulateMessage({
         type: 'ice_candidate',
-        from: 'XYZ789',
+        from: VALID_PEER_CODE,
         payload: candidate,
       });
 
-      expect(events.onIceCandidate).toHaveBeenCalledWith('XYZ789', candidate);
+      expect(events.onIceCandidate).toHaveBeenCalledWith(VALID_PEER_CODE, candidate);
     });
 
     it('should handle error message', () => {
@@ -467,9 +474,9 @@ describe('SignalingClient', () => {
 
   describe('WebSocket lifecycle', () => {
     it('should schedule reconnect on unexpected disconnect', () => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       mockWs!.simulateOpen();
-      mockWs!.simulateMessage({ type: 'registered', pairingCode: 'ABC123' });
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
 
       // Simulate unexpected close
       mockWs!.simulateClose();
@@ -484,9 +491,9 @@ describe('SignalingClient', () => {
     });
 
     it('should not reconnect after explicit disconnect', () => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       mockWs!.simulateOpen();
-      mockWs!.simulateMessage({ type: 'registered', pairingCode: 'ABC123' });
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
 
       // Explicit disconnect
       client.disconnect();
@@ -499,7 +506,7 @@ describe('SignalingClient', () => {
     });
 
     it('should stop ping on disconnect', () => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       mockWs!.simulateOpen();
       mockWs!.clearSentMessages();
 
@@ -524,7 +531,7 @@ describe('SignalingClient', () => {
     });
 
     it('should send ping every 25 seconds', () => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       mockWs!.simulateOpen();
       mockWs!.clearSentMessages();
 
@@ -540,7 +547,7 @@ describe('SignalingClient', () => {
     });
 
     it('should register with pairing code and public key on connect', () => {
-      client.connect('my-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       mockWs!.simulateOpen();
 
       const messages = mockWs!.getSentMessages();
@@ -549,24 +556,24 @@ describe('SignalingClient', () => {
       ) as { type: string; pairingCode: string; publicKey: string } | undefined;
 
       expect(registerMsg).toBeDefined();
-      expect(registerMsg!.publicKey).toBe('my-public-key');
+      expect(registerMsg!.publicKey).toBe(VALID_PUBLIC_KEY);
       expect(registerMsg!.pairingCode).toHaveLength(6);
     });
 
     it('should close existing connection before creating new one', () => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       const firstWs = mockWs;
       mockWs!.simulateOpen();
 
       // Connect again
-      client.connect('test-public-key-2');
+      client.connect(VALID_PEER_PUBLIC_KEY);
 
       expect(firstWs!.readyState).toBe(MockWebSocket.CLOSED);
       expect(WebSocket).toHaveBeenCalledTimes(2);
     });
 
     it('should handle WebSocket error', () => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       mockWs!.simulateOpen();
 
       mockWs!.simulateError();
@@ -577,32 +584,32 @@ describe('SignalingClient', () => {
 
   describe('Pairing workflow', () => {
     beforeEach(() => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       mockWs!.simulateOpen();
-      mockWs!.simulateMessage({ type: 'registered', pairingCode: 'ABC123' });
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
       mockWs!.clearSentMessages();
     });
 
     it('should send pair_request and update state to waiting_approval', () => {
-      client.requestPairing('XYZ789');
+      client.requestPairing(VALID_PEER_CODE);
 
       const messages = mockWs!.getSentMessages();
       expect(messages).toHaveLength(1);
       expect(messages[0]).toEqual({
         type: 'pair_request',
-        targetCode: 'XYZ789',
+        targetCode: VALID_PEER_CODE,
       });
       expect(events.onStateChange).toHaveBeenCalledWith('waiting_approval');
     });
 
     it('should send pair_response with accepted=true', () => {
-      client.respondToPairing('XYZ789', true);
+      client.respondToPairing(VALID_PEER_CODE, true);
 
       const messages = mockWs!.getSentMessages();
       expect(messages).toHaveLength(1);
       expect(messages[0]).toEqual({
         type: 'pair_response',
-        targetCode: 'XYZ789',
+        targetCode: VALID_PEER_CODE,
         accepted: true,
       });
     });
@@ -611,19 +618,19 @@ describe('SignalingClient', () => {
       // First get into pending_approval state
       mockWs!.simulateMessage({
         type: 'pair_incoming',
-        fromCode: 'XYZ789',
-        fromPublicKey: 'peer-key',
+        fromCode: VALID_PEER_CODE,
+        fromPublicKey: VALID_PEER_PUBLIC_KEY,
       });
       vi.mocked(events.onStateChange).mockClear();
       mockWs!.clearSentMessages();
 
-      client.respondToPairing('XYZ789', false);
+      client.respondToPairing(VALID_PEER_CODE, false);
 
       const messages = mockWs!.getSentMessages();
       expect(messages).toHaveLength(1);
       expect(messages[0]).toEqual({
         type: 'pair_response',
-        targetCode: 'XYZ789',
+        targetCode: VALID_PEER_CODE,
         accepted: false,
       });
       expect(events.onStateChange).toHaveBeenCalledWith('registered');
@@ -632,29 +639,29 @@ describe('SignalingClient', () => {
 
   describe('WebRTC signaling methods', () => {
     beforeEach(() => {
-      client.connect('test-public-key');
+      client.connect(VALID_PUBLIC_KEY);
       mockWs!.simulateOpen();
       mockWs!.clearSentMessages();
     });
 
     it('should send offer message', () => {
       const offer: RTCSessionDescriptionInit = { type: 'offer', sdp: 'test-offer-sdp' };
-      client.sendOffer('XYZ789', offer);
+      client.sendOffer(VALID_PEER_CODE, offer);
 
       expect(mockWs!.getLastSentMessage()).toEqual({
         type: 'offer',
-        target: 'XYZ789',
+        target: VALID_PEER_CODE,
         payload: offer,
       });
     });
 
     it('should send answer message', () => {
       const answer: RTCSessionDescriptionInit = { type: 'answer', sdp: 'test-answer-sdp' };
-      client.sendAnswer('XYZ789', answer);
+      client.sendAnswer(VALID_PEER_CODE, answer);
 
       expect(mockWs!.getLastSentMessage()).toEqual({
         type: 'answer',
-        target: 'XYZ789',
+        target: VALID_PEER_CODE,
         payload: answer,
       });
     });
@@ -665,11 +672,11 @@ describe('SignalingClient', () => {
         sdpMid: '0',
         sdpMLineIndex: 0,
       };
-      client.sendIceCandidate('XYZ789', candidate);
+      client.sendIceCandidate(VALID_PEER_CODE, candidate);
 
       expect(mockWs!.getLastSentMessage()).toEqual({
         type: 'ice_candidate',
-        target: 'XYZ789',
+        target: VALID_PEER_CODE,
         payload: candidate,
       });
     });
@@ -678,7 +685,7 @@ describe('SignalingClient', () => {
       client.disconnect();
       mockWs!.clearSentMessages();
 
-      client.sendOffer('XYZ789', { type: 'offer', sdp: 'test' });
+      client.sendOffer(VALID_PEER_CODE, { type: 'offer', sdp: 'test' });
 
       expect(mockWs!.getSentMessages()).toHaveLength(0);
     });

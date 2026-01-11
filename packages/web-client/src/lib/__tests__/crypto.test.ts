@@ -417,7 +417,7 @@ describe('CryptoService', () => {
 
       // Replaying the same message should fail
       expect(() => bob.decrypt(sharedRoomId, message)).toThrow(
-        'Replay attack detected: duplicate sequence number'
+        'Replay attack detected'
       );
     });
 
@@ -434,7 +434,7 @@ describe('CryptoService', () => {
       // Now try to replay the early message - should fail as too old
       // seq 1 is outside window: 71 - 1 = 70 >= 64
       expect(() => bob.decrypt(sharedRoomId, earlyMessage)).toThrow(
-        'Replay attack detected: sequence too old'
+        'Replay attack detected'
       );
     });
 
@@ -457,7 +457,7 @@ describe('CryptoService', () => {
 
       // But replaying msg2 again should fail
       expect(() => bob.decrypt(sharedRoomId, msg2)).toThrow(
-        'Replay attack detected: duplicate sequence number'
+        'Replay attack detected'
       );
     });
 

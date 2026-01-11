@@ -1,16 +1,92 @@
+/**
+ * Signaling Client for WebRTC Connection Establishment
+ *
+ * SECURITY MODEL:
+ * ================
+ * This signaling client uses WSS (WebSocket Secure) to communicate with the
+ * signaling server. However, certificate pinning is NOT implemented because:
+ *
+ * 1. Browser Limitation: The browser's WebSocket API does not expose any mechanism
+ *    to access, inspect, or verify server certificates from JavaScript code.
+ *    All TLS negotiation happens at the browser level, completely opaque to JS.
+ *
+ * 2. HPKP Deprecated: HTTP Public Key Pinning was deprecated in 2017 and removed
+ *    from browsers in 2018 due to operational risks.
+ *
+ * MITIGATIONS:
+ * =============
+ * The lack of certificate pinning is mitigated by multiple security layers:
+ *
+ * 1. End-to-End Encryption (E2E): All message content is encrypted using X25519
+ *    key exchange and ChaCha20-Poly1305. Even if the signaling server is
+ *    compromised, message content remains encrypted and unreadable.
+ *
+ * 2. Public Key Fingerprint Verification: Users can verify each other's public
+ *    key fingerprints through an out-of-band channel (phone call, in person)
+ *    to detect MITM attacks during key exchange.
+ *
+ * 3. WebRTC DTLS Protection: Once WebRTC is established, DTLS-SRTP provides
+ *    additional encryption and certificate fingerprint verification via SDP.
+ *
+ * 4. Ephemeral Keys: New key pairs are generated per session, limiting exposure
+ *    if keys are somehow compromised.
+ *
+ * THREAT MODEL:
+ * ==============
+ * The signaling server is treated as an untrusted relay. It only facilitates
+ * connection establishment and never sees decrypted message content. The real
+ * security comes from E2E encryption with verified key fingerprints.
+ *
+ * For high-security scenarios, users SHOULD verify key fingerprints out-of-band.
+ *
+ * See: /SECURITY.md for full security architecture documentation.
+ */
+
 import type {
   ClientMessage,
   ServerMessage,
   ConnectionState,
 } from './protocol';
+import { validateServerMessage, safeJsonParse } from './validation';
+import { TIMEOUTS, PAIRING_CODE, PAIRING_CODE_REGEX, MESSAGE_LIMITS } from './constants';
 
-const PING_INTERVAL = 25000; // 25 seconds
-const RECONNECT_DELAY_BASE = 1000; // Start with 1 second
-const RECONNECT_DELAY_MAX = 30000; // Cap at 30 seconds
-const PAIRING_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const PAIRING_CODE_LENGTH = 6;
-const PAIRING_CODE_REGEX = new RegExp(`^[${PAIRING_CODE_CHARS}]{${PAIRING_CODE_LENGTH}}$`);
-const MAX_MESSAGE_SIZE = 1024 * 1024; // 1MB limit for WebSocket messages
+
+/**
+ * Generates an unbiased random character from the given character set using rejection sampling.
+ *
+ * This avoids modulo bias by rejecting random bytes that would cause uneven distribution.
+ * For a character set of length N, we calculate the largest multiple of N that fits in 256
+ * and reject any bytes >= that value.
+ *
+ * @param chars - The character set to select from
+ * @returns A single random character from the set with uniform probability
+ */
+function getUnbiasedRandomChar(chars: string): string {
+  const charsetLength = chars.length;
+  // Calculate the largest multiple of charsetLength that fits in 256 (byte range)
+  const maxValid = Math.floor(256 / charsetLength) * charsetLength;
+
+  let byte: number;
+  do {
+    byte = crypto.getRandomValues(new Uint8Array(1))[0];
+  } while (byte >= maxValid);
+
+  return chars[byte % charsetLength];
+}
+
+/**
+ * Generates a random pairing code using unbiased random character selection.
+ *
+ * Uses rejection sampling to ensure each character has exactly equal probability,
+ * protecting against modulo bias even if the character set is changed in the future.
+ *
+ * @returns A random pairing code of PAIRING_CODE.LENGTH characters
+ */
+function generatePairingCode(): string {
+  return Array.from({ length: PAIRING_CODE.LENGTH }, () =>
+    getUnbiasedRandomChar(PAIRING_CODE.CHARS)
+  ).join('');
+}
 
 /**
  * Validates a pairing code format.
@@ -22,7 +98,8 @@ function isValidPairingCode(code: string): boolean {
 
 export interface SignalingEvents {
   onStateChange: (state: ConnectionState) => void;
-  onPairIncoming: (fromCode: string, fromPublicKey: string) => void;
+  onPairIncoming: (fromCode: string, fromPublicKey: string, expiresIn?: number) => void;
+  onPairExpiring: (peerCode: string, remainingSeconds: number) => void;
   onPairMatched: (peerCode: string, peerPublicKey: string, isInitiator: boolean) => void;
   onPairRejected: (peerCode: string) => void;
   onPairTimeout: (peerCode: string) => void;
@@ -50,10 +127,7 @@ export class SignalingClient {
   }
 
   private generatePairingCode(): string {
-    const bytes = crypto.getRandomValues(new Uint8Array(6));
-    return Array.from(bytes)
-      .map((b) => PAIRING_CODE_CHARS[b % PAIRING_CODE_CHARS.length])
-      .join('');
+    return generatePairingCode();
   }
 
   private setState(state: ConnectionState): void {
@@ -86,24 +160,33 @@ export class SignalingClient {
     };
 
     this.ws.onmessage = (event) => {
-      try {
-        // Check message size before processing
-        const messageSize = typeof event.data === 'string'
-          ? event.data.length
-          : event.data.byteLength || 0;
-        if (messageSize > MAX_MESSAGE_SIZE) {
-          console.error('Rejected WebSocket message: exceeds 1MB size limit');
-          // Close connection to prevent potential attacks
-          this.disconnect();
-          this.events.onError('Connection closed: message too large');
-          return;
-        }
-
-        const message = JSON.parse(event.data) as ServerMessage;
-        this.handleMessage(message);
-      } catch (e) {
-        console.error('Failed to parse message:', e);
+      // Check message size before processing
+      const messageSize = typeof event.data === 'string'
+        ? event.data.length
+        : event.data.byteLength || 0;
+      if (messageSize > MESSAGE_LIMITS.MAX_WEBSOCKET_MESSAGE_SIZE) {
+        console.error('Rejected WebSocket message: exceeds 1MB size limit');
+        // Close connection to prevent potential attacks
+        this.disconnect();
+        this.events.onError('Connection closed: message too large');
+        return;
       }
+
+      // Parse JSON safely
+      const parsed = safeJsonParse(event.data);
+      if (parsed === null) {
+        console.error('Failed to parse WebSocket message as JSON');
+        return;
+      }
+
+      // Validate message structure before processing
+      const result = validateServerMessage(parsed);
+      if (!result.success) {
+        console.warn('Invalid signaling message:', result.error);
+        return;
+      }
+
+      this.handleMessage(result.data);
     };
 
     this.ws.onerror = (error) => {
@@ -146,8 +229,8 @@ export class SignalingClient {
 
     // Exponential backoff: delay = base * 2^attempts, capped at max
     const delay = Math.min(
-      RECONNECT_DELAY_BASE * Math.pow(2, this.reconnectAttempts),
-      RECONNECT_DELAY_MAX
+      TIMEOUTS.RECONNECT_DELAY_BASE_MS * Math.pow(2, this.reconnectAttempts),
+      TIMEOUTS.RECONNECT_DELAY_MAX_MS
     );
     this.reconnectAttempts++;
 
@@ -163,7 +246,7 @@ export class SignalingClient {
     this.stopPing();
     this.pingInterval = window.setInterval(() => {
       this.send({ type: 'ping' });
-    }, PING_INTERVAL);
+    }, TIMEOUTS.PING_INTERVAL_MS);
   }
 
   private stopPing(): void {
@@ -178,7 +261,12 @@ export class SignalingClient {
       try {
         this.ws.send(JSON.stringify(message));
         return true;
-      } catch {
+      } catch (error) {
+        console.error(`Failed to send ${message.type} message:`, error);
+        // Notify error handler for critical message types
+        if (['pair_request', 'pair_response', 'offer', 'answer'].includes(message.type)) {
+          this.events.onError(`Failed to send ${message.type}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
         return false;
       }
     }
@@ -194,7 +282,12 @@ export class SignalingClient {
 
       case 'pair_incoming':
         this.setState('pending_approval');
-        this.events.onPairIncoming(message.fromCode, message.fromPublicKey);
+        this.events.onPairIncoming(message.fromCode, message.fromPublicKey, message.expiresIn);
+        break;
+
+      case 'pair_expiring':
+        // Warning that pair request is about to expire
+        this.events.onPairExpiring(message.peerCode, message.remainingSeconds);
         break;
 
       case 'pair_matched':

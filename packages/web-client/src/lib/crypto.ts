@@ -1,10 +1,11 @@
 import { x25519 } from '@noble/curves/ed25519';
+import { CRYPTO } from './constants';
 import { chacha20poly1305 } from '@noble/ciphers/chacha';
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
+import { CryptoError, ErrorCodes } from './errors';
 
-const NONCE_SIZE = 12;
 
 /**
  * Formats a key fingerprint for human-readable display.
@@ -20,19 +21,93 @@ export interface KeyPair {
 }
 
 // Replay protection constants
-const SEQUENCE_WINDOW = 64; // Size of sliding window for out-of-order delivery
+
+/**
+ * Bitmap-based sliding window for replay protection.
+ * Uses RFC 4303 (IPsec ESP) anti-replay algorithm.
+ * Memory: O(1) - fixed ~12 bytes per peer instead of unbounded Set growth.
+ */
+interface ReplayWindow {
+  highestSeq: number;  // Highest sequence number seen
+  bitmap: bigint;      // 64-bit bitmap of seen sequences within window
+}
 
 export class CryptoService {
   private keyPair: KeyPair | null = null;
   private sessionKeys = new Map<string, Uint8Array>();
   private sendCounters = new Map<string, number>();
-  private receiveCounters = new Map<string, number>();
-  // Track seen sequences within the window using a Set per peer
-  private seenSequences = new Map<string, Set<number>>();
+  // Bitmap-based replay windows (replaces Set-based seenSequences + receiveCounters)
+  private replayWindows = new Map<string, ReplayWindow>();
   // Separate counters for binary data (file chunks) to avoid interference with text messages
   private sendBytesCounters = new Map<string, number>();
-  private receiveBytesCounters = new Map<string, number>();
-  private seenBytesSequences = new Map<string, Set<number>>();
+  private replayWindowsBytes = new Map<string, ReplayWindow>();
+  // Store peer public keys for handshake verification (prevents MITM attacks)
+  private peerPublicKeys = new Map<string, string>();
+
+  /**
+   * Check if a sequence number should be accepted (not a replay).
+   * Uses RFC 4303 anti-replay algorithm with bitmap sliding window.
+   *
+   * This approach provides:
+   * - O(1) time complexity for all operations
+   * - O(1) memory: ~12 bytes per peer regardless of message patterns
+   * - No cleanup needed - inherently bounded by bitmap size
+   *
+   * @param windows - The map of replay windows to use
+   * @param peerId - The peer identifier
+   * @param seq - The sequence number to check
+   * @returns true if sequence is valid (not a replay), false if replay detected
+   */
+  private checkAndUpdateReplayWindow(
+    windows: Map<string, ReplayWindow>,
+    peerId: string,
+    seq: number
+  ): boolean {
+    let window = windows.get(peerId);
+    if (!window) {
+      window = { highestSeq: 0, bitmap: 0n };
+      windows.set(peerId, window);
+    }
+
+    if (seq === 0) {
+      // Sequence 0 is invalid (we start from 1)
+      return false;
+    }
+
+    if (seq > window.highestSeq) {
+      // New highest sequence - advance the window
+      const shift = seq - window.highestSeq;
+      if (shift >= CRYPTO.SEQUENCE_WINDOW) {
+        // Jump is larger than window - reset bitmap, only new seq is set
+        window.bitmap = 1n;
+      } else {
+        // Shift the bitmap and set the new sequence bit
+        window.bitmap = (window.bitmap << BigInt(shift)) | 1n;
+        // Mask to window size to prevent unbounded growth
+        window.bitmap &= (1n << BigInt(CRYPTO.SEQUENCE_WINDOW)) - 1n;
+      }
+      window.highestSeq = seq;
+      return true;
+    }
+
+    if (seq <= window.highestSeq - CRYPTO.SEQUENCE_WINDOW) {
+      // Sequence is too old (outside the window)
+      return false;
+    }
+
+    // Sequence is within the window - check if already seen
+    const bitPosition = window.highestSeq - seq;
+    const bit = 1n << BigInt(bitPosition);
+
+    if ((window.bitmap & bit) !== 0n) {
+      // Already seen - replay detected
+      return false;
+    }
+
+    // Mark as seen and accept
+    window.bitmap |= bit;
+    return true;
+  }
 
   async initialize(): Promise<void> {
     // Generate ephemeral key pair - keys live only in memory
@@ -46,12 +121,16 @@ export class CryptoService {
   }
 
   getPublicKeyBase64(): string {
-    if (!this.keyPair) throw new Error('CryptoService not initialized');
+    if (!this.keyPair) {
+      throw new CryptoError('CryptoService not initialized', ErrorCodes.CRYPTO_NOT_INITIALIZED);
+    }
     return btoa(String.fromCharCode(...this.keyPair.publicKey));
   }
 
   getPublicKeyHex(): string {
-    if (!this.keyPair) throw new Error('CryptoService not initialized');
+    if (!this.keyPair) {
+      throw new CryptoError('CryptoService not initialized', ErrorCodes.CRYPTO_NOT_INITIALIZED);
+    }
     return bytesToHex(this.keyPair.publicKey);
   }
 
@@ -65,7 +144,9 @@ export class CryptoService {
    * @returns A human-readable fingerprint string (uppercase hex, space-separated)
    */
   getPublicKeyFingerprint(): string {
-    if (!this.keyPair) throw new Error('CryptoService not initialized');
+    if (!this.keyPair) {
+      throw new CryptoError('CryptoService not initialized', ErrorCodes.CRYPTO_NOT_INITIALIZED);
+    }
     const hash = sha256(this.keyPair.publicKey);
     // Use full 256-bit hash for collision resistance
     return formatFingerprint(bytesToHex(hash));
@@ -86,11 +167,14 @@ export class CryptoService {
         c.charCodeAt(0)
       );
     } catch {
-      throw new Error('Invalid peer public key: malformed base64');
+      throw new CryptoError('Invalid peer public key: malformed base64', ErrorCodes.CRYPTO_INVALID_KEY);
     }
 
-    if (peerPublicKey.length !== 32) {
-      throw new Error(`Invalid peer public key: expected 32 bytes, got ${peerPublicKey.length}`);
+    if (peerPublicKey.length !== CRYPTO.X25519_KEY_SIZE) {
+      throw new CryptoError(
+        `Invalid peer public key: expected 32 bytes, got ${peerPublicKey.length}`,
+        ErrorCodes.CRYPTO_INVALID_KEY
+      );
     }
 
     const hash = sha256(peerPublicKey);
@@ -98,17 +182,15 @@ export class CryptoService {
     return formatFingerprint(bytesToHex(hash));
   }
 
-  // TODO: Implement proper key verification to prevent MITM attacks.
-  // Current implementation trusts the signaling server completely, which means:
-  // 1. A compromised signaling server could substitute its own public key
-  // 2. Users have no way to verify they're talking to the intended peer
-  // Recommended improvements:
-  // - Display key fingerprints in the UI for out-of-band verification ✓ (implemented)
+  // TODO: Additional key verification improvements:
   // - Implement Safety Numbers (like Signal) for visual verification
   // - Add QR code scanning for in-person key verification
   // - Consider implementing a Trust On First Use (TOFU) model with warnings on key changes
+  // Note: Handshake verification is now implemented via verifyPeerKey() method
   establishSession(peerId: string, peerPublicKeyBase64: string): void {
-    if (!this.keyPair) throw new Error('CryptoService not initialized');
+    if (!this.keyPair) {
+      throw new CryptoError('CryptoService not initialized', ErrorCodes.CRYPTO_NOT_INITIALIZED);
+    }
 
     // Decode and validate peer's public key
     let peerPublicKey: Uint8Array;
@@ -117,13 +199,21 @@ export class CryptoService {
         c.charCodeAt(0)
       );
     } catch {
-      throw new Error('Invalid peer public key: malformed base64');
+      throw new CryptoError('Invalid peer public key: malformed base64', ErrorCodes.CRYPTO_INVALID_KEY);
     }
 
     // X25519 public keys must be exactly 32 bytes
-    if (peerPublicKey.length !== 32) {
-      throw new Error(`Invalid peer public key: expected 32 bytes, got ${peerPublicKey.length}`);
+    if (peerPublicKey.length !== CRYPTO.X25519_KEY_SIZE) {
+      throw new CryptoError(
+        `Invalid peer public key: expected 32 bytes, got ${peerPublicKey.length}`,
+        ErrorCodes.CRYPTO_INVALID_KEY
+      );
     }
+
+    // Store peer public key for later handshake verification
+    // This allows us to verify the key received over WebRTC matches
+    // the key received during signaling (prevents MITM attacks)
+    this.peerPublicKeys.set(peerId, peerPublicKeyBase64);
 
     // Perform ECDH
     const sharedSecret = x25519.getSharedSecret(
@@ -142,19 +232,60 @@ export class CryptoService {
     return this.sessionKeys.has(peerId);
   }
 
+  /**
+   * Verifies that a received public key matches the expected key from signaling.
+   * This prevents MITM attacks where an attacker substitutes their own key.
+   *
+   * Uses constant-time comparison to prevent timing attacks.
+   *
+   * @param peerId - The peer identifier
+   * @param receivedKey - The public key received over WebRTC data channel
+   * @returns true if the keys match, false otherwise
+   */
+  verifyPeerKey(peerId: string, receivedKey: string): boolean {
+    const expectedKey = this.peerPublicKeys.get(peerId);
+    if (!expectedKey) {
+      return false;
+    }
+
+    // Constant-time comparison to prevent timing attacks
+    // Both keys should be base64 strings of the same length (32-byte keys)
+    if (expectedKey.length !== receivedKey.length) {
+      return false;
+    }
+
+    let result = 0;
+    for (let i = 0; i < expectedKey.length; i++) {
+      result |= expectedKey.charCodeAt(i) ^ receivedKey.charCodeAt(i);
+    }
+    return result === 0;
+  }
+
+  /**
+   * Gets the stored peer public key for debugging purposes.
+   * Note: In production, avoid logging actual key values.
+   *
+   * @param peerId - The peer identifier
+   * @returns The stored public key or null if not found
+   */
+  getStoredPeerKey(peerId: string): string | null {
+    return this.peerPublicKeys.get(peerId) || null;
+  }
+
   clearSession(peerId: string): void {
     this.sessionKeys.delete(peerId);
+    this.peerPublicKeys.delete(peerId);
     this.sendCounters.delete(peerId);
-    this.receiveCounters.delete(peerId);
-    this.seenSequences.delete(peerId);
+    this.replayWindows.delete(peerId);
     this.sendBytesCounters.delete(peerId);
-    this.receiveBytesCounters.delete(peerId);
-    this.seenBytesSequences.delete(peerId);
+    this.replayWindowsBytes.delete(peerId);
   }
 
   encrypt(peerId: string, plaintext: string): string {
     const sessionKey = this.sessionKeys.get(peerId);
-    if (!sessionKey) throw new Error(`No session for peer: ${peerId}`);
+    if (!sessionKey) {
+      throw new CryptoError(`No session for peer: ${peerId}`, ErrorCodes.CRYPTO_NO_SESSION);
+    }
 
     // Increment and get sequence number for replay protection
     const seq = (this.sendCounters.get(peerId) || 0) + 1;
@@ -169,7 +300,7 @@ export class CryptoService {
     combined.set(seqBytes);
     combined.set(plaintextBytes, 4);
 
-    const nonce = crypto.getRandomValues(new Uint8Array(NONCE_SIZE));
+    const nonce = crypto.getRandomValues(new Uint8Array(CRYPTO.NONCE_SIZE));
 
     const cipher = chacha20poly1305(sessionKey, nonce);
     const ciphertext = cipher.encrypt(combined);
@@ -184,51 +315,25 @@ export class CryptoService {
 
   decrypt(peerId: string, ciphertextBase64: string): string {
     const sessionKey = this.sessionKeys.get(peerId);
-    if (!sessionKey) throw new Error(`No session for peer: ${peerId}`);
+    if (!sessionKey) {
+      throw new CryptoError(`No session for peer: ${peerId}`, ErrorCodes.CRYPTO_NO_SESSION);
+    }
 
     const data = Uint8Array.from(atob(ciphertextBase64), (c) => c.charCodeAt(0));
 
     // Extract nonce and ciphertext
-    const nonce = data.slice(0, NONCE_SIZE);
-    const ciphertext = data.slice(NONCE_SIZE);
+    const nonce = data.slice(0, CRYPTO.NONCE_SIZE);
+    const ciphertext = data.slice(CRYPTO.NONCE_SIZE);
 
     const cipher = chacha20poly1305(sessionKey, nonce);
     const combined = cipher.decrypt(ciphertext);
 
     // Extract and verify sequence number for replay protection
     const seq = new DataView(combined.buffer, combined.byteOffset, 4).getUint32(0, false);
-    const lastSeq = this.receiveCounters.get(peerId) || 0;
 
-    // Get or create the seen sequences set for this peer
-    let seen = this.seenSequences.get(peerId);
-    if (!seen) {
-      seen = new Set<number>();
-      this.seenSequences.set(peerId, seen);
-    }
-
-    // Check for replay attacks using sliding window
-    if (seq > lastSeq) {
-      // New highest sequence - advance the window
-      // Clear sequences that are now outside the window
-      const newWindowStart = seq - SEQUENCE_WINDOW;
-      for (const oldSeq of seen) {
-        if (oldSeq <= newWindowStart) {
-          seen.delete(oldSeq);
-        }
-      }
-      // Update the counter and mark as seen
-      this.receiveCounters.set(peerId, seq);
-      seen.add(seq);
-    } else if (seq <= lastSeq - SEQUENCE_WINDOW) {
-      // Sequence is too old (outside the window)
-      throw new Error('Replay attack detected: sequence too old');
-    } else {
-      // Sequence is within the window - check if already seen
-      if (seen.has(seq)) {
-        throw new Error('Replay attack detected: duplicate sequence number');
-      }
-      // Mark as seen (allow out-of-order delivery within window)
-      seen.add(seq);
+    // Check for replay attacks using bitmap sliding window (O(1) memory)
+    if (!this.checkAndUpdateReplayWindow(this.replayWindows, peerId, seq)) {
+      throw new CryptoError('Replay attack detected', ErrorCodes.CRYPTO_REPLAY_DETECTED);
     }
 
     // Extract plaintext (skip 4-byte sequence number)
@@ -238,7 +343,9 @@ export class CryptoService {
 
   encryptBytes(peerId: string, data: Uint8Array): Uint8Array {
     const sessionKey = this.sessionKeys.get(peerId);
-    if (!sessionKey) throw new Error(`No session for peer: ${peerId}`);
+    if (!sessionKey) {
+      throw new CryptoError(`No session for peer: ${peerId}`, ErrorCodes.CRYPTO_NO_SESSION);
+    }
 
     // Increment and get sequence number for replay protection
     const seq = (this.sendBytesCounters.get(peerId) || 0) + 1;
@@ -252,7 +359,7 @@ export class CryptoService {
     combined.set(seqBytes);
     combined.set(data, 4);
 
-    const nonce = crypto.getRandomValues(new Uint8Array(NONCE_SIZE));
+    const nonce = crypto.getRandomValues(new Uint8Array(CRYPTO.NONCE_SIZE));
     const cipher = chacha20poly1305(sessionKey, nonce);
     const ciphertext = cipher.encrypt(combined);
 
@@ -265,43 +372,22 @@ export class CryptoService {
 
   decryptBytes(peerId: string, data: Uint8Array): Uint8Array {
     const sessionKey = this.sessionKeys.get(peerId);
-    if (!sessionKey) throw new Error(`No session for peer: ${peerId}`);
+    if (!sessionKey) {
+      throw new CryptoError(`No session for peer: ${peerId}`, ErrorCodes.CRYPTO_NO_SESSION);
+    }
 
-    const nonce = data.slice(0, NONCE_SIZE);
-    const ciphertext = data.slice(NONCE_SIZE);
+    const nonce = data.slice(0, CRYPTO.NONCE_SIZE);
+    const ciphertext = data.slice(CRYPTO.NONCE_SIZE);
 
     const cipher = chacha20poly1305(sessionKey, nonce);
     const combined = cipher.decrypt(ciphertext);
 
     // Extract and verify sequence number for replay protection
     const seq = new DataView(combined.buffer, combined.byteOffset, 4).getUint32(0, false);
-    const lastSeq = this.receiveBytesCounters.get(peerId) || 0;
 
-    // Get or create the seen sequences set for this peer
-    let seen = this.seenBytesSequences.get(peerId);
-    if (!seen) {
-      seen = new Set<number>();
-      this.seenBytesSequences.set(peerId, seen);
-    }
-
-    // Check for replay attacks using sliding window
-    if (seq > lastSeq) {
-      // New highest sequence - advance the window
-      const newWindowStart = seq - SEQUENCE_WINDOW;
-      for (const oldSeq of seen) {
-        if (oldSeq <= newWindowStart) {
-          seen.delete(oldSeq);
-        }
-      }
-      this.receiveBytesCounters.set(peerId, seq);
-      seen.add(seq);
-    } else if (seq <= lastSeq - SEQUENCE_WINDOW) {
-      throw new Error('Replay attack detected: sequence too old');
-    } else {
-      if (seen.has(seq)) {
-        throw new Error('Replay attack detected: duplicate sequence number');
-      }
-      seen.add(seq);
+    // Check for replay attacks using bitmap sliding window (O(1) memory)
+    if (!this.checkAndUpdateReplayWindow(this.replayWindowsBytes, peerId, seq)) {
+      throw new CryptoError('Replay attack detected', ErrorCodes.CRYPTO_REPLAY_DETECTED);
     }
 
     // Return data without the 4-byte sequence number
