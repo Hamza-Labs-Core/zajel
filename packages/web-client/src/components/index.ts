@@ -6,3 +6,4 @@ export { ChatView } from './ChatView';
 export { FileTransfer } from './FileTransfer';
 export { StatusIndicator } from './StatusIndicator';
 export { KeyChangeWarning } from './KeyChangeWarning';
+export { FingerprintDisplay } from './FingerprintDisplay';
