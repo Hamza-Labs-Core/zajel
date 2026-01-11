@@ -23,6 +23,7 @@ if (!SIGNALING_URL) {
 const CHUNK_SIZE = 16 * 1024; // 16KB chunks
 const MAX_MESSAGES = 1000; // Maximum number of messages to keep in memory
 const MAX_TRANSFERS = 100; // Maximum number of file transfers to keep in memory
+const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB limit for incoming files
 
 export function App() {
   const [state, setState] = useState<ConnectionState>('disconnected');
@@ -78,12 +79,14 @@ export function App() {
           // Start WebRTC
           await webrtcRef.current?.connect(peerCode, isInitiator);
         },
-        onPairRejected: (code) => {
-          setError(`${code} rejected the connection`);
+        onPairRejected: (_peerCode) => {
+          // Use generic message to prevent information leakage about valid codes
+          setError('Connection request declined');
           setState('registered');
         },
-        onPairTimeout: (code) => {
-          setError(`Connection to ${code} timed out`);
+        onPairTimeout: (_peerCode) => {
+          // Use generic message to prevent information leakage about valid codes
+          setError('Connection request timed out');
           setState('registered');
         },
         onPairError: (err) => {
@@ -145,6 +148,12 @@ export function App() {
           }
         },
         onFileStart: (fileId, fileName, totalSize, totalChunks) => {
+          // Reject files larger than the limit to prevent memory exhaustion
+          if (totalSize > MAX_FILE_SIZE) {
+            console.warn(`Rejected file transfer: ${fileName} (${totalSize} bytes exceeds ${MAX_FILE_SIZE} limit)`);
+            webrtcRef.current?.sendFileError(fileId, 'File too large');
+            return;
+          }
           setTransfers((prev) => {
             const updated = [
               ...prev,

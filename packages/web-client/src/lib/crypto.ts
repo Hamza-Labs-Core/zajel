@@ -29,6 +29,10 @@ export class CryptoService {
   private receiveCounters = new Map<string, number>();
   // Track seen sequences within the window using a Set per peer
   private seenSequences = new Map<string, Set<number>>();
+  // Separate counters for binary data (file chunks) to avoid interference with text messages
+  private sendBytesCounters = new Map<string, number>();
+  private receiveBytesCounters = new Map<string, number>();
+  private seenBytesSequences = new Map<string, Set<number>>();
 
   async initialize(): Promise<void> {
     // Generate ephemeral key pair - keys live only in memory
@@ -143,6 +147,9 @@ export class CryptoService {
     this.sendCounters.delete(peerId);
     this.receiveCounters.delete(peerId);
     this.seenSequences.delete(peerId);
+    this.sendBytesCounters.delete(peerId);
+    this.receiveBytesCounters.delete(peerId);
+    this.seenBytesSequences.delete(peerId);
   }
 
   encrypt(peerId: string, plaintext: string): string {
@@ -233,9 +240,21 @@ export class CryptoService {
     const sessionKey = this.sessionKeys.get(peerId);
     if (!sessionKey) throw new Error(`No session for peer: ${peerId}`);
 
+    // Increment and get sequence number for replay protection
+    const seq = (this.sendBytesCounters.get(peerId) || 0) + 1;
+    this.sendBytesCounters.set(peerId, seq);
+
+    // Prepend 4-byte sequence number to data (big-endian)
+    const seqBytes = new Uint8Array(4);
+    new DataView(seqBytes.buffer).setUint32(0, seq, false);
+
+    const combined = new Uint8Array(4 + data.length);
+    combined.set(seqBytes);
+    combined.set(data, 4);
+
     const nonce = crypto.getRandomValues(new Uint8Array(NONCE_SIZE));
     const cipher = chacha20poly1305(sessionKey, nonce);
-    const ciphertext = cipher.encrypt(data);
+    const ciphertext = cipher.encrypt(combined);
 
     const result = new Uint8Array(nonce.length + ciphertext.length);
     result.set(nonce);
@@ -252,7 +271,41 @@ export class CryptoService {
     const ciphertext = data.slice(NONCE_SIZE);
 
     const cipher = chacha20poly1305(sessionKey, nonce);
-    return cipher.decrypt(ciphertext);
+    const combined = cipher.decrypt(ciphertext);
+
+    // Extract and verify sequence number for replay protection
+    const seq = new DataView(combined.buffer, combined.byteOffset, 4).getUint32(0, false);
+    const lastSeq = this.receiveBytesCounters.get(peerId) || 0;
+
+    // Get or create the seen sequences set for this peer
+    let seen = this.seenBytesSequences.get(peerId);
+    if (!seen) {
+      seen = new Set<number>();
+      this.seenBytesSequences.set(peerId, seen);
+    }
+
+    // Check for replay attacks using sliding window
+    if (seq > lastSeq) {
+      // New highest sequence - advance the window
+      const newWindowStart = seq - SEQUENCE_WINDOW;
+      for (const oldSeq of seen) {
+        if (oldSeq <= newWindowStart) {
+          seen.delete(oldSeq);
+        }
+      }
+      this.receiveBytesCounters.set(peerId, seq);
+      seen.add(seq);
+    } else if (seq <= lastSeq - SEQUENCE_WINDOW) {
+      throw new Error('Replay attack detected: sequence too old');
+    } else {
+      if (seen.has(seq)) {
+        throw new Error('Replay attack detected: duplicate sequence number');
+      }
+      seen.add(seq);
+    }
+
+    // Return data without the 4-byte sequence number
+    return combined.slice(4);
   }
 }
 

@@ -93,6 +93,9 @@ export class SignalingClient {
           : event.data.byteLength || 0;
         if (messageSize > MAX_MESSAGE_SIZE) {
           console.error('Rejected WebSocket message: exceeds 1MB size limit');
+          // Close connection to prevent potential attacks
+          this.disconnect();
+          this.events.onError('Connection closed: message too large');
           return;
         }
 
