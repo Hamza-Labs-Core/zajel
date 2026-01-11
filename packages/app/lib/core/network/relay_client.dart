@@ -460,15 +460,17 @@ class RelayClient {
   }
 
   /// Dispose resources.
-  void dispose() {
+  Future<void> dispose() async {
     _loadReportTimer?.cancel();
-    _introductionController.close();
-    _introductionErrorController.close();
-    _stateController.close();
-    _loadChangeController.close();
+    _loadReportTimer = null;
+
+    await _introductionController.close();
+    await _introductionErrorController.close();
+    await _stateController.close();
+    await _loadChangeController.close();
 
     for (final relayId in _relayConnections.keys.toList()) {
-      _webrtcService.closeConnection(relayId);
+      await _webrtcService.closeConnection(relayId);
     }
     _relayConnections.clear();
     _sourceIdToPeerId.clear();

@@ -3,7 +3,9 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:crypto/crypto.dart' as crypto;
 
+import '../constants.dart';
 /// Cryptographic service implementing X25519 key exchange and ChaCha20-Poly1305 encryption.
 ///
 /// This implements a simplified Double Ratchet-like protocol for forward secrecy:
@@ -27,7 +29,7 @@ class CryptoService {
 
   CryptoService({FlutterSecureStorage? secureStorage})
       : _secureStorage = secureStorage ?? const FlutterSecureStorage() {
-    _hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
+    _hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: CryptoConstants.hkdfOutputLength);
   }
 
   /// Initialize the crypto service and generate/load identity keys.
@@ -56,6 +58,67 @@ class CryptoService {
   /// Get a stored peer's public key.
   String? getPeerPublicKey(String peerId) {
     return _peerPublicKeys[peerId];
+  }
+
+  /// Returns a SHA-256 fingerprint of our public key for out-of-band verification.
+  ///
+  /// Users can compare fingerprints through a trusted channel (in person, phone call, etc.)
+  /// to verify they're communicating with the intended party and not a MITM attacker.
+  ///
+  /// Uses the full 256-bit hash for collision resistance (birthday bound at 2^128).
+  ///
+  /// Returns a human-readable fingerprint string (uppercase hex, space-separated 4-char groups).
+  Future<String> getPublicKeyFingerprint() async {
+    final publicKeyBytes = await getPublicKeyBytes();
+    final hash = crypto.sha256.convert(publicKeyBytes);
+    return _formatFingerprint(hash.toString());
+  }
+
+  /// Returns a SHA-256 fingerprint of a peer's public key for out-of-band verification.
+  ///
+  /// Compare this with what the peer reports to detect MITM attacks.
+  ///
+  /// [peerPublicKeyBase64] - The peer's public key in base64 format
+  /// Returns a human-readable fingerprint string (uppercase hex, space-separated 4-char groups).
+  /// Throws [CryptoException] if the public key is invalid.
+  String getPeerPublicKeyFingerprint(String peerPublicKeyBase64) {
+    final Uint8List peerPublicKey;
+    try {
+      peerPublicKey = Uint8List.fromList(base64Decode(peerPublicKeyBase64));
+    } catch (e) {
+      throw CryptoException('Invalid peer public key: malformed base64');
+    }
+
+    if (peerPublicKey.length != CryptoConstants.x25519KeySize) {
+      throw CryptoException(
+          'Invalid peer public key: expected 32 bytes, got ${peerPublicKey.length}');
+    }
+
+    final hash = crypto.sha256.convert(peerPublicKey);
+    return _formatFingerprint(hash.toString());
+  }
+
+  /// Get the fingerprint for a peer by their ID.
+  ///
+  /// Returns null if no public key is stored for the peer.
+  String? getPeerFingerprintById(String peerId) {
+    final publicKey = _peerPublicKeys[peerId];
+    if (publicKey == null) return null;
+    return getPeerPublicKeyFingerprint(publicKey);
+  }
+
+  /// Formats a hex string as a human-readable fingerprint.
+  ///
+  /// Groups hex characters into 4-character chunks separated by spaces.
+  /// Example: "abcd1234ef567890..." -> "ABCD 1234 EF56 7890 ..."
+  String _formatFingerprint(String hex) {
+    final buffer = StringBuffer();
+    for (var i = 0; i < hex.length; i += 4) {
+      if (i > 0) buffer.write(' ');
+      final end = (i + 4).clamp(0, hex.length);
+      buffer.write(hex.substring(i, end).toUpperCase());
+    }
+    return buffer.toString();
   }
 
   /// Get our public key as a base64 string for sharing with peers (async version).
@@ -190,8 +253,8 @@ class CryptoService {
     }
 
     final combined = base64Decode(ciphertextBase64);
-    const nonceLength = 12; // ChaCha20 nonce length
-    const macLength = 16; // Poly1305 MAC length
+    const nonceLength = CryptoConstants.nonceSize;
+    const macLength = CryptoConstants.macSize;
 
     if (combined.length < nonceLength + macLength) {
       throw CryptoException('Invalid ciphertext: too short');
@@ -264,7 +327,9 @@ class CryptoService {
         return;
       }
     } catch (_) {
-      // Key loading failed, generate new ones
+      // Intentionally silent: Storage read failures (corrupted data, storage API errors,
+      // or invalid base64) are handled by generating new keys. This is expected behavior
+      // on first run or after storage is cleared.
     }
 
     // Generate new identity keys
@@ -307,7 +372,8 @@ class CryptoService {
         return sessionKey;
       }
     } catch (_) {
-      // Failed to load session key
+      // Intentionally silent: Session key loading failure is handled by returning null.
+      // Caller will establish a new session with fresh key exchange if no key is found.
     }
 
     return null;

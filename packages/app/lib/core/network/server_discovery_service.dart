@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 /// Represents a discovered VPS server from the bootstrap service.
@@ -117,7 +118,10 @@ class ServerDiscoveryService {
 
       return _cachedServers;
     } catch (e) {
-      // Return cached servers on error (may be empty)
+      // Graceful degradation: Return cached servers on discovery error.
+      // Network errors, timeouts, or server unavailability shouldn't block the app.
+      // Cached servers may be stale but still usable for connection attempts.
+      debugPrint('[ServerDiscovery] Discovery failed, using cache: $e');
       return _cachedServers;
     }
   }

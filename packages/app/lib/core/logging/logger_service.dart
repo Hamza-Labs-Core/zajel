@@ -179,7 +179,9 @@ class LoggerService {
         await _cleanupOldLogs();
       }
     } catch (e) {
-      // Ignore errors during rotation check
+      // Intentionally ignored: Log rotation errors should not crash the app.
+      // Logging will continue to current file; rotation retried on next check.
+      debugPrint('Log rotation check failed: $e');
     }
   }
 

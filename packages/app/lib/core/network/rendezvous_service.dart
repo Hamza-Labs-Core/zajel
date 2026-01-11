@@ -235,9 +235,9 @@ class RendezvousService {
   }
 
   /// Dispose resources and close streams.
-  void dispose() {
-    _peerFoundController.close();
-    _deadDropController.close();
+  Future<void> dispose() async {
+    await _peerFoundController.close();
+    await _deadDropController.close();
   }
 }
 

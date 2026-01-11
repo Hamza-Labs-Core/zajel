@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
@@ -386,41 +387,55 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     showModalBottomSheet(
       context: context,
-      builder: (context) => Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Peer Information',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 16),
-            _InfoRow(label: 'Name', value: peer.displayName),
-            _InfoRow(label: 'ID', value: peer.id),
-            if (peer.ipAddress != null)
-              _InfoRow(label: 'IP', value: peer.ipAddress!),
-            _InfoRow(
-              label: 'Connection',
-              value: 'End-to-end encrypted',
-            ),
-            _InfoRow(
-              label: 'Last Seen',
-              value: _formatDateTime(peer.lastSeen),
-            ),
-            const SizedBox(height: 16),
-            Row(
+      isScrollControlled: true,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        minChildSize: 0.4,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (context, scrollController) => SingleChildScrollView(
+          controller: scrollController,
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.lock, size: 16, color: Colors.green.shade700),
-                const SizedBox(width: 8),
                 Text(
-                  'End-to-end encrypted',
-                  style: TextStyle(color: Colors.green.shade700),
+                  'Peer Information',
+                  style: Theme.of(context).textTheme.titleLarge,
                 ),
+                const SizedBox(height: 16),
+                _InfoRow(label: 'Name', value: peer.displayName),
+                _InfoRow(label: 'ID', value: peer.id),
+                if (peer.ipAddress != null)
+                  _InfoRow(label: 'IP', value: peer.ipAddress!),
+                _InfoRow(
+                  label: 'Connection',
+                  value: 'End-to-end encrypted',
+                ),
+                _InfoRow(
+                  label: 'Last Seen',
+                  value: _formatDateTime(peer.lastSeen),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Icon(Icons.lock, size: 16, color: Colors.green.shade700),
+                    const SizedBox(width: 8),
+                    Text(
+                      'End-to-end encrypted',
+                      style: TextStyle(color: Colors.green.shade700),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                const Divider(),
+                const SizedBox(height: 16),
+                _FingerprintVerificationSection(peerId: peer.id),
               ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -617,6 +632,321 @@ class _InfoRow extends StatelessWidget {
             child: Text(
               value,
               style: const TextStyle(fontWeight: FontWeight.w500),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Widget for displaying fingerprint verification information.
+///
+/// This helps users verify they're communicating with the intended peer
+/// and not a man-in-the-middle attacker. Users should compare fingerprints
+/// through a trusted channel (phone call, in person).
+class _FingerprintVerificationSection extends ConsumerStatefulWidget {
+  final String peerId;
+
+  const _FingerprintVerificationSection({required this.peerId});
+
+  @override
+  ConsumerState<_FingerprintVerificationSection> createState() =>
+      _FingerprintVerificationSectionState();
+}
+
+class _FingerprintVerificationSectionState
+    extends ConsumerState<_FingerprintVerificationSection> {
+  String? _myFingerprint;
+  String? _peerFingerprint;
+  bool _isLoading = true;
+  bool _isExpanded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFingerprints();
+  }
+
+  Future<void> _loadFingerprints() async {
+    try {
+      final cryptoService = ref.read(cryptoServiceProvider);
+      final myFingerprint = await cryptoService.getPublicKeyFingerprint();
+      final peerFingerprint = cryptoService.getPeerFingerprintById(widget.peerId);
+
+      if (mounted) {
+        setState(() {
+          _myFingerprint = myFingerprint;
+          _peerFingerprint = peerFingerprint;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _copyToClipboard(String text, String label) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$label copied to clipboard'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Header with security shield icon
+        InkWell(
+          onTap: () => setState(() => _isExpanded = !_isExpanded),
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.shield,
+                  color: Colors.green.shade700,
+                  size: 24,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Verify Connection Security',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                      ),
+                      Text(
+                        'Tap to compare fingerprints',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Colors.grey.shade600,
+                            ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(
+                  _isExpanded ? Icons.expand_less : Icons.expand_more,
+                  color: Colors.grey.shade600,
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // Expandable fingerprint section
+        if (_isExpanded) ...[
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey.shade300),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Instructions
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline,
+                          color: Colors.blue.shade700, size: 20),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Compare these fingerprints with your peer through a trusted channel (phone call, video chat, or in person).',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.blue.shade800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // My fingerprint
+                if (_myFingerprint != null) ...[
+                  _FingerprintCard(
+                    label: 'Your Fingerprint',
+                    fingerprint: _myFingerprint!,
+                    onCopy: () =>
+                        _copyToClipboard(_myFingerprint!, 'Your fingerprint'),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+
+                // Peer fingerprint
+                if (_peerFingerprint != null) ...[
+                  _FingerprintCard(
+                    label: 'Peer Fingerprint',
+                    fingerprint: _peerFingerprint!,
+                    onCopy: () =>
+                        _copyToClipboard(_peerFingerprint!, 'Peer fingerprint'),
+                  ),
+                ] else ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.orange.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.warning_amber_rounded,
+                            color: Colors.orange.shade700, size: 20),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'Peer fingerprint not available. The peer may need to reconnect.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.orange.shade800,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+
+                const SizedBox(height: 16),
+
+                // Success indicator
+                if (_myFingerprint != null && _peerFingerprint != null)
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.green.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.green.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.check_circle,
+                            color: Colors.green.shade700, size: 20),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'If fingerprints match, your connection is secure from interception.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.green.shade800,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Card widget for displaying a fingerprint with copy functionality.
+class _FingerprintCard extends StatelessWidget {
+  final String label;
+  final String fingerprint;
+  final VoidCallback onCopy;
+
+  const _FingerprintCard({
+    required this.label,
+    required this.fingerprint,
+    required this.onCopy,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey.shade700,
+                ),
+              ),
+              InkWell(
+                onTap: onCopy,
+                borderRadius: BorderRadius.circular(4),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.copy, size: 14, color: Colors.grey.shade600),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Copy',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            fingerprint,
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 11,
+              letterSpacing: 0.5,
+              height: 1.5,
             ),
           ),
         ],

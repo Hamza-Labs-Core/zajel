@@ -396,7 +396,9 @@ class _PeerCard extends ConsumerWidget {
     try {
       await connectionManager.cancelConnection(peer.id);
     } catch (e) {
-      // Handle error
+      // Intentionally silenced: Cancel is a best-effort operation.
+      // UI state is already updated regardless of cancel success.
+      // Errors are logged in ConnectionManager for debugging.
     }
   }
 }

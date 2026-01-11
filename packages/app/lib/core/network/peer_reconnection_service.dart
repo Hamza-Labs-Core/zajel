@@ -8,6 +8,7 @@ import 'connection_info.dart';
 import 'meeting_point_service.dart';
 import 'relay_client.dart';
 import 'signaling_client.dart';
+import 'subscription_manager.dart';
 
 /// Orchestrates peer reconnection using the relay and rendezvous system.
 ///
@@ -21,7 +22,7 @@ import 'signaling_client.dart';
 /// 2. When a peer is found (live or dead drop), attempt WebRTC connection
 /// 3. If peer not found at meeting points, try through known relays
 /// 4. After successful connection, save peer as trusted
-class PeerReconnectionService {
+class PeerReconnectionService with SubscriptionManager {
   final CryptoService _cryptoService;
   final TrustedPeersStorage _trustedPeers;
   final MeetingPointService _meetingPointService;
@@ -64,14 +65,15 @@ class PeerReconnectionService {
 
   void _setupRelayListeners() {
     // Listen for introductions from other peers through relays
-    _relayClient.onIntroduction.listen((event) {
+    // Use track() to ensure the subscription is cancelled on dispose
+    track(_relayClient.onIntroduction.listen((event) {
       _connectionRequestController.add(ConnectionRequestEvent(
         peerId: event.fromSourceId,
         relayId: event.relayId,
         encryptedPayload: event.payload,
         timestamp: DateTime.now(),
       ));
-    });
+    }));
   }
 
   /// Connect to the signaling server and start peer discovery.
@@ -368,6 +370,7 @@ class PeerReconnectionService {
   /// Dispose resources.
   Future<void> dispose() async {
     await disconnect();
+    await cancelAllSubscriptions();
     await _peerFoundController.close();
     await _connectionRequestController.close();
     await _statusController.close();
