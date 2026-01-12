@@ -17,3 +17,5 @@ package-lock.json
 .vscode/
 *.swp
 *.swo
+packages/web-client/playwright-report/
+packages/web-client/test-results/
