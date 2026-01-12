@@ -13,11 +13,19 @@ export default defineConfig({
   /* Fail the build on CI if you accidentally left test.only in the source code */
   forbidOnly: !!process.env.CI,
 
-  /* Retry on CI only */
-  retries: process.env.CI ? 2 : 0,
+  /* Retry on CI only - reduced for faster CI */
+  retries: process.env.CI ? 1 : 0,
 
   /* Use single worker on CI for stability */
   workers: process.env.CI ? 1 : undefined,
+
+  /* Global timeout for each test - prevents runaway tests */
+  timeout: 30000,
+
+  /* Expect timeout - faster assertions */
+  expect: {
+    timeout: 5000,
+  },
 
   /* Reporter configuration */
   reporter: [

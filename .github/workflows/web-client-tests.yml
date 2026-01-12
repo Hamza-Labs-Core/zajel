@@ -70,6 +70,7 @@ jobs:
     name: E2E Chromium (Shard ${{ matrix.shard }}/${{ matrix.total-shards }})
     runs-on: ubuntu-latest
     needs: build
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -118,6 +119,7 @@ jobs:
     name: E2E Firefox
     runs-on: ubuntu-latest
     needs: build
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -161,6 +163,7 @@ jobs:
     name: E2E WebKit
     runs-on: ubuntu-latest
     needs: build
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
