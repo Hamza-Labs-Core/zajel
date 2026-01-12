@@ -34,7 +34,9 @@ export function App() {
     publicKey: string;
   } | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [transfers, setTransfers] = useState<FileTransfer[]>([]);
+  const [transfers, setTransfers] = useState<Map<string, FileTransfer>>(new Map());
+  // Ref for immediate transfer state storage to avoid race conditions with async state updates
+  const transfersMapRef = useRef<Map<string, FileTransfer>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [myFingerprint, setMyFingerprint] = useState('');
   const [peerFingerprint, setPeerFingerprint] = useState('');
@@ -209,127 +211,151 @@ export function App() {
           }
           // Sanitize filename to remove path separators and control characters
           const sanitizedFileName = sanitizeFilename(fileName);
-          setTransfers((prev) => {
-            const updated = [
-              ...prev,
-              {
-                id: fileId,
-                fileName: sanitizedFileName,
-                totalSize,
-                totalChunks,
-                receivedChunks: 0,
-                status: 'receiving' as const,
-                data: [],
-              },
-            ];
-            // Remove oldest completed transfers if limit exceeded
-            if (updated.length > FILE_TRANSFER.MAX_TRANSFERS) {
-              const activeTransfers = updated.filter(t => t.status !== 'complete');
-              const completedTransfers = updated.filter(t => t.status === 'complete');
-              const toKeep = FILE_TRANSFER.MAX_TRANSFERS - activeTransfers.length;
-              return [...completedTransfers.slice(-Math.max(0, toKeep)), ...activeTransfers];
+
+          // Create new transfer and store in ref immediately (synchronous)
+          const newTransfer: FileTransfer = {
+            id: fileId,
+            fileName: sanitizedFileName,
+            totalSize,
+            totalChunks,
+            receivedChunks: 0,
+            status: 'receiving' as const,
+            data: [],
+            lastActivityTime: Date.now(),
+          };
+          transfersMapRef.current.set(fileId, newTransfer);
+
+          // Remove oldest completed transfers if limit exceeded
+          if (transfersMapRef.current.size > FILE_TRANSFER.MAX_TRANSFERS) {
+            const entries = Array.from(transfersMapRef.current.entries());
+            const completedIds = entries
+              .filter(([, t]) => t.status === 'complete')
+              .map(([id]) => id);
+            // Remove oldest completed transfers first
+            for (const id of completedIds) {
+              if (transfersMapRef.current.size <= FILE_TRANSFER.MAX_TRANSFERS) break;
+              transfersMapRef.current.delete(id);
             }
-            return updated;
-          });
+          }
+
+          // Sync to React state
+          setTransfers(new Map(transfersMapRef.current));
         },
         onFileChunk: (fileId, chunkIndex, encryptedData) => {
           const currentPeerCode = peerCodeRef.current;
           if (!currentPeerCode) return;
-          setTransfers((prev) =>
-            prev.map((t) => {
-              if (t.id !== fileId) return t;
-              // Skip if already failed
-              if (t.status === 'failed') return t;
 
-              const data = t.data || [];
-              // Decrypt chunk
-              try {
-                const decrypted = cryptoService.decrypt(currentPeerCode, encryptedData);
-                const bytes = Uint8Array.from(atob(decrypted), (c) => c.charCodeAt(0));
-                data[chunkIndex] = bytes;
-                return {
-                  ...t,
-                  receivedChunks: t.receivedChunks + 1,
-                  data,
-                };
-              } catch (e) {
-                // Use centralized error handling
-                const err = handleError(e, 'file.chunk.decrypt', ErrorCodes.CRYPTO_DECRYPTION_FAILED);
-                const userMessage = isCryptoError(e)
-                  ? err.userMessage
-                  : `Failed to decrypt chunk ${chunkIndex + 1}`;
+          // Read from ref immediately (synchronous) to avoid race conditions
+          const transfer = transfersMapRef.current.get(fileId);
+          if (!transfer) {
+            console.warn(`Received chunk for unknown transfer: ${fileId}`);
+            return;
+          }
 
-                // Mark transfer as failed and notify peer
-                webrtcRef.current?.sendFileError(fileId, userMessage);
-                return {
-                  ...t,
-                  status: 'failed',
-                  error: userMessage,
-                };
-              }
-            })
-          );
+          // Skip if already failed
+          if (transfer.status === 'failed') return;
+
+          const data = transfer.data || [];
+          // Decrypt chunk
+          try {
+            const decrypted = cryptoService.decrypt(currentPeerCode, encryptedData);
+            const bytes = Uint8Array.from(atob(decrypted), (c) => c.charCodeAt(0));
+            data[chunkIndex] = bytes;
+
+            // Update ref immediately (synchronous)
+            const updatedTransfer: FileTransfer = {
+              ...transfer,
+              receivedChunks: transfer.receivedChunks + 1,
+              data,
+              lastActivityTime: Date.now(),
+            };
+            transfersMapRef.current.set(fileId, updatedTransfer);
+
+            // Sync to React state
+            setTransfers(new Map(transfersMapRef.current));
+          } catch (e) {
+            // Use centralized error handling
+            const err = handleError(e, 'file.chunk.decrypt', ErrorCodes.CRYPTO_DECRYPTION_FAILED);
+            const userMessage = isCryptoError(e)
+              ? err.userMessage
+              : `Failed to decrypt chunk ${chunkIndex + 1}`;
+
+            // Mark transfer as failed in ref immediately
+            const failedTransfer: FileTransfer = {
+              ...transfer,
+              status: 'failed',
+              error: userMessage,
+            };
+            transfersMapRef.current.set(fileId, failedTransfer);
+
+            // Notify peer
+            webrtcRef.current?.sendFileError(fileId, userMessage);
+
+            // Sync to React state
+            setTransfers(new Map(transfersMapRef.current));
+          }
         },
         onFileComplete: (fileId) => {
-          setTransfers((prev) =>
-            prev.map((t) => {
-              if (t.id !== fileId) return t;
-              // Skip if already failed
-              if (t.status === 'failed') return t;
+          const transfer = transfersMapRef.current.get(fileId);
+          if (!transfer) return;
+          // Skip if already failed
+          if (transfer.status === 'failed') return;
 
-              // Check if any chunks are missing
-              if (t.data) {
-                const missingChunks: number[] = [];
-                for (let i = 0; i < t.totalChunks; i++) {
-                  if (!t.data[i]) {
-                    missingChunks.push(i + 1);
-                  }
-                }
-                if (missingChunks.length > 0) {
-                  const missingStr = missingChunks.length > 3
-                    ? `${missingChunks.slice(0, 3).join(', ')}... (${missingChunks.length} total)`
-                    : missingChunks.join(', ');
-                  return {
-                    ...t,
-                    status: 'failed',
-                    error: `Missing chunks: ${missingStr}`,
-                  };
-                }
-
-                // All chunks present, combine and download
-                const blob = new Blob(t.data as BlobPart[]);
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = t.fileName;
-                a.click();
-                URL.revokeObjectURL(url);
-              } else {
-                // No data received at all
-                return {
-                  ...t,
-                  status: 'failed',
-                  error: 'No data received',
-                };
+          // Check if any chunks are missing
+          if (transfer.data) {
+            const missingChunks: number[] = [];
+            for (let i = 0; i < transfer.totalChunks; i++) {
+              if (!transfer.data[i]) {
+                missingChunks.push(i + 1);
               }
+            }
+            if (missingChunks.length > 0) {
+              const missingStr = missingChunks.length > 3
+                ? `${missingChunks.slice(0, 3).join(', ')}... (${missingChunks.length} total)`
+                : missingChunks.join(', ');
+              transfersMapRef.current.set(fileId, {
+                ...transfer,
+                status: 'failed',
+                error: `Missing chunks: ${missingStr}`,
+              });
+              setTransfers(new Map(transfersMapRef.current));
+              return;
+            }
 
-              return { ...t, status: 'complete' };
-            })
-          );
+            // All chunks present, combine and download
+            const blob = new Blob(transfer.data as BlobPart[]);
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = transfer.fileName;
+            a.click();
+            URL.revokeObjectURL(url);
+          } else {
+            // No data received at all
+            transfersMapRef.current.set(fileId, {
+              ...transfer,
+              status: 'failed',
+              error: 'No data received',
+            });
+            setTransfers(new Map(transfersMapRef.current));
+            return;
+          }
+
+          transfersMapRef.current.set(fileId, { ...transfer, status: 'complete' });
+          setTransfers(new Map(transfersMapRef.current));
         },
         onFileError: (fileId, error) => {
           // Sanitize error message from peer to prevent XSS
           const sanitizedError = sanitizeErrorMessage(error);
-          setTransfers((prev) =>
-            prev.map((t) => {
-              if (t.id !== fileId) return t;
-              return {
-                ...t,
-                status: 'failed',
-                error: `Peer error: ${sanitizedError}`,
-              };
-            })
-          );
+          const transfer = transfersMapRef.current.get(fileId);
+          if (transfer) {
+            transfersMapRef.current.set(fileId, {
+              ...transfer,
+              status: 'failed',
+              error: `Peer error: ${sanitizedError}`,
+            });
+            setTransfers(new Map(transfersMapRef.current));
+          }
         },
       });
 
@@ -407,28 +433,32 @@ export function App() {
       const fileId = crypto.randomUUID();
       const totalChunks = Math.ceil(file.size / FILE_TRANSFER.CHUNK_SIZE);
 
-      // Add to transfers
-      setTransfers((prev) => {
-        const updated = [
-          ...prev,
-          {
-            id: fileId,
-            fileName: file.name,
-            totalSize: file.size,
-            totalChunks,
-            receivedChunks: 0,
-            status: 'sending' as const,
-          },
-        ];
-        // Remove oldest completed transfers if limit exceeded
-        if (updated.length > FILE_TRANSFER.MAX_TRANSFERS) {
-          const activeTransfers = updated.filter(t => t.status !== 'complete');
-          const completedTransfers = updated.filter(t => t.status === 'complete');
-          const toKeep = FILE_TRANSFER.MAX_TRANSFERS - activeTransfers.length;
-          return [...completedTransfers.slice(-Math.max(0, toKeep)), ...activeTransfers];
+      // Add to transfers using Map ref for consistency
+      const newTransfer: FileTransfer = {
+        id: fileId,
+        fileName: file.name,
+        totalSize: file.size,
+        totalChunks,
+        receivedChunks: 0,
+        status: 'sending' as const,
+        lastActivityTime: Date.now(),
+      };
+      transfersMapRef.current.set(fileId, newTransfer);
+
+      // Remove oldest completed transfers if limit exceeded
+      if (transfersMapRef.current.size > FILE_TRANSFER.MAX_TRANSFERS) {
+        const entries = Array.from(transfersMapRef.current.entries());
+        const completedIds = entries
+          .filter(([, t]) => t.status === 'complete')
+          .map(([id]) => id);
+        for (const id of completedIds) {
+          if (transfersMapRef.current.size <= FILE_TRANSFER.MAX_TRANSFERS) break;
+          transfersMapRef.current.delete(id);
         }
-        return updated;
-      });
+      }
+
+      // Sync to React state
+      setTransfers(new Map(transfersMapRef.current));
 
       // Send file start
       webrtcRef.current.sendFileStart(fileId, file.name, file.size, totalChunks);
@@ -451,29 +481,40 @@ export function App() {
 
         if (!sent) {
           // Channel closed or error occurred
-          setTransfers((prev) =>
-            prev.map((t) =>
-              t.id === fileId
-                ? { ...t, status: 'failed' as const, error: 'Connection lost during transfer' }
-                : t
-            )
-          );
+          const failedTransfer = transfersMapRef.current.get(fileId);
+          if (failedTransfer) {
+            transfersMapRef.current.set(fileId, {
+              ...failedTransfer,
+              status: 'failed' as const,
+              error: 'Connection lost during transfer',
+            });
+            setTransfers(new Map(transfersMapRef.current));
+          }
           return;
         }
 
-        // Update progress
-        setTransfers((prev) =>
-          prev.map((t) =>
-            t.id === fileId ? { ...t, receivedChunks: i + 1 } : t
-          )
-        );
+        // Update progress and lastActivityTime
+        const currentTransfer = transfersMapRef.current.get(fileId);
+        if (currentTransfer) {
+          transfersMapRef.current.set(fileId, {
+            ...currentTransfer,
+            receivedChunks: i + 1,
+            lastActivityTime: Date.now(),
+          });
+          setTransfers(new Map(transfersMapRef.current));
+        }
       }
 
       // Send complete
       webrtcRef.current.sendFileComplete(fileId);
-      setTransfers((prev) =>
-        prev.map((t) => (t.id === fileId ? { ...t, status: 'complete' } : t))
-      );
+      const completedTransfer = transfersMapRef.current.get(fileId);
+      if (completedTransfer) {
+        transfersMapRef.current.set(fileId, {
+          ...completedTransfer,
+          status: 'complete' as const,
+        });
+        setTransfers(new Map(transfersMapRef.current));
+      }
     },
     [peerCode]
   );
@@ -498,7 +539,9 @@ export function App() {
     setPeerCode('');
     setPeerFingerprint('');
     setMessages([]);
-    setTransfers([]);
+    // Clear transfers using Map
+    transfersMapRef.current.clear();
+    setTransfers(new Map());
     setShowSecurityReminder(false);
     setState('registered');
   }, []);
@@ -508,8 +551,44 @@ export function App() {
   }, []);
 
   const handleDismissTransfer = useCallback((transferId: string) => {
-    setTransfers((prev) => prev.filter((t) => t.id !== transferId));
+    transfersMapRef.current.delete(transferId);
+    setTransfers(new Map(transfersMapRef.current));
   }, []);
+
+  // Handle transfer timeout - cancel the transfer and notify peer
+  const handleTransferTimeout = useCallback((fileId: string) => {
+    const transfer = transfersMapRef.current.get(fileId);
+    if (!transfer) return;
+
+    // Mark as failed due to timeout
+    transfersMapRef.current.set(fileId, {
+      ...transfer,
+      status: 'failed',
+      error: 'Transfer stalled - no activity for 30 seconds',
+    });
+    setTransfers(new Map(transfersMapRef.current));
+
+    // Notify peer about the timeout/cancellation
+    webrtcRef.current?.sendTransferCancel(fileId, 'timeout');
+  }, []);
+
+  // Stall detection interval - check for transfers with no activity for >30 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      transfersMapRef.current.forEach((transfer, fileId) => {
+        // Only check active transfers (receiving or sending)
+        if (transfer.status === 'receiving' || transfer.status === 'sending') {
+          const lastActivity = transfer.lastActivityTime || 0;
+          if (lastActivity > 0 && now - lastActivity > FILE_TRANSFER.STALL_TIMEOUT_MS) {
+            handleTransferTimeout(fileId);
+          }
+        }
+      });
+    }, FILE_TRANSFER.STALL_CHECK_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+  }, [handleTransferTimeout]);
 
   // Render based on state
   const renderContent = () => {
@@ -525,9 +604,9 @@ export function App() {
             myFingerprint={myFingerprint}
             peerFingerprint={peerFingerprint}
           />
-          {transfers.length > 0 && (
+          {transfers.size > 0 && (
             <FileTransferUI
-              transfers={transfers}
+              transfers={Array.from(transfers.values())}
               onSendFile={handleSendFile}
               onDismiss={handleDismissTransfer}
             />

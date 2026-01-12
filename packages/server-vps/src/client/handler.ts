@@ -141,6 +141,12 @@ interface RateLimitInfo {
   windowStart: number;
 }
 
+// Pair request rate limiting tracking per WebSocket connection
+interface PairRequestRateLimitInfo {
+  requestCount: number;
+  windowStart: number;
+}
+
 // Entropy metrics for pairing code monitoring (Issue #41)
 interface EntropyMetrics {
   activeCodes: number;
@@ -205,6 +211,8 @@ export class ClientHandler extends EventEmitter {
 
   // Rate limiting
   private wsRateLimits: Map<WebSocket, RateLimitInfo> = new Map();
+  // Pair request rate limiting (stricter limit for expensive operations)
+  private wsPairRequestRateLimits: Map<WebSocket, PairRequestRateLimitInfo> = new Map();
 
   // Entropy monitoring thresholds (Issue #41)
   // Based on birthday paradox analysis: collision risk increases at ~33k active codes
@@ -293,6 +301,40 @@ export class ClientHandler extends EventEmitter {
   }
 
   /**
+   * Check and update pair request rate limit for a WebSocket connection
+   * Returns true if the pair request should be allowed, false if rate limited
+   */
+  private checkPairRequestRateLimit(ws: WebSocket): boolean {
+    const now = Date.now();
+    let rateLimitInfo = this.wsPairRequestRateLimits.get(ws);
+
+    if (!rateLimitInfo) {
+      // First pair request from this connection
+      rateLimitInfo = { requestCount: 1, windowStart: now };
+      this.wsPairRequestRateLimits.set(ws, rateLimitInfo);
+      return true;
+    }
+
+    // Check if we're in a new window
+    if (now - rateLimitInfo.windowStart >= RATE_LIMIT.WINDOW_MS) {
+      // Reset the window
+      rateLimitInfo.requestCount = 1;
+      rateLimitInfo.windowStart = now;
+      return true;
+    }
+
+    // Increment request count
+    rateLimitInfo.requestCount++;
+
+    // Check if over limit
+    if (rateLimitInfo.requestCount > RATE_LIMIT.MAX_PAIR_REQUESTS) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
    * Handle incoming WebSocket message
    */
   async handleMessage(ws: WebSocket, data: string): Promise<void> {
@@ -332,6 +374,11 @@ export class ClientHandler extends EventEmitter {
           break;
 
         case 'pair_request':
+          // Apply stricter rate limit for expensive pair_request operations
+          if (!this.checkPairRequestRateLimit(ws)) {
+            this.sendError(ws, 'Too many pair requests. Please slow down.');
+            return;
+          }
           this.handlePairRequest(ws, message as PairRequestMessage);
           break;
 
@@ -1098,6 +1145,7 @@ export class ClientHandler extends EventEmitter {
   async handleDisconnect(ws: WebSocket): Promise<void> {
     // Clean up rate limiting tracking
     this.wsRateLimits.delete(ws);
+    this.wsPairRequestRateLimits.delete(ws);
 
     // Clean up pairing code mappings (for signaling clients)
     const pairingCode = this.wsToPairingCode.get(ws);
@@ -1315,6 +1363,7 @@ export class ClientHandler extends EventEmitter {
 
     // Clear rate limiting data
     this.wsRateLimits.clear();
+    this.wsPairRequestRateLimits.clear();
 
     // Close all relay clients
     for (const [peerId, client] of this.clients) {

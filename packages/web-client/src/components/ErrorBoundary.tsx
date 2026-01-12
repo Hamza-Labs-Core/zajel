@@ -1,0 +1,38 @@
+import { Component, ComponentChildren } from 'preact';
+
+interface Props {
+  children: ComponentChildren;
+  fallback?: ComponentChildren;
+}
+
+interface State {
+  hasError: boolean;
+  error: Error | null;
+}
+
+export class ErrorBoundary extends Component<Props, State> {
+  state: State = { hasError: false, error: null };
+
+  static getDerivedStateFromError(error: Error): State {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: any) {
+    console.error('ErrorBoundary caught:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback || (
+        <div class="error-boundary">
+          <h2>Something went wrong</h2>
+          <p>{this.state.error?.message}</p>
+          <button onClick={() => this.setState({ hasError: false, error: null })}>
+            Try Again
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}

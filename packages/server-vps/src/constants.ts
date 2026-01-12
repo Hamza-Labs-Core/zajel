@@ -33,6 +33,9 @@ export const RATE_LIMIT = {
 
   /** Maximum messages per window */
   MAX_MESSAGES: 100,
+
+  /** Maximum pair requests per window (stricter limit for expensive operations) */
+  MAX_PAIR_REQUESTS: 10,
 } as const;
 
 // =============================================================================

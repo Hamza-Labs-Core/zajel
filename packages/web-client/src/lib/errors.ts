@@ -17,6 +17,7 @@ export const ErrorCodes = {
   CRYPTO_ENCRYPTION_FAILED: 'CRYPTO_004',
   CRYPTO_REPLAY_DETECTED: 'CRYPTO_005',
   CRYPTO_NO_SESSION: 'CRYPTO_006',
+  CRYPTO_COUNTER_EXHAUSTED: 'CRYPTO_007',
 
   // Signaling errors (SIG_xxx)
   SIGNALING_CONNECTION_FAILED: 'SIG_001',
@@ -58,6 +59,8 @@ export const UserMessages: Record<string, string> = {
     'Security alert: Possible replay attack detected.',
   [ErrorCodes.CRYPTO_NO_SESSION]:
     'No secure session established. Please reconnect.',
+  [ErrorCodes.CRYPTO_COUNTER_EXHAUSTED]:
+    'Session counter exhausted. Please reconnect to establish a new session.',
   [ErrorCodes.SIGNALING_CONNECTION_FAILED]:
     'Cannot connect to server. Please check your internet connection.',
   [ErrorCodes.SIGNALING_MESSAGE_PARSE_ERROR]:

@@ -733,3 +733,54 @@ textarea:focus-visible {
   outline-offset: 2px;
   border-color: var(--primary);
 }
+
+/* ========================================
+   Error Boundary Styles
+   ======================================== */
+
+.error-boundary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+  padding: 40px 20px;
+  text-align: center;
+}
+
+.error-boundary h2 {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--error);
+  margin-bottom: 16px;
+}
+
+.error-boundary p {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-bottom: 24px;
+  max-width: 400px;
+  word-break: break-word;
+}
+
+.error-boundary button {
+  padding: 12px 24px;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.error-boundary button:hover {
+  background: var(--primary-dark);
+}
+
+.error-boundary button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.3);
+}

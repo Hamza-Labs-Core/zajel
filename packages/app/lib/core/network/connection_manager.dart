@@ -52,6 +52,21 @@ String _generateSecurePairingCode() {
   return buffer.toString();
 }
 
+/// Validates pairing code format.
+///
+/// A valid pairing code must:
+/// - Be exactly [_pairingCodeLength] characters long (6 characters)
+/// - Contain only characters from [_pairingCodeChars] (uppercase letters A-Z
+///   excluding O and I, plus digits 2-9)
+///
+/// This ensures consistency with the pairing code generation algorithm.
+bool _isValidPairingCode(String code) {
+  if (code.length != _pairingCodeLength) return false;
+  // Validate against the same character set used for generation
+  final validChars = RegExp('^[$_pairingCodeChars]+\$');
+  return validChars.hasMatch(code.toUpperCase());
+}
+
 /// Sealed class representing the signaling connection state.
 ///
 /// Using a sealed class ensures exhaustive pattern matching and
@@ -226,6 +241,12 @@ class ConnectionManager {
   /// Request to connect to an external peer using their pairing code.
   /// This sends a pair request that the peer must approve.
   Future<void> connectToExternalPeer(String pairingCode) async {
+    // Normalize and validate pairing code format
+    final normalizedCode = pairingCode.toUpperCase().trim();
+    if (!_isValidPairingCode(normalizedCode)) {
+      throw ConnectionException('Invalid pairing code format');
+    }
+
     // Pattern 2: Guard with early return using local variable capture
     final state = _signalingState;
     if (state is! SignalingConnected || !state.client.isConnected) {
@@ -234,18 +255,18 @@ class ConnectionManager {
 
     // Create a placeholder peer (waiting for approval)
     final peer = Peer(
-      id: pairingCode,
-      displayName: 'Peer $pairingCode',
+      id: normalizedCode,
+      displayName: 'Peer $normalizedCode',
       connectionState: PeerConnectionState.connecting,
       lastSeen: DateTime.now(),
       isLocal: false,
     );
-    _peers[pairingCode] = peer;
+    _peers[normalizedCode] = peer;
     _notifyPeersChanged();
 
     // Request pairing (peer must approve before WebRTC starts)
     // Using captured state.client - guaranteed non-null by pattern match
-    state.client.requestPairing(pairingCode);
+    state.client.requestPairing(normalizedCode);
   }
 
   /// Respond to an incoming pair request.

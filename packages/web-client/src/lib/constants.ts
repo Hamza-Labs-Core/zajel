@@ -47,6 +47,12 @@ export const FILE_TRANSFER = {
 
   /** Delay between sending file chunks to prevent overwhelming the connection (ms) */
   CHUNK_SEND_DELAY_MS: 10,
+
+  /** Time without activity before a transfer is considered stalled (ms) */
+  STALL_TIMEOUT_MS: 30000,
+
+  /** How often to check for stalled transfers (ms) */
+  STALL_CHECK_INTERVAL_MS: 5000,
 } as const;
 
 // =============================================================================

@@ -252,6 +252,12 @@ class PinnedWebSocketPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         /**
          * Calculate the SHA-256 hash of the certificate's Subject Public Key Info (SPKI)
          * and encode it as base64.
+         *
+         * This uses cert.publicKey.encoded which returns the full SPKI structure including
+         * the algorithm identifier (OID). This is the standard format used by Chrome, OkHttp,
+         * and most pinning implementations.
+         *
+         * The iOS implementation wraps raw key bytes in SPKI headers to match this format.
          */
         private fun sha256Pin(cert: X509Certificate): String {
             val publicKeyEncoded = cert.publicKey.encoded

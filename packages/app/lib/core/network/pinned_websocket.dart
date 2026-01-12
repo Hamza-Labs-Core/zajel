@@ -7,6 +7,17 @@ import '../logging/logger_service.dart';
 
 /// Certificate pins for known signaling servers.
 /// These should be updated when certificates are rotated.
+///
+/// Pin format: Base64-encoded SHA-256 hash of the certificate's Subject Public Key Info (SPKI).
+/// This is the standard format used by Chrome, OkHttp, and most pinning implementations.
+///
+/// To generate a pin from a certificate:
+/// ```bash
+/// openssl x509 -in cert.pem -pubkey -noout | \
+///   openssl pkey -pubin -outform der | \
+///   openssl dgst -sha256 -binary | \
+///   base64
+/// ```
 class CertificatePins {
   /// Cloudflare Workers (*.workers.dev) pins
   static const List<String> cloudflare = [

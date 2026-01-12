@@ -176,14 +176,23 @@ private class WebSocketConnection: NSObject {
 
         webSocketTask?.resume()
 
+        // Capture timeout value before entering async context to avoid force unwrap crash
+        let connectionTimeout = timeout
+
         // Wait for connection or timeout
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            if self?.isConnected == true {
+            guard let self = self else {
+                completion(false, "Connection deallocated")
+                return
+            }
+
+            if self.isConnected {
                 completion(true, nil)
-                self?.receiveMessage()
+                self.receiveMessage()
             } else {
-                // Give it more time
-                DispatchQueue.global().asyncAfter(deadline: .now() + self!.timeout - 0.5) { [weak self] in
+                // Give it more time using captured timeout value
+                let remainingTimeout = max(connectionTimeout - 0.5, 0.1)
+                DispatchQueue.global().asyncAfter(deadline: .now() + remainingTimeout) { [weak self] in
                     if self?.isConnected == true {
                         completion(true, nil)
                     } else {
@@ -312,7 +321,9 @@ extension WebSocketConnection: URLSessionDelegate {
         }
     }
 
-    /// Calculate SHA-256 hash of the certificate's public key
+    /// Calculate SHA-256 hash of the certificate's Subject Public Key Info (SPKI).
+    /// This matches the standard SPKI pinning format used by Android, Chrome, OkHttp, etc.
+    /// The SPKI includes the algorithm identifier (OID) header prepended to the raw public key.
     private func sha256Pin(for certificate: SecCertificate) -> String {
         guard let publicKey = SecCertificateCopyKey(certificate) else {
             return ""
@@ -323,12 +334,105 @@ extension WebSocketConnection: URLSessionDelegate {
             return ""
         }
 
+        // Get the key type and wrap the raw key in SPKI format
+        guard let spkiData = wrapInSPKI(publicKey: publicKey, rawKeyData: publicKeyData) else {
+            return ""
+        }
+
         var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-        publicKeyData.withUnsafeBytes { buffer in
-            _ = CC_SHA256(buffer.baseAddress, CC_LONG(publicKeyData.count), &hash)
+        spkiData.withUnsafeBytes { buffer in
+            _ = CC_SHA256(buffer.baseAddress, CC_LONG(spkiData.count), &hash)
         }
 
         return Data(hash).base64EncodedString()
+    }
+
+    /// Wraps raw public key data in SubjectPublicKeyInfo (SPKI) ASN.1 structure.
+    /// This makes iOS pins compatible with Android's cert.publicKey.encoded format.
+    private func wrapInSPKI(publicKey: SecKey, rawKeyData: Data) -> Data? {
+        // ASN.1 headers for different key types (algorithm identifier + bit string wrapper)
+        // These headers are the DER encoding of the AlgorithmIdentifier and BitString wrapper
+
+        // RSA SPKI header: SEQUENCE { SEQUENCE { OID rsaEncryption, NULL }, BIT STRING { ... } }
+        // OID 1.2.840.113549.1.1.1 = rsaEncryption
+        let rsa2048Header: [UInt8] = [
+            0x30, 0x82, 0x01, 0x22,  // SEQUENCE, length 290
+            0x30, 0x0d,              // SEQUENCE, length 13
+            0x06, 0x09,              // OID, length 9
+            0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01,  // rsaEncryption OID
+            0x05, 0x00,              // NULL
+            0x03, 0x82, 0x01, 0x0f,  // BIT STRING, length 271
+            0x00                     // unused bits = 0
+        ]
+
+        let rsa4096Header: [UInt8] = [
+            0x30, 0x82, 0x02, 0x22,  // SEQUENCE, length 546
+            0x30, 0x0d,              // SEQUENCE, length 13
+            0x06, 0x09,              // OID, length 9
+            0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01,  // rsaEncryption OID
+            0x05, 0x00,              // NULL
+            0x03, 0x82, 0x02, 0x0f,  // BIT STRING, length 527
+            0x00                     // unused bits = 0
+        ]
+
+        // EC P-256 SPKI header: SEQUENCE { SEQUENCE { OID ecPublicKey, OID prime256v1 }, BIT STRING { ... } }
+        // OID 1.2.840.10045.2.1 = ecPublicKey, OID 1.2.840.10045.3.1.7 = prime256v1
+        let ecP256Header: [UInt8] = [
+            0x30, 0x59,              // SEQUENCE, length 89
+            0x30, 0x13,              // SEQUENCE, length 19
+            0x06, 0x07,              // OID, length 7
+            0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,  // ecPublicKey OID
+            0x06, 0x08,              // OID, length 8
+            0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07,  // prime256v1 OID
+            0x03, 0x42,              // BIT STRING, length 66
+            0x00                     // unused bits = 0
+        ]
+
+        // EC P-384 SPKI header
+        // OID 1.3.132.0.34 = secp384r1
+        let ecP384Header: [UInt8] = [
+            0x30, 0x76,              // SEQUENCE, length 118
+            0x30, 0x10,              // SEQUENCE, length 16
+            0x06, 0x07,              // OID, length 7
+            0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,  // ecPublicKey OID
+            0x06, 0x05,              // OID, length 5
+            0x2b, 0x81, 0x04, 0x00, 0x22,  // secp384r1 OID
+            0x03, 0x62,              // BIT STRING, length 98
+            0x00                     // unused bits = 0
+        ]
+
+        // Determine key type from attributes
+        guard let attributes = SecKeyCopyAttributes(publicKey) as? [String: Any],
+              let keyType = attributes[kSecAttrKeyType as String] as? String,
+              let keySize = attributes[kSecAttrKeySizeInBits as String] as? Int else {
+            return nil
+        }
+
+        var header: [UInt8]
+
+        if keyType == (kSecAttrKeyTypeRSA as String) {
+            if keySize <= 2048 {
+                header = rsa2048Header
+            } else {
+                header = rsa4096Header
+            }
+        } else if keyType == (kSecAttrKeyTypeECSECPrimeRandom as String) ||
+                  keyType == (kSecAttrKeyTypeEC as String) {
+            if keySize <= 256 {
+                header = ecP256Header
+            } else {
+                header = ecP384Header
+            }
+        } else {
+            // Unknown key type, return nil
+            return nil
+        }
+
+        // Combine header with raw key data
+        var spkiData = Data(header)
+        spkiData.append(rawKeyData)
+
+        return spkiData
     }
 }
 

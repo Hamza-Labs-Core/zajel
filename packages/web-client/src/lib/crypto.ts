@@ -288,7 +288,11 @@ export class CryptoService {
     }
 
     // Increment and get sequence number for replay protection
-    const seq = (this.sendCounters.get(peerId) || 0) + 1;
+    const currentSeq = this.sendCounters.get(peerId) || 0;
+    if (currentSeq >= 0xFFFFFFFF) {
+      throw new CryptoError('Counter exhausted, session rekeying required', ErrorCodes.CRYPTO_COUNTER_EXHAUSTED);
+    }
+    const seq = currentSeq + 1;
     this.sendCounters.set(peerId, seq);
 
     // Prepend 4-byte sequence number to plaintext (big-endian)
@@ -348,7 +352,11 @@ export class CryptoService {
     }
 
     // Increment and get sequence number for replay protection
-    const seq = (this.sendBytesCounters.get(peerId) || 0) + 1;
+    const currentSeq = this.sendBytesCounters.get(peerId) || 0;
+    if (currentSeq >= 0xFFFFFFFF) {
+      throw new CryptoError('Counter exhausted, session rekeying required', ErrorCodes.CRYPTO_COUNTER_EXHAUSTED);
+    }
+    const seq = currentSeq + 1;
     this.sendBytesCounters.set(peerId, seq);
 
     // Prepend 4-byte sequence number to data (big-endian)
