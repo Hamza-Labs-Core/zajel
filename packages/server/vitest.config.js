@@ -4,10 +4,10 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['src/**/*.test.js'],
+    include: ['src/**/*.test.js', 'tests/**/*.test.js'],
     coverage: {
       reporter: ['text', 'json', 'html'],
-      exclude: ['node_modules/', 'src/**/*.test.js'],
+      exclude: ['node_modules/', 'src/**/*.test.js', 'tests/**/*.test.js'],
     },
   },
 });
