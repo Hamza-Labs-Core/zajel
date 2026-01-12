@@ -204,14 +204,15 @@ describe('WebRTCService', () => {
     // Create fresh mock for each test
     currentMockPc = createMockPeerConnection();
 
-    // Mock RTCPeerConnection globally - each call creates a new instance
-    vi.stubGlobal(
-      'RTCPeerConnection',
-      vi.fn(() => {
-        currentMockPc = createMockPeerConnection();
-        return currentMockPc;
-      })
-    );
+    // Create a proper RTCPeerConnection mock that can be used with 'new'
+    // and also tracked as a spy
+    const MockRTCPeerConnectionConstructor = vi.fn().mockImplementation(function () {
+      currentMockPc = createMockPeerConnection();
+      return currentMockPc;
+    });
+
+    // Mock RTCPeerConnection globally
+    vi.stubGlobal('RTCPeerConnection', MockRTCPeerConnectionConstructor);
 
     mockSignaling = createMockSignaling();
 

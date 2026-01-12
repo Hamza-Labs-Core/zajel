@@ -5,6 +5,7 @@ import '../crypto/crypto_service.dart';
 import '../logging/logger_service.dart';
 import '../models/models.dart';
 import '../network/connection_manager.dart';
+import '../network/device_link_service.dart';
 import '../network/meeting_point_service.dart';
 import '../network/peer_reconnection_service.dart';
 import '../network/relay_client.dart';
@@ -79,15 +80,42 @@ final peerReconnectionServiceProvider = Provider<PeerReconnectionService?>((ref)
   );
 });
 
+/// Provider for device link service (for linking web clients).
+/// Must be defined before connectionManagerProvider since ConnectionManager depends on it.
+final deviceLinkServiceProvider = Provider<DeviceLinkService>((ref) {
+  final cryptoService = ref.watch(cryptoServiceProvider);
+  final webrtcService = ref.watch(webrtcServiceProvider);
+
+  final service = DeviceLinkService(
+    cryptoService: cryptoService,
+    webrtcService: webrtcService,
+  );
+  ref.onDispose(() => service.dispose());
+  return service;
+});
+
 /// Provider for connection manager.
 final connectionManagerProvider = Provider<ConnectionManager>((ref) {
   final cryptoService = ref.watch(cryptoServiceProvider);
   final webrtcService = ref.watch(webrtcServiceProvider);
+  final deviceLinkService = ref.watch(deviceLinkServiceProvider);
 
   return ConnectionManager(
     cryptoService: cryptoService,
     webrtcService: webrtcService,
+    deviceLinkService: deviceLinkService,
   );
+});
+
+/// Provider for the list of linked devices.
+final linkedDevicesProvider = StreamProvider<List<LinkedDevice>>((ref) {
+  final deviceLinkService = ref.watch(deviceLinkServiceProvider);
+  return deviceLinkService.linkedDevices;
+});
+
+/// Provider for current link session state.
+final linkSessionStateProvider = StateProvider<DeviceLinkState>((ref) {
+  return DeviceLinkIdle();
 });
 
 /// Provider for the list of peers.

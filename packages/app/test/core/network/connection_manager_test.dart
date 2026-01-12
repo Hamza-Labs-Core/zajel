@@ -10,10 +10,12 @@ void main() {
     late ConnectionManager connectionManager;
     late MockCryptoService mockCryptoService;
     late MockWebRTCService mockWebRTCService;
+    late MockDeviceLinkService mockDeviceLinkService;
 
     setUp(() {
       mockCryptoService = MockCryptoService();
       mockWebRTCService = MockWebRTCService();
+      mockDeviceLinkService = MockDeviceLinkService();
 
       // Default stubs for dispose
       when(() => mockWebRTCService.dispose()).thenAnswer((_) async {});
@@ -21,6 +23,7 @@ void main() {
       connectionManager = ConnectionManager(
         cryptoService: mockCryptoService,
         webrtcService: mockWebRTCService,
+        deviceLinkService: mockDeviceLinkService,
       );
     });
 

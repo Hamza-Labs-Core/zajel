@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -6,6 +7,7 @@ import 'package:uuid/uuid.dart';
 
 import '../crypto/crypto_service.dart';
 import '../models/models.dart';
+import 'device_link_service.dart';
 import 'signaling_client.dart';
 import 'webrtc_service.dart';
 
@@ -74,9 +76,11 @@ class SignalingConnected extends SignalingState {
 /// - WebRTC connection establishment
 /// - Cryptographic handshakes
 /// - Message and file routing
+/// - Linked device management (web clients proxied through mobile)
 class ConnectionManager {
   final CryptoService _cryptoService;
   final WebRTCService _webrtcService;
+  final DeviceLinkService _deviceLinkService;
 
   /// Current signaling state - uses sealed class for type-safe null handling.
   SignalingState _signalingState = SignalingDisconnected();
@@ -101,11 +105,14 @@ class ConnectionManager {
   /// to being overwritten by each new connection.
   StreamSubscription? _signalingEventsSubscription;
 
+
   ConnectionManager({
     required CryptoService cryptoService,
     required WebRTCService webrtcService,
+    required DeviceLinkService deviceLinkService,
   })  : _cryptoService = cryptoService,
-        _webrtcService = webrtcService {
+        _webrtcService = webrtcService,
+        _deviceLinkService = deviceLinkService {
     _setupCallbacks();
   }
 
@@ -147,6 +154,13 @@ class ConnectionManager {
 
   /// Stream of incoming pair requests.
   Stream<(String, String)> get pairRequests => _pairRequestController.stream;
+
+  /// Stream of incoming link requests from web clients.
+  final _linkRequestController =
+      StreamController<(String linkCode, String publicKey, String deviceName)>.broadcast();
+
+  /// Stream of incoming link requests.
+  Stream<(String, String, String)> get linkRequests => _linkRequestController.stream;
 
   /// Connect to signaling server for external connections.
   Future<String> enableExternalConnections({
@@ -249,6 +263,19 @@ class ConnectionManager {
     }
   }
 
+  /// Respond to an incoming link request from a web client.
+  void respondToLinkRequest(String linkCode, {required bool accept, String? deviceId}) {
+    // Safe access using pattern matching
+    final state = _signalingState;
+    if (state is SignalingConnected) {
+      state.client.respondToLinkRequest(linkCode, accept: accept, deviceId: deviceId);
+    }
+
+    if (!accept) {
+      _deviceLinkService.cancelLinkSession();
+    }
+  }
+
   /// Start WebRTC connection after pairing is matched.
   Future<void> _startWebRTCConnection(String peerCode, String peerPublicKey, bool isInitiator) async {
     // Pattern 1: Capture signaling client before async operations (HIGH risk fix)
@@ -284,6 +311,40 @@ class ConnectionManager {
       }
     }
     // If not initiator, wait for offer from the other peer
+  }
+
+  /// Start WebRTC connection for device linking (web client → mobile).
+  Future<void> _startLinkConnection(String linkCode, String webPublicKey, bool isInitiator) async {
+    // Capture signaling client before async operations
+    final state = _signalingState;
+    if (state is! SignalingConnected || !state.client.isConnected) {
+      _deviceLinkService.cancelLinkSession();
+      return;
+    }
+    final client = state.client;
+
+    // Use link code as the "peer" ID for WebRTC
+    final webClientId = 'link_$linkCode';
+
+    // Store web client's public key for handshake
+    _cryptoService.setPeerPublicKey(webClientId, webPublicKey);
+
+    if (isInitiator) {
+      // We're the initiator - create and send offer
+      try {
+        final offer = await _webrtcService.createOffer(webClientId);
+
+        if (client.isConnected) {
+          client.sendOffer(linkCode, offer);
+        } else {
+          _deviceLinkService.cancelLinkSession();
+        }
+      } catch (e) {
+        _deviceLinkService.cancelLinkSession();
+        rethrow;
+      }
+    }
+    // If not initiator, wait for offer from web client
   }
 
   /// Send a message to a peer.
@@ -336,13 +397,27 @@ class ConnectionManager {
     await _fileStartController.close();
     await _fileCompleteController.close();
     await _pairRequestController.close();
+    await _linkRequestController.close();
   }
 
   // Private methods
 
   void _setupCallbacks() {
     _webrtcService.onMessage = (peerId, message) {
+      // Check if this is a message from a linked device (needs to be proxied to a peer)
+      if (peerId.startsWith('link_')) {
+        _handleLinkedDeviceMessage(peerId, message);
+        return;
+      }
+
+      // Normal peer message - emit to UI
       _messagesController.add((peerId, message));
+
+      // Also forward to all connected linked devices
+      _deviceLinkService.broadcastToLinkedDevices(
+        fromPeerId: peerId,
+        plaintext: message,
+      );
     };
 
     _webrtcService.onFileChunk = (peerId, fileId, chunk, index, total) {
@@ -358,8 +433,67 @@ class ConnectionManager {
     };
 
     _webrtcService.onConnectionStateChange = (peerId, state) {
+      // Check if this is a linked device connection state change
+      if (peerId.startsWith('link_')) {
+        if (state == PeerConnectionState.connected) {
+          _deviceLinkService.handleDeviceConnected(peerId);
+        } else if (state == PeerConnectionState.disconnected ||
+                   state == PeerConnectionState.failed) {
+          _deviceLinkService.handleDeviceDisconnected(peerId);
+        }
+        return;
+      }
+
       _updatePeerState(peerId, state);
+
+      // Notify linked devices of peer connection state changes
+      for (final device in _deviceLinkService.currentLinkedDevices) {
+        if (device.state == LinkedDeviceState.connected) {
+          // Send state update to linked device
+          _deviceLinkService.proxyMessageToDevice(
+            toDeviceId: device.id,
+            fromPeerId: peerId,
+            plaintext: '{"type":"peer_state","peerId":"$peerId","state":"${state.name}"}',
+          );
+        }
+      }
     };
+  }
+
+  /// Handle a message from a linked device (proxied to a peer).
+  void _handleLinkedDeviceMessage(String deviceId, String message) {
+    try {
+      // Message format: {"type":"send","to":"peerId","data":"..."}
+      final parsed = _parseLinkedDeviceMessage(message);
+      if (parsed == null) return;
+
+      final type = parsed['type'] as String?;
+      if (type == 'send') {
+        final toPeerId = parsed['to'] as String?;
+        final data = parsed['data'] as String?;
+        if (toPeerId != null && data != null) {
+          // Proxy message to the peer
+          _deviceLinkService.proxyMessageToPeer(
+            fromDeviceId: deviceId,
+            toPeerId: toPeerId,
+            encryptedTunnelData: data,
+          );
+        }
+      }
+    } catch (e) {
+      // Invalid message format - ignore
+    }
+  }
+
+  /// Parse a JSON message from a linked device.
+  Map<String, dynamic>? _parseLinkedDeviceMessage(String message) {
+    try {
+      return Map<String, dynamic>.from(
+        const JsonDecoder().convert(message) as Map,
+      );
+    } catch (e) {
+      return null;
+    }
   }
 
   void _handleSignalingMessage(SignalingMessage message) async {
@@ -454,6 +588,27 @@ class ConnectionManager {
 
       case SignalingError(message: final _):
         // Handle error - could show notification to user
+        break;
+
+      // Device linking messages (web client → mobile app)
+      case SignalingLinkRequest(linkCode: final linkCode, publicKey: final publicKey, deviceName: final deviceName):
+        // Web client wants to link with us - emit event for UI to show approval
+        _linkRequestController.add((linkCode, publicKey, deviceName));
+        break;
+
+      case SignalingLinkMatched(linkCode: final linkCode, peerPublicKey: final peerPublicKey, isInitiator: final isInitiator):
+        // Link approved - establish WebRTC tunnel with web client
+        await _startLinkConnection(linkCode, peerPublicKey, isInitiator);
+        break;
+
+      case SignalingLinkRejected():
+        // Web client's link request was rejected
+        _deviceLinkService.cancelLinkSession();
+        break;
+
+      case SignalingLinkTimeout():
+        // Link request timed out
+        _deviceLinkService.cancelLinkSession();
         break;
     }
   }

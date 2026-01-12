@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../constants.dart';
+import '../logging/logger_service.dart';
+import 'pinned_websocket.dart';
 
 /// Client for connecting to the signaling server for external peer connections.
 ///
@@ -71,13 +73,24 @@ class SignalingClient {
   final String serverUrl;
   final String _pairingCode;
   final String _publicKey;
+  final bool _usePinnedWebSocket;
 
+  // Standard WebSocket (for web platform or when pinning disabled)
   WebSocketChannel? _channel;
   StreamSubscription? _subscription;
+
+  // Pinned WebSocket (for mobile platforms)
+  PinnedWebSocket? _pinnedSocket;
+  StreamSubscription? _pinnedMessageSubscription;
+  StreamSubscription? _pinnedStateSubscription;
+  StreamSubscription? _pinnedErrorSubscription;
+
   final _messageController =
       StreamController<SignalingMessage>.broadcast();
   final _connectionStateController =
       StreamController<SignalingConnectionState>.broadcast();
+
+  final _logger = LoggerService.instance;
 
   bool _isConnected = false;
   Timer? _heartbeatTimer;
@@ -86,8 +99,11 @@ class SignalingClient {
     required this.serverUrl,
     required String pairingCode,
     required String publicKey,
+    bool? usePinnedWebSocket,
   })  : _pairingCode = pairingCode,
-        _publicKey = publicKey;
+        _publicKey = publicKey,
+        // Use pinned WebSocket on non-web platforms by default
+        _usePinnedWebSocket = usePinnedWebSocket ?? !kIsWeb;
 
   /// Stream of incoming signaling messages.
   Stream<SignalingMessage> get messages => _messageController.stream;
@@ -103,21 +119,21 @@ class SignalingClient {
   String get pairingCode => _pairingCode;
 
   /// Connect to the signaling server.
+  ///
+  /// On mobile platforms (Android/iOS), uses certificate pinning via
+  /// platform-specific native WebSocket implementations. On web, uses
+  /// standard WebSocket (browser handles TLS validation).
   Future<void> connect() async {
     if (_isConnected) return;
 
     try {
       _connectionStateController.add(SignalingConnectionState.connecting);
 
-      _channel = WebSocketChannel.connect(Uri.parse(serverUrl));
-
-      await _channel!.ready;
-
-      _subscription = _channel!.stream.listen(
-        _handleMessage,
-        onError: _handleError,
-        onDone: _handleDisconnect,
-      );
+      if (_usePinnedWebSocket) {
+        await _connectWithPinning();
+      } else {
+        await _connectStandard();
+      }
 
       _isConnected = true;
       _connectionStateController.add(SignalingConnectionState.connected);
@@ -139,6 +155,68 @@ class SignalingClient {
     }
   }
 
+  /// Connect using standard WebSocket (no pinning).
+  Future<void> _connectStandard() async {
+    _channel = WebSocketChannel.connect(Uri.parse(serverUrl));
+
+    await _channel!.ready;
+
+    _subscription = _channel!.stream.listen(
+      _handleMessage,
+      onError: _handleError,
+      onDone: _handleDisconnect,
+    );
+  }
+
+  /// Connect using pinned WebSocket (certificate pinning enabled).
+  Future<void> _connectWithPinning() async {
+    _logger.info(
+      'SignalingClient',
+      'Connecting to signaling server with certificate pinning',
+    );
+
+    _pinnedSocket = PinnedWebSocket(url: serverUrl);
+
+    // Listen for state changes
+    _pinnedStateSubscription = _pinnedSocket!.stateStream.listen((state) {
+      switch (state) {
+        case PinnedWebSocketState.disconnected:
+          _handleDisconnect();
+          break;
+        case PinnedWebSocketState.error:
+          _handleError('Connection error');
+          break;
+        default:
+          break;
+      }
+    });
+
+    // Listen for messages
+    _pinnedMessageSubscription = _pinnedSocket!.messages.listen(
+      (message) => _handleMessage(message),
+      onError: _handleError,
+    );
+
+    // Listen for errors (including pinning failures)
+    _pinnedErrorSubscription = _pinnedSocket!.errors.listen((error) {
+      if (error.startsWith('PINNING_FAILED:')) {
+        _logger.error(
+          'SignalingClient',
+          'Certificate pinning failed for $serverUrl',
+        );
+        // Emit a specific error for pinning failures
+        _connectionStateController.add(SignalingConnectionState.failed);
+      }
+    });
+
+    await _pinnedSocket!.connect();
+
+    _logger.info(
+      'SignalingClient',
+      'Connected to signaling server with certificate pinning',
+    );
+  }
+
   /// Disconnect from the signaling server.
   Future<void> disconnect() async {
     await _cleanupConnection();
@@ -150,6 +228,7 @@ class SignalingClient {
     _stopHeartbeat();
     _isConnected = false;
 
+    // Clean up standard WebSocket
     final subscription = _subscription;
     _subscription = null;
     await subscription?.cancel();
@@ -157,6 +236,23 @@ class SignalingClient {
     final channel = _channel;
     _channel = null;
     await channel?.sink.close();
+
+    // Clean up pinned WebSocket
+    final pinnedMessageSub = _pinnedMessageSubscription;
+    _pinnedMessageSubscription = null;
+    await pinnedMessageSub?.cancel();
+
+    final pinnedStateSub = _pinnedStateSubscription;
+    _pinnedStateSubscription = null;
+    await pinnedStateSub?.cancel();
+
+    final pinnedErrorSub = _pinnedErrorSubscription;
+    _pinnedErrorSubscription = null;
+    await pinnedErrorSub?.cancel();
+
+    final pinnedSocket = _pinnedSocket;
+    _pinnedSocket = null;
+    await pinnedSocket?.close();
   }
 
   /// Send an offer to a peer via the signaling server.
@@ -204,6 +300,16 @@ class SignalingClient {
     });
   }
 
+  /// Respond to a device link request (accept or reject web client linking).
+  void respondToLinkRequest(String linkCode, {required bool accept, String? deviceId}) {
+    _send({
+      'type': 'link_response',
+      'linkCode': linkCode,
+      'accepted': accept,
+      if (deviceId != null) 'deviceId': deviceId,
+    });
+  }
+
   /// Send a generic message to the signaling server.
   ///
   /// Used by RelayClient for load reporting and other relay-specific messages.
@@ -221,8 +327,16 @@ class SignalingClient {
   // Private methods
 
   void _send(Map<String, dynamic> message) {
-    if (!_isConnected || _channel == null) return;
-    _channel!.sink.add(jsonEncode(message));
+    if (!_isConnected) return;
+
+    final encodedMessage = jsonEncode(message);
+
+    // Use pinned WebSocket if available, otherwise use standard
+    if (_pinnedSocket != null) {
+      _pinnedSocket!.send(encodedMessage);
+    } else if (_channel != null) {
+      _channel!.sink.add(encodedMessage);
+    }
   }
 
   void _handleMessage(dynamic data) {
@@ -300,6 +414,38 @@ class SignalingClient {
         case 'error':
           _messageController.add(SignalingMessage.error(
             message: json['message'] as String,
+          ));
+          break;
+
+        case 'link_request':
+          // Web client requesting to link with this mobile app
+          _messageController.add(SignalingMessage.linkRequest(
+            linkCode: json['linkCode'] as String,
+            publicKey: json['publicKey'] as String,
+            deviceName: json['deviceName'] as String? ?? 'Unknown Device',
+          ));
+          break;
+
+        case 'link_matched':
+          // Link request was accepted, WebRTC connection can proceed
+          _messageController.add(SignalingMessage.linkMatched(
+            linkCode: json['linkCode'] as String,
+            peerPublicKey: json['peerPublicKey'] as String,
+            isInitiator: json['isInitiator'] as bool,
+          ));
+          break;
+
+        case 'link_rejected':
+          // Link request was rejected
+          _messageController.add(SignalingMessage.linkRejected(
+            linkCode: json['linkCode'] as String,
+          ));
+          break;
+
+        case 'link_timeout':
+          // Link request timed out
+          _messageController.add(SignalingMessage.linkTimeout(
+            linkCode: json['linkCode'] as String,
           ));
           break;
 
@@ -388,6 +534,24 @@ sealed class SignalingMessage {
       SignalingPairError;
 
   factory SignalingMessage.error({required String message}) = SignalingError;
+
+  factory SignalingMessage.linkRequest({
+    required String linkCode,
+    required String publicKey,
+    required String deviceName,
+  }) = SignalingLinkRequest;
+
+  factory SignalingMessage.linkMatched({
+    required String linkCode,
+    required String peerPublicKey,
+    required bool isInitiator,
+  }) = SignalingLinkMatched;
+
+  factory SignalingMessage.linkRejected({required String linkCode}) =
+      SignalingLinkRejected;
+
+  factory SignalingMessage.linkTimeout({required String linkCode}) =
+      SignalingLinkTimeout;
 }
 
 class SignalingOffer extends SignalingMessage {
@@ -467,6 +631,46 @@ class SignalingPairError extends SignalingMessage {
   final String error;
 
   const SignalingPairError({required this.error});
+}
+
+/// Device link request from a web client.
+class SignalingLinkRequest extends SignalingMessage {
+  final String linkCode;
+  final String publicKey;
+  final String deviceName;
+
+  const SignalingLinkRequest({
+    required this.linkCode,
+    required this.publicKey,
+    required this.deviceName,
+  });
+}
+
+/// Device link matched - ready for WebRTC connection.
+class SignalingLinkMatched extends SignalingMessage {
+  final String linkCode;
+  final String peerPublicKey;
+  final bool isInitiator;
+
+  const SignalingLinkMatched({
+    required this.linkCode,
+    required this.peerPublicKey,
+    required this.isInitiator,
+  });
+}
+
+/// Device link request was rejected.
+class SignalingLinkRejected extends SignalingMessage {
+  final String linkCode;
+
+  const SignalingLinkRejected({required this.linkCode});
+}
+
+/// Device link request timed out.
+class SignalingLinkTimeout extends SignalingMessage {
+  final String linkCode;
+
+  const SignalingLinkTimeout({required this.linkCode});
 }
 
 /// Connection state for the signaling client.

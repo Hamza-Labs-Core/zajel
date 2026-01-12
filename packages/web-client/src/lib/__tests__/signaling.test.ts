@@ -113,20 +113,20 @@ describe('SignalingClient', () => {
     vi.useFakeTimers();
     mockWs = null;
 
-    // Mock WebSocket constructor
-    vi.stubGlobal(
-      'WebSocket',
-      vi.fn((url: string) => {
-        mockWs = new MockWebSocket(url);
-        return mockWs;
-      })
-    );
+    // Create a proper WebSocket mock class that can be used with 'new'
+    // and also tracked as a spy
+    const MockWebSocketConstructor = vi.fn().mockImplementation(function (this: MockWebSocket, url: string) {
+      const ws = new MockWebSocket(url);
+      mockWs = ws;
+      return ws;
+    });
+    MockWebSocketConstructor.OPEN = MockWebSocket.OPEN;
+    MockWebSocketConstructor.CONNECTING = MockWebSocket.CONNECTING;
+    MockWebSocketConstructor.CLOSING = MockWebSocket.CLOSING;
+    MockWebSocketConstructor.CLOSED = MockWebSocket.CLOSED;
 
-    // Mock WebSocket static constants
-    (globalThis.WebSocket as unknown as typeof MockWebSocket).OPEN = MockWebSocket.OPEN;
-    (globalThis.WebSocket as unknown as typeof MockWebSocket).CONNECTING = MockWebSocket.CONNECTING;
-    (globalThis.WebSocket as unknown as typeof MockWebSocket).CLOSING = MockWebSocket.CLOSING;
-    (globalThis.WebSocket as unknown as typeof MockWebSocket).CLOSED = MockWebSocket.CLOSED;
+    // Mock WebSocket constructor
+    vi.stubGlobal('WebSocket', MockWebSocketConstructor);
 
     // Mock crypto
     vi.stubGlobal('crypto', {
@@ -688,6 +688,137 @@ describe('SignalingClient', () => {
       client.sendOffer(VALID_PEER_CODE, { type: 'offer', sdp: 'test' });
 
       expect(mockWs!.getSentMessages()).toHaveLength(0);
+    });
+  });
+
+  describe('Exponential backoff reconnection', () => {
+    it('should use exponential backoff for reconnection delays', () => {
+      client.connect(VALID_PUBLIC_KEY);
+      mockWs!.simulateOpen();
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
+
+      // First disconnect - should use base delay (3000ms)
+      mockWs!.simulateClose();
+      expect(WebSocket).toHaveBeenCalledTimes(1);
+
+      // Advance 3000ms - should reconnect
+      vi.advanceTimersByTime(3000);
+      expect(WebSocket).toHaveBeenCalledTimes(2);
+    });
+
+    it('should reset backoff after successful registration', () => {
+      client.connect(VALID_PUBLIC_KEY);
+      mockWs!.simulateOpen();
+
+      // Simulate disconnect before registration
+      mockWs!.simulateClose();
+
+      // Advance first reconnect delay
+      vi.advanceTimersByTime(3000);
+      expect(WebSocket).toHaveBeenCalledTimes(2);
+
+      // Simulate successful registration
+      mockWs!.simulateOpen();
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
+
+      // Disconnect again
+      mockWs!.simulateClose();
+
+      // Should use base delay again (backoff reset)
+      vi.advanceTimersByTime(3000);
+      expect(WebSocket).toHaveBeenCalledTimes(3);
+    });
+
+    it('should not schedule multiple reconnects', () => {
+      client.connect(VALID_PUBLIC_KEY);
+      mockWs!.simulateOpen();
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
+
+      // Simulate multiple close events
+      mockWs!.simulateClose();
+      mockWs!.simulateClose(); // Second close should be ignored
+
+      // Only one reconnect should be scheduled
+      vi.advanceTimersByTime(3000);
+      expect(WebSocket).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('Pair expiring message', () => {
+    it('should handle pair_expiring message', () => {
+      client.connect(VALID_PUBLIC_KEY);
+      mockWs!.simulateOpen();
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
+
+      mockWs!.simulateMessage({
+        type: 'pair_expiring',
+        peerCode: VALID_PEER_CODE,
+        remainingSeconds: 30,
+      });
+
+      expect(events.onPairExpiring).toHaveBeenCalledWith(VALID_PEER_CODE, 30);
+    });
+
+    it('should handle pair_expiring with different remaining times', () => {
+      client.connect(VALID_PUBLIC_KEY);
+      mockWs!.simulateOpen();
+      mockWs!.simulateMessage({ type: 'registered', pairingCode: VALID_PAIRING_CODE });
+
+      mockWs!.simulateMessage({
+        type: 'pair_expiring',
+        peerCode: VALID_PEER_CODE,
+        remainingSeconds: 10,
+      });
+
+      expect(events.onPairExpiring).toHaveBeenCalledWith(VALID_PEER_CODE, 10);
+    });
+  });
+
+  describe('Message validation edge cases', () => {
+    it('should warn on invalid message structure', () => {
+      client.connect(VALID_PUBLIC_KEY);
+      mockWs!.simulateOpen();
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      // Message missing required fields
+      mockWs!.simulateMessage({ type: 'pair_matched' }); // Missing peerCode, peerPublicKey, isInitiator
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        'Invalid signaling message:',
+        expect.any(String)
+      );
+
+      consoleSpy.mockRestore();
+    });
+
+    it('should handle unknown message types', () => {
+      client.connect(VALID_PUBLIC_KEY);
+      mockWs!.simulateOpen();
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      mockWs!.simulateMessage({ type: 'unknown_type' });
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        'Invalid signaling message:',
+        expect.stringContaining('Unknown message type')
+      );
+
+      consoleSpy.mockRestore();
+    });
+
+    it('should reject message without type field', () => {
+      client.connect(VALID_PUBLIC_KEY);
+      mockWs!.simulateOpen();
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      mockWs!.simulateMessage({ data: 'no type field' });
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        'Invalid signaling message:',
+        expect.any(String)
+      );
+
+      consoleSpy.mockRestore();
     });
   });
 });

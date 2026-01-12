@@ -10,6 +10,7 @@ import 'package:zajel/core/network/meeting_point_service.dart';
 import 'package:zajel/core/network/rendezvous_service.dart';
 import 'package:zajel/core/network/signaling_client.dart';
 import 'package:zajel/core/network/webrtc_service.dart';
+import 'package:zajel/core/network/device_link_service.dart';
 import 'package:zajel/core/storage/trusted_peers_storage.dart';
 
 // Mock classes
@@ -28,6 +29,8 @@ class MockRendezvousService extends Mock implements RendezvousService {}
 class MockWebRTCService extends Mock implements WebRTCService {}
 
 class MockSignalingClient extends Mock implements SignalingClient {}
+
+class MockDeviceLinkService extends Mock implements DeviceLinkService {}
 
 class MockWebSocketChannel extends Mock implements WebSocketChannel {}
 

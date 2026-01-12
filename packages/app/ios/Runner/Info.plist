@@ -45,5 +45,39 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<!-- App Transport Security - Require HTTPS -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- Require HTTPS for all connections -->
+		<key>NSAllowsArbitraryLoads</key>
+		<false/>
+		<!-- Exception domains for signaling servers -->
+		<key>NSExceptionDomains</key>
+		<dict>
+			<!-- Cloudflare Workers -->
+			<key>workers.dev</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSExceptionRequiresForwardSecrecy</key>
+				<true/>
+				<key>NSExceptionMinimumTLSVersion</key>
+				<string>TLSv1.2</string>
+			</dict>
+			<!-- Zajel VPS servers -->
+			<key>zajel.app</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSExceptionRequiresForwardSecrecy</key>
+				<true/>
+				<key>NSExceptionMinimumTLSVersion</key>
+				<string>TLSv1.2</string>
+			</dict>
+		</dict>
+	</dict>
+	<!-- Camera permission for QR scanning -->
+	<key>NSCameraUsageDescription</key>
+	<string>Zajel needs camera access to scan QR codes for device pairing</string>
 </dict>
 </plist>

@@ -66,3 +66,9 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // OkHttp for WebSocket with certificate pinning
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
+}

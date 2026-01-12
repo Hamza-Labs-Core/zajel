@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Network Security Configuration for Zajel
+
+  This configuration enables certificate pinning for known signaling servers
+  to prevent MITM attacks on the signaling channel.
+
+  IMPORTANT: Update these pins before certificate expiration!
+  Pin expiration should be set to match certificate renewal schedule.
+-->
+<network-security-config>
+    <!-- Default configuration: require HTTPS -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Cloudflare Workers (*.workers.dev) - Default bootstrap server -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">workers.dev</domain>
+        <pin-set expiration="2027-01-01">
+            <!-- Cloudflare Inc ECC CA-3 (current) -->
+            <pin digest="SHA-256">Ao+fWMFrBdoKXPJPJllbL5ZLHQ5Q8zU+5mNCILUGNMM=</pin>
+            <!-- Baltimore CyberTrust Root (backup) -->
+            <pin digest="SHA-256">Y9mvm0exBk1JoQ57f9Vm28jKo5lFm/woKcVxrYxu80o=</pin>
+            <!-- DigiCert Global Root G2 (backup) -->
+            <pin digest="SHA-256">i7WTqTvh0OioIruIfFR4kMPnBqrS2rdiVPl/s2uC/CY=</pin>
+        </pin-set>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+
+    <!-- Zajel VPS servers (*.zajel.app) - Production servers -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">zajel.app</domain>
+        <pin-set expiration="2027-01-01">
+            <!-- Let's Encrypt ISRG Root X1 -->
+            <pin digest="SHA-256">C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=</pin>
+            <!-- Let's Encrypt E1 (ECDSA intermediate) -->
+            <pin digest="SHA-256">jQJTbIh0grw0/1TkHSumWb+Fs0Ggogr621gT3PvPKG0=</pin>
+            <!-- Let's Encrypt R3 (RSA intermediate - backup) -->
+            <pin digest="SHA-256">jQJTbIh0grw0/1TkHSumWb+Fs0Ggogr621gT3PvPKG0=</pin>
+        </pin-set>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+
+    <!-- Debug configuration: Allow user-installed CAs for testing -->
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="user" />
+            <certificates src="system" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>

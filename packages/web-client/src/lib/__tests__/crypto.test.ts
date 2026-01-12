@@ -518,4 +518,123 @@ describe('CryptoService', () => {
       expect(alice.decrypt(roomId, b2)).toBe('Message 2 from Bob');
     });
   });
+
+  describe('Peer Key Verification (MITM Protection)', () => {
+    let alice: CryptoService;
+    let bob: CryptoService;
+
+    beforeEach(async () => {
+      alice = new CryptoService();
+      bob = new CryptoService();
+      await alice.initialize();
+      await bob.initialize();
+    });
+
+    it('verifyPeerKey should return true for matching key', () => {
+      const peerId = 'bob-peer';
+      const bobKey = bob.getPublicKeyBase64();
+
+      // Alice stores Bob's key during session establishment
+      alice.establishSession(peerId, bobKey);
+
+      // Verify with the same key should return true
+      expect(alice.verifyPeerKey(peerId, bobKey)).toBe(true);
+    });
+
+    it('verifyPeerKey should return false for mismatched key', () => {
+      const peerId = 'bob-peer';
+      const bobKey = bob.getPublicKeyBase64();
+
+      // Alice stores Bob's key during session establishment
+      alice.establishSession(peerId, bobKey);
+
+      // Verify with a different key (Eve's key) should return false
+      // Create a fake key that is different from Bob's
+      const eveKey = btoa(String.fromCharCode(...new Uint8Array(32).fill(99)));
+
+      expect(alice.verifyPeerKey(peerId, eveKey)).toBe(false);
+    });
+
+    it('verifyPeerKey should return false for unknown peer', () => {
+      expect(alice.verifyPeerKey('unknown-peer', bob.getPublicKeyBase64())).toBe(false);
+    });
+
+    it('verifyPeerKey should return false for different length keys', () => {
+      const peerId = 'bob-peer';
+      const bobKey = bob.getPublicKeyBase64();
+
+      alice.establishSession(peerId, bobKey);
+
+      // A key with different length should fail
+      const shortKey = btoa(String.fromCharCode(...new Uint8Array(16)));
+      expect(alice.verifyPeerKey(peerId, shortKey)).toBe(false);
+    });
+
+    it('getStoredPeerKey should return stored key', () => {
+      const peerId = 'bob-peer';
+      const bobKey = bob.getPublicKeyBase64();
+
+      alice.establishSession(peerId, bobKey);
+
+      expect(alice.getStoredPeerKey(peerId)).toBe(bobKey);
+    });
+
+    it('getStoredPeerKey should return null for unknown peer', () => {
+      expect(alice.getStoredPeerKey('unknown-peer')).toBe(null);
+    });
+
+    it('clearSession should remove stored peer key', () => {
+      const peerId = 'bob-peer';
+      const bobKey = bob.getPublicKeyBase64();
+
+      alice.establishSession(peerId, bobKey);
+      expect(alice.getStoredPeerKey(peerId)).toBe(bobKey);
+
+      alice.clearSession(peerId);
+      expect(alice.getStoredPeerKey(peerId)).toBe(null);
+    });
+  });
+
+  describe('Bytes Replay Protection', () => {
+    let alice: CryptoService;
+    let bob: CryptoService;
+    const sharedRoomId = 'bytes-replay-test';
+
+    beforeEach(async () => {
+      alice = new CryptoService();
+      bob = new CryptoService();
+      await alice.initialize();
+      await bob.initialize();
+      alice.establishSession(sharedRoomId, bob.getPublicKeyBase64());
+      bob.establishSession(sharedRoomId, alice.getPublicKeyBase64());
+    });
+
+    it('should reject replay of same bytes message', () => {
+      const data = new Uint8Array([1, 2, 3, 4, 5]);
+      const encrypted = alice.encryptBytes(sharedRoomId, data);
+
+      // First decryption should succeed
+      const decrypted = bob.decryptBytes(sharedRoomId, encrypted);
+      expect(decrypted).toEqual(data);
+
+      // Replaying the same message should fail
+      expect(() => bob.decryptBytes(sharedRoomId, encrypted)).toThrow(
+        'Replay attack detected'
+      );
+    });
+
+    it('bytes replay window is separate from text replay window', () => {
+      // Send text messages
+      for (let i = 0; i < 5; i++) {
+        const msg = alice.encrypt(sharedRoomId, `Text ${i}`);
+        bob.decrypt(sharedRoomId, msg);
+      }
+
+      // Bytes messages should still work with their own sequence
+      const data = new Uint8Array([1, 2, 3]);
+      const encrypted = alice.encryptBytes(sharedRoomId, data);
+      const decrypted = bob.decryptBytes(sharedRoomId, encrypted);
+      expect(decrypted).toEqual(data);
+    });
+  });
 });

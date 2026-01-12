@@ -112,6 +112,21 @@ interface SignalingIceCandidateMessage {
   payload: Record<string, unknown>;
 }
 
+// Device linking messages (web client linking to mobile app)
+interface LinkRequestMessage {
+  type: 'link_request';
+  linkCode: string;      // The link code from the mobile app's QR
+  publicKey: string;     // Web client's public key
+  deviceName?: string;   // Browser name (e.g., "Chrome on Windows")
+}
+
+interface LinkResponseMessage {
+  type: 'link_response';
+  linkCode: string;
+  accepted: boolean;
+  deviceId?: string;     // Assigned device ID if accepted
+}
+
 // Pending pair request tracking
 interface PendingPairRequest {
   requesterCode: string;
@@ -147,7 +162,9 @@ type ClientMessage =
   | PairResponseMessage
   | SignalingOfferMessage
   | SignalingAnswerMessage
-  | SignalingIceCandidateMessage;
+  | SignalingIceCandidateMessage
+  | LinkRequestMessage
+  | LinkResponseMessage;
 
 export class ClientHandler extends EventEmitter {
   private identity: ServerIdentity;
@@ -166,6 +183,14 @@ export class ClientHandler extends EventEmitter {
   private pendingPairRequests: Map<string, PendingPairRequest[]> = new Map();
   // Default timeout: 120 seconds (2 minutes) to allow for fingerprint verification
   // Default warning time: 30 seconds before timeout
+
+  // Pending device link requests: linkCode -> request info
+  private pendingLinkRequests: Map<string, {
+    webClientCode: string;   // The web client's pairing code
+    webPublicKey: string;    // The web client's public key
+    deviceName: string;      // Browser name
+    timestamp: number;
+  }> = new Map();
 
   // Configurable timeout values (set in constructor from config)
   private readonly pairRequestTimeout: number;
@@ -324,6 +349,14 @@ export class ClientHandler extends EventEmitter {
 
         case 'ice_candidate':
           this.handleSignalingForward(ws, message as SignalingIceCandidateMessage);
+          break;
+
+        case 'link_request':
+          this.handleLinkRequest(ws, message as LinkRequestMessage);
+          break;
+
+        case 'link_response':
+          this.handleLinkResponse(ws, message as LinkResponseMessage);
           break;
 
         case 'update_load':
@@ -557,7 +590,7 @@ export class ClientHandler extends EventEmitter {
     // Check if pairing code already exists (collision)
     if (this.pairingCodeToWs.has(pairingCode)) {
       this.entropyMetrics.collisionAttempts++;
-      logger.warn(`Pairing code collision detected: ${pairingCode} (total collisions: ${this.entropyMetrics.collisionAttempts})`);
+      logger.warn(`Pairing code collision detected: ${logger.pairingCode(pairingCode)} (total collisions: ${this.entropyMetrics.collisionAttempts})`);
 
       // Notify client to regenerate code and reconnect
       this.send(ws, {
@@ -871,6 +904,146 @@ export class ClientHandler extends EventEmitter {
   }
 
   /**
+   * Handle device link request (web client wanting to link to mobile app).
+   *
+   * The link flow is:
+   * 1. Mobile app generates link code and displays QR
+   * 2. Web client scans QR and sends link_request with the link code
+   * 3. Server forwards request to mobile app (via pairing code match)
+   * 4. Mobile app approves/rejects
+   * 5. On approval, both sides get link_matched to start WebRTC
+   */
+  private handleLinkRequest(ws: WebSocket, message: LinkRequestMessage): void {
+    const { linkCode, publicKey, deviceName = 'Unknown Browser' } = message;
+    const webClientCode = this.wsToPairingCode.get(ws);
+
+    if (!webClientCode) {
+      this.sendError(ws, 'Not registered. Send register message first.');
+      return;
+    }
+
+    if (!linkCode) {
+      this.sendError(ws, 'Missing required field: linkCode');
+      return;
+    }
+
+    if (!publicKey) {
+      this.sendError(ws, 'Missing required field: publicKey');
+      return;
+    }
+
+    // The linkCode IS the mobile app's pairing code
+    // Find the mobile app's WebSocket
+    const mobileWs = this.pairingCodeToWs.get(linkCode);
+
+    if (!mobileWs) {
+      // Use generic error to prevent enumeration attacks
+      this.send(ws, {
+        type: 'link_error',
+        error: 'Link request could not be processed',
+      });
+      return;
+    }
+
+    // Store pending link request
+    this.pendingLinkRequests.set(linkCode, {
+      webClientCode,
+      webPublicKey: publicKey,
+      deviceName,
+      timestamp: Date.now(),
+    });
+
+    // Forward request to mobile app
+    this.send(mobileWs, {
+      type: 'link_request',
+      linkCode,
+      publicKey,
+      deviceName,
+    });
+
+    logger.debug(`[Link] Request: web ${logger.pairingCode(webClientCode)} -> mobile ${logger.pairingCode(linkCode)}`);
+  }
+
+  /**
+   * Handle device link response from mobile app.
+   */
+  private handleLinkResponse(ws: WebSocket, message: LinkResponseMessage): void {
+    const { linkCode, accepted, deviceId } = message;
+    const mobileCode = this.wsToPairingCode.get(ws);
+
+    if (!mobileCode) {
+      this.sendError(ws, 'Not registered. Send register message first.');
+      return;
+    }
+
+    // Verify this is the mobile app that owns the link code
+    if (mobileCode !== linkCode) {
+      this.sendError(ws, 'Cannot respond to link request for another device');
+      return;
+    }
+
+    // Find the pending request
+    const pending = this.pendingLinkRequests.get(linkCode);
+    if (!pending) {
+      this.send(ws, {
+        type: 'link_error',
+        error: 'No pending link request found',
+      });
+      return;
+    }
+
+    // Remove the pending request
+    this.pendingLinkRequests.delete(linkCode);
+
+    // Find the web client
+    const webWs = this.pairingCodeToWs.get(pending.webClientCode);
+
+    if (!webWs) {
+      // Web client disconnected
+      return;
+    }
+
+    if (accepted) {
+      // Get mobile app's public key
+      const mobilePublicKey = this.pairingCodeToPublicKey.get(mobileCode);
+      if (!mobilePublicKey) {
+        this.sendError(ws, 'Public key not found');
+        return;
+      }
+
+      // Notify both sides about the match
+      // Web client is initiator (creates WebRTC offer)
+      this.send(webWs, {
+        type: 'link_matched',
+        linkCode,
+        peerPublicKey: mobilePublicKey,
+        isInitiator: true,
+        deviceId,
+      });
+
+      // Mobile app is responder
+      this.send(ws, {
+        type: 'link_matched',
+        linkCode,
+        peerPublicKey: pending.webPublicKey,
+        isInitiator: false,
+        webClientCode: pending.webClientCode,
+        deviceName: pending.deviceName,
+      });
+
+      logger.debug(`[Link] Matched: web ${logger.pairingCode(pending.webClientCode)} <-> mobile ${logger.pairingCode(mobileCode)}`);
+    } else {
+      // Notify web client about rejection
+      this.send(webWs, {
+        type: 'link_rejected',
+        linkCode,
+      });
+
+      logger.debug(`[Link] Rejected: web ${logger.pairingCode(pending.webClientCode)} by mobile ${logger.pairingCode(mobileCode)}`);
+    }
+  }
+
+  /**
    * Handle signaling message forwarding (offer, answer, ice_candidate)
    */
   private handleSignalingForward(
@@ -968,6 +1141,25 @@ export class ClientHandler extends EventEmitter {
           this.pendingPairRequests.set(targetCode, filtered);
         }
       }
+
+      // Clean up pending link requests where this peer was the mobile app
+      this.pendingLinkRequests.delete(pairingCode);
+
+      // Also clean up link requests where this peer was the web client
+      for (const [linkCode, request] of this.pendingLinkRequests) {
+        if (request.webClientCode === pairingCode) {
+          this.pendingLinkRequests.delete(linkCode);
+          // Notify mobile app that web client disconnected
+          const mobileWs = this.pairingCodeToWs.get(linkCode);
+          if (mobileWs) {
+            this.send(mobileWs, {
+              type: 'link_timeout',
+              linkCode,
+            });
+          }
+        }
+      }
+
       logger.pairingEvent('disconnected', { code: pairingCode });
     }
 
@@ -1149,6 +1341,7 @@ export class ClientHandler extends EventEmitter {
     this.wsToPairingCode.clear();
     this.pairingCodeToPublicKey.clear();
     this.pendingPairRequests.clear();
+    this.pendingLinkRequests.clear();
   }
 
   /**
