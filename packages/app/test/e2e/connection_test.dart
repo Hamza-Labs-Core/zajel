@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -7,10 +6,8 @@ import 'package:mocktail/mocktail.dart';
 import 'package:zajel/core/crypto/crypto_service.dart';
 import 'package:zajel/core/models/peer.dart';
 import 'package:zajel/core/network/connection_manager.dart';
-import 'package:zajel/core/network/device_link_service.dart';
 import 'package:zajel/core/network/server_discovery_service.dart';
 import 'package:zajel/core/network/signaling_client.dart';
-import 'package:zajel/core/network/webrtc_service.dart';
 
 import '../mocks/mocks.dart';
 
