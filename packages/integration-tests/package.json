@@ -7,8 +7,8 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:web-to-web": "vitest run --testPathPattern=web-to-web",
-    "test:pairing": "vitest run --testPathPattern=pairing-flow",
+    "test:web-to-web": "vitest run src/scenarios/web-to-web.test.ts",
+    "test:pairing": "vitest run src/scenarios/pairing-flow.test.ts",
     "test:all": "vitest run",
     "typecheck": "tsc --noEmit"
   },

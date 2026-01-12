@@ -79,4 +79,7 @@ export default defineConfig({
   server: {
     port: 3847,
   },
+  preview: {
+    port: 3847,
+  },
 });

@@ -37,17 +37,25 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
 
-  /* Configure projects for chromium only */
+  /* Configure projects for cross-browser testing */
   projects: [
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
+    {
+      name: 'firefox',
+      use: { ...devices['Desktop Firefox'] },
+    },
+    {
+      name: 'webkit',
+      use: { ...devices['Desktop Safari'] },
+    },
   ],
 
   /* Run local dev server before starting the tests */
   webServer: {
-    command: 'npm run dev',
+    command: process.env.CI ? 'npm run preview' : 'npm run dev',
     url: 'http://localhost:3847',
     reuseExistingServer: !process.env.CI,
     timeout: 60000,

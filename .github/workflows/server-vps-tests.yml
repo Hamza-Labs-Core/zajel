@@ -1,0 +1,101 @@
+name: VPS Server Tests
+
+on:
+  push:
+    branches: [main, 'feature/**']
+    paths:
+      - 'packages/server-vps/**'
+      - '.github/workflows/server-vps-tests.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/server-vps/**'
+      - '.github/workflows/server-vps-tests.yml'
+
+concurrency:
+  group: server-vps-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: packages/server-vps
+
+jobs:
+  unit-tests:
+    name: Unit Tests (Shard ${{ matrix.shard }}/${{ matrix.total-shards }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+        total-shards: [2]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: packages/server-vps/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test -- --shard=${{ matrix.shard }}/${{ matrix.total-shards }}
+        env:
+          CI: true
+          LOG_LEVEL: error
+
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: packages/server-vps/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run E2E tests
+        run: npm test -- tests/e2e/
+        env:
+          CI: true
+          LOG_LEVEL: error
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: packages/server-vps/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run integration tests
+        run: npm test -- tests/integration/
+        env:
+          CI: true
+          LOG_LEVEL: error
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vps-integration-results
+          path: packages/server-vps/test-results/
+          retention-days: 7
