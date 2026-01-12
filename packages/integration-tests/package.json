@@ -12,7 +12,9 @@
     "test:all": "vitest run",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@zajel/server-vps": "^1.0.0"
+  },
   "devDependencies": {
     "@playwright/test": "^1.40.0",
     "@types/node": "^22.10.5",

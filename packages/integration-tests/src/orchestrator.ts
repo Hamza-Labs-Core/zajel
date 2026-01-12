@@ -7,11 +7,19 @@
  */
 
 import type { ChildProcess } from 'child_process';
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import { WebSocket } from 'ws';
 import type { Browser, BrowserContext } from 'playwright';
 import { chromium } from 'playwright';
-import { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from 'http';
+import http, { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from 'http';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { writeFileSync, unlinkSync, existsSync } from 'fs';
+
+// Get the directory of this file for relative path resolution
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const PROJECT_ROOT = resolve(__dirname, '../../..');
 
 // Dynamic import for server-vps to handle build timing
 let createZajelServer: (config?: Partial<ServerConfig>) => Promise<ZajelServer>;
@@ -141,14 +149,19 @@ export class TestOrchestrator {
   private mockBootstrapServer: HttpServer | null = null;
   private mockBootstrapStore: MockBootstrapStore = { servers: new Map() };
   private mockBootstrapPort: number = 0;
+  private tempEnvFile: string | null = null;
 
   constructor(config: OrchestratorConfig = {}) {
+    // Detect CI environment - CI environments need longer timeouts
+    const isCI = process.env.CI === 'true' || !!process.env.GITHUB_ACTIONS;
+    const defaultTimeout = isCI ? 60000 : 30000;
+
     this.config = {
       headless: config.headless ?? true,
       vpsPort: config.vpsPort ?? 0,
       webClientPort: config.webClientPort ?? 0,
-      startupTimeout: config.startupTimeout ?? 30000,
-      verbose: config.verbose ?? false,
+      startupTimeout: config.startupTimeout ?? defaultTimeout,
+      verbose: config.verbose ?? (process.env.LOG_LEVEL !== 'error'),
     };
   }
 
@@ -326,58 +339,113 @@ export class TestOrchestrator {
    * Start the web-client Vite dev server
    */
   async startWebClient(): Promise<number> {
+    if (!this.vpsServer) {
+      throw new Error('VPS server not started. Call startVpsServer() first.');
+    }
+
     this.webClientPort = this.config.webClientPort || getNextPort();
 
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Web client startup timeout'));
-      }, this.config.startupTimeout);
+    // Get the VPS server's WebSocket URL for the web client to connect to
+    const vpsEndpoint = this.vpsServer.config.network.publicEndpoint;
+    this.log(`Starting web-client dev server on port ${this.webClientPort}...`);
+    this.log(`Web client will connect to VPS at: ${vpsEndpoint}`);
 
-      this.log(`Starting web-client dev server on port ${this.webClientPort}...`);
+    // Use shell: true to find npm via PATH, and resolve cwd dynamically
+    const webClientDir = resolve(PROJECT_ROOT, 'packages/web-client');
 
-      this.webClientProcess = spawn('npm', ['run', 'dev', '--', '--port', String(this.webClientPort)], {
-        cwd: '/home/meywd/zajel/packages/web-client',
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
-          FORCE_COLOR: '0',
-        },
+    // Write a temporary .env file for Vite to pick up
+    // Vite loads env vars from .env files, not just process.env
+    this.tempEnvFile = resolve(webClientDir, 'src/.env');
+    const envContent = `VITE_SIGNALING_URL=${vpsEndpoint}\n`;
+    this.log(`Writing temp .env file: ${this.tempEnvFile}`);
+    writeFileSync(this.tempEnvFile, envContent);
+
+    this.webClientProcess = spawn('npm', ['run', 'dev', '--', '--port', String(this.webClientPort)], {
+      cwd: webClientDir,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: true, // Required for CI environments where npm isn't directly in PATH
+      env: {
+        ...process.env,
+        FORCE_COLOR: '0',
+        // Also pass as env var in case Vite picks it up from process.env
+        VITE_SIGNALING_URL: vpsEndpoint,
+      },
+    });
+
+    let startupOutput = '';
+    let processExited = false;
+    let exitCode: number | null = null;
+
+    this.webClientProcess.stdout?.on('data', (data) => {
+      const output = data.toString();
+      startupOutput += output;
+      if (this.config.verbose) {
+        process.stdout.write(`[Vite stdout] ${output}`);
+      }
+    });
+
+    this.webClientProcess.stderr?.on('data', (data) => {
+      const output = data.toString();
+      startupOutput += output;
+      if (this.config.verbose) {
+        process.stderr.write(`[Vite stderr] ${output}`);
+      }
+    });
+
+    this.webClientProcess.on('error', (err) => {
+      this.log(`Web client process error: ${err.message}`);
+      processExited = true;
+    });
+
+    this.webClientProcess.on('exit', (code) => {
+      processExited = true;
+      exitCode = code;
+      if (code !== 0 && code !== null) {
+        this.log(`Web client process exited with code ${code}`);
+      }
+    });
+
+    // Use polling to check when the server is ready
+    const startTime = Date.now();
+    const pollInterval = 500;
+    const timeout = this.config.startupTimeout;
+
+    while (Date.now() - startTime < timeout) {
+      if (processExited && exitCode !== 0) {
+        throw new Error(`Web client process exited with code ${exitCode}\nOutput: ${startupOutput}`);
+      }
+
+      // Try to connect to the server to see if it's ready
+      const isReady = await this.checkPortReady(this.webClientPort);
+      if (isReady) {
+        this.log(`Web client dev server ready on port ${this.webClientPort}`);
+        // Give Vite a moment to fully initialize
+        await delay(200);
+        return this.webClientPort;
+      }
+
+      await delay(pollInterval);
+    }
+
+    throw new Error(`Web client startup timeout after ${timeout}ms\nOutput: ${startupOutput}`);
+  }
+
+  /**
+   * Check if a port is ready by attempting an HTTP connection
+   */
+  private async checkPortReady(port: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const req = http.get(`http://localhost:${port}/`, (res) => {
+        // Any response means the server is up
+        res.resume(); // Consume response to free up resources
+        resolve(true);
       });
-
-      let startupOutput = '';
-
-      this.webClientProcess.stdout?.on('data', (data) => {
-        const output = data.toString();
-        startupOutput += output;
-        if (this.config.verbose) {
-          process.stdout.write(output);
-        }
-
-        // Vite outputs "Local: http://localhost:PORT/" when ready
-        if (output.includes('Local:') || output.includes('ready in')) {
-          clearTimeout(timeout);
-          this.log(`Web client dev server ready on port ${this.webClientPort}`);
-          // Give Vite a moment to fully initialize
-          setTimeout(() => resolve(this.webClientPort), 500);
-        }
+      req.on('error', () => {
+        resolve(false);
       });
-
-      this.webClientProcess.stderr?.on('data', (data) => {
-        if (this.config.verbose) {
-          process.stderr.write(data.toString());
-        }
-      });
-
-      this.webClientProcess.on('error', (err) => {
-        clearTimeout(timeout);
-        reject(err);
-      });
-
-      this.webClientProcess.on('exit', (code) => {
-        if (code !== 0 && code !== null) {
-          clearTimeout(timeout);
-          reject(new Error(`Web client process exited with code ${code}\nOutput: ${startupOutput}`));
-        }
+      req.setTimeout(1000, () => {
+        req.destroy();
+        resolve(false);
       });
     });
   }
@@ -455,9 +523,10 @@ export class TestOrchestrator {
   }
 
   /**
-   * Create a WebSocket client connection to the VPS server
+   * Create a WebSocket client connection to the VPS server.
+   * Returns an extended WebSocket with message buffering to prevent race conditions.
    */
-  async createWsClient(timeout: number = 10000): Promise<{ ws: WebSocket; serverInfo: unknown }> {
+  async createWsClient(timeout: number = 10000): Promise<{ ws: WebSocket & { messageBuffer: unknown[] }; serverInfo: unknown }> {
     if (!this.vpsServer) {
       throw new Error('VPS server not started. Call startVpsServer() first.');
     }
@@ -465,60 +534,81 @@ export class TestOrchestrator {
     const port = this.vpsServer.config.network.port;
 
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+      const ws = new WebSocket(`ws://127.0.0.1:${port}`) as WebSocket & { messageBuffer: unknown[] };
+
+      // Initialize message buffer - ALL messages go here, consumed by waitForMessage
+      ws.messageBuffer = [];
+      let serverInfoReceived = false;
+      let resolved = false;
 
       const timer = setTimeout(() => {
         ws.close();
         reject(new Error('WebSocket connection timeout'));
       }, timeout);
 
-      ws.on('open', () => {
-        const messageHandler = (data: Buffer) => {
-          try {
-            const message = JSON.parse(data.toString());
-            if (message.type === 'server_info') {
-              clearTimeout(timer);
-              ws.off('message', messageHandler);
-              resolve({ ws, serverInfo: message });
-            }
-          } catch {
-            // Ignore parse errors
-          }
-        };
-        ws.on('message', messageHandler);
-      });
-
-      ws.on('error', (err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
-    });
-  }
-
-  /**
-   * Wait for a specific message type on a WebSocket
-   */
-  async waitForMessage(ws: WebSocket, messageType: string, timeout: number = 10000): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`Timeout waiting for message type: ${messageType}`));
-      }, timeout);
-
-      const handler = (data: Buffer) => {
+      // Single message handler that buffers everything
+      const bufferHandler = (data: Buffer) => {
         try {
           const message = JSON.parse(data.toString());
-          if (message.type === messageType) {
+          ws.messageBuffer.push(message);
+
+          // Debug logging
+          if (this.config.verbose) {
+            console.log(`[WS] Received message type: ${message.type}, buffer size: ${ws.messageBuffer.length}`);
+          }
+
+          // Check for server_info to resolve the connection promise
+          if (message.type === 'server_info' && !serverInfoReceived) {
+            serverInfoReceived = true;
             clearTimeout(timer);
-            ws.off('message', handler);
-            resolve(message);
+            if (!resolved) {
+              resolved = true;
+              resolve({ ws, serverInfo: message });
+            }
           }
         } catch {
           // Ignore parse errors
         }
       };
 
-      ws.on('message', handler);
+      ws.on('message', bufferHandler);
+
+      ws.on('error', (err) => {
+        clearTimeout(timer);
+        if (!resolved) {
+          resolved = true;
+          reject(err);
+        }
+      });
     });
+  }
+
+  /**
+   * Wait for a specific message type on a WebSocket.
+   * Uses polling approach on the message buffer to avoid race conditions.
+   */
+  async waitForMessage(ws: WebSocket & { messageBuffer?: unknown[] }, messageType: string, timeout: number = 10000): Promise<unknown> {
+    const startTime = Date.now();
+    const pollInterval = 50; // Check every 50ms
+
+    while (Date.now() - startTime < timeout) {
+      // Check the message buffer for the target message type
+      if (ws.messageBuffer) {
+        const bufferIndex = ws.messageBuffer.findIndex(
+          (msg: unknown) => (msg as { type?: string }).type === messageType
+        );
+        if (bufferIndex !== -1) {
+          // Remove from buffer and return
+          const message = ws.messageBuffer.splice(bufferIndex, 1)[0];
+          return message;
+        }
+      }
+
+      // Wait a bit before checking again
+      await new Promise(resolve => setTimeout(resolve, pollInterval));
+    }
+
+    throw new Error(`Timeout waiting for message type: ${messageType}`);
   }
 
   /**
@@ -566,6 +656,17 @@ export class TestOrchestrator {
       this.webClientProcess.kill('SIGTERM');
       this.webClientProcess = null;
       this.webClientPort = 0;
+    }
+
+    // Remove temporary .env file
+    if (this.tempEnvFile && existsSync(this.tempEnvFile)) {
+      try {
+        unlinkSync(this.tempEnvFile);
+        this.log(`Removed temp .env file: ${this.tempEnvFile}`);
+      } catch (err) {
+        console.error('Error removing temp .env file:', err);
+      }
+      this.tempEnvFile = null;
     }
 
     // Shutdown VPS server
