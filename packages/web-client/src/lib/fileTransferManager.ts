@@ -18,15 +18,9 @@ import type {
   FileStartAckMessage,
   FileCompleteAckMessage,
 } from './protocol';
-
-// Configuration constants
-const CHUNK_SIZE = 16 * 1024; // 16KB chunks (WebRTC-safe)
-const MAX_RETRIES_PER_CHUNK = 3;
-const CHUNK_ACK_TIMEOUT = 5000; // 5 seconds
-const TRANSFER_IDLE_TIMEOUT = 60000; // 1 minute
-const MAX_BUFFERED_AMOUNT = 1024 * 1024; // 1MB buffer limit
-const BACKPRESSURE_CHECK_INTERVAL = 50; // ms
-const MAX_CHUNKS_IN_FLIGHT = 10; // Sliding window size
+import { logger } from './logger';
+import { handleError, ErrorCodes } from './errors';
+import { FILE_TRANSFER, RELIABLE_TRANSFER } from './constants';
 
 /**
  * Compute SHA-256 hash of data
@@ -181,12 +175,12 @@ export class FileTransferManager {
           continue;
         }
 
-        if (now - ctx.lastActivityTime > TRANSFER_IDLE_TIMEOUT) {
+        if (now - ctx.lastActivityTime > RELIABLE_TRANSFER.TRANSFER_IDLE_TIMEOUT_MS) {
           this.failTransfer(id, 'Transfer timeout - no activity for 60 seconds');
           this.events.sendTransferCancel(id, 'timeout');
         }
       }
-    }, 10000); // Check every 10 seconds
+    }, RELIABLE_TRANSFER.IDLE_CHECK_INTERVAL_MS);
   }
 
   /**
@@ -229,7 +223,7 @@ export class FileTransferManager {
     const failedChunks: number[] = [];
     if (ctx.direction === 'sending' && ctx.sentChunks) {
       for (const [index, info] of ctx.sentChunks) {
-        if (!info.acked && info.retries >= MAX_RETRIES_PER_CHUNK) {
+        if (!info.acked && info.retries >= RELIABLE_TRANSFER.MAX_RETRIES_PER_CHUNK) {
           failedChunks.push(index);
         }
       }
@@ -296,8 +290,8 @@ export class FileTransferManager {
    * Wait for backpressure to clear
    */
   private async waitForBackpressure(): Promise<void> {
-    while (this.events.getBufferedAmount() > MAX_BUFFERED_AMOUNT) {
-      await new Promise((r) => setTimeout(r, BACKPRESSURE_CHECK_INTERVAL));
+    while (this.events.getBufferedAmount() > RELIABLE_TRANSFER.MAX_BUFFERED_AMOUNT) {
+      await new Promise((r) => setTimeout(r, RELIABLE_TRANSFER.BACKPRESSURE_CHECK_INTERVAL_MS));
     }
   }
 
@@ -308,7 +302,7 @@ export class FileTransferManager {
    */
   async sendFile(file: File): Promise<string> {
     const fileId = crypto.randomUUID();
-    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const totalChunks = Math.ceil(file.size / FILE_TRANSFER.CHUNK_SIZE);
 
     // Create transfer context
     const ctx: TransferContext = {
@@ -316,7 +310,7 @@ export class FileTransferManager {
       fileName: file.name,
       totalSize: file.size,
       totalChunks,
-      chunkSize: CHUNK_SIZE,
+      chunkSize: FILE_TRANSFER.CHUNK_SIZE,
       direction: 'sending',
       state: 'awaiting_start_ack',
       sentChunks: new Map(),
@@ -337,8 +331,8 @@ export class FileTransferManager {
     const chunkHashes: string[] = [];
 
     for (let i = 0; i < totalChunks; i++) {
-      const start = i * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, file.size);
+      const start = i * FILE_TRANSFER.CHUNK_SIZE;
+      const end = Math.min(start + FILE_TRANSFER.CHUNK_SIZE, file.size);
       const chunk = bytes.slice(start, end);
       const hash = await computeHash(chunk);
       chunkHashes.push(hash);
@@ -416,7 +410,7 @@ export class FileTransferManager {
       if (ctx.state !== 'transferring' || this.isCancelled.has(fileId)) return;
 
       // Wait if too many chunks in flight
-      while (pendingAcks.size >= MAX_CHUNKS_IN_FLIGHT) {
+      while (pendingAcks.size >= RELIABLE_TRANSFER.MAX_CHUNKS_IN_FLIGHT) {
         await new Promise((r) => setTimeout(r, 100));
         if (ctx.state !== 'transferring' || this.isCancelled.has(fileId)) return;
       }
@@ -427,13 +421,13 @@ export class FileTransferManager {
       if (chunkInfo.acked) continue;
 
       // Skip if already waiting for ack (unless it timed out)
-      if (pendingAcks.has(i) && Date.now() - chunkInfo.sentAt < CHUNK_ACK_TIMEOUT) {
+      if (pendingAcks.has(i) && Date.now() - chunkInfo.sentAt < RELIABLE_TRANSFER.CHUNK_ACK_TIMEOUT_MS) {
         continue;
       }
 
       // Check retry limit
-      if (chunkInfo.retries >= MAX_RETRIES_PER_CHUNK) {
-        this.failTransfer(fileId, `Chunk ${i} failed after ${MAX_RETRIES_PER_CHUNK} retries`);
+      if (chunkInfo.retries >= RELIABLE_TRANSFER.MAX_RETRIES_PER_CHUNK) {
+        this.failTransfer(fileId, `Chunk ${i} failed after ${RELIABLE_TRANSFER.MAX_RETRIES_PER_CHUNK} retries`);
         return;
       }
 
@@ -490,7 +484,7 @@ export class FileTransferManager {
 
     const timeout = setTimeout(() => {
       this.handleChunkTimeout(fileId, chunkIndex);
-    }, CHUNK_ACK_TIMEOUT);
+    }, RELIABLE_TRANSFER.CHUNK_ACK_TIMEOUT_MS);
 
     ctx.retryTimeouts!.set(chunkIndex, timeout);
   }
@@ -505,7 +499,7 @@ export class FileTransferManager {
     const chunkInfo = ctx.sentChunks?.get(chunkIndex);
     if (!chunkInfo || chunkInfo.acked) return;
 
-    console.warn(`Chunk ${chunkIndex} timeout for file ${fileId}, will retry`);
+    logger.warn('FileTransfer', `Chunk ${chunkIndex} timeout for file ${fileId}, will retry`);
 
     // Remove from pending so it can be resent
     ctx.pendingAcks?.delete(chunkIndex);
@@ -538,7 +532,7 @@ export class FileTransferManager {
     if (msg.status === 'received') {
       // Verify hash if provided
       if (msg.hash && msg.hash !== chunkInfo.hash) {
-        console.warn(`Hash mismatch for chunk ${msg.chunkIndex}, will retry`);
+        logger.warn('FileTransfer', `Hash mismatch for chunk ${msg.chunkIndex}, will retry`);
         chunkInfo.acked = false;
         this.sendChunksWithWindow(msg.fileId);
         return;
@@ -550,7 +544,7 @@ export class FileTransferManager {
       this.checkSendComplete(msg.fileId);
     } else {
       // Chunk failed, will be retried by sendChunksWithWindow
-      console.warn(`Chunk ${msg.chunkIndex} failed on receiver, will retry`);
+      logger.warn('FileTransfer', `Chunk ${msg.chunkIndex} failed on receiver, will retry`);
       this.sendChunksWithWindow(msg.fileId);
     }
   }
@@ -603,7 +597,7 @@ export class FileTransferManager {
     } else {
       // Handle missing chunks - retry them
       if (msg.missingChunks && msg.missingChunks.length > 0) {
-        console.warn(`Receiver reports missing chunks: ${msg.missingChunks.join(', ')}`);
+        logger.warn('FileTransfer', `Receiver reports missing chunks: ${msg.missingChunks.join(', ')}`);
 
         // Mark these chunks as not acked so they get resent
         for (const index of msg.missingChunks) {
@@ -629,7 +623,7 @@ export class FileTransferManager {
     const ctx = this.transfers.get(msg.fileId);
     if (!ctx || ctx.direction !== 'sending') return;
 
-    console.log(`Receiver requested retry of chunks: ${msg.chunkIndices.join(', ')}`);
+    logger.info('FileTransfer', `Receiver requested retry of chunks: ${msg.chunkIndices.join(', ')}`);
 
     ctx.lastActivityTime = Date.now();
 
@@ -677,7 +671,7 @@ export class FileTransferManager {
       fileName,
       totalSize,
       totalChunks,
-      chunkSize: CHUNK_SIZE,
+      chunkSize: FILE_TRANSFER.CHUNK_SIZE,
       direction: 'receiving',
       state: 'receiving',
       receivedChunks: new Map(),
@@ -721,7 +715,7 @@ export class FileTransferManager {
       computeHash(bytes).then((computedHash) => {
         // Check against provided hash
         if (hash && hash !== computedHash) {
-          console.warn(`Hash mismatch for chunk ${chunkIndex}`);
+          logger.warn('FileTransfer', `Hash mismatch for chunk ${chunkIndex}`);
           this.events.sendChunkAck(fileId, chunkIndex, 'failed');
           return;
         }
@@ -729,7 +723,7 @@ export class FileTransferManager {
         // Check against expected hash from file_start
         if (ctx.expectedHashes && ctx.expectedHashes[chunkIndex]) {
           if (ctx.expectedHashes[chunkIndex] !== computedHash) {
-            console.warn(`Chunk ${chunkIndex} hash doesn't match expected`);
+            logger.warn('FileTransfer', `Chunk ${chunkIndex} hash doesn't match expected`);
             this.events.sendChunkAck(fileId, chunkIndex, 'failed');
             return;
           }
@@ -747,7 +741,8 @@ export class FileTransferManager {
         this.emitUpdate(ctx);
       });
     } catch (e) {
-      console.error('Failed to process chunk:', e);
+      // Use centralized error handling for chunk processing failures
+      handleError(e, 'fileTransfer.processChunk', ErrorCodes.FILE_CHUNK_FAILED);
       this.events.sendChunkAck(fileId, chunkIndex, 'failed');
     }
   }

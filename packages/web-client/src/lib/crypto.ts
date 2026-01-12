@@ -43,6 +43,8 @@ export class CryptoService {
   private replayWindowsBytes = new Map<string, ReplayWindow>();
   // Store peer public keys for handshake verification (prevents MITM attacks)
   private peerPublicKeys = new Map<string, string>();
+  // Track session creation time for expiration (forward secrecy)
+  private sessionCreatedAt = new Map<string, number>();
 
   /**
    * Check if a sequence number should be accepted (not a replay).
@@ -107,6 +109,19 @@ export class CryptoService {
     // Mark as seen and accept
     window.bitmap |= bit;
     return true;
+  }
+
+  /**
+   * Check if a session has expired.
+   * Sessions expire after SESSION_KEY_EXPIRY_MS (24 hours by default) for forward secrecy.
+   *
+   * @param peerId - The peer identifier
+   * @returns true if the session has expired or doesn't exist, false otherwise
+   */
+  private isSessionExpired(peerId: string): boolean {
+    const createdAt = this.sessionCreatedAt.get(peerId);
+    if (!createdAt) return true;
+    return Date.now() - createdAt > CRYPTO.SESSION_KEY_EXPIRY_MS;
   }
 
   async initialize(): Promise<void> {
@@ -226,6 +241,8 @@ export class CryptoService {
     const sessionKey = hkdf(sha256, sharedSecret, undefined, info, 32);
 
     this.sessionKeys.set(peerId, sessionKey);
+    // Record session creation time for expiration tracking
+    this.sessionCreatedAt.set(peerId, Date.now());
   }
 
   hasSession(peerId: string): boolean {
@@ -279,12 +296,18 @@ export class CryptoService {
     this.replayWindows.delete(peerId);
     this.sendBytesCounters.delete(peerId);
     this.replayWindowsBytes.delete(peerId);
+    this.sessionCreatedAt.delete(peerId);
   }
 
   encrypt(peerId: string, plaintext: string): string {
     const sessionKey = this.sessionKeys.get(peerId);
     if (!sessionKey) {
       throw new CryptoError(`No session for peer: ${peerId}`, ErrorCodes.CRYPTO_NO_SESSION);
+    }
+
+    // Check session expiration for forward secrecy
+    if (this.isSessionExpired(peerId)) {
+      throw new CryptoError('Session expired, please reconnect', ErrorCodes.CRYPTO_SESSION_EXPIRED);
     }
 
     // Increment and get sequence number for replay protection
@@ -323,6 +346,11 @@ export class CryptoService {
       throw new CryptoError(`No session for peer: ${peerId}`, ErrorCodes.CRYPTO_NO_SESSION);
     }
 
+    // Check session expiration for forward secrecy
+    if (this.isSessionExpired(peerId)) {
+      throw new CryptoError('Session expired, please reconnect', ErrorCodes.CRYPTO_SESSION_EXPIRED);
+    }
+
     const data = Uint8Array.from(atob(ciphertextBase64), (c) => c.charCodeAt(0));
 
     // Extract nonce and ciphertext
@@ -349,6 +377,11 @@ export class CryptoService {
     const sessionKey = this.sessionKeys.get(peerId);
     if (!sessionKey) {
       throw new CryptoError(`No session for peer: ${peerId}`, ErrorCodes.CRYPTO_NO_SESSION);
+    }
+
+    // Check session expiration for forward secrecy
+    if (this.isSessionExpired(peerId)) {
+      throw new CryptoError('Session expired, please reconnect', ErrorCodes.CRYPTO_SESSION_EXPIRED);
     }
 
     // Increment and get sequence number for replay protection
@@ -382,6 +415,11 @@ export class CryptoService {
     const sessionKey = this.sessionKeys.get(peerId);
     if (!sessionKey) {
       throw new CryptoError(`No session for peer: ${peerId}`, ErrorCodes.CRYPTO_NO_SESSION);
+    }
+
+    // Check session expiration for forward secrecy
+    if (this.isSessionExpired(peerId)) {
+      throw new CryptoError('Session expired, please reconnect', ErrorCodes.CRYPTO_SESSION_EXPIRED);
     }
 
     const nonce = data.slice(0, CRYPTO.NONCE_SIZE);

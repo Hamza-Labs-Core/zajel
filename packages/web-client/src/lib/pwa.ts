@@ -1,4 +1,5 @@
 import { useRegisterSW } from 'virtual:pwa-register/preact';
+import { handleError, ErrorCodes } from './errors';
 
 // Check for updates every hour
 const UPDATE_INTERVAL_MS = 60 * 60 * 1000;
@@ -18,7 +19,8 @@ export function usePWA() {
       }
     },
     onRegisterError(error) {
-      console.error('Service worker registration error:', error);
+      // Use centralized error handling - SW registration errors are recoverable
+      handleError(error, 'pwa.serviceWorkerRegistration', ErrorCodes.INITIALIZATION_FAILED);
     }
   });
 

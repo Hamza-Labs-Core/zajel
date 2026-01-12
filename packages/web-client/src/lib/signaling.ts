@@ -49,6 +49,8 @@ import type {
 } from './protocol';
 import { validateServerMessage, safeJsonParse } from './validation';
 import { TIMEOUTS, PAIRING_CODE, PAIRING_CODE_REGEX, MESSAGE_LIMITS } from './constants';
+import { logger, mask } from './logger';
+import { handleError, ErrorCodes } from './errors';
 
 
 /**
@@ -131,6 +133,7 @@ export class SignalingClient {
   }
 
   private setState(state: ConnectionState): void {
+    logger.info('Signaling', `State changed: ${this.state} -> ${state}`);
     this.state = state;
     this.events.onStateChange(state);
   }
@@ -150,6 +153,7 @@ export class SignalingClient {
 
     this.myPublicKey = publicKey;
     this.myCode = this.generatePairingCode();
+    logger.info('Signaling', `Connecting to server, pairing code: ${mask(this.myCode)}`);
     this.setState('connecting');
 
     this.ws = new WebSocket(this.serverUrl);
@@ -165,7 +169,7 @@ export class SignalingClient {
         ? event.data.length
         : event.data.byteLength || 0;
       if (messageSize > MESSAGE_LIMITS.MAX_WEBSOCKET_MESSAGE_SIZE) {
-        console.error('Rejected WebSocket message: exceeds 1MB size limit');
+        logger.error('Signaling', 'Rejected WebSocket message: exceeds 1MB size limit');
         // Close connection to prevent potential attacks
         this.disconnect();
         this.events.onError('Connection closed: message too large');
@@ -175,22 +179,22 @@ export class SignalingClient {
       // Parse JSON safely
       const parsed = safeJsonParse(event.data);
       if (parsed === null) {
-        console.error('Failed to parse WebSocket message as JSON');
+        logger.error('Signaling', 'Failed to parse WebSocket message as JSON');
         return;
       }
 
       // Validate message structure before processing
       const result = validateServerMessage(parsed);
       if (!result.success) {
-        console.warn('Invalid signaling message:', result.error);
+        logger.warn('Signaling', 'Invalid signaling message:', result.error);
         return;
       }
 
       this.handleMessage(result.data);
     };
 
-    this.ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
+    this.ws.onerror = () => {
+      logger.error('Signaling', 'WebSocket error');
       this.events.onError('Connection error');
     };
 
@@ -260,12 +264,14 @@ export class SignalingClient {
     if (this.ws?.readyState === WebSocket.OPEN) {
       try {
         this.ws.send(JSON.stringify(message));
+        logger.debug('Signaling', `Sent message: ${message.type}`);
         return true;
       } catch (error) {
-        console.error(`Failed to send ${message.type} message:`, error);
+        // Use centralized error handling for structured logging
+        const zajelError = handleError(error, `signaling.send.${message.type}`, ErrorCodes.SIGNALING_SEND_FAILED);
         // Notify error handler for critical message types
         if (['pair_request', 'pair_response', 'offer', 'answer'].includes(message.type)) {
-          this.events.onError(`Failed to send ${message.type}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          this.events.onError(zajelError.userMessage);
         }
         return false;
       }

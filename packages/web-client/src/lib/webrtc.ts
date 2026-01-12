@@ -9,13 +9,10 @@ import type {
 } from './protocol';
 import { validateHandshake, validateDataChannelMessage, safeJsonParse } from './validation';
 import { WEBRTC, MESSAGE_LIMITS } from './constants';
+import { logger } from './logger';
+import { handleError, ErrorCodes } from './errors';
 
 
-// Buffer management constants for backpressure handling
-// Based on WebRTC best practices: https://developer.mozilla.org/en-US/docs/Web/API/RTCDataChannel/bufferedAmount
-const HIGH_WATER_MARK = 1024 * 1024;      // 1MB - pause sending when buffer exceeds this
-const LOW_WATER_MARK = 256 * 1024;        // 256KB - resume sending when buffer drops below this
-const BUFFER_DRAIN_TIMEOUT = 30000;       // 30s timeout to prevent infinite waits
 
 export interface WebRTCEvents {
   onStateChange: (state: RTCPeerConnectionState) => void;
@@ -58,6 +55,7 @@ export class WebRTCService {
     // ICE candidate handling
     this.pc.onicecandidate = (event) => {
       if (event.candidate) {
+        logger.debug('WebRTC', `ICE candidate: ${event.candidate.type || 'unknown'}`);
         this.signaling.sendIceCandidate(this.peerCode, event.candidate.toJSON());
       }
     };
@@ -65,6 +63,7 @@ export class WebRTCService {
     // Connection state
     this.pc.onconnectionstatechange = () => {
       if (this.pc) {
+        logger.info('WebRTC', `Connection state: ${this.pc.connectionState}`);
         this.events.onStateChange(this.pc.connectionState);
       }
     };
@@ -131,7 +130,7 @@ export class WebRTCService {
     // Queue candidate if connection not ready OR remote description not set
     if (!this.pc || !this.remoteDescriptionSet) {
       if (this.pendingCandidates.length >= WEBRTC.MAX_PENDING_ICE_CANDIDATES) {
-        console.warn('ICE candidate queue full, dropping oldest candidate');
+        logger.warn('WebRTC', 'ICE candidate queue full, dropping oldest candidate');
         this.pendingCandidates.shift();
       }
       this.pendingCandidates.push(candidate);
@@ -141,7 +140,7 @@ export class WebRTCService {
     try {
       await this.pc.addIceCandidate(candidate);
     } catch (e) {
-      console.warn('Failed to add ICE candidate:', e);
+      logger.warn('WebRTC', 'Failed to add ICE candidate:', e instanceof Error ? e.message : 'Unknown error');
     }
   }
 
@@ -154,7 +153,7 @@ export class WebRTCService {
       try {
         await this.pc?.addIceCandidate(candidate);
       } catch (e) {
-        console.warn('Failed to add pending ICE candidate:', e);
+        logger.warn('WebRTC', 'Failed to add pending ICE candidate:', e instanceof Error ? e.message : 'Unknown error');
       }
     }
     this.pendingCandidates = [];
@@ -162,7 +161,7 @@ export class WebRTCService {
 
   private setupMessageChannel(channel: RTCDataChannel): void {
     channel.onopen = () => {
-      console.log('Message channel open');
+      logger.info('WebRTC', 'Message channel open');
     };
 
     channel.onmessage = (event) => {
@@ -171,7 +170,7 @@ export class WebRTCService {
         ? event.data.length
         : event.data.byteLength || 0;
       if (dataSize > MESSAGE_LIMITS.MAX_DATA_CHANNEL_MESSAGE_SIZE) {
-        console.error('Rejected message channel data: exceeds 1MB size limit');
+        logger.error('WebRTC', 'Rejected message channel data: exceeds 1MB size limit');
         return;
       }
 
@@ -191,8 +190,8 @@ export class WebRTCService {
       this.events.onMessage(event.data);
     };
 
-    channel.onerror = (error) => {
-      console.error('Message channel error:', error);
+    channel.onerror = () => {
+      logger.error('WebRTC', 'Message channel error');
     };
   }
 
@@ -203,21 +202,21 @@ export class WebRTCService {
         ? event.data.length
         : event.data.byteLength || 0;
       if (dataSize > MESSAGE_LIMITS.MAX_DATA_CHANNEL_MESSAGE_SIZE) {
-        console.error('Rejected file channel data: exceeds 1MB size limit');
+        logger.error('WebRTC', 'Rejected file channel data: exceeds 1MB size limit');
         return;
       }
 
       // Parse JSON safely
       const parsed = safeJsonParse(event.data);
       if (parsed === null) {
-        console.error('Failed to parse file channel message as JSON');
+        logger.error('WebRTC', 'Failed to parse file channel message as JSON');
         return;
       }
 
       // Validate message structure
       const result = validateDataChannelMessage(parsed);
       if (!result.success) {
-        console.warn('Invalid file channel message:', result.error);
+        logger.warn('WebRTC', 'Invalid file channel message:', result.error);
         return;
       }
 
@@ -258,7 +257,7 @@ export class WebRTCService {
           break;
         case 'handshake':
           // Handshake should not come on file channel, ignore
-          console.warn('Received handshake on file channel, ignoring');
+          logger.warn('WebRTC', 'Received handshake on file channel, ignoring');
           break;
       }
     };
@@ -304,7 +303,7 @@ export class WebRTCService {
       );
       return true;
     } catch (e) {
-      console.error('Failed to send file_start:', e);
+      logger.error('WebRTC', 'Failed to send file_start:', e instanceof Error ? e.message : 'Unknown error');
       return false;
     }
   }
@@ -344,7 +343,7 @@ export class WebRTCService {
       );
       return true;
     } catch (error) {
-      console.error('Failed to send file chunk:', error);
+      logger.error('WebRTC', 'Failed to send file chunk:', error instanceof Error ? error.message : 'Unknown error');
       return false;
     }
   }
@@ -361,13 +360,13 @@ export class WebRTCService {
       }
 
       // Check if buffer is already below threshold
-      if (this.fileChannel.bufferedAmount <= HIGH_WATER_MARK) {
+      if (this.fileChannel.bufferedAmount <= WEBRTC.HIGH_WATER_MARK) {
         resolve();
         return;
       }
 
       // Set up threshold-based resume using bufferedamountlow event
-      this.fileChannel.bufferedAmountLowThreshold = LOW_WATER_MARK;
+      this.fileChannel.bufferedAmountLowThreshold = WEBRTC.LOW_WATER_MARK;
 
       let resolved = false;
 
@@ -386,7 +385,7 @@ export class WebRTCService {
         resolved = true;
         this.fileChannel?.removeEventListener('bufferedamountlow', onBufferLow);
         resolve();
-      }, BUFFER_DRAIN_TIMEOUT);
+      }, WEBRTC.BUFFER_DRAIN_TIMEOUT_MS);
     });
   }
 
@@ -413,7 +412,8 @@ export class WebRTCService {
       this.fileChannel.send(JSON.stringify(msg));
       return true;
     } catch (e) {
-      console.error('Failed to send file_start_ack:', e);
+      // Use centralized error handling - file transfer errors are recoverable
+      handleError(e, 'webrtc.sendFileStartAck', ErrorCodes.WEBRTC_SEND_FAILED);
       return false;
     }
   }
@@ -432,7 +432,8 @@ export class WebRTCService {
       this.fileChannel.send(JSON.stringify(msg));
       return true;
     } catch (e) {
-      console.error('Failed to send chunk_ack:', e);
+      // Use centralized error handling - file transfer errors are recoverable
+      handleError(e, 'webrtc.sendChunkAck', ErrorCodes.WEBRTC_SEND_FAILED);
       return false;
     }
   }
@@ -446,7 +447,8 @@ export class WebRTCService {
       this.fileChannel.send(JSON.stringify(msg));
       return true;
     } catch (e) {
-      console.error('Failed to send chunk_retry:', e);
+      // Use centralized error handling - file transfer errors are recoverable
+      handleError(e, 'webrtc.sendChunkRetryRequest', ErrorCodes.WEBRTC_SEND_FAILED);
       return false;
     }
   }
@@ -471,7 +473,8 @@ export class WebRTCService {
       this.fileChannel.send(JSON.stringify(msg));
       return true;
     } catch (e) {
-      console.error('Failed to send file_complete_ack:', e);
+      // Use centralized error handling - file transfer errors are recoverable
+      handleError(e, 'webrtc.sendFileCompleteAck', ErrorCodes.WEBRTC_SEND_FAILED);
       return false;
     }
   }
@@ -488,7 +491,8 @@ export class WebRTCService {
       this.fileChannel.send(JSON.stringify(msg));
       return true;
     } catch (e) {
-      console.error('Failed to send transfer_cancel:', e);
+      // Use centralized error handling - file transfer errors are recoverable
+      handleError(e, 'webrtc.sendTransferCancel', ErrorCodes.WEBRTC_SEND_FAILED);
       return false;
     }
   }
@@ -514,7 +518,7 @@ export class WebRTCService {
    * When true, sending should be paused to allow the buffer to drain.
    */
   get isFileChannelBufferFull(): boolean {
-    return (this.fileChannel?.bufferedAmount ?? 0) > HIGH_WATER_MARK;
+    return (this.fileChannel?.bufferedAmount ?? 0) > WEBRTC.HIGH_WATER_MARK;
   }
 
   close(): void {

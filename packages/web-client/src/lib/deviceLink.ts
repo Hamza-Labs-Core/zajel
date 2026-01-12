@@ -21,6 +21,7 @@ import { chacha20poly1305 } from '@noble/ciphers/chacha';
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha256';
 import { CRYPTO, PAIRING_CODE } from './constants';
+import { logger } from './logger';
 
 /**
  * Generates an unbiased random character from the given character set using rejection sampling.
@@ -93,7 +94,7 @@ export function parseLinkQrData(qrData: string): LinkData | null {
     };
   } catch (error) {
     // URL decoding failed - log for debugging and return null to indicate invalid QR data
-    console.warn('Failed to parse QR link data:', error instanceof Error ? error.message : String(error));
+    logger.warn('DeviceLink', 'Failed to parse QR link data:', error instanceof Error ? error.message : String(error));
     return null;
   }
 }
@@ -281,7 +282,7 @@ export class DeviceLinkClient {
           // JSON parse error - expected for some message types
           // Only log unexpected errors (not SyntaxError from invalid JSON)
           if (!(parseError instanceof SyntaxError)) {
-            console.warn('Unexpected error parsing signaling message:', parseError instanceof Error ? parseError.message : String(parseError));
+            logger.warn('DeviceLink', 'Unexpected error parsing signaling message:', parseError instanceof Error ? parseError.message : String(parseError));
           }
         }
         this.handleSignalingMessage(event.data);
@@ -362,7 +363,7 @@ export class DeviceLinkClient {
     try {
       message = JSON.parse(data);
     } catch {
-      console.error('Invalid signaling message');
+      logger.error('DeviceLink', 'Invalid signaling message');
       return;
     }
 
@@ -539,7 +540,7 @@ export class DeviceLinkClient {
         if (parseError instanceof SyntaxError) {
           // Expected: encrypted data is not valid JSON, proceed to decryption
         } else {
-          console.warn('Unexpected error parsing tunnel message:', parseError instanceof Error ? parseError.message : String(parseError));
+          logger.warn('DeviceLink', 'Unexpected error parsing tunnel message:', parseError instanceof Error ? parseError.message : String(parseError));
         }
       }
     }
@@ -568,7 +569,7 @@ export class DeviceLinkClient {
     } catch (error) {
       // Decryption or parsing failed - report to user as this indicates a serious issue
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error('Failed to decrypt tunnel message:', errorMessage);
+      logger.error('DeviceLink', 'Failed to decrypt tunnel message:', errorMessage);
       // Notify user of decryption failure - this could indicate tampering or key mismatch
       this.callbacks.onError(`Failed to decrypt message: ${errorMessage}`);
     }
@@ -629,7 +630,7 @@ export class DeviceLinkClient {
       // ICE candidate failures are common during connection negotiation
       // Log for debugging but don't report to user unless connection fails
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.warn('Failed to add ICE candidate (connection may still succeed):', errorMessage);
+      logger.warn('DeviceLink', 'Failed to add ICE candidate (connection may still succeed):', errorMessage);
     }
   }
 
@@ -721,7 +722,7 @@ export function getStoredLinkSession(): { deviceId: string } | null {
   } catch (error) {
     // Log storage/parse errors for debugging but don't propagate
     // This is a non-critical operation - users can still link manually
-    console.warn('Failed to retrieve stored link session:', error instanceof Error ? error.message : String(error));
+    logger.warn('DeviceLink', 'Failed to retrieve stored link session:', error instanceof Error ? error.message : String(error));
   }
   return null;
 }
@@ -736,7 +737,7 @@ export function storeLinkSession(deviceId: string): void {
   } catch (error) {
     // Log storage errors for debugging but don't propagate
     // This is a non-critical operation - the session will work but won't persist
-    console.warn('Failed to store link session:', error instanceof Error ? error.message : String(error));
+    logger.warn('DeviceLink', 'Failed to store link session:', error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -747,6 +748,6 @@ export function clearLinkSession(): void {
   } catch (error) {
     // Log storage errors for debugging but don't propagate
     // This is a non-critical operation - session may persist unexpectedly
-    console.warn('Failed to clear link session:', error instanceof Error ? error.message : String(error));
+    logger.warn('DeviceLink', 'Failed to clear link session:', error instanceof Error ? error.message : String(error));
   }
 }

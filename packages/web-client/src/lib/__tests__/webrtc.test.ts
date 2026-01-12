@@ -335,8 +335,9 @@ describe('WebRTCService', () => {
       await service.handleIceCandidate(candidate);
 
       expect(consoleSpy).toHaveBeenCalledWith(
+        '[WebRTC]',
         'Failed to add ICE candidate:',
-        expect.any(Error)
+        'Failed'
       );
 
       consoleSpy.mockRestore();
@@ -377,7 +378,8 @@ describe('WebRTCService', () => {
       }
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining('ICE candidate queue full')
+        '[WebRTC]',
+        'ICE candidate queue full, dropping oldest candidate'
       );
 
       // Set remote description to process queued candidates
@@ -776,6 +778,7 @@ describe('WebRTCService', () => {
         channel.simulateMessage('not valid json');
 
         expect(consoleSpy).toHaveBeenCalledWith(
+          '[WebRTC]',
           'Failed to parse file channel message as JSON'
         );
         expect(events.onFileStart).not.toHaveBeenCalled();
@@ -799,6 +802,7 @@ describe('WebRTCService', () => {
       messageChannel!.simulateMessage(largeMessage);
 
       expect(consoleSpy).toHaveBeenCalledWith(
+        '[WebRTC]',
         'Rejected message channel data: exceeds 1MB size limit'
       );
       expect(events.onMessage).not.toHaveBeenCalled();
@@ -819,6 +823,7 @@ describe('WebRTCService', () => {
       channel.simulateMessage(largeMessage);
 
       expect(consoleSpy).toHaveBeenCalledWith(
+        '[WebRTC]',
         'Rejected file channel data: exceeds 1MB size limit'
       );
       expect(events.onFileStart).not.toHaveBeenCalled();
@@ -851,8 +856,8 @@ describe('WebRTCService', () => {
       messageChannel!.simulateError();
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        'Message channel error:',
-        expect.any(Event)
+        '[WebRTC]',
+        'Message channel error'
       );
 
       consoleSpy.mockRestore();
@@ -963,14 +968,14 @@ describe('WebRTCService', () => {
 
   describe('Console logging', () => {
     it('should log when message channel opens', async () => {
-      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const consoleSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
 
       await service.connect('peer-123', true);
 
       const messageChannel = currentMockPc.getDataChannel('messages');
       messageChannel!.simulateOpen();
 
-      expect(consoleSpy).toHaveBeenCalledWith('Message channel open');
+      expect(consoleSpy).toHaveBeenCalledWith('[WebRTC]', 'Message channel open');
 
       consoleSpy.mockRestore();
     });

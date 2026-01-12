@@ -329,6 +329,7 @@ describe('SignalingClient', () => {
       mockWs!.simulateRawMessage(largeData);
 
       expect(consoleSpy).toHaveBeenCalledWith(
+        '[Signaling]',
         'Rejected WebSocket message: exceeds 1MB size limit'
       );
 
@@ -784,6 +785,7 @@ describe('SignalingClient', () => {
       mockWs!.simulateMessage({ type: 'pair_matched' }); // Missing peerCode, peerPublicKey, isInitiator
 
       expect(consoleSpy).toHaveBeenCalledWith(
+        '[Signaling]',
         'Invalid signaling message:',
         expect.any(String)
       );
@@ -799,6 +801,7 @@ describe('SignalingClient', () => {
       mockWs!.simulateMessage({ type: 'unknown_type' });
 
       expect(consoleSpy).toHaveBeenCalledWith(
+        '[Signaling]',
         'Invalid signaling message:',
         expect.stringContaining('Unknown message type')
       );
@@ -814,6 +817,7 @@ describe('SignalingClient', () => {
       mockWs!.simulateMessage({ data: 'no type field' });
 
       expect(consoleSpy).toHaveBeenCalledWith(
+        '[Signaling]',
         'Invalid signaling message:',
         expect.any(String)
       );

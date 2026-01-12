@@ -1,4 +1,5 @@
 import { Component, ComponentChildren } from 'preact';
+import { handleError, ErrorCodes } from '../lib/errors';
 
 interface Props {
   children: ComponentChildren;
@@ -17,8 +18,9 @@ export class ErrorBoundary extends Component<Props, State> {
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, errorInfo: any) {
-    console.error('ErrorBoundary caught:', error, errorInfo);
+  componentDidCatch(error: Error, _errorInfo: unknown) {
+    // Use centralized error handling for React boundary errors
+    handleError(error, 'react.errorBoundary', ErrorCodes.INITIALIZATION_FAILED);
   }
 
   render() {

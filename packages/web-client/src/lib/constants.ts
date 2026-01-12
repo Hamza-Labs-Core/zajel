@@ -29,6 +29,9 @@ export const CRYPTO = {
 
   /** Sliding window size for out-of-order message tolerance in replay protection */
   SEQUENCE_WINDOW: 64,
+
+  /** Session key expiration time (24 hours) for forward secrecy */
+  SESSION_KEY_EXPIRY_MS: 24 * 60 * 60 * 1000,
 } as const;
 
 // =============================================================================
@@ -126,4 +129,43 @@ export const WEBRTC = {
     /** Channel for file transfers */
     FILES: 'files',
   },
+
+  // Buffer management constants for backpressure handling
+  // Based on WebRTC best practices: https://developer.mozilla.org/en-US/docs/Web/API/RTCDataChannel/bufferedAmount
+
+  /** High water mark - pause sending when buffer exceeds this (1MB) */
+  HIGH_WATER_MARK: 1024 * 1024,
+
+  /** Low water mark - resume sending when buffer drops below this (256KB) */
+  LOW_WATER_MARK: 256 * 1024,
+
+  /** Timeout to prevent infinite waits for buffer drain (30 seconds) */
+  BUFFER_DRAIN_TIMEOUT_MS: 30000,
+} as const;
+
+// =============================================================================
+// RELIABLE FILE TRANSFER CONSTANTS (FileTransferManager)
+// =============================================================================
+
+export const RELIABLE_TRANSFER = {
+  /** Maximum retries per chunk before failing the transfer */
+  MAX_RETRIES_PER_CHUNK: 3,
+
+  /** Timeout waiting for chunk acknowledgment (ms) */
+  CHUNK_ACK_TIMEOUT_MS: 5000,
+
+  /** Time without activity before transfer is considered idle (1 minute) */
+  TRANSFER_IDLE_TIMEOUT_MS: 60000,
+
+  /** Maximum buffered amount before applying backpressure (1MB) */
+  MAX_BUFFERED_AMOUNT: 1024 * 1024,
+
+  /** Interval to check backpressure (ms) */
+  BACKPRESSURE_CHECK_INTERVAL_MS: 50,
+
+  /** Sliding window size - max chunks in flight simultaneously */
+  MAX_CHUNKS_IN_FLIGHT: 10,
+
+  /** How often to check for idle/stale transfers (ms) */
+  IDLE_CHECK_INTERVAL_MS: 10000,
 } as const;

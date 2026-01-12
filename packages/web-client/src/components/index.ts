@@ -8,3 +8,6 @@ export { StatusIndicator } from './StatusIndicator';
 export { KeyChangeWarning } from './KeyChangeWarning';
 export { FingerprintDisplay } from './FingerprintDisplay';
 export { ErrorBoundary } from './ErrorBoundary';
+export { SecurityInfoPanel } from './SecurityInfoPanel';
+export { SecurityReminder } from './SecurityReminder';
+export { ErrorBanner } from './ErrorBanner';

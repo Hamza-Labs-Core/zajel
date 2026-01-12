@@ -1,4 +1,5 @@
 import { useState } from 'preact/hooks';
+import { logger } from '../lib/logger';
 
 interface FingerprintDisplayProps {
   myFingerprint: string;
@@ -42,7 +43,8 @@ export function FingerprintDisplay({
         setAnnouncement('');
       }, 2000);
     } catch (err) {
-      console.error('Failed to copy:', err);
+      // Clipboard errors are non-critical UI failures - log but don't use full error handling
+      logger.warn('FingerprintDisplay', 'Failed to copy to clipboard:', err instanceof Error ? err.message : 'Unknown error');
       setAnnouncement('Failed to copy to clipboard');
     }
   };
