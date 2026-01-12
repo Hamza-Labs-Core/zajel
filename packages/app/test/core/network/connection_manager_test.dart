@@ -64,12 +64,25 @@ void main() {
 
     group('connectToExternalPeer', () {
       test('throws when not connected to signaling server', () async {
+        // Use valid pairing code format (6 chars from A-Z excluding O,I + 2-9)
+        expect(
+          () => connectionManager.connectToExternalPeer('ABC234'),
+          throwsA(isA<ConnectionException>().having(
+            (e) => e.message,
+            'message',
+            contains('Not connected to signaling server'),
+          )),
+        );
+      });
+
+      test('throws for invalid pairing code format', () async {
+        // Code with invalid character '1' (only 2-9 allowed)
         expect(
           () => connectionManager.connectToExternalPeer('PEER12'),
           throwsA(isA<ConnectionException>().having(
             (e) => e.message,
             'message',
-            contains('Not connected to signaling server'),
+            contains('Invalid pairing code format'),
           )),
         );
       });
