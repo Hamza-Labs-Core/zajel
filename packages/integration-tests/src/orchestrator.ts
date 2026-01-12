@@ -9,7 +9,7 @@
 import type { ChildProcess } from 'child_process';
 import { spawn, execSync } from 'child_process';
 import { WebSocket } from 'ws';
-import type { Browser, BrowserContext } from 'playwright';
+import type { Browser, BrowserContext, Page } from 'playwright';
 import { chromium } from 'playwright';
 import http, { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from 'http';
 import { resolve, dirname } from 'path';
