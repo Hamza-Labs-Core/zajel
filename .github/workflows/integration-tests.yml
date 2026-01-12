@@ -31,32 +31,22 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
 
-      - name: Install VPS server dependencies
+      - name: Install all dependencies
         run: npm ci
-        working-directory: packages/server-vps
-
-      - name: Install web client dependencies
-        run: npm ci
-        working-directory: packages/web-client
 
       - name: Build web client
-        run: npm run build
-        working-directory: packages/web-client
+        run: npm run build --workspace=@zajel/web-client
         env:
           VITE_SIGNALING_URL: ws://localhost:3000
 
-      - name: Cache VPS node_modules
+      - name: Cache node_modules
         uses: actions/cache/save@v4
         with:
-          path: packages/server-vps/node_modules
-          key: vps-modules-${{ hashFiles('packages/server-vps/package-lock.json') }}
-
-      - name: Cache web-client node_modules
-        uses: actions/cache/save@v4
-        with:
-          path: packages/web-client/node_modules
-          key: web-modules-${{ hashFiles('packages/web-client/package-lock.json') }}
+          path: node_modules
+          key: node-modules-${{ hashFiles('package-lock.json') }}
 
       - name: Upload web client build
         uses: actions/upload-artifact@v4
@@ -77,19 +67,14 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Restore VPS node_modules
+      - name: Restore node_modules
         uses: actions/cache/restore@v4
         with:
-          path: packages/server-vps/node_modules
-          key: vps-modules-${{ hashFiles('packages/server-vps/package-lock.json') }}
-
-      - name: Install integration test dependencies
-        run: npm ci
-        working-directory: packages/integration-tests
+          path: node_modules
+          key: node-modules-${{ hashFiles('package-lock.json') }}
 
       - name: Run pairing flow tests
-        run: npm run test:pairing
-        working-directory: packages/integration-tests
+        run: npm run test:pairing --workspace=@zajel/integration-tests
         env:
           CI: true
           LOG_LEVEL: error
@@ -106,17 +91,11 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Restore VPS node_modules
+      - name: Restore node_modules
         uses: actions/cache/restore@v4
         with:
-          path: packages/server-vps/node_modules
-          key: vps-modules-${{ hashFiles('packages/server-vps/package-lock.json') }}
-
-      - name: Restore web-client node_modules
-        uses: actions/cache/restore@v4
-        with:
-          path: packages/web-client/node_modules
-          key: web-modules-${{ hashFiles('packages/web-client/package-lock.json') }}
+          path: node_modules
+          key: node-modules-${{ hashFiles('package-lock.json') }}
 
       - name: Download web client build
         uses: actions/download-artifact@v4
@@ -128,13 +107,8 @@ jobs:
         run: npx playwright install --with-deps chromium
         working-directory: packages/web-client
 
-      - name: Install integration test dependencies
-        run: npm ci
-        working-directory: packages/integration-tests
-
       - name: Run web-to-web tests
-        run: npm run test:web-to-web
-        working-directory: packages/integration-tests
+        run: npm run test:web-to-web --workspace=@zajel/integration-tests
         env:
           CI: true
           LOG_LEVEL: error

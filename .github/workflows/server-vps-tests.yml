@@ -16,10 +16,6 @@ concurrency:
   group: server-vps-${{ github.ref }}
   cancel-in-progress: true
 
-defaults:
-  run:
-    working-directory: packages/server-vps
-
 jobs:
   unit-tests:
     name: Unit Tests (Shard ${{ matrix.shard }}/${{ matrix.total-shards }})
@@ -37,13 +33,13 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: packages/server-vps/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
       - name: Run unit tests
-        run: npm test -- --shard=${{ matrix.shard }}/${{ matrix.total-shards }}
+        run: npm test --workspace=@zajel/server-vps -- --shard=${{ matrix.shard }}/${{ matrix.total-shards }}
         env:
           CI: true
           LOG_LEVEL: error
@@ -59,13 +55,13 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: packages/server-vps/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
       - name: Run E2E tests
-        run: npm test -- tests/e2e/
+        run: npm test --workspace=@zajel/server-vps -- tests/e2e/
         env:
           CI: true
           LOG_LEVEL: error
@@ -81,13 +77,13 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: packages/server-vps/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
       - name: Run integration tests
-        run: npm test -- tests/integration/
+        run: npm test --workspace=@zajel/server-vps -- tests/integration/
         env:
           CI: true
           LOG_LEVEL: error

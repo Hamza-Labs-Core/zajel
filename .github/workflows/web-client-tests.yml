@@ -16,10 +16,6 @@ concurrency:
   group: web-client-${{ github.ref }}
   cancel-in-progress: true
 
-defaults:
-  run:
-    working-directory: packages/web-client
-
 jobs:
   unit-tests:
     name: Unit Tests
@@ -32,13 +28,13 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: packages/web-client/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
       - name: Run unit tests
-        run: npm test
+        run: npm test --workspace=@zajel/web-client
         env:
           CI: true
 
@@ -53,13 +49,13 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: packages/web-client/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
       - name: Build
-        run: npm run build
+        run: npm run build --workspace=@zajel/web-client
         env:
           VITE_SIGNALING_URL: ws://localhost:3000
 
@@ -87,13 +83,14 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: packages/web-client/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
+        working-directory: packages/web-client
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -103,6 +100,7 @@ jobs:
 
       - name: Run E2E tests
         run: npx playwright test --project=chromium --shard=${{ matrix.shard }}/${{ matrix.total-shards }}
+        working-directory: packages/web-client
         env:
           CI: true
 
@@ -128,13 +126,14 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: packages/web-client/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
       - name: Install Playwright Firefox
         run: npx playwright install --with-deps firefox
+        working-directory: packages/web-client
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -144,6 +143,7 @@ jobs:
 
       - name: Run E2E tests
         run: npx playwright test --project=firefox
+        working-directory: packages/web-client
         env:
           CI: true
 
@@ -169,13 +169,14 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: packages/web-client/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
       - name: Install Playwright WebKit
         run: npx playwright install --with-deps webkit
+        working-directory: packages/web-client
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -185,6 +186,7 @@ jobs:
 
       - name: Run E2E tests
         run: npx playwright test --project=webkit
+        working-directory: packages/web-client
         env:
           CI: true
 

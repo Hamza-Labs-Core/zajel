@@ -5,7 +5,7 @@ node_modules/
 dist/
 dist-server/
 
-# Lock files (use npm ci with package-lock.json in CI)
+# Lock files are managed at root level for npm workspaces
 package-lock.json
 
 # Environment
