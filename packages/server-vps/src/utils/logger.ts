@@ -168,7 +168,7 @@ class Logger {
    * Log a pairing event with automatic redaction
    */
   pairingEvent(
-    event: 'registered' | 'request' | 'matched' | 'rejected' | 'expired' | 'disconnected' | 'forwarded' | 'not_found',
+    event: 'registered' | 'request' | 'matched' | 'rejected' | 'expired' | 'disconnected' | 'forwarded' | 'forward_failed' | 'not_found',
     codes: { requester?: string; target?: string; code?: string; type?: string; activeCodes?: number }
   ): void {
     const redactedCodes: Record<string, unknown> = {

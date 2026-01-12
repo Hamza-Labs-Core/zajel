@@ -39,6 +39,21 @@ export const RATE_LIMIT = {
 } as const;
 
 // =============================================================================
+// PAIRING CODE FORMAT
+// =============================================================================
+
+export const PAIRING_CODE = {
+  /**
+   * Regex for validating pairing code format.
+   * Pairing codes are 6 characters using an unambiguous alphabet:
+   * - Uppercase letters excluding I, O (to avoid confusion with 1, 0)
+   * - Digits excluding 0, 1 (to avoid confusion with O, I)
+   * This gives 32 possible characters (24 letters + 8 digits).
+   */
+  REGEX: /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/,
+} as const;
+
+// =============================================================================
 // PAIRING CONSTANTS
 // =============================================================================
 

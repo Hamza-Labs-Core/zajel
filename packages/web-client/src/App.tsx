@@ -133,11 +133,18 @@ export function App() {
   // Signaling callbacks
   const signalingCallbacks = useMemo(() => ({
     onPairMatched: async (matchedPeerCode: string, peerPublicKey: string, isInitiator: boolean) => {
-      setPeerCode(matchedPeerCode);
-      setAppState('webrtc_connecting');
-      crypto.establishSession(matchedPeerCode, peerPublicKey);
-      setPeerFingerprint(crypto.getPeerFingerprint(peerPublicKey));
-      await webrtc.connect(matchedPeerCode, isInitiator);
+      try {
+        setPeerCode(matchedPeerCode);
+        setAppState('webrtc_connecting');
+        crypto.establishSession(matchedPeerCode, peerPublicKey);
+        setPeerFingerprint(crypto.getPeerFingerprint(peerPublicKey));
+        await webrtc.connect(matchedPeerCode, isInitiator);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to establish secure connection';
+        signalingRef.current?.setError(message);
+        signalingRef.current?.setState('registered');
+        setPeerCode('');
+      }
     },
     onOffer: async (_from: string, payload: RTCSessionDescriptionInit) => {
       await webrtc.handleOffer(payload);
@@ -208,10 +215,12 @@ export function App() {
   }, []);
 
   const handleFileInputChange = useCallback((e: Event) => {
-    const files = (e.target as HTMLInputElement).files;
+    const input = e.target as HTMLInputElement;
+    const files = input.files;
     if (files && files.length > 0) {
       fileTransfer.sendFile(files[0]);
     }
+    input.value = ''; // Reset to allow re-selecting same file
   }, [fileTransfer]);
 
   const handleVerified = useCallback(() => {

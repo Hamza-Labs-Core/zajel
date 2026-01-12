@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:uuid/uuid.dart';
 
 import '../crypto/crypto_service.dart';
+import '../logging/logger_service.dart';
 import '../models/models.dart';
 import 'device_link_service.dart';
 import 'signaling_client.dart';
@@ -518,119 +519,126 @@ class ConnectionManager {
   }
 
   void _handleSignalingMessage(SignalingMessage message) async {
-    switch (message) {
-      case SignalingPairIncoming(fromCode: final fromCode, fromPublicKey: final fromPublicKey):
-        // Someone wants to pair with us - emit event for UI to show approval dialog
-        _pairRequestController.add((fromCode, fromPublicKey));
-        break;
+    try {
+      switch (message) {
+        case SignalingPairIncoming(fromCode: final fromCode, fromPublicKey: final fromPublicKey):
+          // Someone wants to pair with us - emit event for UI to show approval dialog
+          _pairRequestController.add((fromCode, fromPublicKey));
+          break;
 
-      case SignalingPairMatched(peerCode: final peerCode, peerPublicKey: final peerPublicKey, isInitiator: final isInitiator):
-        // Pairing approved by both sides - start WebRTC connection
-        if (!_peers.containsKey(peerCode)) {
-          _peers[peerCode] = Peer(
-            id: peerCode,
-            displayName: 'Peer $peerCode',
-            connectionState: PeerConnectionState.connecting,
-            lastSeen: DateTime.now(),
-            isLocal: false,
-          );
+        case SignalingPairMatched(peerCode: final peerCode, peerPublicKey: final peerPublicKey, isInitiator: final isInitiator):
+          // Pairing approved by both sides - start WebRTC connection
+          if (!_peers.containsKey(peerCode)) {
+            _peers[peerCode] = Peer(
+              id: peerCode,
+              displayName: 'Peer $peerCode',
+              connectionState: PeerConnectionState.connecting,
+              lastSeen: DateTime.now(),
+              isLocal: false,
+            );
+            _notifyPeersChanged();
+          }
+          await _startWebRTCConnection(peerCode, peerPublicKey, isInitiator);
+          break;
+
+        case SignalingPairRejected(peerCode: final peerCode):
+          // Peer rejected our pairing request
+          _updatePeerState(peerCode, PeerConnectionState.failed);
+          _peers.remove(peerCode);
           _notifyPeersChanged();
-        }
-        await _startWebRTCConnection(peerCode, peerPublicKey, isInitiator);
-        break;
+          break;
 
-      case SignalingPairRejected(peerCode: final peerCode):
-        // Peer rejected our pairing request
-        _updatePeerState(peerCode, PeerConnectionState.failed);
-        _peers.remove(peerCode);
-        _notifyPeersChanged();
-        break;
-
-      case SignalingPairTimeout(peerCode: final peerCode):
-        // Pairing request timed out
-        _updatePeerState(peerCode, PeerConnectionState.failed);
-        _peers.remove(peerCode);
-        _notifyPeersChanged();
-        break;
-
-      case SignalingPairError(error: final _):
-        // Pairing error
-        break;
-
-      case SignalingOffer(from: final from, payload: final payload):
-        // Pattern 6: Capture client reference before async operation (HIGH risk fix)
-        final signalingState = _signalingState;
-        if (signalingState is! SignalingConnected) {
-          // Connection was closed, cannot process offer
-          return;
-        }
-        final client = signalingState.client;
-
-        // Offer from matched peer (we're the non-initiator)
-        if (!_peers.containsKey(from)) {
-          _peers[from] = Peer(
-            id: from,
-            displayName: 'Peer $from',
-            connectionState: PeerConnectionState.connecting,
-            lastSeen: DateTime.now(),
-            isLocal: false,
-          );
+        case SignalingPairTimeout(peerCode: final peerCode):
+          // Pairing request timed out
+          _updatePeerState(peerCode, PeerConnectionState.failed);
+          _peers.remove(peerCode);
           _notifyPeersChanged();
-        }
+          break;
 
-        // No need to configure signaling callback here anymore!
-        // The stream-based approach handles all signaling events.
+        case SignalingPairError(error: final _):
+          // Pairing error
+          break;
 
-        // Handle offer and create answer
-        final answer = await _webrtcService.handleOffer(from, payload);
+        case SignalingOffer(from: final from, payload: final payload):
+          // Pattern 6: Capture client reference before async operation (HIGH risk fix)
+          final signalingState = _signalingState;
+          if (signalingState is! SignalingConnected) {
+            // Connection was closed, cannot process offer
+            return;
+          }
+          final client = signalingState.client;
 
-        // Check if client is still valid and connected after async operation
-        // This prevents crash if disableExternalConnections() was called during await
-        if (client.isConnected) {
-          client.sendAnswer(from, answer);
-        }
-        break;
+          // Offer from matched peer (we're the non-initiator)
+          if (!_peers.containsKey(from)) {
+            _peers[from] = Peer(
+              id: from,
+              displayName: 'Peer $from',
+              connectionState: PeerConnectionState.connecting,
+              lastSeen: DateTime.now(),
+              isLocal: false,
+            );
+            _notifyPeersChanged();
+          }
 
-      case SignalingAnswer(from: final from, payload: final payload):
-        await _webrtcService.handleAnswer(from, payload);
-        break;
+          // No need to configure signaling callback here anymore!
+          // The stream-based approach handles all signaling events.
 
-      case SignalingIceCandidate(from: final from, payload: final payload):
-        await _webrtcService.addIceCandidate(from, payload);
-        break;
+          // Handle offer and create answer
+          final answer = await _webrtcService.handleOffer(from, payload);
 
-      case SignalingPeerJoined(peerId: final _):
-        // Peer is online, we could auto-connect or notify user
-        break;
+          // Check if client is still valid and connected after async operation
+          // This prevents crash if disableExternalConnections() was called during await
+          if (client.isConnected) {
+            client.sendAnswer(from, answer);
+          }
+          break;
 
-      case SignalingPeerLeft(peerId: final peerId):
-        _updatePeerState(peerId, PeerConnectionState.disconnected);
-        break;
+        case SignalingAnswer(from: final from, payload: final payload):
+          await _webrtcService.handleAnswer(from, payload);
+          break;
 
-      case SignalingError(message: final _):
-        // Handle error - could show notification to user
-        break;
+        case SignalingIceCandidate(from: final from, payload: final payload):
+          await _webrtcService.addIceCandidate(from, payload);
+          break;
 
-      // Device linking messages (web client → mobile app)
-      case SignalingLinkRequest(linkCode: final linkCode, publicKey: final publicKey, deviceName: final deviceName):
-        // Web client wants to link with us - emit event for UI to show approval
-        _linkRequestController.add((linkCode, publicKey, deviceName));
-        break;
+        case SignalingPeerJoined(peerId: final _):
+          // Peer is online, we could auto-connect or notify user
+          break;
 
-      case SignalingLinkMatched(linkCode: final linkCode, peerPublicKey: final peerPublicKey, isInitiator: final isInitiator):
-        // Link approved - establish WebRTC tunnel with web client
-        await _startLinkConnection(linkCode, peerPublicKey, isInitiator);
-        break;
+        case SignalingPeerLeft(peerId: final peerId):
+          _updatePeerState(peerId, PeerConnectionState.disconnected);
+          break;
 
-      case SignalingLinkRejected():
-        // Web client's link request was rejected
-        _deviceLinkService.cancelLinkSession();
-        break;
+        case SignalingError(message: final _):
+          // Handle error - could show notification to user
+          break;
 
-      case SignalingLinkTimeout():
-        // Link request timed out
-        _deviceLinkService.cancelLinkSession();
-        break;
+        // Device linking messages (web client → mobile app)
+        case SignalingLinkRequest(linkCode: final linkCode, publicKey: final publicKey, deviceName: final deviceName):
+          // Web client wants to link with us - emit event for UI to show approval
+          _linkRequestController.add((linkCode, publicKey, deviceName));
+          break;
+
+        case SignalingLinkMatched(linkCode: final linkCode, peerPublicKey: final peerPublicKey, isInitiator: final isInitiator):
+          // Link approved - establish WebRTC tunnel with web client
+          await _startLinkConnection(linkCode, peerPublicKey, isInitiator);
+          break;
+
+        case SignalingLinkRejected():
+          // Web client's link request was rejected
+          _deviceLinkService.cancelLinkSession();
+          break;
+
+        case SignalingLinkTimeout():
+          // Link request timed out
+          _deviceLinkService.cancelLinkSession();
+          break;
+      }
+    } catch (e, stackTrace) {
+      // Log error to prevent silent failures in async void handler
+      // This ensures exceptions from WebRTC operations are captured and visible
+      logger.error('ConnectionManager', 'Failed to handle signaling message', e, stackTrace);
+      // TODO: Consider emitting error to a dedicated error stream for UI notification
     }
   }
 

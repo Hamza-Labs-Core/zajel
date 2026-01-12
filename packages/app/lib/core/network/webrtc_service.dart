@@ -91,9 +91,15 @@ class WebRTCService {
     // Create data channels
     await _createDataChannels(connection);
 
-    // Create and set local description
-    final offer = await connection.pc.createOffer();
-    await connection.pc.setLocalDescription(offer);
+    // Create and set local description with timeout to prevent hanging
+    final offer = await connection.pc.createOffer().timeout(
+      WebRTCConstants.operationTimeout,
+      onTimeout: () => throw WebRTCException('createOffer timeout'),
+    );
+    await connection.pc.setLocalDescription(offer).timeout(
+      WebRTCConstants.operationTimeout,
+      onTimeout: () => throw WebRTCException('setLocalDescription timeout'),
+    );
 
     return {
       'type': 'offer',
@@ -108,14 +114,23 @@ class WebRTCService {
   ) async {
     final connection = await _createConnection(peerId);
 
-    // Set remote description
+    // Set remote description with timeout to prevent hanging
     await connection.pc.setRemoteDescription(
       RTCSessionDescription(offer['sdp'] as String, 'offer'),
+    ).timeout(
+      WebRTCConstants.operationTimeout,
+      onTimeout: () => throw WebRTCException('setRemoteDescription timeout'),
     );
 
-    // Create and set local description
-    final answer = await connection.pc.createAnswer();
-    await connection.pc.setLocalDescription(answer);
+    // Create and set local description with timeout to prevent hanging
+    final answer = await connection.pc.createAnswer().timeout(
+      WebRTCConstants.operationTimeout,
+      onTimeout: () => throw WebRTCException('createAnswer timeout'),
+    );
+    await connection.pc.setLocalDescription(answer).timeout(
+      WebRTCConstants.operationTimeout,
+      onTimeout: () => throw WebRTCException('setLocalDescription timeout'),
+    );
 
     return {
       'type': 'answer',
@@ -133,8 +148,12 @@ class WebRTCService {
       throw WebRTCException('No connection found for peer: $peerId');
     }
 
+    // Set remote description with timeout to prevent hanging
     await connection.pc.setRemoteDescription(
       RTCSessionDescription(answer['sdp'] as String, 'answer'),
+    ).timeout(
+      WebRTCConstants.operationTimeout,
+      onTimeout: () => throw WebRTCException('setRemoteDescription timeout'),
     );
   }
 
@@ -149,12 +168,16 @@ class WebRTCService {
       return;
     }
 
+    // Add ICE candidate with timeout to prevent hanging
     await connection.pc.addCandidate(
       RTCIceCandidate(
         candidate['candidate'] as String?,
         candidate['sdpMid'] as String?,
         candidate['sdpMLineIndex'] as int?,
       ),
+    ).timeout(
+      WebRTCConstants.operationTimeout,
+      onTimeout: () => throw WebRTCException('addIceCandidate timeout'),
     );
   }
 

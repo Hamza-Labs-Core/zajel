@@ -102,6 +102,8 @@ const VALID_PEER_CODE = 'XYZ789';
 // Public keys need to be 32-256 chars
 const VALID_PUBLIC_KEY = 'test-public-key-123456789012345678901234567890';
 const VALID_PEER_PUBLIC_KEY = 'peer-public-key-123456789012345678901234567890';
+// Valid SDP must start with 'v=0' and contain 'o=' and 's=' lines per RFC 4566
+const VALID_SDP = 'v=0\r\no=- 123 456 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n';
 
 describe('SignalingClient', () => {
   let mockWs: MockWebSocket | null = null;
@@ -411,7 +413,7 @@ describe('SignalingClient', () => {
     });
 
     it('should handle offer message', () => {
-      const offer: RTCSessionDescriptionInit = { type: 'offer', sdp: 'test-sdp' };
+      const offer: RTCSessionDescriptionInit = { type: 'offer', sdp: VALID_SDP };
       mockWs!.simulateMessage({
         type: 'offer',
         from: VALID_PEER_CODE,
@@ -422,7 +424,7 @@ describe('SignalingClient', () => {
     });
 
     it('should handle answer message', () => {
-      const answer: RTCSessionDescriptionInit = { type: 'answer', sdp: 'test-sdp' };
+      const answer: RTCSessionDescriptionInit = { type: 'answer', sdp: VALID_SDP };
       mockWs!.simulateMessage({
         type: 'answer',
         from: VALID_PEER_CODE,
@@ -646,7 +648,7 @@ describe('SignalingClient', () => {
     });
 
     it('should send offer message', () => {
-      const offer: RTCSessionDescriptionInit = { type: 'offer', sdp: 'test-offer-sdp' };
+      const offer: RTCSessionDescriptionInit = { type: 'offer', sdp: VALID_SDP };
       client.sendOffer(VALID_PEER_CODE, offer);
 
       expect(mockWs!.getLastSentMessage()).toEqual({
@@ -657,7 +659,7 @@ describe('SignalingClient', () => {
     });
 
     it('should send answer message', () => {
-      const answer: RTCSessionDescriptionInit = { type: 'answer', sdp: 'test-answer-sdp' };
+      const answer: RTCSessionDescriptionInit = { type: 'answer', sdp: VALID_SDP };
       client.sendAnswer(VALID_PEER_CODE, answer);
 
       expect(mockWs!.getLastSentMessage()).toEqual({
@@ -686,7 +688,7 @@ describe('SignalingClient', () => {
       client.disconnect();
       mockWs!.clearSentMessages();
 
-      client.sendOffer(VALID_PEER_CODE, { type: 'offer', sdp: 'test' });
+      client.sendOffer(VALID_PEER_CODE, { type: 'offer', sdp: VALID_SDP });
 
       expect(mockWs!.getSentMessages()).toHaveLength(0);
     });

@@ -16,6 +16,8 @@ import {
 // Valid test data that passes validation
 const VALID_PAIRING_CODE = 'ABC234';
 const VALID_PUBLIC_KEY = 'test-public-key-123456789012345678901234567890'; // 32-256 chars
+// Valid SDP must start with 'v=0' and contain 'o=' and 's=' lines per RFC 4566
+const VALID_SDP = 'v=0\r\no=- 123 456 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n';
 
 describe('validateServerMessage', () => {
   describe('Basic validation', () => {
@@ -249,7 +251,7 @@ describe('validateServerMessage', () => {
       const result = validateServerMessage({
         type: 'offer',
         from: VALID_PAIRING_CODE,
-        payload: { type: 'offer', sdp: 'test-sdp' },
+        payload: { type: 'offer', sdp: VALID_SDP },
       });
       expect(result.success).toBe(true);
     });
@@ -263,11 +265,20 @@ describe('validateServerMessage', () => {
       expect(result.success).toBe(true);
     });
 
+    it('should validate offer with empty sdp string', () => {
+      const result = validateServerMessage({
+        type: 'offer',
+        from: VALID_PAIRING_CODE,
+        payload: { type: 'offer', sdp: '' },
+      });
+      expect(result.success).toBe(true);
+    });
+
     it('should reject offer with invalid SDP type', () => {
       const result = validateServerMessage({
         type: 'offer',
         from: VALID_PAIRING_CODE,
-        payload: { type: 'invalid-type', sdp: 'test' },
+        payload: { type: 'invalid-type', sdp: VALID_SDP },
       });
       expect(result.success).toBe(false);
     });
@@ -276,9 +287,45 @@ describe('validateServerMessage', () => {
       const result = validateServerMessage({
         type: 'offer',
         from: VALID_PAIRING_CODE,
-        payload: { type: 'offer', sdp: 'x'.repeat(100001) },
+        payload: { type: 'offer', sdp: 'v=0\r\no=x\r\ns=x\r\n' + 'x'.repeat(100001) },
       });
       expect(result.success).toBe(false);
+    });
+
+    it('should reject offer with SDP not starting with v=0', () => {
+      const result = validateServerMessage({
+        type: 'offer',
+        from: VALID_PAIRING_CODE,
+        payload: { type: 'offer', sdp: 'invalid-sdp' },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject offer with SDP missing o= line', () => {
+      const result = validateServerMessage({
+        type: 'offer',
+        from: VALID_PAIRING_CODE,
+        payload: { type: 'offer', sdp: 'v=0\r\ns=-\r\n' },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject offer with SDP missing s= line', () => {
+      const result = validateServerMessage({
+        type: 'offer',
+        from: VALID_PAIRING_CODE,
+        payload: { type: 'offer', sdp: 'v=0\r\no=- 123 456 IN IP4 127.0.0.1\r\n' },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('should accept SDP with Unix-style line endings', () => {
+      const result = validateServerMessage({
+        type: 'offer',
+        from: VALID_PAIRING_CODE,
+        payload: { type: 'offer', sdp: 'v=0\no=- 123 456 IN IP4 127.0.0.1\ns=-\n' },
+      });
+      expect(result.success).toBe(true);
     });
   });
 
@@ -287,7 +334,7 @@ describe('validateServerMessage', () => {
       const result = validateServerMessage({
         type: 'answer',
         from: VALID_PAIRING_CODE,
-        payload: { type: 'answer', sdp: 'test-sdp' },
+        payload: { type: 'answer', sdp: VALID_SDP },
       });
       expect(result.success).toBe(true);
     });
@@ -297,6 +344,15 @@ describe('validateServerMessage', () => {
         type: 'answer',
         from: VALID_PAIRING_CODE,
         payload: 'string-payload',
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject answer with malformed SDP', () => {
+      const result = validateServerMessage({
+        type: 'answer',
+        from: VALID_PAIRING_CODE,
+        payload: { type: 'answer', sdp: 'malformed-sdp-content' },
       });
       expect(result.success).toBe(false);
     });

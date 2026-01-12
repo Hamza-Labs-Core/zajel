@@ -43,6 +43,7 @@ const MAX_SDP_LENGTH = 100000;
 const MAX_ICE_CANDIDATE_LENGTH = 10000;
 const MAX_FILE_NAME_LENGTH = 255;
 const MAX_FILE_CHUNKS = 1000000;
+const MAX_ARRAY_SIZE = 10000; // Max elements in retry/missing chunk arrays to prevent DoS
 
 /**
  * Result of a validation operation.
@@ -135,6 +136,14 @@ function isValidSdpPayload(value: unknown): value is RTCSessionDescriptionInit {
   if ('sdp' in value && value.sdp !== undefined) {
     if (!isString(value.sdp, 0, MAX_SDP_LENGTH)) {
       return false;
+    }
+    // Basic SDP structure validation for defense in depth
+    // Valid SDP must start with 'v=0' and contain 'o=' and 's=' lines
+    const sdp = value.sdp;
+    if (sdp.length > 0) {
+      if (!sdp.startsWith('v=0')) return false;
+      if (!sdp.includes('\no=') && !sdp.includes('\r\no=')) return false;
+      if (!sdp.includes('\ns=') && !sdp.includes('\r\ns=')) return false;
     }
   }
 
@@ -350,6 +359,9 @@ function validateFileStartMessage(obj: Record<string, unknown>): ValidationResul
   // chunkHashes is optional - validate if present
   let chunkHashes: string[] | undefined;
   if (Array.isArray(obj.chunkHashes)) {
+    if (obj.chunkHashes.length > MAX_ARRAY_SIZE) {
+      return failure('chunkHashes array exceeds maximum size');
+    }
     chunkHashes = [];
     for (const h of obj.chunkHashes) {
       if (!isString(h, 1, 100)) {
@@ -450,6 +462,9 @@ function validateChunkRetryRequestMessage(obj: Record<string, unknown>): Validat
   if (!Array.isArray(obj.chunkIndices)) {
     return failure('Invalid or missing chunkIndices in chunk_retry message');
   }
+  if (obj.chunkIndices.length > MAX_ARRAY_SIZE) {
+    return failure('chunkIndices array exceeds maximum size');
+  }
   // Validate each chunk index
   for (const index of obj.chunkIndices) {
     if (!isInteger(index, 0, MAX_FILE_CHUNKS)) {
@@ -473,6 +488,9 @@ function validateFileCompleteAckMessage(obj: Record<string, unknown>): Validatio
   // missingChunks is optional
   let missingChunks: number[] | undefined;
   if (Array.isArray(obj.missingChunks)) {
+    if (obj.missingChunks.length > MAX_ARRAY_SIZE) {
+      return failure('missingChunks array exceeds maximum size');
+    }
     missingChunks = [];
     for (const index of obj.missingChunks) {
       if (!isInteger(index, 0, MAX_FILE_CHUNKS)) {

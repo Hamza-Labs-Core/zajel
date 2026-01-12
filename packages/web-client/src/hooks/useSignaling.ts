@@ -105,9 +105,15 @@ export function useSignaling(callbacks: SignalingCallbacks): UseSignalingReturn 
         // For now, we just ignore this - the timeout will handle it
       },
       onPairMatched: async (peerCode, peerPublicKey, isInitiator) => {
-        setIncomingRequest(null);
-        setConnectionState('webrtc_connecting');
-        await callbacksRef.current.onPairMatched(peerCode, peerPublicKey, isInitiator);
+        try {
+          setIncomingRequest(null);
+          setConnectionState('webrtc_connecting');
+          await callbacksRef.current.onPairMatched(peerCode, peerPublicKey, isInitiator);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'WebRTC connection failed';
+          setError(sanitizeErrorMessage(message));
+          setConnectionState('registered');
+        }
       },
       onPairRejected: (_peerCode) => {
         // Use generic message to prevent information leakage about valid codes
@@ -125,13 +131,31 @@ export function useSignaling(callbacks: SignalingCallbacks): UseSignalingReturn 
         setConnectionState('registered');
       },
       onOffer: async (from, payload) => {
-        await callbacksRef.current.onOffer(from, payload);
+        try {
+          await callbacksRef.current.onOffer(from, payload);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Failed to process offer';
+          setError(sanitizeErrorMessage(message));
+          setConnectionState('registered');
+        }
       },
       onAnswer: async (from, payload) => {
-        await callbacksRef.current.onAnswer(from, payload);
+        try {
+          await callbacksRef.current.onAnswer(from, payload);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Failed to process answer';
+          setError(sanitizeErrorMessage(message));
+          setConnectionState('registered');
+        }
       },
       onIceCandidate: async (from, payload) => {
-        await callbacksRef.current.onIceCandidate(from, payload);
+        try {
+          await callbacksRef.current.onIceCandidate(from, payload);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Failed to process ICE candidate';
+          setError(sanitizeErrorMessage(message));
+          setConnectionState('registered');
+        }
       },
       onError: (err) => {
         // Sanitize error message from server to prevent XSS

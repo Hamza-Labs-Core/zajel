@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,6 +27,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
   String? _error;
 
   LinkSession? _linkSession;
+  StreamSubscription<(String, String, String)>? _linkRequestsSubscription;
 
   @override
   void initState() {
@@ -37,7 +40,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
   /// Listen for incoming link requests from web clients and show approval dialog.
   void _listenForLinkRequests() {
     final connectionManager = ref.read(connectionManagerProvider);
-    connectionManager.linkRequests.listen((request) {
+    _linkRequestsSubscription = connectionManager.linkRequests.listen((request) {
       final (linkCode, publicKey, deviceName) = request;
       _showLinkApprovalDialog(linkCode, publicKey, deviceName);
     });
@@ -209,6 +212,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
   @override
   void dispose() {
+    _linkRequestsSubscription?.cancel();
     _tabController.dispose();
     _codeController.dispose();
     _scannerController.dispose();

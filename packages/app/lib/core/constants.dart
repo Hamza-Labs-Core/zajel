@@ -74,4 +74,8 @@ class WebRTCConstants {
 
   /// Maximum retransmit attempts for data channels
   static const int maxRetransmits = 3;
+
+  /// Timeout for WebRTC operations (createOffer, setLocalDescription, etc.)
+  /// This prevents hanging when network is unstable or TURN/STUN servers are unreachable.
+  static const Duration operationTimeout = Duration(seconds: 30);
 }

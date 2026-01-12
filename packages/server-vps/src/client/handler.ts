@@ -14,7 +14,7 @@ import { DistributedRendezvous, type PartialResult } from '../registry/distribut
 import type { DeadDropResult, LiveMatchResult } from '../registry/rendezvous-registry.js';
 import { logger } from '../utils/logger.js';
 
-import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, ENTROPY } from '../constants.js';
+import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY } from '../constants.js';
 
 export interface ClientHandlerConfig {
   heartbeatInterval: number;   // Expected heartbeat interval from clients
@@ -197,6 +197,10 @@ export class ClientHandler extends EventEmitter {
     deviceName: string;      // Browser name
     timestamp: number;
   }> = new Map();
+
+  // Timer references for link request expiration (Issue #9: Memory leak fix)
+  // Key: linkCode
+  private linkRequestTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   // Configurable timeout values (set in constructor from config)
   private readonly pairRequestTimeout: number;
@@ -608,6 +612,12 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
+    // Validate pairing code format (Issue #17)
+    if (!PAIRING_CODE.REGEX.test(pairingCode)) {
+      this.sendError(ws, 'Invalid pairing code format');
+      return;
+    }
+
     if (!publicKey) {
       this.sendError(ws, 'Missing required field: publicKey');
       return;
@@ -694,6 +704,12 @@ export class ClientHandler extends EventEmitter {
 
     if (!targetCode) {
       this.sendError(ws, 'Missing required field: targetCode');
+      return;
+    }
+
+    // Validate target code format (Issue #17)
+    if (!PAIRING_CODE.REGEX.test(targetCode)) {
+      this.sendError(ws, 'Invalid target code format');
       return;
     }
 
@@ -841,6 +857,12 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
+    // Validate target code format (Issue #17)
+    if (!targetCode || !PAIRING_CODE.REGEX.test(targetCode)) {
+      this.sendError(ws, 'Invalid target code format');
+      return;
+    }
+
     // Find the pending request
     const pending = this.pendingPairRequests.get(responderCode) || [];
     const requestIndex = pending.findIndex(r => r.requesterCode === targetCode);
@@ -974,6 +996,12 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
+    // Validate link code format (Issue #17)
+    if (!PAIRING_CODE.REGEX.test(linkCode)) {
+      this.sendError(ws, 'Invalid link code format');
+      return;
+    }
+
     if (!publicKey) {
       this.sendError(ws, 'Missing required field: publicKey');
       return;
@@ -992,6 +1020,13 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
+    // Clear any existing timer for this link code (in case of duplicate request)
+    const existingLinkTimer = this.linkRequestTimers.get(linkCode);
+    if (existingLinkTimer) {
+      clearTimeout(existingLinkTimer);
+      this.linkRequestTimers.delete(linkCode);
+    }
+
     // Store pending link request
     this.pendingLinkRequests.set(linkCode, {
       webClientCode,
@@ -1000,12 +1035,21 @@ export class ClientHandler extends EventEmitter {
       timestamp: Date.now(),
     });
 
-    // Forward request to mobile app
+    // Set timeout for this link request (reuse pairRequestTimeout - 120s default)
+    // Issue #9: Prevents memory leak if mobile app never responds
+    const linkTimer = setTimeout(() => {
+      this.expireLinkRequest(linkCode);
+      this.linkRequestTimers.delete(linkCode);
+    }, this.pairRequestTimeout);
+    this.linkRequestTimers.set(linkCode, linkTimer);
+
+    // Forward request to mobile app (include timeout for UI countdown)
     this.send(mobileWs, {
       type: 'link_request',
       linkCode,
       publicKey,
       deviceName,
+      expiresIn: this.pairRequestTimeout,
     });
 
     logger.debug(`[Link] Request: web ${logger.pairingCode(webClientCode)} -> mobile ${logger.pairingCode(linkCode)}`);
@@ -1023,6 +1067,12 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
+    // Validate link code format (Issue #17)
+    if (!linkCode || !PAIRING_CODE.REGEX.test(linkCode)) {
+      this.sendError(ws, 'Invalid link code format');
+      return;
+    }
+
     // Verify this is the mobile app that owns the link code
     if (mobileCode !== linkCode) {
       this.sendError(ws, 'Cannot respond to link request for another device');
@@ -1037,6 +1087,13 @@ export class ClientHandler extends EventEmitter {
         error: 'No pending link request found',
       });
       return;
+    }
+
+    // Clear the timer for this request (Issue #9)
+    const existingLinkTimer = this.linkRequestTimers.get(linkCode);
+    if (existingLinkTimer) {
+      clearTimeout(existingLinkTimer);
+      this.linkRequestTimers.delete(linkCode);
     }
 
     // Remove the pending request
@@ -1091,6 +1148,41 @@ export class ClientHandler extends EventEmitter {
   }
 
   /**
+   * Expire a pending link request (Issue #9: Memory leak fix)
+   *
+   * Called when the mobile app does not respond within the timeout period.
+   * Notifies both parties that the request has expired.
+   */
+  private expireLinkRequest(linkCode: string): void {
+    const pending = this.pendingLinkRequests.get(linkCode);
+
+    if (pending) {
+      // Request is still pending, expire it
+      this.pendingLinkRequests.delete(linkCode);
+
+      // Notify web client about timeout
+      const webWs = this.pairingCodeToWs.get(pending.webClientCode);
+      if (webWs) {
+        this.send(webWs, {
+          type: 'link_timeout',
+          linkCode,
+        });
+      }
+
+      // Notify mobile app about timeout (in case they have stale UI state)
+      const mobileWs = this.pairingCodeToWs.get(linkCode);
+      if (mobileWs) {
+        this.send(mobileWs, {
+          type: 'link_timeout',
+          linkCode,
+        });
+      }
+
+      logger.debug(`[Link] Expired: web ${logger.pairingCode(pending.webClientCode)} -> mobile ${logger.pairingCode(linkCode)}`);
+    }
+  }
+
+  /**
    * Handle signaling message forwarding (offer, answer, ice_candidate)
    */
   private handleSignalingForward(
@@ -1107,6 +1199,12 @@ export class ClientHandler extends EventEmitter {
 
     if (!target) {
       this.sendError(ws, 'Missing required field: target');
+      return;
+    }
+
+    // Validate target code format (Issue #17)
+    if (!PAIRING_CODE.REGEX.test(target)) {
+      this.sendError(ws, 'Invalid target code format');
       return;
     }
 
@@ -1132,6 +1230,7 @@ export class ClientHandler extends EventEmitter {
     if (forwarded) {
       logger.pairingEvent('forwarded', { requester: senderPairingCode, target, type });
     } else {
+      logger.pairingEvent('forward_failed', { requester: senderPairingCode, target, type });
       this.send(ws, {
         type: 'error',
         message: `Failed to forward ${type} to ${target}`,
@@ -1190,12 +1289,23 @@ export class ClientHandler extends EventEmitter {
         }
       }
 
-      // Clean up pending link requests where this peer was the mobile app
+      // Clean up pending link requests where this peer was the mobile app (Issue #9)
+      const mobileTimer = this.linkRequestTimers.get(pairingCode);
+      if (mobileTimer) {
+        clearTimeout(mobileTimer);
+        this.linkRequestTimers.delete(pairingCode);
+      }
       this.pendingLinkRequests.delete(pairingCode);
 
       // Also clean up link requests where this peer was the web client
       for (const [linkCode, request] of this.pendingLinkRequests) {
         if (request.webClientCode === pairingCode) {
+          // Clear the timer for this link request (Issue #9)
+          const webClientTimer = this.linkRequestTimers.get(linkCode);
+          if (webClientTimer) {
+            clearTimeout(webClientTimer);
+            this.linkRequestTimers.delete(linkCode);
+          }
           this.pendingLinkRequests.delete(linkCode);
           // Notify mobile app that web client disconnected
           const mobileWs = this.pairingCodeToWs.get(linkCode);
@@ -1342,6 +1452,20 @@ export class ClientHandler extends EventEmitter {
       }
     }
 
+
+    // Clean up stale rate limiter entries for signaling clients that may have
+    // disconnected without triggering the WebSocket 'close' event (Issue #4)
+    const STALE_THRESHOLD = 5 * 60 * 1000; // 5 minutes
+    for (const [ws, rateLimitInfo] of this.wsRateLimits) {
+      if (now - rateLimitInfo.windowStart > STALE_THRESHOLD) {
+        this.wsRateLimits.delete(ws);
+      }
+    }
+    for (const [ws, rateLimitInfo] of this.wsPairRequestRateLimits) {
+      if (now - rateLimitInfo.windowStart > STALE_THRESHOLD) {
+        this.wsPairRequestRateLimits.delete(ws);
+      }
+    }
     return stale.length;
   }
 
@@ -1360,6 +1484,12 @@ export class ClientHandler extends EventEmitter {
       clearTimeout(timer);
     }
     this.pairRequestWarningTimers.clear();
+
+    // Clear all link request timers to prevent memory leaks (Issue #9)
+    for (const timer of this.linkRequestTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.linkRequestTimers.clear();
 
     // Clear rate limiting data
     this.wsRateLimits.clear();
