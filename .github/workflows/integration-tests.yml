@@ -37,6 +37,9 @@ jobs:
       - name: Install all dependencies
         run: npm ci
 
+      - name: Build server-vps
+        run: npm run build --workspace=@zajel/server-vps
+
       - name: Build web client
         run: npm run build --workspace=@zajel/web-client
         env:
@@ -45,8 +48,16 @@ jobs:
       - name: Cache node_modules
         uses: actions/cache/save@v4
         with:
-          path: node_modules
+          path: |
+            node_modules
+            packages/*/node_modules
           key: node-modules-${{ hashFiles('package-lock.json') }}
+
+      - name: Cache server-vps build
+        uses: actions/cache/save@v4
+        with:
+          path: packages/server-vps/dist
+          key: server-vps-dist-${{ github.sha }}
 
       - name: Upload web client build
         uses: actions/upload-artifact@v4
@@ -70,8 +81,16 @@ jobs:
       - name: Restore node_modules
         uses: actions/cache/restore@v4
         with:
-          path: node_modules
+          path: |
+            node_modules
+            packages/*/node_modules
           key: node-modules-${{ hashFiles('package-lock.json') }}
+
+      - name: Restore server-vps build
+        uses: actions/cache/restore@v4
+        with:
+          path: packages/server-vps/dist
+          key: server-vps-dist-${{ github.sha }}
 
       - name: Run pairing flow tests
         run: npm run test:pairing --workspace=@zajel/integration-tests
@@ -94,8 +113,16 @@ jobs:
       - name: Restore node_modules
         uses: actions/cache/restore@v4
         with:
-          path: node_modules
+          path: |
+            node_modules
+            packages/*/node_modules
           key: node-modules-${{ hashFiles('package-lock.json') }}
+
+      - name: Restore server-vps build
+        uses: actions/cache/restore@v4
+        with:
+          path: packages/server-vps/dist
+          key: server-vps-dist-${{ github.sha }}
 
       - name: Download web client build
         uses: actions/download-artifact@v4
