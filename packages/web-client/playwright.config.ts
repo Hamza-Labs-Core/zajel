@@ -53,11 +53,27 @@ export default defineConfig({
     },
     {
       name: 'firefox',
-      use: { ...devices['Desktop Firefox'] },
+      use: {
+        ...devices['Desktop Firefox'],
+        // Extra time for Firefox in CI headless mode
+        actionTimeout: process.env.CI ? 10000 : 5000,
+        navigationTimeout: process.env.CI ? 30000 : 15000,
+        launchOptions: {
+          // Firefox needs these for stable headless CI
+          firefoxUserPrefs: {
+            'dom.ipc.processCount': 1,
+          },
+        },
+      },
     },
     {
       name: 'webkit',
-      use: { ...devices['Desktop Safari'] },
+      use: {
+        ...devices['Desktop Safari'],
+        // Extra time for WebKit in CI headless mode
+        actionTimeout: process.env.CI ? 10000 : 5000,
+        navigationTimeout: process.env.CI ? 30000 : 15000,
+      },
     },
   ],
 
