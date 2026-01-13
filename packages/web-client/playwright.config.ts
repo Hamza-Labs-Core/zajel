@@ -1,11 +1,13 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const isCI = !!process.env.CI;
-const baseURL = isCI ? 'https://localhost:3847' : 'http://localhost:3847';
+// Use 127.0.0.1 instead of localhost for secure context in Firefox/WebKit
+// Loopback IP addresses are treated as secure contexts by all browsers
+const baseURL = 'http://127.0.0.1:3847';
 
 /**
  * Playwright configuration for web-client E2E tests
- * Uses HTTPS in CI for Web Crypto API secure context requirement
+ * Uses 127.0.0.1 for Web Crypto API secure context requirement
  */
 export default defineConfig({
   testDir: './tests/e2e-browser',
@@ -19,7 +21,6 @@ export default defineConfig({
 
   use: {
     baseURL,
-    ignoreHTTPSErrors: isCI,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
@@ -31,7 +32,16 @@ export default defineConfig({
     },
     {
       name: 'firefox',
-      use: { ...devices['Desktop Firefox'] },
+      use: {
+        ...devices['Desktop Firefox'],
+        // Ensure localhost is treated as secure context
+        launchOptions: {
+          firefoxUserPrefs: {
+            'dom.securecontext.allowlist_onions': true,
+            'network.proxy.allow_hijacking_localhost': false,
+          },
+        },
+      },
     },
     {
       name: 'webkit',
@@ -40,10 +50,9 @@ export default defineConfig({
   ],
 
   webServer: {
-    command: isCI ? 'npm run preview' : 'npm run dev',
+    command: isCI ? 'npm run preview -- --host 127.0.0.1' : 'npm run dev -- --host 127.0.0.1',
     url: baseURL,
     reuseExistingServer: !isCI,
     timeout: 120000,
-    ignoreHTTPSErrors: true,
   },
 });

@@ -1,13 +1,10 @@
 import { defineConfig } from 'vite';
 import preact from '@preact/preset-vite';
 import { VitePWA } from 'vite-plugin-pwa';
-import basicSsl from '@vitejs/plugin-basic-ssl';
 
 export default defineConfig({
   plugins: [
     preact(),
-    // Enable HTTPS in CI for Web Crypto API secure context
-    ...(process.env.CI ? [basicSsl()] : []),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.png', 'apple-touch-icon.png', 'dove.svg'],
@@ -53,8 +50,10 @@ export default defineConfig({
   },
   server: {
     port: 3847,
+    host: '127.0.0.1',
   },
   preview: {
     port: 3847,
+    host: '127.0.0.1',
   },
 });
