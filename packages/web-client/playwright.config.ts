@@ -2,7 +2,6 @@ import { defineConfig, devices } from '@playwright/test';
 
 /**
  * Playwright configuration for web-client E2E tests
- * Chromium only - Firefox/WebKit have app compatibility issues
  * @see https://playwright.dev/docs/test-configuration
  */
 export default defineConfig({
@@ -16,7 +15,10 @@ export default defineConfig({
   reporter: [['html', { open: 'never' }], ['list']],
 
   use: {
-    baseURL: 'http://localhost:3847',
+    // Use HTTPS in CI for Web Crypto API secure context
+    baseURL: process.env.CI ? 'https://localhost:3847' : 'http://localhost:3847',
+    // Accept self-signed certs in CI
+    ignoreHTTPSErrors: !!process.env.CI,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
@@ -26,14 +28,21 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
-    // Firefox/WebKit disabled - app doesn't render correctly
-    // TODO: Fix browser compatibility and re-enable
+    {
+      name: 'firefox',
+      use: { ...devices['Desktop Firefox'] },
+    },
+    {
+      name: 'webkit',
+      use: { ...devices['Desktop Safari'] },
+    },
   ],
 
   webServer: {
     command: process.env.CI ? 'npm run preview' : 'npm run dev',
-    url: 'http://localhost:3847',
+    url: process.env.CI ? 'https://localhost:3847' : 'http://localhost:3847',
     reuseExistingServer: !process.env.CI,
     timeout: 60000,
+    ignoreHTTPSErrors: true,
   },
 });
