@@ -22,5 +22,8 @@
     "type": "git",
     "url": "https://github.com/zajel/zajel.git"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "jsdom": "^27.4.0"
+  }
 }
