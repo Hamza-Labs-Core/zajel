@@ -35,7 +35,7 @@ jobs:
         run: npm ci
 
       - name: Run unit tests
-        run: npm test --workspace=@zajel/web-client
+        run: npm run test:run --workspace=@zajel/web-client
         env:
           CI: true
 
