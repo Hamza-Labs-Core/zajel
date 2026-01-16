@@ -12,19 +12,9 @@
  * - Multi-client scenarios
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { WebSocket } from 'ws';
-import { TestOrchestrator, delay, waitFor, getNextPort } from '../orchestrator';
-
-// CI environments need longer timeouts due to slower execution
-const isCI = process.env.CI === 'true' || !!process.env.GITHUB_ACTIONS;
-const TIMEOUT = {
-  short: isCI ? 20000 : 10000,
-  medium: isCI ? 30000 : 15000,
-  long: isCI ? 45000 : 25000,
-  veryLong: isCI ? 90000 : 45000,
-  startup: isCI ? 60000 : 30000,
-};
+import { TestOrchestrator, delay, waitFor, getNextPort, TIMEOUTS, safeCleanup } from '../orchestrator';
 
 describe('Pairing Flow Integration Tests', () => {
   let orchestrator: TestOrchestrator;
@@ -33,16 +23,16 @@ describe('Pairing Flow Integration Tests', () => {
     orchestrator = new TestOrchestrator({
       headless: true,
       verbose: process.env.LOG_LEVEL !== 'error',
-      startupTimeout: TIMEOUT.startup,
+      startupTimeout: TIMEOUTS.STARTUP,
     });
 
     await orchestrator.startMockBootstrap();
     await orchestrator.startVpsServer();
-  }, TIMEOUT.veryLong);
+  }, TIMEOUTS.VERY_LONG);
 
   afterAll(async () => {
-    await orchestrator.cleanup();
-  }, TIMEOUT.long);
+    await safeCleanup(() => orchestrator.cleanup(), 'orchestrator');
+  }, TIMEOUTS.LONG);
 
   describe('VPS Server Pairing Registration', () => {
     it('should accept client registration with valid pairing code', async () => {
@@ -76,7 +66,7 @@ describe('Pairing Flow Integration Tests', () => {
       } finally {
         ws.close();
       }
-    }, TIMEOUT.medium);
+    }, TIMEOUTS.MEDIUM);
 
     it('should reject registration with invalid pairing code format', async () => {
       const { ws } = await orchestrator.createWsClient();
@@ -95,7 +85,7 @@ describe('Pairing Flow Integration Tests', () => {
       } finally {
         ws.close();
       }
-    }, TIMEOUT.medium);
+    }, TIMEOUTS.MEDIUM);
 
     it('should reject registration with invalid public key', async () => {
       const { ws } = await orchestrator.createWsClient();
@@ -114,7 +104,7 @@ describe('Pairing Flow Integration Tests', () => {
       } finally {
         ws.close();
       }
-    }, TIMEOUT.medium);
+    }, TIMEOUTS.MEDIUM);
   });
 
   describe('Pairing Between Two WebSocket Clients', () => {
@@ -172,7 +162,7 @@ describe('Pairing Flow Integration Tests', () => {
         ws1.close();
         ws2.close();
       }
-    }, TIMEOUT.long);
+    }, TIMEOUTS.LONG);
 
     it('should handle pairing rejection', async () => {
       const { ws: ws1 } = await orchestrator.createWsClient();
@@ -204,7 +194,7 @@ describe('Pairing Flow Integration Tests', () => {
         ws1.close();
         ws2.close();
       }
-    }, TIMEOUT.long);
+    }, TIMEOUTS.LONG);
 
     it('should handle pairing to non-existent code', async () => {
       const { ws } = await orchestrator.createWsClient();
@@ -228,7 +218,7 @@ describe('Pairing Flow Integration Tests', () => {
       } finally {
         ws.close();
       }
-    }, TIMEOUT.medium);
+    }, TIMEOUTS.MEDIUM);
   });
 
   describe('WebRTC Signaling Exchange', () => {
@@ -290,7 +280,7 @@ describe('Pairing Flow Integration Tests', () => {
         ws1.close();
         ws2.close();
       }
-    }, TIMEOUT.long);
+    }, TIMEOUTS.LONG);
 
     it('should relay ICE candidates between paired clients', async () => {
       const { ws: ws1 } = await orchestrator.createWsClient();
@@ -338,7 +328,7 @@ describe('Pairing Flow Integration Tests', () => {
         ws1.close();
         ws2.close();
       }
-    }, TIMEOUT.long);
+    }, TIMEOUTS.LONG);
   });
 
   // TODO: Fix browser test - Vite isn't picking up the dynamic signaling URL from .env file
@@ -366,13 +356,13 @@ describe('Pairing Flow Integration Tests', () => {
 
         // Wait for browser to be ready and get its code
         await browser.page.waitForSelector('[data-testid="my-code"], .my-code, .code-display', {
-          timeout: TIMEOUT.long,
+          timeout: TIMEOUTS.LONG,
           state: 'visible',
         }).catch(() => {
           // Fallback
           return browser.page.waitForFunction(
             () => /[A-HJ-NP-Z2-9]{6}/.test(document.body.innerText),
-            { timeout: TIMEOUT.long }
+            { timeout: TIMEOUTS.LONG }
           );
         });
 
@@ -388,18 +378,18 @@ describe('Pairing Flow Integration Tests', () => {
         // Browser should show incoming request
         await browser.page.waitForSelector(
           '[data-testid="approval-request"], .approval-request, button:has-text("Accept")',
-          { timeout: TIMEOUT.medium, state: 'visible' }
+          { timeout: TIMEOUTS.MEDIUM, state: 'visible' }
         );
 
         // Accept in browser
         const acceptButton = await browser.page.waitForSelector(
           'button:has-text("Accept"), button:has-text("Approve")',
-          { timeout: TIMEOUT.short }
+          { timeout: TIMEOUTS.SHORT }
         );
         await acceptButton.click();
 
         // WebSocket client should receive pair_matched
-        const matched = await orchestrator.waitForMessage(ws, 'pair_matched', TIMEOUT.medium) as {
+        const matched = await orchestrator.waitForMessage(ws, 'pair_matched', TIMEOUTS.MEDIUM) as {
           peerCode: string;
           isInitiator: boolean;
         };
@@ -410,7 +400,7 @@ describe('Pairing Flow Integration Tests', () => {
         ws.close();
         await browser.browser.close();
       }
-    }, TIMEOUT.veryLong);
+    }, TIMEOUTS.VERY_LONG);
   });
 
   describe('Multi-Client Scenarios', () => {
@@ -448,7 +438,7 @@ describe('Pairing Flow Integration Tests', () => {
       } finally {
         clients.forEach(({ ws }) => ws.close());
       }
-    }, TIMEOUT.long);
+    }, TIMEOUTS.LONG);
 
     it('should handle client disconnection during pairing', async () => {
       const { ws: ws1 } = await orchestrator.createWsClient();
@@ -493,7 +483,7 @@ describe('Pairing Flow Integration Tests', () => {
       } finally {
         ws1.close();
       }
-    }, TIMEOUT.long);
+    }, TIMEOUTS.LONG);
   });
 
   describe('Ping/Pong Keep-Alive', () => {
@@ -510,6 +500,6 @@ describe('Pairing Flow Integration Tests', () => {
       } finally {
         ws.close();
       }
-    }, TIMEOUT.short);
+    }, TIMEOUTS.SHORT);
   });
 });

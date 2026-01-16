@@ -7,7 +7,7 @@
  */
 
 import type { ChildProcess } from 'child_process';
-import { spawn, execSync } from 'child_process';
+import { spawn } from 'child_process';
 import { WebSocket } from 'ws';
 import type { Browser, BrowserContext, Page } from 'playwright';
 import { chromium } from 'playwright';
@@ -15,6 +15,15 @@ import http, { createServer, type Server as HttpServer, type IncomingMessage, ty
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { writeFileSync, unlinkSync, existsSync } from 'fs';
+import {
+  TIMEOUTS,
+  NETWORK,
+  PROTOCOL,
+  POLL_INTERVALS,
+  delay as delayFn,
+  safeCleanup,
+  cleanupAll,
+} from './test-constants.js';
 
 // Get the directory of this file for relative path resolution
 const __filename = fileURLToPath(import.meta.url);
@@ -101,7 +110,7 @@ export interface BootstrapServerEntry {
 }
 
 // Port allocation for tests - use random base to avoid conflicts
-let portCounter = 15000 + Math.floor(Math.random() * 5000);
+let portCounter = NETWORK.BASE_PORT + Math.floor(Math.random() * NETWORK.PORT_RANGE);
 export const getNextPort = () => portCounter++;
 
 /**
@@ -152,15 +161,11 @@ export class TestOrchestrator {
   private tempEnvFile: string | null = null;
 
   constructor(config: OrchestratorConfig = {}) {
-    // Detect CI environment - CI environments need longer timeouts
-    const isCI = process.env.CI === 'true' || !!process.env.GITHUB_ACTIONS;
-    const defaultTimeout = isCI ? 60000 : 30000;
-
     this.config = {
       headless: config.headless ?? true,
       vpsPort: config.vpsPort ?? 0,
       webClientPort: config.webClientPort ?? 0,
-      startupTimeout: config.startupTimeout ?? defaultTimeout,
+      startupTimeout: config.startupTimeout ?? TIMEOUTS.STARTUP,
       verbose: config.verbose ?? (process.env.LOG_LEVEL !== 'error'),
     };
   }
@@ -298,9 +303,9 @@ export class TestOrchestrator {
       },
       bootstrap: {
         serverUrl: bootstrapUrl,
-        heartbeatInterval: 5000,
+        heartbeatInterval: PROTOCOL.BOOTSTRAP_HEARTBEAT,
         nodes: [],
-        retryInterval: 1000,
+        retryInterval: PROTOCOL.RETRY_INTERVAL,
         maxRetries: 3,
       },
       storage: {
@@ -312,18 +317,18 @@ export class TestOrchestrator {
         ephemeralIdPrefix: 'test',
       },
       gossip: {
-        interval: 2000,
-        suspicionTimeout: 4000,
-        failureTimeout: 8000,
+        interval: PROTOCOL.GOSSIP_INTERVAL,
+        suspicionTimeout: PROTOCOL.GOSSIP_INTERVAL * 2,
+        failureTimeout: PROTOCOL.GOSSIP_INTERVAL * 4,
         indirectPingCount: 2,
-        stateExchangeInterval: 5000,
+        stateExchangeInterval: PROTOCOL.STATE_EXCHANGE_INTERVAL,
       },
       client: {
         maxConnectionsPerPeer: 20,
-        heartbeatInterval: 30000,
-        heartbeatTimeout: 60000,
-        pairRequestTimeout: 120000,
-        pairRequestWarningTime: 30000,
+        heartbeatInterval: PROTOCOL.HEARTBEAT_INTERVAL,
+        heartbeatTimeout: PROTOCOL.HEARTBEAT_TIMEOUT,
+        pairRequestTimeout: PROTOCOL.PAIR_REQUEST_TIMEOUT,
+        pairRequestWarningTime: PROTOCOL.PAIR_REQUEST_WARNING,
       },
       ...configOverrides,
     };
@@ -407,7 +412,6 @@ export class TestOrchestrator {
 
     // Use polling to check when the server is ready
     const startTime = Date.now();
-    const pollInterval = 500;
     const timeout = this.config.startupTimeout;
 
     while (Date.now() - startTime < timeout) {
@@ -420,11 +424,11 @@ export class TestOrchestrator {
       if (isReady) {
         this.log(`Web client dev server ready on port ${this.webClientPort}`);
         // Give Vite a moment to fully initialize
-        await delay(200);
+        await delayFn(POLL_INTERVALS.HEALTH_CHECK);
         return this.webClientPort;
       }
 
-      await delay(pollInterval);
+      await delayFn(POLL_INTERVALS.SLOW);
     }
 
     throw new Error(`Web client startup timeout after ${timeout}ms\nOutput: ${startupOutput}`);
@@ -443,7 +447,7 @@ export class TestOrchestrator {
       req.on('error', () => {
         resolve(false);
       });
-      req.setTimeout(1000, () => {
+      req.setTimeout(POLL_INTERVALS.SLOW * 2, () => {
         req.destroy();
         resolve(false);
       });
@@ -526,7 +530,7 @@ export class TestOrchestrator {
    * Create a WebSocket client connection to the VPS server.
    * Returns an extended WebSocket with message buffering to prevent race conditions.
    */
-  async createWsClient(timeout: number = 10000): Promise<{ ws: WebSocket & { messageBuffer: unknown[] }; serverInfo: unknown }> {
+  async createWsClient(timeout: number = NETWORK.WS_CONNECT_TIMEOUT): Promise<{ ws: WebSocket & { messageBuffer: unknown[] }; serverInfo: unknown }> {
     if (!this.vpsServer) {
       throw new Error('VPS server not started. Call startVpsServer() first.');
     }
@@ -587,9 +591,8 @@ export class TestOrchestrator {
    * Wait for a specific message type on a WebSocket.
    * Uses polling approach on the message buffer to avoid race conditions.
    */
-  async waitForMessage(ws: WebSocket & { messageBuffer?: unknown[] }, messageType: string, timeout: number = 10000): Promise<unknown> {
+  async waitForMessage(ws: WebSocket & { messageBuffer?: unknown[] }, messageType: string, timeout: number = NETWORK.WS_MESSAGE_TIMEOUT): Promise<unknown> {
     const startTime = Date.now();
-    const pollInterval = 50; // Check every 50ms
 
     while (Date.now() - startTime < timeout) {
       // Check the message buffer for the target message type
@@ -605,7 +608,7 @@ export class TestOrchestrator {
       }
 
       // Wait a bit before checking again
-      await new Promise(resolve => setTimeout(resolve, pollInterval));
+      await delayFn(POLL_INTERVALS.FAST);
     }
 
     throw new Error(`Timeout waiting for message type: ${messageType}`);
@@ -636,57 +639,80 @@ export class TestOrchestrator {
   }
 
   /**
-   * Clean up all test infrastructure
+   * Clean up all test infrastructure.
+   * Uses safe cleanup to ensure all resources are cleaned even if some fail.
    */
   async cleanup(): Promise<void> {
     this.log('Cleaning up test infrastructure...');
 
+    // Collect all cleanup operations
+    const cleanups: Array<{ name: string; fn: () => Promise<void> }> = [];
+
     // Close all browsers
-    for (const browser of this.browsers) {
-      try {
-        await browser.close();
-      } catch (err) {
-        console.error('Error closing browser:', err);
-      }
+    for (let i = 0; i < this.browsers.length; i++) {
+      const browser = this.browsers[i];
+      cleanups.push({
+        name: `browser-${i}`,
+        fn: async () => { await browser.close(); }
+      });
     }
-    this.browsers = [];
 
     // Stop web client dev server
     if (this.webClientProcess) {
-      this.webClientProcess.kill('SIGTERM');
-      this.webClientProcess = null;
-      this.webClientPort = 0;
+      const proc = this.webClientProcess;
+      cleanups.push({
+        name: 'web-client-process',
+        fn: async () => {
+          proc.kill('SIGTERM');
+        }
+      });
     }
 
     // Remove temporary .env file
     if (this.tempEnvFile && existsSync(this.tempEnvFile)) {
-      try {
-        unlinkSync(this.tempEnvFile);
-        this.log(`Removed temp .env file: ${this.tempEnvFile}`);
-      } catch (err) {
-        console.error('Error removing temp .env file:', err);
-      }
-      this.tempEnvFile = null;
+      const envFile = this.tempEnvFile;
+      cleanups.push({
+        name: 'temp-env-file',
+        fn: async () => {
+          unlinkSync(envFile);
+          this.log(`Removed temp .env file: ${envFile}`);
+        }
+      });
     }
 
     // Shutdown VPS server
     if (this.vpsServer) {
-      try {
-        await this.vpsServer.shutdown();
-      } catch (err) {
-        console.error('Error shutting down VPS server:', err);
-      }
-      this.vpsServer = null;
+      const server = this.vpsServer;
+      cleanups.push({
+        name: 'vps-server',
+        fn: async () => { await server.shutdown(); }
+      });
     }
 
     // Stop mock bootstrap server
     if (this.mockBootstrapServer) {
-      await new Promise<void>((resolve) => {
-        this.mockBootstrapServer!.close(() => resolve());
+      const mockServer = this.mockBootstrapServer;
+      cleanups.push({
+        name: 'mock-bootstrap-server',
+        fn: async () => {
+          await new Promise<void>((resolve) => {
+            mockServer.close(() => resolve());
+          });
+        }
       });
-      this.mockBootstrapServer = null;
-      this.mockBootstrapStore.servers.clear();
     }
+
+    // Run all cleanups, collecting errors
+    await cleanupAll(cleanups);
+
+    // Reset state
+    this.browsers = [];
+    this.webClientProcess = null;
+    this.webClientPort = 0;
+    this.tempEnvFile = null;
+    this.vpsServer = null;
+    this.mockBootstrapServer = null;
+    this.mockBootstrapStore.servers.clear();
 
     this.log('Cleanup complete');
   }
@@ -697,24 +723,42 @@ export class TestOrchestrator {
  */
 export async function waitFor(
   condition: () => boolean | Promise<boolean>,
-  timeout: number = 10000,
-  pollInterval: number = 100
+  timeout: number = TIMEOUTS.MEDIUM,
+  pollInterval: number = POLL_INTERVALS.STANDARD
 ): Promise<void> {
   const startTime = Date.now();
 
   while (Date.now() - startTime < timeout) {
-    if (await condition()) {
-      return;
+    try {
+      if (await condition()) {
+        return;
+      }
+    } catch {
+      // Condition threw, continue waiting
     }
-    await new Promise(resolve => setTimeout(resolve, pollInterval));
+    await delayFn(pollInterval);
   }
 
-  throw new Error('Timeout waiting for condition');
+  throw new Error(`Timeout waiting for condition after ${timeout}ms`);
 }
 
 /**
  * Helper: Create a promise that resolves after a delay
  */
 export function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return delayFn(ms);
 }
+
+// Re-export constants for use in test files
+export {
+  TIMEOUTS,
+  NETWORK,
+  PROTOCOL,
+  POLL_INTERVALS,
+  LIMITS,
+  isCI,
+  ciTimeout,
+  safeCleanup,
+  cleanupAll,
+  createMessageWaiter,
+} from './test-constants.js';

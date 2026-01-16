@@ -12,18 +12,8 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { TestOrchestrator, delay, waitFor } from '../orchestrator';
+import { TestOrchestrator, delay, waitFor, TIMEOUTS, isCI, safeCleanup } from '../orchestrator';
 import type { Page } from 'playwright';
-
-// CI environments need longer timeouts due to slower execution
-const isCI = process.env.CI === 'true' || !!process.env.GITHUB_ACTIONS;
-const TIMEOUT = {
-  short: isCI ? 20000 : 10000,
-  medium: isCI ? 30000 : 15000,
-  long: isCI ? 60000 : 30000,
-  veryLong: isCI ? 90000 : 45000,
-  startup: isCI ? 90000 : 45000,
-};
 
 // TODO: Fix web client tests - Vite isn't picking up the dynamic signaling URL from .env file
 // The test infrastructure works but the web client doesn't connect to the test VPS server
@@ -39,7 +29,7 @@ describe.skip('Web-to-Web Integration Tests', () => {
     orchestrator = new TestOrchestrator({
       headless: true,
       verbose: process.env.LOG_LEVEL !== 'error',
-      startupTimeout: TIMEOUT.startup,
+      startupTimeout: TIMEOUTS.STARTUP,
     });
 
     // Start mock bootstrap and VPS server
@@ -48,11 +38,11 @@ describe.skip('Web-to-Web Integration Tests', () => {
 
     // Start web client dev server
     webClientPort = await orchestrator.startWebClient();
-  }, TIMEOUT.veryLong);
+  }, TIMEOUTS.VERY_LONG);
 
   afterAll(async () => {
-    await orchestrator.cleanup();
-  }, TIMEOUT.long);
+    await safeCleanup(() => orchestrator.cleanup(), 'orchestrator');
+  }, TIMEOUTS.LONG);
 
   describe('Two Browsers Connecting via VPS', () => {
     it('should load web client in both browsers', async () => {
@@ -74,7 +64,7 @@ describe.skip('Web-to-Web Integration Tests', () => {
         await browser1.browser.close();
         await browser2.browser.close();
       }
-    }, TIMEOUT.veryLong);
+    }, TIMEOUTS.VERY_LONG);
 
     it('should generate unique pairing codes for each client', async () => {
       const browser1 = await orchestrator.connectWebBrowser();
@@ -96,7 +86,7 @@ describe.skip('Web-to-Web Integration Tests', () => {
         await browser1.browser.close();
         await browser2.browser.close();
       }
-    }, TIMEOUT.veryLong);
+    }, TIMEOUTS.VERY_LONG);
 
     it('should complete pairing flow between two browsers', async () => {
       const browser1 = await orchestrator.connectWebBrowser();
@@ -131,7 +121,7 @@ describe.skip('Web-to-Web Integration Tests', () => {
         await browser1.browser.close();
         await browser2.browser.close();
       }
-    }, TIMEOUT.veryLong);
+    }, TIMEOUTS.VERY_LONG);
 
     it('should handle pairing rejection', async () => {
       const browser1 = await orchestrator.connectWebBrowser();
@@ -160,7 +150,7 @@ describe.skip('Web-to-Web Integration Tests', () => {
         await browser1.browser.close();
         await browser2.browser.close();
       }
-    }, TIMEOUT.veryLong);
+    }, TIMEOUTS.VERY_LONG);
   });
 
   describe('Message Exchange Between Paired Browsers', () => {
@@ -186,7 +176,7 @@ describe.skip('Web-to-Web Integration Tests', () => {
         await browser1.browser.close();
         await browser2.browser.close();
       }
-    }, TIMEOUT.veryLong);
+    }, TIMEOUTS.VERY_LONG);
 
     it('should handle bidirectional messaging', async () => {
       const browser1 = await orchestrator.connectWebBrowser();
@@ -217,7 +207,7 @@ describe.skip('Web-to-Web Integration Tests', () => {
         await browser1.browser.close();
         await browser2.browser.close();
       }
-    }, TIMEOUT.veryLong);
+    }, TIMEOUTS.VERY_LONG);
   });
 
   describe('Connection Resilience', () => {
@@ -249,15 +239,14 @@ describe.skip('Web-to-Web Integration Tests', () => {
       } finally {
         await browser1.browser.close();
       }
-    }, TIMEOUT.veryLong);
+    }, TIMEOUTS.VERY_LONG);
   });
 });
 
 // Helper functions for browser interactions
-// Use dynamic timeout based on CI environment
-const helperTimeout = isCI ? 45000 : 30000;
+// Using shared TIMEOUTS constants for consistency
 
-async function waitForPairingCode(page: Page, timeout = helperTimeout): Promise<void> {
+async function waitForPairingCode(page: Page, timeout = TIMEOUTS.LONG): Promise<void> {
   // Wait for the app to be in a registered state with a pairing code displayed
   await page.waitForSelector('[data-testid="my-code"], .my-code, .code-display', {
     timeout,
@@ -296,7 +285,7 @@ async function enterPairingCode(page: Page, code: string): Promise<void> {
   // Find and fill the code input
   const input = await page.waitForSelector(
     'input[placeholder*="code" i], input[name="code"], input[data-testid="peer-code-input"], input[type="text"]',
-    { timeout: isCI ? 20000 : 10000 }
+    { timeout: TIMEOUTS.MEDIUM }
   );
 
   await input.fill(code);
@@ -304,12 +293,12 @@ async function enterPairingCode(page: Page, code: string): Promise<void> {
   // Click connect/pair button
   const button = await page.waitForSelector(
     'button:has-text("Connect"), button:has-text("Pair"), button[type="submit"], button:has-text("Request")',
-    { timeout: isCI ? 10000 : 5000 }
+    { timeout: TIMEOUTS.SHORT }
   );
   await button.click();
 }
 
-async function waitForApprovalRequest(page: Page, timeout = isCI ? 30000 : 15000): Promise<void> {
+async function waitForApprovalRequest(page: Page, timeout = TIMEOUTS.MEDIUM): Promise<void> {
   // Wait for the approval dialog/request to appear
   await page.waitForSelector(
     '[data-testid="approval-request"], .approval-request, .pair-incoming, button:has-text("Accept"), button:has-text("Approve")',
@@ -320,7 +309,7 @@ async function waitForApprovalRequest(page: Page, timeout = isCI ? 30000 : 15000
 async function acceptPairingRequest(page: Page): Promise<void> {
   const acceptButton = await page.waitForSelector(
     'button:has-text("Accept"), button:has-text("Approve"), button[data-testid="accept-btn"]',
-    { timeout: isCI ? 10000 : 5000 }
+    { timeout: TIMEOUTS.SHORT }
   );
   await acceptButton.click();
 }
@@ -328,12 +317,12 @@ async function acceptPairingRequest(page: Page): Promise<void> {
 async function rejectPairingRequest(page: Page): Promise<void> {
   const rejectButton = await page.waitForSelector(
     'button:has-text("Reject"), button:has-text("Decline"), button[data-testid="reject-btn"]',
-    { timeout: isCI ? 10000 : 5000 }
+    { timeout: TIMEOUTS.SHORT }
   );
   await rejectButton.click();
 }
 
-async function waitForConnected(page: Page, timeout = isCI ? 60000 : 30000): Promise<void> {
+async function waitForConnected(page: Page, timeout = TIMEOUTS.LONG): Promise<void> {
   // Wait for the connected state indicator
   await page.waitForSelector(
     '.status.connected, [data-testid="connected-status"], .connected-indicator',
@@ -365,7 +354,7 @@ async function sendMessage(page: Page, message: string): Promise<void> {
   // Find message input
   const input = await page.waitForSelector(
     'input[placeholder*="message" i], textarea, [data-testid="message-input"], input[name="message"]',
-    { timeout: isCI ? 20000 : 10000 }
+    { timeout: TIMEOUTS.MEDIUM }
   );
 
   await input.fill(message);
@@ -380,7 +369,7 @@ async function sendMessage(page: Page, message: string): Promise<void> {
   }
 }
 
-async function waitForMessage(page: Page, messageText: string, timeout = isCI ? 30000 : 15000): Promise<void> {
+async function waitForMessage(page: Page, messageText: string, timeout = TIMEOUTS.MEDIUM): Promise<void> {
   await page.waitForFunction(
     (text) => {
       const messages = document.querySelectorAll('.message, [data-testid="message"], .chat-message');
