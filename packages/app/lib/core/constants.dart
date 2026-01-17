@@ -102,5 +102,9 @@ class CallConstants {
 
   /// Maximum pending ICE candidates to queue before remote description is set.
   /// Prevents memory exhaustion from ICE candidate floods.
+  ///
+  /// This value is synchronized with the web client constant
+  /// `WEBRTC.MAX_PENDING_ICE_CANDIDATES` in `packages/web-client/src/lib/constants.ts`.
+  /// Both platforms use the same limit (100) for consistent behavior.
   static const int maxPendingIceCandidates = 100;
 }
