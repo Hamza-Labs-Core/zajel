@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../core/media/media_service.dart';
 import '../../core/models/models.dart';
 import '../../core/network/voip_service.dart';
 import '../../core/providers/app_providers.dart';

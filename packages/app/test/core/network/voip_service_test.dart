@@ -5,7 +5,6 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:zajel/core/network/signaling_client.dart';
 import 'package:zajel/core/network/voip_service.dart';
-import 'package:zajel/core/media/media_service.dart';
 import 'package:zajel/core/constants.dart';
 
 import '../../mocks/mocks.dart';

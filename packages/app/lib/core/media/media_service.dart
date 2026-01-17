@@ -183,7 +183,6 @@ class MediaService {
     } on PlatformException catch (e) {
       logger.error(_tag, 'Platform error requesting media', e);
       _handlePlatformException(e);
-      rethrow; // In case _handlePlatformException doesn't throw
     } catch (e) {
       logger.error(_tag, 'Error requesting media', e);
 
