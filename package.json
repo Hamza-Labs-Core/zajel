@@ -1,0 +1,29 @@
+{
+  "name": "zajel",
+  "version": "1.0.0",
+  "description": "Zajel - End-to-end encrypted peer-to-peer messaging",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test:integration": "npm test --workspace=@zajel/integration-tests",
+    "test:integration:web-to-web": "npm run test:web-to-web --workspace=@zajel/integration-tests",
+    "test:integration:pairing": "npm run test:pairing --workspace=@zajel/integration-tests",
+    "build:server-vps": "npm run build --workspace=@zajel/server-vps",
+    "build:web-client": "npm run build --workspace=@zajel/web-client",
+    "dev:server-vps": "npm run dev --workspace=@zajel/server-vps",
+    "dev:web-client": "npm run dev --workspace=@zajel/web-client"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zajel/zajel.git"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "jsdom": "^27.4.0"
+  }
+}

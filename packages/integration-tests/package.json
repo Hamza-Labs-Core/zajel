@@ -1,0 +1,31 @@
+{
+  "name": "@zajel/integration-tests",
+  "version": "1.0.0",
+  "description": "Cross-app integration tests for Zajel - VPS server, web-client, and Flutter app",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:web-to-web": "vitest run src/scenarios/web-to-web.test.ts",
+    "test:pairing": "vitest run src/scenarios/pairing-flow.test.ts",
+    "test:all": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@zajel/server-vps": "^1.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "@types/node": "^22.10.5",
+    "@types/ws": "^8.5.13",
+    "playwright": "^1.40.0",
+    "typescript": "^5.7.2",
+    "vite": "^7.3.1",
+    "vitest": "^4.0.16",
+    "ws": "^8.16.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
