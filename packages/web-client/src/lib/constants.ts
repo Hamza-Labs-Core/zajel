@@ -169,3 +169,18 @@ export const RELIABLE_TRANSFER = {
   /** How often to check for idle/stale transfers (ms) */
   IDLE_CHECK_INTERVAL_MS: 10000,
 } as const;
+
+// =============================================================================
+// VOIP CALL CONSTANTS
+// =============================================================================
+
+export const CALL = {
+  /** Time allowed for the callee to answer before timeout (60 seconds) */
+  RINGING_TIMEOUT_MS: 60000,
+
+  /** Time allowed for ICE candidate gathering (10 seconds) */
+  ICE_GATHERING_TIMEOUT_MS: 10000,
+
+  /** Time allowed for reconnection after connection drops (30 seconds) */
+  RECONNECT_TIMEOUT_MS: 30000,
+} as const;

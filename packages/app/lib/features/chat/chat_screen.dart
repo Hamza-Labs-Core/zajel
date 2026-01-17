@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -8,8 +9,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../core/media/media_service.dart';
 import '../../core/models/models.dart';
+import '../../core/network/voip_service.dart';
 import '../../core/providers/app_providers.dart';
+import '../call/call_screen.dart';
+import '../call/incoming_call_dialog.dart';
 
 /// Chat screen for messaging with a peer.
 class ChatScreen extends ConsumerStatefulWidget {
@@ -25,11 +30,27 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
   bool _isSending = false;
+  StreamSubscription<CallState>? _voipStateSubscription;
 
   @override
   void initState() {
     super.initState();
     _listenToMessages();
+    _setupVoipListener();
+  }
+
+  void _setupVoipListener() {
+    // Listen for incoming calls after the first frame to ensure context is available
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final voipService = ref.read(voipServiceProvider);
+      if (voipService != null) {
+        _voipStateSubscription = voipService.onStateChange.listen((state) {
+          if (state == CallState.incoming && mounted) {
+            _showIncomingCallDialog();
+          }
+        });
+      }
+    });
   }
 
   void _listenToMessages() {
@@ -55,6 +76,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   void dispose() {
+    _voipStateSubscription?.cancel();
     _messageController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -105,6 +127,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ],
         ),
         actions: [
+          // Voice call button
+          IconButton(
+            icon: const Icon(Icons.call),
+            tooltip: 'Voice call',
+            onPressed: () => _startCall(withVideo: false),
+          ),
+          // Video call button
+          IconButton(
+            icon: const Icon(Icons.videocam),
+            tooltip: 'Video call',
+            onPressed: () => _startCall(withVideo: true),
+          ),
           IconButton(
             icon: const Icon(Icons.info_outline),
             onPressed: () => _showPeerInfo(context, peer),
@@ -359,6 +393,89 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         );
       }
     });
+  }
+
+  /// Start a VoIP call to the current peer.
+  Future<void> _startCall({required bool withVideo}) async {
+    final voipService = ref.read(voipServiceProvider);
+    final mediaService = ref.read(mediaServiceProvider);
+
+    if (voipService == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('VoIP not available. Connect to signaling server first.'),
+          ),
+        );
+      }
+      return;
+    }
+
+    try {
+      await voipService.startCall(widget.peerId, withVideo);
+
+      if (mounted) {
+        _navigateToCallScreen(voipService, mediaService);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to start call: $e')),
+        );
+      }
+    }
+  }
+
+  /// Show the incoming call dialog.
+  void _showIncomingCallDialog() {
+    final voipService = ref.read(voipServiceProvider);
+    final mediaService = ref.read(mediaServiceProvider);
+    final peer = ref.read(selectedPeerProvider);
+
+    if (voipService == null || voipService.currentCall == null) return;
+
+    final call = voipService.currentCall!;
+    final callerName = peer?.displayName ?? 'Unknown';
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => IncomingCallDialog(
+        callerName: callerName,
+        callId: call.callId,
+        withVideo: call.withVideo,
+        onAccept: () {
+          Navigator.of(context).pop();
+          voipService.acceptCall(call.callId, false);
+          _navigateToCallScreen(voipService, mediaService);
+        },
+        onAcceptWithVideo: () {
+          Navigator.of(context).pop();
+          voipService.acceptCall(call.callId, true);
+          _navigateToCallScreen(voipService, mediaService);
+        },
+        onReject: () {
+          Navigator.of(context).pop();
+          voipService.rejectCall(call.callId);
+        },
+      ),
+    );
+  }
+
+  /// Navigate to the call screen.
+  void _navigateToCallScreen(VoIPService voipService, MediaService mediaService) {
+    final peer = ref.read(selectedPeerProvider);
+    final peerName = peer?.displayName ?? 'Unknown';
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => CallScreen(
+          voipService: voipService,
+          mediaService: mediaService,
+          peerName: peerName,
+        ),
+      ),
+    );
   }
 
   String _getConnectionStatus(Peer? peer) {

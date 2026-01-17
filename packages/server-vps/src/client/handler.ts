@@ -14,7 +14,7 @@ import { DistributedRendezvous, type PartialResult } from '../registry/distribut
 import type { DeadDropResult, LiveMatchResult } from '../registry/rendezvous-registry.js';
 import { logger } from '../utils/logger.js';
 
-import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY } from '../constants.js';
+import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING } from '../constants.js';
 
 export interface ClientHandlerConfig {
   heartbeatInterval: number;   // Expected heartbeat interval from clients
@@ -112,6 +112,37 @@ interface SignalingIceCandidateMessage {
   payload: Record<string, unknown>;
 }
 
+// VoIP call signaling messages
+interface CallOfferMessage {
+  type: 'call_offer';
+  target: string;
+  payload: Record<string, unknown>;
+}
+
+interface CallAnswerMessage {
+  type: 'call_answer';
+  target: string;
+  payload: Record<string, unknown>;
+}
+
+interface CallRejectMessage {
+  type: 'call_reject';
+  target: string;
+  payload: Record<string, unknown>;
+}
+
+interface CallHangupMessage {
+  type: 'call_hangup';
+  target: string;
+  payload: Record<string, unknown>;
+}
+
+interface CallIceMessage {
+  type: 'call_ice';
+  target: string;
+  payload: Record<string, unknown>;
+}
+
 // Device linking messages (web client linking to mobile app)
 interface LinkRequestMessage {
   type: 'link_request';
@@ -169,6 +200,11 @@ type ClientMessage =
   | SignalingOfferMessage
   | SignalingAnswerMessage
   | SignalingIceCandidateMessage
+  | CallOfferMessage
+  | CallAnswerMessage
+  | CallRejectMessage
+  | CallHangupMessage
+  | CallIceMessage
   | LinkRequestMessage
   | LinkResponseMessage;
 
@@ -400,6 +436,27 @@ export class ClientHandler extends EventEmitter {
 
         case 'ice_candidate':
           this.handleSignalingForward(ws, message as SignalingIceCandidateMessage);
+          break;
+
+        // VoIP call signaling messages - relay to paired peer
+        case 'call_offer':
+          this.handleCallSignalingForward(ws, message as CallOfferMessage);
+          break;
+
+        case 'call_answer':
+          this.handleCallSignalingForward(ws, message as CallAnswerMessage);
+          break;
+
+        case 'call_reject':
+          this.handleCallSignalingForward(ws, message as CallRejectMessage);
+          break;
+
+        case 'call_hangup':
+          this.handleCallSignalingForward(ws, message as CallHangupMessage);
+          break;
+
+        case 'call_ice':
+          this.handleCallSignalingForward(ws, message as CallIceMessage);
           break;
 
         case 'link_request':
@@ -1205,6 +1262,128 @@ export class ClientHandler extends EventEmitter {
     // Validate target code format (Issue #17)
     if (!PAIRING_CODE.REGEX.test(target)) {
       this.sendError(ws, 'Invalid target code format');
+      return;
+    }
+
+    // Find target WebSocket
+    const targetWs = this.pairingCodeToWs.get(target);
+
+    if (!targetWs) {
+      logger.pairingEvent('not_found', { target, type });
+      this.send(ws, {
+        type: 'error',
+        message: `Peer not found: ${target}`,
+      });
+      return;
+    }
+
+    // Forward the message to target with sender info
+    const forwarded = this.send(targetWs, {
+      type,
+      from: senderPairingCode,
+      payload,
+    });
+
+    if (forwarded) {
+      logger.pairingEvent('forwarded', { requester: senderPairingCode, target, type });
+    } else {
+      logger.pairingEvent('forward_failed', { requester: senderPairingCode, target, type });
+      this.send(ws, {
+        type: 'error',
+        message: `Failed to forward ${type} to ${target}`,
+      });
+    }
+  }
+
+  /**
+   * Validate call signaling payload based on message type.
+   * Returns error message if invalid, undefined if valid.
+   */
+  private validateCallSignalingPayload(
+    type: string,
+    payload: Record<string, unknown>
+  ): string | undefined {
+    if (!payload || typeof payload !== 'object') {
+      return 'Missing or invalid payload';
+    }
+
+    // All call messages require callId
+    const callId = payload.callId;
+    if (typeof callId !== 'string' || !CALL_SIGNALING.UUID_REGEX.test(callId)) {
+      return 'Invalid or missing callId (must be UUID v4 format)';
+    }
+
+    switch (type) {
+      case 'call_offer':
+      case 'call_answer': {
+        // Require sdp field with content
+        const sdp = payload.sdp;
+        if (typeof sdp !== 'string' || sdp.length === 0) {
+          return `Missing or invalid sdp in ${type}`;
+        }
+        if (sdp.length > CALL_SIGNALING.MAX_SDP_LENGTH) {
+          return `SDP too large (max ${CALL_SIGNALING.MAX_SDP_LENGTH} bytes)`;
+        }
+        break;
+      }
+
+      case 'call_ice': {
+        // Require candidate field with content
+        const candidate = payload.candidate;
+        if (typeof candidate !== 'string' || candidate.length === 0) {
+          return 'Missing or invalid candidate in call_ice';
+        }
+        if (candidate.length > CALL_SIGNALING.MAX_ICE_CANDIDATE_LENGTH) {
+          return `ICE candidate too large (max ${CALL_SIGNALING.MAX_ICE_CANDIDATE_LENGTH} bytes)`;
+        }
+        break;
+      }
+
+      case 'call_reject':
+      case 'call_hangup':
+        // Only callId is required, which is already validated above
+        break;
+
+      default:
+        return `Unknown call signaling type: ${type}`;
+    }
+
+    return undefined; // Valid
+  }
+
+  /**
+   * Handle VoIP call signaling message forwarding (call_offer, call_answer, call_reject, call_hangup, call_ice)
+   *
+   * Uses the same validation and forwarding pattern as WebRTC data channel signaling.
+   * The server acts as a simple relay - no call state tracking needed.
+   */
+  private handleCallSignalingForward(
+    ws: WebSocket,
+    message: CallOfferMessage | CallAnswerMessage | CallRejectMessage | CallHangupMessage | CallIceMessage
+  ): void {
+    const { type, target, payload } = message;
+    const senderPairingCode = this.wsToPairingCode.get(ws);
+
+    if (!senderPairingCode) {
+      this.sendError(ws, 'Not registered. Send register message first.');
+      return;
+    }
+
+    if (!target) {
+      this.sendError(ws, 'Missing required field: target');
+      return;
+    }
+
+    // Validate target code format
+    if (!PAIRING_CODE.REGEX.test(target)) {
+      this.sendError(ws, 'Invalid target code format');
+      return;
+    }
+
+    // Validate payload structure based on message type
+    const payloadError = this.validateCallSignalingPayload(type, payload);
+    if (payloadError) {
+      this.sendError(ws, payloadError);
       return;
     }
 

@@ -46,6 +46,11 @@ import type {
   ClientMessage,
   ServerMessage,
   ConnectionState,
+  CallOfferReceivedMessage,
+  CallAnswerReceivedMessage,
+  CallRejectReceivedMessage,
+  CallHangupReceivedMessage,
+  CallIceReceivedMessage,
 } from './protocol';
 import { validateServerMessage, safeJsonParse } from './validation';
 import { TIMEOUTS, PAIRING_CODE, PAIRING_CODE_REGEX, MESSAGE_LIMITS } from './constants';
@@ -110,6 +115,12 @@ export interface SignalingEvents {
   onAnswer: (from: string, payload: RTCSessionDescriptionInit) => void;
   onIceCandidate: (from: string, payload: RTCIceCandidateInit) => void;
   onError: (error: string) => void;
+  // Call signaling events
+  onCallOffer?: (message: CallOfferReceivedMessage) => void;
+  onCallAnswer?: (message: CallAnswerReceivedMessage) => void;
+  onCallReject?: (message: CallRejectReceivedMessage) => void;
+  onCallHangup?: (message: CallHangupReceivedMessage) => void;
+  onCallIce?: (message: CallIceReceivedMessage) => void;
 }
 
 export class SignalingClient {
@@ -339,6 +350,27 @@ export class SignalingClient {
       case 'error':
         this.events.onError(message.message);
         break;
+
+      // Call signaling messages
+      case 'call_offer':
+        this.events.onCallOffer?.(message);
+        break;
+
+      case 'call_answer':
+        this.events.onCallAnswer?.(message);
+        break;
+
+      case 'call_reject':
+        this.events.onCallReject?.(message);
+        break;
+
+      case 'call_hangup':
+        this.events.onCallHangup?.(message);
+        break;
+
+      case 'call_ice':
+        this.events.onCallIce?.(message);
+        break;
     }
   }
 
@@ -379,5 +411,67 @@ export class SignalingClient {
 
   sendIceCandidate(target: string, payload: RTCIceCandidateInit): void {
     this.send({ type: 'ice_candidate', target, payload });
+  }
+
+  // Call signaling methods
+
+  /**
+   * Send call offer to peer
+   */
+  sendCallOffer(callId: string, targetId: string, sdp: string, withVideo: boolean): void {
+    this.send({
+      type: 'call_offer',
+      callId,
+      targetId,
+      sdp,
+      withVideo,
+    });
+  }
+
+  /**
+   * Send call answer to peer
+   */
+  sendCallAnswer(callId: string, targetId: string, sdp: string): void {
+    this.send({
+      type: 'call_answer',
+      callId,
+      targetId,
+      sdp,
+    });
+  }
+
+  /**
+   * Reject incoming call
+   */
+  sendCallReject(callId: string, targetId: string, reason?: 'busy' | 'declined' | 'timeout'): void {
+    this.send({
+      type: 'call_reject',
+      callId,
+      targetId,
+      reason,
+    });
+  }
+
+  /**
+   * End current call
+   */
+  sendCallHangup(callId: string, targetId: string): void {
+    this.send({
+      type: 'call_hangup',
+      callId,
+      targetId,
+    });
+  }
+
+  /**
+   * Send ICE candidate for call
+   */
+  sendCallIce(callId: string, targetId: string, candidate: RTCIceCandidate): void {
+    this.send({
+      type: 'call_ice',
+      callId,
+      targetId,
+      candidate: JSON.stringify(candidate),
+    });
   }
 }

@@ -827,4 +827,257 @@ describe('SignalingClient', () => {
       consoleSpy.mockRestore();
     });
   });
+
+  describe('Call signaling methods', () => {
+    const VALID_CALL_ID = '12345678-1234-4234-8234-123456789abc';
+    const VALID_TARGET_ID = 'peer123';
+    const VALID_CALL_SDP = 'v=0\r\no=- 123 456 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n';
+
+    beforeEach(() => {
+      client.connect(VALID_PUBLIC_KEY);
+      mockWs!.simulateOpen();
+      mockWs!.clearSentMessages();
+    });
+
+    describe('sendCallOffer', () => {
+      it('should send call offer with video', () => {
+        client.sendCallOffer(VALID_CALL_ID, VALID_TARGET_ID, VALID_CALL_SDP, true);
+
+        expect(mockWs!.getLastSentMessage()).toEqual({
+          type: 'call_offer',
+          callId: VALID_CALL_ID,
+          targetId: VALID_TARGET_ID,
+          sdp: VALID_CALL_SDP,
+          withVideo: true,
+        });
+      });
+
+      it('should send call offer without video', () => {
+        client.sendCallOffer(VALID_CALL_ID, VALID_TARGET_ID, VALID_CALL_SDP, false);
+
+        expect(mockWs!.getLastSentMessage()).toEqual({
+          type: 'call_offer',
+          callId: VALID_CALL_ID,
+          targetId: VALID_TARGET_ID,
+          sdp: VALID_CALL_SDP,
+          withVideo: false,
+        });
+      });
+    });
+
+    describe('sendCallAnswer', () => {
+      it('should send call answer', () => {
+        client.sendCallAnswer(VALID_CALL_ID, VALID_TARGET_ID, VALID_CALL_SDP);
+
+        expect(mockWs!.getLastSentMessage()).toEqual({
+          type: 'call_answer',
+          callId: VALID_CALL_ID,
+          targetId: VALID_TARGET_ID,
+          sdp: VALID_CALL_SDP,
+        });
+      });
+    });
+
+    describe('sendCallReject', () => {
+      it('should send call reject without reason', () => {
+        client.sendCallReject(VALID_CALL_ID, VALID_TARGET_ID);
+
+        expect(mockWs!.getLastSentMessage()).toEqual({
+          type: 'call_reject',
+          callId: VALID_CALL_ID,
+          targetId: VALID_TARGET_ID,
+          reason: undefined,
+        });
+      });
+
+      it('should send call reject with busy reason', () => {
+        client.sendCallReject(VALID_CALL_ID, VALID_TARGET_ID, 'busy');
+
+        expect(mockWs!.getLastSentMessage()).toEqual({
+          type: 'call_reject',
+          callId: VALID_CALL_ID,
+          targetId: VALID_TARGET_ID,
+          reason: 'busy',
+        });
+      });
+
+      it('should send call reject with declined reason', () => {
+        client.sendCallReject(VALID_CALL_ID, VALID_TARGET_ID, 'declined');
+
+        expect(mockWs!.getLastSentMessage()).toEqual({
+          type: 'call_reject',
+          callId: VALID_CALL_ID,
+          targetId: VALID_TARGET_ID,
+          reason: 'declined',
+        });
+      });
+
+      it('should send call reject with timeout reason', () => {
+        client.sendCallReject(VALID_CALL_ID, VALID_TARGET_ID, 'timeout');
+
+        expect(mockWs!.getLastSentMessage()).toEqual({
+          type: 'call_reject',
+          callId: VALID_CALL_ID,
+          targetId: VALID_TARGET_ID,
+          reason: 'timeout',
+        });
+      });
+    });
+
+    describe('sendCallHangup', () => {
+      it('should send call hangup', () => {
+        client.sendCallHangup(VALID_CALL_ID, VALID_TARGET_ID);
+
+        expect(mockWs!.getLastSentMessage()).toEqual({
+          type: 'call_hangup',
+          callId: VALID_CALL_ID,
+          targetId: VALID_TARGET_ID,
+        });
+      });
+    });
+
+    describe('sendCallIce', () => {
+      it('should send call ICE candidate as JSON string', () => {
+        const candidate = {
+          candidate: 'candidate:123',
+          sdpMid: '0',
+          sdpMLineIndex: 0,
+        } as RTCIceCandidate;
+
+        client.sendCallIce(VALID_CALL_ID, VALID_TARGET_ID, candidate);
+
+        expect(mockWs!.getLastSentMessage()).toEqual({
+          type: 'call_ice',
+          callId: VALID_CALL_ID,
+          targetId: VALID_TARGET_ID,
+          candidate: JSON.stringify(candidate),
+        });
+      });
+    });
+  });
+
+  describe('Call signaling message handling', () => {
+    const VALID_CALL_ID = '12345678-1234-4234-8234-123456789abc';
+    const VALID_FROM = 'peer123';
+    const VALID_CALL_SDP = 'v=0\r\no=- 123 456 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n';
+    const VALID_ICE_CANDIDATE = JSON.stringify({ candidate: 'candidate:123', sdpMid: '0' });
+
+    beforeEach(() => {
+      // Add call event handlers to events
+      events.onCallOffer = vi.fn();
+      events.onCallAnswer = vi.fn();
+      events.onCallReject = vi.fn();
+      events.onCallHangup = vi.fn();
+      events.onCallIce = vi.fn();
+
+      client.connect(VALID_PUBLIC_KEY);
+      mockWs!.simulateOpen();
+    });
+
+    it('should handle call_offer message', () => {
+      const message = {
+        type: 'call_offer',
+        callId: VALID_CALL_ID,
+        from: VALID_FROM,
+        sdp: VALID_CALL_SDP,
+        withVideo: true,
+      };
+      mockWs!.simulateMessage(message);
+
+      expect(events.onCallOffer).toHaveBeenCalledWith(message);
+    });
+
+    it('should handle call_answer message', () => {
+      const message = {
+        type: 'call_answer',
+        callId: VALID_CALL_ID,
+        from: VALID_FROM,
+        sdp: VALID_CALL_SDP,
+      };
+      mockWs!.simulateMessage(message);
+
+      expect(events.onCallAnswer).toHaveBeenCalledWith(message);
+    });
+
+    it('should handle call_reject message without reason', () => {
+      const message = {
+        type: 'call_reject',
+        callId: VALID_CALL_ID,
+        from: VALID_FROM,
+      };
+      mockWs!.simulateMessage(message);
+
+      expect(events.onCallReject).toHaveBeenCalledWith({
+        ...message,
+        reason: undefined,
+      });
+    });
+
+    it('should handle call_reject message with reason', () => {
+      const message = {
+        type: 'call_reject',
+        callId: VALID_CALL_ID,
+        from: VALID_FROM,
+        reason: 'busy',
+      };
+      mockWs!.simulateMessage(message);
+
+      expect(events.onCallReject).toHaveBeenCalledWith(message);
+    });
+
+    it('should handle call_hangup message', () => {
+      const message = {
+        type: 'call_hangup',
+        callId: VALID_CALL_ID,
+        from: VALID_FROM,
+      };
+      mockWs!.simulateMessage(message);
+
+      expect(events.onCallHangup).toHaveBeenCalledWith(message);
+    });
+
+    it('should handle call_ice message', () => {
+      const message = {
+        type: 'call_ice',
+        callId: VALID_CALL_ID,
+        from: VALID_FROM,
+        candidate: VALID_ICE_CANDIDATE,
+      };
+      mockWs!.simulateMessage(message);
+
+      expect(events.onCallIce).toHaveBeenCalledWith(message);
+    });
+
+    it('should not call handler if not registered', () => {
+      // Create new client without call handlers
+      const noCallEvents: SignalingEvents = {
+        onStateChange: vi.fn(),
+        onPairIncoming: vi.fn(),
+        onPairExpiring: vi.fn(),
+        onPairMatched: vi.fn(),
+        onPairRejected: vi.fn(),
+        onPairTimeout: vi.fn(),
+        onPairError: vi.fn(),
+        onOffer: vi.fn(),
+        onAnswer: vi.fn(),
+        onIceCandidate: vi.fn(),
+        onError: vi.fn(),
+        // No call handlers - they are optional
+      };
+      const noCallClient = new SignalingClient('wss://test.example.com', noCallEvents);
+      noCallClient.connect(VALID_PUBLIC_KEY);
+      mockWs!.simulateOpen();
+
+      // This should not throw even though handlers are not defined
+      expect(() => {
+        mockWs!.simulateMessage({
+          type: 'call_offer',
+          callId: VALID_CALL_ID,
+          from: VALID_FROM,
+          sdp: VALID_CALL_SDP,
+          withVideo: true,
+        });
+      }).not.toThrow();
+    });
+  });
 });

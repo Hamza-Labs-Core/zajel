@@ -40,6 +40,42 @@ export interface PingMessage {
   type: 'ping';
 }
 
+// Call signaling message types
+export interface CallOfferMessage {
+  type: 'call_offer';
+  callId: string;        // UUID for this call
+  targetId: string;      // Peer to call
+  sdp: string;           // WebRTC SDP offer
+  withVideo: boolean;    // Audio-only or video call
+}
+
+export interface CallAnswerMessage {
+  type: 'call_answer';
+  callId: string;
+  targetId: string;
+  sdp: string;           // WebRTC SDP answer
+}
+
+export interface CallRejectMessage {
+  type: 'call_reject';
+  callId: string;
+  targetId: string;
+  reason?: 'busy' | 'declined' | 'timeout';
+}
+
+export interface CallHangupMessage {
+  type: 'call_hangup';
+  callId: string;
+  targetId: string;
+}
+
+export interface CallIceMessage {
+  type: 'call_ice';
+  callId: string;
+  targetId: string;
+  candidate: string;     // JSON stringified RTCIceCandidate
+}
+
 export type ClientMessage =
   | RegisterMessage
   | PairRequestMessage
@@ -47,7 +83,12 @@ export type ClientMessage =
   | OfferMessage
   | AnswerMessage
   | IceCandidateMessage
-  | PingMessage;
+  | PingMessage
+  | CallOfferMessage
+  | CallAnswerMessage
+  | CallRejectMessage
+  | CallHangupMessage
+  | CallIceMessage;
 
 // Server → Client messages
 export interface RegisteredMessage {
@@ -117,6 +158,42 @@ export interface ErrorMessage {
   message: string;
 }
 
+// Call signaling messages received from server (relayed from peer)
+export interface CallOfferReceivedMessage {
+  type: 'call_offer';
+  callId: string;
+  from: string;          // Peer who initiated the call
+  sdp: string;           // WebRTC SDP offer
+  withVideo: boolean;    // Audio-only or video call
+}
+
+export interface CallAnswerReceivedMessage {
+  type: 'call_answer';
+  callId: string;
+  from: string;
+  sdp: string;           // WebRTC SDP answer
+}
+
+export interface CallRejectReceivedMessage {
+  type: 'call_reject';
+  callId: string;
+  from: string;
+  reason?: 'busy' | 'declined' | 'timeout';
+}
+
+export interface CallHangupReceivedMessage {
+  type: 'call_hangup';
+  callId: string;
+  from: string;
+}
+
+export interface CallIceReceivedMessage {
+  type: 'call_ice';
+  callId: string;
+  from: string;
+  candidate: string;     // JSON stringified RTCIceCandidate
+}
+
 export type ServerMessage =
   | RegisteredMessage
   | PairIncomingMessage
@@ -129,7 +206,12 @@ export type ServerMessage =
   | AnswerReceivedMessage
   | IceCandidateReceivedMessage
   | PongMessage
-  | ErrorMessage;
+  | ErrorMessage
+  | CallOfferReceivedMessage
+  | CallAnswerReceivedMessage
+  | CallRejectReceivedMessage
+  | CallHangupReceivedMessage
+  | CallIceReceivedMessage;
 
 // Data channel messages (after WebRTC connected)
 export interface HandshakeMessage {

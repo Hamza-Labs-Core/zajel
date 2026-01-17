@@ -12,6 +12,8 @@ import 'package:zajel/core/network/signaling_client.dart';
 import 'package:zajel/core/network/webrtc_service.dart';
 import 'package:zajel/core/network/device_link_service.dart';
 import 'package:zajel/core/storage/trusted_peers_storage.dart';
+import 'package:zajel/core/media/media_service.dart';
+import 'package:zajel/core/network/voip_service.dart';
 
 // Mock classes
 class MockFlutterSecureStorage extends Mock implements FlutterSecureStorage {}
@@ -31,6 +33,10 @@ class MockWebRTCService extends Mock implements WebRTCService {}
 class MockSignalingClient extends Mock implements SignalingClient {}
 
 class MockDeviceLinkService extends Mock implements DeviceLinkService {}
+
+class MockMediaService extends Mock implements MediaService {}
+
+class MockVoIPService extends Mock implements VoIPService {}
 
 class MockWebSocketChannel extends Mock implements WebSocketChannel {}
 

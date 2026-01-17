@@ -54,6 +54,33 @@ export const PAIRING_CODE = {
 } as const;
 
 // =============================================================================
+// CALL SIGNALING VALIDATION
+// =============================================================================
+
+export const CALL_SIGNALING = {
+  /**
+   * Regex for validating UUID v4 format (used for callId).
+   * Standard UUID v4 format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+   * where y is 8, 9, a, or b.
+   */
+  UUID_REGEX: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+
+  /**
+   * Maximum length for SDP strings (defense against oversized payloads).
+   * Typical SDP is 2-5KB, but can grow with many media lines.
+   * 64KB should be more than enough for any legitimate SDP.
+   */
+  MAX_SDP_LENGTH: 65536,
+
+  /**
+   * Maximum length for ICE candidate strings.
+   * Typical ICE candidate is ~100-200 bytes.
+   * 1KB should be more than enough.
+   */
+  MAX_ICE_CANDIDATE_LENGTH: 1024,
+} as const;
+
+// =============================================================================
 // PAIRING CONSTANTS
 // =============================================================================
 

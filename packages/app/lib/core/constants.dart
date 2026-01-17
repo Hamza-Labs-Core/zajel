@@ -79,3 +79,32 @@ class WebRTCConstants {
   /// This prevents hanging when network is unstable or TURN/STUN servers are unreachable.
   static const Duration operationTimeout = Duration(seconds: 30);
 }
+
+// =============================================================================
+// VOIP/CALL CONSTANTS
+// =============================================================================
+
+/// VoIP and call-related constants.
+class CallConstants {
+  CallConstants._();
+
+  /// Timeout for ringing phase before auto-hangup (60 seconds)
+  static const Duration ringingTimeout = Duration(seconds: 60);
+
+  /// Reconnection attempt timeout after ICE disconnect
+  static const Duration reconnectionTimeout = Duration(seconds: 10);
+
+  /// Maximum time to wait for ICE gathering to complete
+  static const Duration iceGatheringTimeout = Duration(seconds: 30);
+
+  /// Delay before cleanup after call end to allow final packets
+  static const Duration cleanupDelay = Duration(milliseconds: 500);
+
+  /// Maximum pending ICE candidates to queue before remote description is set.
+  /// Prevents memory exhaustion from ICE candidate floods.
+  ///
+  /// This value is synchronized with the web client constant
+  /// `WEBRTC.MAX_PENDING_ICE_CANDIDATES` in `packages/web-client/src/lib/constants.ts`.
+  /// Both platforms use the same limit (100) for consistent behavior.
+  static const int maxPendingIceCandidates = 100;
+}

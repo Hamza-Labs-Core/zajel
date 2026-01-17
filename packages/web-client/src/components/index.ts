@@ -11,3 +11,5 @@ export { ErrorBoundary } from './ErrorBoundary';
 export { SecurityInfoPanel } from './SecurityInfoPanel';
 export { SecurityReminder } from './SecurityReminder';
 export { ErrorBanner } from './ErrorBanner';
+export { IncomingCallOverlay } from './IncomingCallOverlay';
+export { CallView } from './CallView';

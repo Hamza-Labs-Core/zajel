@@ -12,6 +12,8 @@ import '../network/relay_client.dart';
 import '../network/server_discovery_service.dart';
 import '../network/signaling_client.dart';
 import '../network/webrtc_service.dart';
+import '../media/media_service.dart';
+import '../network/voip_service.dart';
 import '../storage/file_receive_service.dart';
 import '../storage/trusted_peers_storage.dart';
 import '../storage/trusted_peers_storage_impl.dart';
@@ -305,4 +307,22 @@ final fileCompletesStreamProvider = StreamProvider<(String, String)>((ref) {
 final loggerServiceProvider = Provider<LoggerService>((ref) {
   // Uses the singleton instance
   return LoggerService.instance;
+});
+
+/// Provider for media service.
+final mediaServiceProvider = Provider<MediaService>((ref) {
+  final service = MediaService();
+  ref.onDispose(() => service.dispose());
+  return service;
+});
+
+/// Provider for VoIP service (created lazily when signaling is connected).
+final voipServiceProvider = Provider<VoIPService?>((ref) {
+  final signalingClient = ref.watch(signalingClientProvider);
+  if (signalingClient == null) return null;
+
+  final mediaService = ref.watch(mediaServiceProvider);
+  final voipService = VoIPService(mediaService, signalingClient);
+  ref.onDispose(() => voipService.dispose());
+  return voipService;
 });
