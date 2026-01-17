@@ -14,7 +14,7 @@ import { DistributedRendezvous, type PartialResult } from '../registry/distribut
 import type { DeadDropResult, LiveMatchResult } from '../registry/rendezvous-registry.js';
 import { logger } from '../utils/logger.js';
 
-import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY } from '../constants.js';
+import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING } from '../constants.js';
 
 export interface ClientHandlerConfig {
   heartbeatInterval: number;   // Expected heartbeat interval from clients
@@ -1296,6 +1296,62 @@ export class ClientHandler extends EventEmitter {
   }
 
   /**
+   * Validate call signaling payload based on message type.
+   * Returns error message if invalid, undefined if valid.
+   */
+  private validateCallSignalingPayload(
+    type: string,
+    payload: Record<string, unknown>
+  ): string | undefined {
+    if (!payload || typeof payload !== 'object') {
+      return 'Missing or invalid payload';
+    }
+
+    // All call messages require callId
+    const callId = payload.callId;
+    if (typeof callId !== 'string' || !CALL_SIGNALING.UUID_REGEX.test(callId)) {
+      return 'Invalid or missing callId (must be UUID v4 format)';
+    }
+
+    switch (type) {
+      case 'call_offer':
+      case 'call_answer': {
+        // Require sdp field with content
+        const sdp = payload.sdp;
+        if (typeof sdp !== 'string' || sdp.length === 0) {
+          return `Missing or invalid sdp in ${type}`;
+        }
+        if (sdp.length > CALL_SIGNALING.MAX_SDP_LENGTH) {
+          return `SDP too large (max ${CALL_SIGNALING.MAX_SDP_LENGTH} bytes)`;
+        }
+        break;
+      }
+
+      case 'call_ice': {
+        // Require candidate field with content
+        const candidate = payload.candidate;
+        if (typeof candidate !== 'string' || candidate.length === 0) {
+          return 'Missing or invalid candidate in call_ice';
+        }
+        if (candidate.length > CALL_SIGNALING.MAX_ICE_CANDIDATE_LENGTH) {
+          return `ICE candidate too large (max ${CALL_SIGNALING.MAX_ICE_CANDIDATE_LENGTH} bytes)`;
+        }
+        break;
+      }
+
+      case 'call_reject':
+      case 'call_hangup':
+        // Only callId is required, which is already validated above
+        break;
+
+      default:
+        return `Unknown call signaling type: ${type}`;
+    }
+
+    return undefined; // Valid
+  }
+
+  /**
    * Handle VoIP call signaling message forwarding (call_offer, call_answer, call_reject, call_hangup, call_ice)
    *
    * Uses the same validation and forwarding pattern as WebRTC data channel signaling.
@@ -1321,6 +1377,13 @@ export class ClientHandler extends EventEmitter {
     // Validate target code format
     if (!PAIRING_CODE.REGEX.test(target)) {
       this.sendError(ws, 'Invalid target code format');
+      return;
+    }
+
+    // Validate payload structure based on message type
+    const payloadError = this.validateCallSignalingPayload(type, payload);
+    if (payloadError) {
+      this.sendError(ws, payloadError);
       return;
     }
 
