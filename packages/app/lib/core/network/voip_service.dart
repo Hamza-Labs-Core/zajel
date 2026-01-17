@@ -126,6 +126,10 @@ class VoIPService extends ChangeNotifier {
   RTCPeerConnection? _peerConnection;
   CallInfo? _currentCall;
   Timer? _ringingTimeout;
+  Timer? _reconnectionTimeout;
+
+  // Guard against double cleanup
+  bool _isCleaningUp = false;
 
   // ICE candidates received before remote description is set
   final List<RTCIceCandidate> _pendingIceCandidates = [];
@@ -302,10 +306,30 @@ class VoIPService extends ChangeNotifier {
     _cleanup();
   }
 
+  /// Check if media controls are allowed in the current call state.
+  ///
+  /// Media controls are only valid during outgoing, connecting, or connected states
+  /// where local media has been acquired.
+  bool _isMediaControlAllowed() {
+    if (_currentCall == null) {
+      return false;
+    }
+    return _currentCall!.state == CallState.outgoing ||
+        _currentCall!.state == CallState.connecting ||
+        _currentCall!.state == CallState.connected;
+  }
+
   /// Toggle audio mute state.
   ///
   /// Returns the new mute state (true = muted).
+  /// If no active call exists or call is in invalid state, returns current state
+  /// without making changes.
   bool toggleMute() {
+    if (!_isMediaControlAllowed()) {
+      logger.warning(_tag, 'Cannot toggle mute: no active call or invalid state '
+          '(hasCall: ${_currentCall != null}, state: ${_currentCall?.state})');
+      return _mediaService.isAudioMuted;
+    }
     final muted = _mediaService.toggleMute();
     notifyListeners();
     return muted;
@@ -314,7 +338,14 @@ class VoIPService extends ChangeNotifier {
   /// Toggle video on/off.
   ///
   /// Returns the new video state (true = video on).
+  /// If no active call exists or call is in invalid state, returns current state
+  /// without making changes.
   bool toggleVideo() {
+    if (!_isMediaControlAllowed()) {
+      logger.warning(_tag, 'Cannot toggle video: no active call or invalid state '
+          '(hasCall: ${_currentCall != null}, state: ${_currentCall?.state})');
+      return !_mediaService.isVideoMuted;
+    }
     final videoOn = _mediaService.toggleVideo();
     notifyListeners();
     return videoOn;
@@ -354,8 +385,10 @@ class VoIPService extends ChangeNotifier {
     // Handle remote tracks
     pc.onTrack = (event) {
       logger.info(_tag, 'Received remote track: ${event.track.kind}');
-      if (event.streams.isNotEmpty) {
-        _currentCall?.remoteStream = event.streams[0];
+      // Capture reference locally to avoid null race
+      final call = _currentCall;
+      if (call != null && event.streams.isNotEmpty) {
+        call.remoteStream = event.streams[0];
         _remoteStreamController.add(event.streams[0]);
         notifyListeners();
       }
@@ -368,6 +401,7 @@ class VoIPService extends ChangeNotifier {
       switch (state) {
         case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
           _ringingTimeout?.cancel();
+          _reconnectionTimeout?.cancel();
           _currentCall?.state = CallState.connected;
           _currentCall?.startTime = DateTime.now();
           _notifyState(CallState.connected);
@@ -378,10 +412,16 @@ class VoIPService extends ChangeNotifier {
 
         case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
           logger.warning(_tag, 'Peer connection disconnected');
+          // Cancel any existing reconnection timer
+          _reconnectionTimeout?.cancel();
+          // Capture current call ID to validate in callback
+          final disconnectedCallId = _currentCall?.callId;
           // Give some time for reconnection before hanging up
-          Future.delayed(CallConstants.reconnectionTimeout, () {
-            if (_peerConnection?.connectionState ==
-                RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
+          _reconnectionTimeout = Timer(CallConstants.reconnectionTimeout, () {
+            // Only hangup if this is still the same call and still disconnected
+            if (_currentCall?.callId == disconnectedCallId &&
+                _peerConnection?.connectionState ==
+                    RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
               hangup();
             }
           });
@@ -509,8 +549,15 @@ class VoIPService extends ChangeNotifier {
 
       // If remote description is not set yet, queue the candidate
       if (_peerConnection?.getRemoteDescription() == null) {
-        logger.debug(_tag, 'Queueing ICE candidate (no remote description yet)');
+        // Enforce queue bounds to prevent memory exhaustion
+        if (_pendingIceCandidates.length >= CallConstants.maxPendingIceCandidates) {
+          logger.warning(_tag, 'ICE candidate queue full '
+              '(${CallConstants.maxPendingIceCandidates}), dropping oldest candidate');
+          _pendingIceCandidates.removeAt(0);
+        }
         _pendingIceCandidates.add(candidate);
+        logger.debug(_tag, 'Queued ICE candidate '
+            '(${_pendingIceCandidates.length}/${CallConstants.maxPendingIceCandidates})');
       } else {
         await _peerConnection?.addCandidate(candidate);
       }
@@ -549,29 +596,43 @@ class VoIPService extends ChangeNotifier {
 
   /// Clean up resources after a call ends.
   Future<void> _cleanup() async {
-    logger.debug(_tag, 'Cleaning up call resources');
-
-    _ringingTimeout?.cancel();
-    _ringingTimeout = null;
-
-    // Close peer connection
-    final pc = _peerConnection;
-    _peerConnection = null;
-    await pc?.close();
-
-    // Stop media tracks
-    await _mediaService.stopAllTracks();
-
-    // Clear pending ICE candidates
-    _pendingIceCandidates.clear();
-
-    // Update state
-    if (_currentCall != null) {
-      _currentCall!.state = CallState.ended;
-      _notifyState(CallState.ended);
+    // Guard against double cleanup
+    if (_isCleaningUp) {
+      logger.debug(_tag, 'Cleanup already in progress, skipping');
+      return;
     }
+    _isCleaningUp = true;
 
-    _currentCall = null;
+    try {
+      logger.debug(_tag, 'Cleaning up call resources');
+
+      _ringingTimeout?.cancel();
+      _ringingTimeout = null;
+
+      _reconnectionTimeout?.cancel();
+      _reconnectionTimeout = null;
+
+      // Close peer connection
+      final pc = _peerConnection;
+      _peerConnection = null;
+      await pc?.close();
+
+      // Stop media tracks
+      await _mediaService.stopAllTracks();
+
+      // Clear pending ICE candidates
+      _pendingIceCandidates.clear();
+
+      // Update state
+      if (_currentCall != null) {
+        _currentCall!.state = CallState.ended;
+        _notifyState(CallState.ended);
+      }
+
+      _currentCall = null;
+    } finally {
+      _isCleaningUp = false;
+    }
   }
 
   /// Notify listeners of state change.

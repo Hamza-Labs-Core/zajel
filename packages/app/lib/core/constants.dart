@@ -99,4 +99,8 @@ class CallConstants {
 
   /// Delay before cleanup after call end to allow final packets
   static const Duration cleanupDelay = Duration(milliseconds: 500);
+
+  /// Maximum pending ICE candidates to queue before remote description is set.
+  /// Prevents memory exhaustion from ICE candidate floods.
+  static const int maxPendingIceCandidates = 100;
 }

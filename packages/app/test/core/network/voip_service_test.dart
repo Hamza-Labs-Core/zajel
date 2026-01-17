@@ -259,42 +259,45 @@ void main() {
     });
 
     group('toggleMute', () {
-      test('delegates to MediaService and returns result', () {
-        when(() => mockMediaService.toggleMute()).thenReturn(true);
+      test('returns current state without calling MediaService when no active call', () {
+        // Without an active call, toggleMute validates state and returns isAudioMuted
+        when(() => mockMediaService.isAudioMuted).thenReturn(true);
 
         final result = voipService.toggleMute();
 
-        expect(result, isTrue);
-        verify(() => mockMediaService.toggleMute()).called(1);
+        // Returns current audioMuted state without calling toggleMute
+        expect(result, isTrue); // isAudioMuted from MediaService
+        verifyNever(() => mockMediaService.toggleMute());
       });
 
-      test('toggleMute returns false when unmuting', () {
-        when(() => mockMediaService.toggleMute()).thenReturn(false);
-
+      test('returns audioMuted false from state when unmuted', () {
+        // Default setUp already has isAudioMuted: false
         final result = voipService.toggleMute();
 
-        expect(result, isFalse);
-        verify(() => mockMediaService.toggleMute()).called(1);
+        expect(result, isFalse); // isAudioMuted from MediaService
+        verifyNever(() => mockMediaService.toggleMute());
       });
     });
 
     group('toggleVideo', () {
-      test('delegates to MediaService and returns result', () {
-        when(() => mockMediaService.toggleVideo()).thenReturn(false);
+      test('returns current state without calling MediaService when no active call', () {
+        // Without an active call, toggleVideo validates state and returns !isVideoMuted
+        when(() => mockMediaService.isVideoMuted).thenReturn(true);
 
         final result = voipService.toggleVideo();
 
+        // Returns !isVideoMuted = !true = false (video off)
         expect(result, isFalse);
-        verify(() => mockMediaService.toggleVideo()).called(1);
+        verifyNever(() => mockMediaService.toggleVideo());
       });
 
-      test('toggleVideo returns true when enabling video', () {
-        when(() => mockMediaService.toggleVideo()).thenReturn(true);
-
+      test('returns video on when not muted in state', () {
+        // Default setUp already has isVideoMuted: false
         final result = voipService.toggleVideo();
 
+        // Returns !isVideoMuted = !false = true (video is ON)
         expect(result, isTrue);
-        verify(() => mockMediaService.toggleVideo()).called(1);
+        verifyNever(() => mockMediaService.toggleVideo());
       });
     });
 
@@ -433,30 +436,38 @@ void main() {
     });
 
     group('notifyListeners', () {
-      test('toggleMute calls notifyListeners', () {
-        when(() => mockMediaService.toggleMute()).thenReturn(true);
+      test('toggleMute does not notify without active call', () {
+        // With call state validation, toggleMute returns early when no call
+        // Default setUp already has isAudioMuted: false
 
         var notified = false;
         voipService.addListener(() {
           notified = true;
         });
 
-        voipService.toggleMute();
+        final result = voipService.toggleMute();
 
-        expect(notified, isTrue);
+        // Returns current mute state without notification
+        expect(result, isFalse); // isAudioMuted from MediaService
+        expect(notified, isFalse);
+        verifyNever(() => mockMediaService.toggleMute());
       });
 
-      test('toggleVideo calls notifyListeners', () {
-        when(() => mockMediaService.toggleVideo()).thenReturn(true);
+      test('toggleVideo does not notify without active call', () {
+        // With call state validation, toggleVideo returns early when no call
+        // Default setUp already has isVideoMuted: false
 
         var notified = false;
         voipService.addListener(() {
           notified = true;
         });
 
-        voipService.toggleVideo();
+        final result = voipService.toggleVideo();
 
-        expect(notified, isTrue);
+        // Returns true (video ON) since !isVideoMuted = !false = true
+        expect(result, isTrue);
+        expect(notified, isFalse);
+        verifyNever(() => mockMediaService.toggleVideo());
       });
     });
   });

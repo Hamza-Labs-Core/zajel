@@ -185,30 +185,22 @@ export class MediaService {
 
   /**
    * Switch between front/back camera (mobile).
-   * This stops the current video track and requests a new one with opposite facing mode.
+   * This is a best-effort operation - failures are logged but not thrown.
+   * Camera switching may not be supported on all platforms/devices.
    *
-   * @throws MediaError if no stream exists or camera switch fails
+   * @returns true if camera switch was successful, false otherwise
    */
-  async switchCamera(): Promise<void> {
+  async switchCamera(): Promise<boolean> {
     if (!this.localStream) {
-      logger.error('Media', 'Cannot switch camera: no active stream');
-      throw new MediaError(
-        'No active stream',
-        MediaErrorCodes.MEDIA_NO_STREAM
-      );
+      logger.warn('Media', 'Cannot switch camera: no active stream');
+      return false;
     }
 
     const videoTracks = this.localStream.getVideoTracks();
     if (videoTracks.length === 0) {
       logger.warn('Media', 'Cannot switch camera: no video tracks');
-      throw new MediaError(
-        'No video tracks to switch',
-        MediaErrorCodes.MEDIA_SWITCH_CAMERA_FAILED
-      );
+      return false;
     }
-
-    // Stop current video track
-    videoTracks.forEach((track) => track.stop());
 
     // Toggle facing mode
     const newFacingMode: FacingMode =
@@ -217,6 +209,7 @@ export class MediaService {
     try {
       logger.info('Media', `Switching camera to: ${newFacingMode}`);
 
+      // Request new camera stream FIRST (before stopping old one)
       const newStream = await navigator.mediaDevices.getUserMedia({
         video: {
           width: { ideal: 1280 },
@@ -225,28 +218,32 @@ export class MediaService {
         },
       });
 
-      // Remove old video tracks from stream
+      const newVideoTrack = newStream.getVideoTracks()[0];
+      if (!newVideoTrack) {
+        logger.warn('Media', 'New stream has no video track');
+        // Clean up the failed stream
+        newStream.getTracks().forEach((track) => track.stop());
+        return false;
+      }
+
+      // Success - now stop old tracks and add new one
       videoTracks.forEach((track) => {
+        track.stop();
         this.localStream?.removeTrack(track);
       });
 
-      // Add new video track to stream
-      const newVideoTrack = newStream.getVideoTracks()[0];
-      if (newVideoTrack) {
-        this.localStream?.addTrack(newVideoTrack);
-        // Apply current mute state to new track
-        newVideoTrack.enabled = !this.videoMuted;
-      }
+      this.localStream?.addTrack(newVideoTrack);
+      // Apply current mute state to new track
+      newVideoTrack.enabled = !this.videoMuted;
 
       this.currentFacingMode = newFacingMode;
       logger.info('Media', `Camera switched to: ${newFacingMode}`);
+      return true;
     } catch (error) {
       logger.error('Media', 'Failed to switch camera:', error);
-      throw new MediaError(
-        'Failed to switch camera',
-        MediaErrorCodes.MEDIA_SWITCH_CAMERA_FAILED,
-        { originalError: error instanceof Error ? error.message : String(error) }
-      );
+      // Don't rethrow - camera switching is a best-effort operation
+      // and may not be supported on all platforms
+      return false;
     }
   }
 

@@ -454,7 +454,17 @@ describe('VoIPService', () => {
   });
 
   describe('toggleMute', () => {
-    it('should delegate to MediaService', () => {
+    it('should return current mute state when no active call', () => {
+      const result = voipService.toggleMute();
+
+      // No delegation when no call - returns current state (audioMuted: false)
+      expect(mockMediaService.toggleMute).not.toHaveBeenCalled();
+      expect(result).toBe(false);
+    });
+
+    it('should delegate to MediaService during active call', async () => {
+      await voipService.startCall('PEER123', true);
+
       const result = voipService.toggleMute();
 
       expect(mockMediaService.toggleMute).toHaveBeenCalled();
@@ -463,7 +473,17 @@ describe('VoIPService', () => {
   });
 
   describe('toggleVideo', () => {
-    it('should delegate to MediaService', () => {
+    it('should return current video state when no active call', () => {
+      const result = voipService.toggleVideo();
+
+      // No delegation when no call - returns current state (!videoMuted = true)
+      expect(mockMediaService.toggleVideo).not.toHaveBeenCalled();
+      expect(result).toBe(true);
+    });
+
+    it('should delegate to MediaService during active call', async () => {
+      await voipService.startCall('PEER123', true);
+
       const result = voipService.toggleVideo();
 
       expect(mockMediaService.toggleVideo).toHaveBeenCalled();

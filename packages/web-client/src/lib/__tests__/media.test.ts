@@ -370,30 +370,20 @@ describe('MediaService', () => {
   });
 
   describe('switchCamera', () => {
-    it('should throw when no stream exists', async () => {
-      await expect(mediaService.switchCamera()).rejects.toThrow(MediaError);
-
-      try {
-        await mediaService.switchCamera();
-      } catch (e) {
-        expect(e).toBeInstanceOf(MediaError);
-        expect((e as MediaError).code).toBe(MediaErrorCodes.MEDIA_NO_STREAM);
-      }
+    it('should return false when no stream exists', async () => {
+      // switchCamera is best-effort - returns false instead of throwing
+      const result = await mediaService.switchCamera();
+      expect(result).toBe(false);
     });
 
-    it('should throw when no video tracks exist', async () => {
+    it('should return false when no video tracks exist', async () => {
       const mockStream = createMockStream(true, false); // Audio only
       mockGetUserMedia.mockResolvedValue(mockStream);
       await mediaService.requestMedia(false);
 
-      await expect(mediaService.switchCamera()).rejects.toThrow(MediaError);
-
-      try {
-        await mediaService.switchCamera();
-      } catch (e) {
-        expect(e).toBeInstanceOf(MediaError);
-        expect((e as MediaError).code).toBe(MediaErrorCodes.MEDIA_SWITCH_CAMERA_FAILED);
-      }
+      // switchCamera is best-effort - returns false instead of throwing
+      const result = await mediaService.switchCamera();
+      expect(result).toBe(false);
     });
 
     it('should switch from user to environment facing mode', async () => {
@@ -479,7 +469,7 @@ describe('MediaService', () => {
       expect(newVideoTrack.enabled).toBe(false);
     });
 
-    it('should throw MediaError when switching fails', async () => {
+    it('should return false when switching fails', async () => {
       const firstStream = createMockStream(true, true);
       mockGetUserMedia
         .mockResolvedValueOnce(firstStream)
@@ -487,14 +477,9 @@ describe('MediaService', () => {
 
       await mediaService.requestMedia(true);
 
-      await expect(mediaService.switchCamera()).rejects.toThrow(MediaError);
-
-      try {
-        await mediaService.switchCamera();
-      } catch (e) {
-        expect(e).toBeInstanceOf(MediaError);
-        expect((e as MediaError).code).toBe(MediaErrorCodes.MEDIA_SWITCH_CAMERA_FAILED);
-      }
+      // switchCamera is best-effort - returns false on failure instead of throwing
+      const result = await mediaService.switchCamera();
+      expect(result).toBe(false);
     });
   });
 

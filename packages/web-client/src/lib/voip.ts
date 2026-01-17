@@ -175,6 +175,7 @@ export class VoIPService {
   private ringingTimeout: ReturnType<typeof setTimeout> | null = null;
   private pendingIceCandidates: RTCIceCandidate[] = [];
   private eventHandlers: Map<keyof VoIPEvents, Set<VoIPEvents[keyof VoIPEvents]>> = new Map();
+  private isCleaningUp = false;
 
   constructor(
     private mediaService: MediaService,
@@ -331,26 +332,37 @@ export class VoIPService {
    * Clean up all resources after a call ends.
    */
   private cleanup(): void {
-    logger.info('VoIP', 'Cleaning up call resources');
-
-    this.clearRingingTimeout();
-
-    // Stop all media tracks
-    this.mediaService.stopAllTracks();
-
-    // Close peer connection
-    if (this.peerConnection) {
-      this.peerConnection.close();
-      this.peerConnection = null;
+    // Guard against double cleanup
+    if (this.isCleaningUp) {
+      logger.debug('VoIP', 'Cleanup already in progress, skipping');
+      return;
     }
+    this.isCleaningUp = true;
 
-    // Clear pending ICE candidates
-    this.pendingIceCandidates = [];
+    try {
+      logger.info('VoIP', 'Cleaning up call resources');
 
-    // Set state to ended, then idle
-    this.setState('ended');
-    this.currentCall = null;
-    this.setState('idle');
+      this.clearRingingTimeout();
+
+      // Stop all media tracks
+      this.mediaService.stopAllTracks();
+
+      // Close peer connection
+      if (this.peerConnection) {
+        this.peerConnection.close();
+        this.peerConnection = null;
+      }
+
+      // Clear pending ICE candidates
+      this.pendingIceCandidates = [];
+
+      // Set state to ended, then idle
+      this.setState('ended');
+      this.currentCall = null;
+      this.setState('idle');
+    } finally {
+      this.isCleaningUp = false;
+    }
   }
 
   /**
@@ -480,8 +492,13 @@ export class VoIPService {
         logger.debug('VoIP', 'Added ICE candidate');
       } else {
         // Queue the candidate until remote description is set
+        // Enforce queue bounds to prevent memory exhaustion
+        if (this.pendingIceCandidates.length >= WEBRTC.MAX_PENDING_ICE_CANDIDATES) {
+          logger.warn('VoIP', `ICE candidate queue full (${WEBRTC.MAX_PENDING_ICE_CANDIDATES}), dropping oldest candidate`);
+          this.pendingIceCandidates.shift();
+        }
         this.pendingIceCandidates.push(candidate);
-        logger.debug('VoIP', 'Queued ICE candidate');
+        logger.debug('VoIP', `Queued ICE candidate (${this.pendingIceCandidates.length}/${WEBRTC.MAX_PENDING_ICE_CANDIDATES})`);
       }
     } catch (error) {
       logger.warn('VoIP', 'Failed to add ICE candidate:', error);
@@ -666,6 +683,10 @@ export class VoIPService {
       delete this.currentCall.pendingOffer;
     } catch (error) {
       logger.error('VoIP', 'Failed to accept call:', error);
+      // Clear pending offer on error to maintain consistent state
+      if (this.currentCall) {
+        delete this.currentCall.pendingOffer;
+      }
       this.cleanup();
 
       if (error instanceof VoIPError) {
@@ -729,20 +750,47 @@ export class VoIPService {
   }
 
   /**
+   * Check if media controls are allowed in the current call state.
+   * Media controls are only valid during outgoing, connecting, or connected states.
+   */
+  private isMediaControlAllowed(): boolean {
+    if (!this.currentCall) {
+      return false;
+    }
+    const allowedStates: CallState[] = ['outgoing', 'connecting', 'connected'];
+    return allowedStates.includes(this.currentCall.state);
+  }
+
+  /**
    * Toggle audio mute state.
    *
-   * @returns New muted state (true = muted)
+   * @returns New muted state (true = muted), or current state if no active call
    */
   toggleMute(): boolean {
+    if (!this.isMediaControlAllowed()) {
+      logger.warn('VoIP', 'Cannot toggle mute: no active call or invalid state', {
+        hasCall: !!this.currentCall,
+        state: this.currentCall?.state,
+      });
+      return this.mediaService.getState().audioMuted;
+    }
     return this.mediaService.toggleMute();
   }
 
   /**
    * Toggle video on/off.
    *
-   * @returns New video state (true = video on)
+   * @returns New video state (true = video on), or current state if no active call
    */
   toggleVideo(): boolean {
+    if (!this.isMediaControlAllowed()) {
+      logger.warn('VoIP', 'Cannot toggle video: no active call or invalid state', {
+        hasCall: !!this.currentCall,
+        state: this.currentCall?.state,
+      });
+      // Return current video ON state (opposite of videoMuted)
+      return !this.mediaService.getState().videoMuted;
+    }
     return this.mediaService.toggleVideo();
   }
 
