@@ -932,8 +932,15 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
-    // We know request exists because requestIndex !== -1
-    const request = pending[requestIndex]!;
+    // Get the request with explicit undefined check for safety
+    const request = pending[requestIndex];
+    if (!request) {
+      this.send(ws, {
+        type: 'pair_error',
+        error: 'Request not found',
+      });
+      return;
+    }
 
     // Clear the timer for this request
     const timerKey = `${targetCode}:${responderCode}`;
