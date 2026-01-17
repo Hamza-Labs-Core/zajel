@@ -1308,7 +1308,7 @@ export class ClientHandler extends EventEmitter {
     }
 
     // All call messages require callId
-    const callId = payload.callId;
+    const callId = payload['callId'];
     if (typeof callId !== 'string' || !CALL_SIGNALING.UUID_REGEX.test(callId)) {
       return 'Invalid or missing callId (must be UUID v4 format)';
     }
@@ -1317,7 +1317,7 @@ export class ClientHandler extends EventEmitter {
       case 'call_offer':
       case 'call_answer': {
         // Require sdp field with content
-        const sdp = payload.sdp;
+        const sdp = payload['sdp'];
         if (typeof sdp !== 'string' || sdp.length === 0) {
           return `Missing or invalid sdp in ${type}`;
         }
@@ -1329,7 +1329,7 @@ export class ClientHandler extends EventEmitter {
 
       case 'call_ice': {
         // Require candidate field with content
-        const candidate = payload.candidate;
+        const candidate = payload['candidate'];
         if (typeof candidate !== 'string' || candidate.length === 0) {
           return 'Missing or invalid candidate in call_ice';
         }
