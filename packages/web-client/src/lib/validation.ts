@@ -32,6 +32,11 @@ import type {
   ChunkRetryRequestMessage,
   FileCompleteAckMessage,
   TransferCancelMessage,
+  CallOfferReceivedMessage,
+  CallAnswerReceivedMessage,
+  CallRejectReceivedMessage,
+  CallHangupReceivedMessage,
+  CallIceReceivedMessage,
 } from './protocol';
 import { PAIRING_CODE_REGEX } from './constants';
 
@@ -44,6 +49,16 @@ const MAX_ICE_CANDIDATE_LENGTH = 10000;
 const MAX_FILE_NAME_LENGTH = 255;
 const MAX_FILE_CHUNKS = 1000000;
 const MAX_ARRAY_SIZE = 10000; // Max elements in retry/missing chunk arrays to prevent DoS
+
+// Call message validation constants
+const MAX_CALL_SDP_LENGTH = 100000; // Max SDP length for call offers/answers
+const MAX_CALL_ICE_CANDIDATE_LENGTH = 10000; // Max ICE candidate JSON length
+
+// UUID v4 regex pattern for call IDs
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+// Valid call reject reasons
+const CALL_REJECT_REASONS = ['busy', 'declined', 'timeout'] as const;
 
 /**
  * Result of a validation operation.
@@ -180,6 +195,45 @@ function isValidIceCandidatePayload(value: unknown): value is RTCIceCandidateIni
   return true;
 }
 
+/**
+ * Validates a UUID v4 format for call IDs.
+ */
+function isValidUuid(value: unknown): value is string {
+  return isString(value) && UUID_REGEX.test(value);
+}
+
+/**
+ * Validates an SDP string for call messages.
+ * Call SDP is a raw string (not wrapped in RTCSessionDescriptionInit).
+ */
+function isValidCallSdp(value: unknown): value is string {
+  if (!isString(value, 1, MAX_CALL_SDP_LENGTH)) {
+    return false;
+  }
+  // Basic SDP structure validation for defense in depth
+  // Valid SDP must start with 'v=0' and contain 'o=' and 's=' lines
+  if (!value.startsWith('v=0')) return false;
+  if (!value.includes('\no=') && !value.includes('\r\no=')) return false;
+  if (!value.includes('\ns=') && !value.includes('\r\ns=')) return false;
+  return true;
+}
+
+/**
+ * Validates a JSON-stringified ICE candidate for call messages.
+ */
+function isValidCallIceCandidate(value: unknown): value is string {
+  if (!isString(value, 1, MAX_CALL_ICE_CANDIDATE_LENGTH)) {
+    return false;
+  }
+  // Verify it's valid JSON
+  try {
+    JSON.parse(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Individual message validators
 
 function validateRegisteredMessage(obj: Record<string, unknown>): ValidationResult<RegisteredMessage> {
@@ -291,6 +345,103 @@ function validateErrorMessage(obj: Record<string, unknown>): ValidationResult<Er
   return success({ type: 'error', message: obj.message });
 }
 
+// Call signaling message validators
+
+function validateCallOfferReceivedMessage(obj: Record<string, unknown>): ValidationResult<CallOfferReceivedMessage> {
+  if (!isValidUuid(obj.callId)) {
+    return failure('Invalid or missing callId in call_offer message');
+  }
+  if (!isString(obj.from, 1)) {
+    return failure('Invalid or missing from in call_offer message');
+  }
+  if (!isValidCallSdp(obj.sdp)) {
+    return failure('Invalid or missing sdp in call_offer message');
+  }
+  if (!isBoolean(obj.withVideo)) {
+    return failure('Invalid or missing withVideo in call_offer message');
+  }
+  return success({
+    type: 'call_offer',
+    callId: obj.callId,
+    from: obj.from,
+    sdp: obj.sdp,
+    withVideo: obj.withVideo,
+  });
+}
+
+function validateCallAnswerReceivedMessage(obj: Record<string, unknown>): ValidationResult<CallAnswerReceivedMessage> {
+  if (!isValidUuid(obj.callId)) {
+    return failure('Invalid or missing callId in call_answer message');
+  }
+  if (!isString(obj.from, 1)) {
+    return failure('Invalid or missing from in call_answer message');
+  }
+  if (!isValidCallSdp(obj.sdp)) {
+    return failure('Invalid or missing sdp in call_answer message');
+  }
+  return success({
+    type: 'call_answer',
+    callId: obj.callId,
+    from: obj.from,
+    sdp: obj.sdp,
+  });
+}
+
+function validateCallRejectReceivedMessage(obj: Record<string, unknown>): ValidationResult<CallRejectReceivedMessage> {
+  if (!isValidUuid(obj.callId)) {
+    return failure('Invalid or missing callId in call_reject message');
+  }
+  if (!isString(obj.from, 1)) {
+    return failure('Invalid or missing from in call_reject message');
+  }
+  // reason is optional but if present must be a valid value
+  let reason: 'busy' | 'declined' | 'timeout' | undefined;
+  if (obj.reason !== undefined) {
+    if (!isString(obj.reason) || !CALL_REJECT_REASONS.includes(obj.reason as typeof CALL_REJECT_REASONS[number])) {
+      return failure('Invalid reason in call_reject message');
+    }
+    reason = obj.reason as 'busy' | 'declined' | 'timeout';
+  }
+  return success({
+    type: 'call_reject',
+    callId: obj.callId,
+    from: obj.from,
+    reason,
+  });
+}
+
+function validateCallHangupReceivedMessage(obj: Record<string, unknown>): ValidationResult<CallHangupReceivedMessage> {
+  if (!isValidUuid(obj.callId)) {
+    return failure('Invalid or missing callId in call_hangup message');
+  }
+  if (!isString(obj.from, 1)) {
+    return failure('Invalid or missing from in call_hangup message');
+  }
+  return success({
+    type: 'call_hangup',
+    callId: obj.callId,
+    from: obj.from,
+  });
+}
+
+function validateCallIceReceivedMessage(obj: Record<string, unknown>): ValidationResult<CallIceReceivedMessage> {
+  if (!isValidUuid(obj.callId)) {
+    return failure('Invalid or missing callId in call_ice message');
+  }
+  if (!isString(obj.from, 1)) {
+    return failure('Invalid or missing from in call_ice message');
+  }
+  if (!isValidCallIceCandidate(obj.candidate)) {
+    return failure('Invalid or missing candidate in call_ice message');
+  }
+  return success({
+    type: 'call_ice',
+    callId: obj.callId,
+    from: obj.from,
+    candidate: obj.candidate,
+  });
+}
+
 /**
  * Validates a server message received via WebSocket.
  * Returns the validated message if successful, or null if validation fails.
@@ -329,6 +480,17 @@ export function validateServerMessage(data: unknown): ValidationResult<ServerMes
       return validatePongMessage();
     case 'error':
       return validateErrorMessage(data);
+    // Call signaling messages
+    case 'call_offer':
+      return validateCallOfferReceivedMessage(data);
+    case 'call_answer':
+      return validateCallAnswerReceivedMessage(data);
+    case 'call_reject':
+      return validateCallRejectReceivedMessage(data);
+    case 'call_hangup':
+      return validateCallHangupReceivedMessage(data);
+    case 'call_ice':
+      return validateCallIceReceivedMessage(data);
     default:
       return failure(`Unknown message type: ${data.type}`);
   }

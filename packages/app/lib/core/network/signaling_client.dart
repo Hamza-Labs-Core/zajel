@@ -90,6 +90,13 @@ class SignalingClient {
   final _connectionStateController =
       StreamController<SignalingConnectionState>.broadcast();
 
+  // Call signaling stream controllers
+  final _callOfferController = StreamController<CallOfferMessage>.broadcast();
+  final _callAnswerController = StreamController<CallAnswerMessage>.broadcast();
+  final _callRejectController = StreamController<CallRejectMessage>.broadcast();
+  final _callHangupController = StreamController<CallHangupMessage>.broadcast();
+  final _callIceController = StreamController<CallIceMessage>.broadcast();
+
   final _logger = LoggerService.instance;
 
   bool _isConnected = false;
@@ -111,6 +118,21 @@ class SignalingClient {
   /// Stream of connection state changes.
   Stream<SignalingConnectionState> get connectionState =>
       _connectionStateController.stream;
+
+  /// Stream of incoming call offer messages.
+  Stream<CallOfferMessage> get onCallOffer => _callOfferController.stream;
+
+  /// Stream of incoming call answer messages.
+  Stream<CallAnswerMessage> get onCallAnswer => _callAnswerController.stream;
+
+  /// Stream of incoming call reject messages.
+  Stream<CallRejectMessage> get onCallReject => _callRejectController.stream;
+
+  /// Stream of incoming call hangup messages.
+  Stream<CallHangupMessage> get onCallHangup => _callHangupController.stream;
+
+  /// Stream of incoming call ICE candidate messages.
+  Stream<CallIceMessage> get onCallIce => _callIceController.stream;
 
   /// Whether currently connected to the signaling server.
   bool get isConnected => _isConnected;
@@ -310,6 +332,75 @@ class SignalingClient {
     });
   }
 
+  // ==========================================================================
+  // Call Signaling Methods
+  // ==========================================================================
+
+  /// Send a call offer to a peer.
+  ///
+  /// [callId] - Unique identifier for this call
+  /// [targetId] - The pairing code of the peer to call
+  /// [sdp] - The SDP offer string
+  /// [withVideo] - Whether this is a video call
+  void sendCallOffer(String callId, String targetId, String sdp, bool withVideo) {
+    _send(CallOfferMessage(
+      callId: callId,
+      targetId: targetId,
+      sdp: sdp,
+      withVideo: withVideo,
+    ).toJson());
+  }
+
+  /// Send a call answer to accept an incoming call.
+  ///
+  /// [callId] - The call ID from the offer
+  /// [targetId] - The pairing code of the caller
+  /// [sdp] - The SDP answer string
+  void sendCallAnswer(String callId, String targetId, String sdp) {
+    _send(CallAnswerMessage(
+      callId: callId,
+      targetId: targetId,
+      sdp: sdp,
+    ).toJson());
+  }
+
+  /// Send a call rejection to decline an incoming call.
+  ///
+  /// [callId] - The call ID from the offer
+  /// [targetId] - The pairing code of the caller
+  /// [reason] - Optional reason for rejection ('busy', 'declined', 'timeout')
+  void sendCallReject(String callId, String targetId, {String? reason}) {
+    _send(CallRejectMessage(
+      callId: callId,
+      targetId: targetId,
+      reason: reason,
+    ).toJson());
+  }
+
+  /// Send a hangup signal to end an active call.
+  ///
+  /// [callId] - The call ID
+  /// [targetId] - The pairing code of the peer
+  void sendCallHangup(String callId, String targetId) {
+    _send(CallHangupMessage(
+      callId: callId,
+      targetId: targetId,
+    ).toJson());
+  }
+
+  /// Send an ICE candidate for call establishment.
+  ///
+  /// [callId] - The call ID
+  /// [targetId] - The pairing code of the peer
+  /// [candidate] - The ICE candidate as a JSON string
+  void sendCallIce(String callId, String targetId, String candidate) {
+    _send(CallIceMessage(
+      callId: callId,
+      targetId: targetId,
+      candidate: candidate,
+    ).toJson());
+  }
+
   /// Send a generic message to the signaling server.
   ///
   /// Used by RelayClient for load reporting and other relay-specific messages.
@@ -322,6 +413,12 @@ class SignalingClient {
     await disconnect();
     await _messageController.close();
     await _connectionStateController.close();
+    // Close call signaling stream controllers
+    await _callOfferController.close();
+    await _callAnswerController.close();
+    await _callRejectController.close();
+    await _callHangupController.close();
+    await _callIceController.close();
   }
 
   // Private methods
@@ -447,6 +544,27 @@ class SignalingClient {
           _messageController.add(SignalingMessage.linkTimeout(
             linkCode: json['linkCode'] as String,
           ));
+          break;
+
+        // Call signaling messages
+        case 'call_offer':
+          _callOfferController.add(CallOfferMessage.fromJson(json));
+          break;
+
+        case 'call_answer':
+          _callAnswerController.add(CallAnswerMessage.fromJson(json));
+          break;
+
+        case 'call_reject':
+          _callRejectController.add(CallRejectMessage.fromJson(json));
+          break;
+
+        case 'call_hangup':
+          _callHangupController.add(CallHangupMessage.fromJson(json));
+          break;
+
+        case 'call_ice':
+          _callIceController.add(CallIceMessage.fromJson(json));
           break;
 
         case 'pong':
@@ -679,4 +797,142 @@ enum SignalingConnectionState {
   connecting,
   connected,
   failed,
+}
+
+// =============================================================================
+// Call Signaling Messages
+// =============================================================================
+
+/// Message for initiating a call offer.
+class CallOfferMessage {
+  final String callId;
+  final String targetId;
+  final String sdp;
+  final bool withVideo;
+
+  const CallOfferMessage({
+    required this.callId,
+    required this.targetId,
+    required this.sdp,
+    required this.withVideo,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'type': 'call_offer',
+        'callId': callId,
+        'targetId': targetId,
+        'sdp': sdp,
+        'withVideo': withVideo,
+      };
+
+  factory CallOfferMessage.fromJson(Map<String, dynamic> json) =>
+      CallOfferMessage(
+        callId: json['callId'] as String,
+        targetId: json['from'] as String? ?? json['targetId'] as String,
+        sdp: json['sdp'] as String,
+        withVideo: json['withVideo'] as bool,
+      );
+}
+
+/// Message for answering a call.
+class CallAnswerMessage {
+  final String callId;
+  final String targetId;
+  final String sdp;
+
+  const CallAnswerMessage({
+    required this.callId,
+    required this.targetId,
+    required this.sdp,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'type': 'call_answer',
+        'callId': callId,
+        'targetId': targetId,
+        'sdp': sdp,
+      };
+
+  factory CallAnswerMessage.fromJson(Map<String, dynamic> json) =>
+      CallAnswerMessage(
+        callId: json['callId'] as String,
+        targetId: json['from'] as String? ?? json['targetId'] as String,
+        sdp: json['sdp'] as String,
+      );
+}
+
+/// Message for rejecting a call.
+class CallRejectMessage {
+  final String callId;
+  final String targetId;
+  final String? reason;
+
+  const CallRejectMessage({
+    required this.callId,
+    required this.targetId,
+    this.reason,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'type': 'call_reject',
+        'callId': callId,
+        'targetId': targetId,
+        if (reason != null) 'reason': reason,
+      };
+
+  factory CallRejectMessage.fromJson(Map<String, dynamic> json) =>
+      CallRejectMessage(
+        callId: json['callId'] as String,
+        targetId: json['from'] as String? ?? json['targetId'] as String,
+        reason: json['reason'] as String?,
+      );
+}
+
+/// Message for ending a call.
+class CallHangupMessage {
+  final String callId;
+  final String targetId;
+
+  const CallHangupMessage({
+    required this.callId,
+    required this.targetId,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'type': 'call_hangup',
+        'callId': callId,
+        'targetId': targetId,
+      };
+
+  factory CallHangupMessage.fromJson(Map<String, dynamic> json) =>
+      CallHangupMessage(
+        callId: json['callId'] as String,
+        targetId: json['from'] as String? ?? json['targetId'] as String,
+      );
+}
+
+/// Message for exchanging ICE candidates during call setup.
+class CallIceMessage {
+  final String callId;
+  final String targetId;
+  final String candidate;
+
+  const CallIceMessage({
+    required this.callId,
+    required this.targetId,
+    required this.candidate,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'type': 'call_ice',
+        'callId': callId,
+        'targetId': targetId,
+        'candidate': candidate,
+      };
+
+  factory CallIceMessage.fromJson(Map<String, dynamic> json) => CallIceMessage(
+        callId: json['callId'] as String,
+        targetId: json['from'] as String? ?? json['targetId'] as String,
+        candidate: json['candidate'] as String,
+      );
 }

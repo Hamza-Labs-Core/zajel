@@ -607,4 +607,506 @@ void main() {
       expect(decoded.length, equals(1));
     });
   });
+
+  group('Call signaling message classes', () {
+    group('CallOfferMessage', () {
+      test('toJson produces correct format', () {
+        final message = CallOfferMessage(
+          callId: 'call-123',
+          targetId: 'PEER01',
+          sdp: 'v=0\r\no=- 123...',
+          withVideo: true,
+        );
+
+        final json = message.toJson();
+
+        expect(json['type'], equals('call_offer'));
+        expect(json['callId'], equals('call-123'));
+        expect(json['targetId'], equals('PEER01'));
+        expect(json['sdp'], equals('v=0\r\no=- 123...'));
+        expect(json['withVideo'], isTrue);
+      });
+
+      test('fromJson parses correctly with from field', () {
+        final json = {
+          'type': 'call_offer',
+          'callId': 'call-456',
+          'from': 'PEER02',
+          'sdp': 'v=0\r\n...',
+          'withVideo': false,
+        };
+
+        final message = CallOfferMessage.fromJson(json);
+
+        expect(message.callId, equals('call-456'));
+        expect(message.targetId, equals('PEER02'));
+        expect(message.sdp, equals('v=0\r\n...'));
+        expect(message.withVideo, isFalse);
+      });
+
+      test('fromJson parses correctly with targetId field', () {
+        final json = {
+          'type': 'call_offer',
+          'callId': 'call-789',
+          'targetId': 'PEER03',
+          'sdp': 'v=0\r\n...',
+          'withVideo': true,
+        };
+
+        final message = CallOfferMessage.fromJson(json);
+
+        expect(message.callId, equals('call-789'));
+        expect(message.targetId, equals('PEER03'));
+      });
+    });
+
+    group('CallAnswerMessage', () {
+      test('toJson produces correct format', () {
+        final message = CallAnswerMessage(
+          callId: 'call-123',
+          targetId: 'PEER01',
+          sdp: 'v=0\r\no=- answer...',
+        );
+
+        final json = message.toJson();
+
+        expect(json['type'], equals('call_answer'));
+        expect(json['callId'], equals('call-123'));
+        expect(json['targetId'], equals('PEER01'));
+        expect(json['sdp'], equals('v=0\r\no=- answer...'));
+      });
+
+      test('fromJson parses correctly', () {
+        final json = {
+          'type': 'call_answer',
+          'callId': 'call-456',
+          'from': 'PEER02',
+          'sdp': 'v=0\r\n...',
+        };
+
+        final message = CallAnswerMessage.fromJson(json);
+
+        expect(message.callId, equals('call-456'));
+        expect(message.targetId, equals('PEER02'));
+        expect(message.sdp, equals('v=0\r\n...'));
+      });
+    });
+
+    group('CallRejectMessage', () {
+      test('toJson produces correct format with reason', () {
+        final message = CallRejectMessage(
+          callId: 'call-123',
+          targetId: 'PEER01',
+          reason: 'busy',
+        );
+
+        final json = message.toJson();
+
+        expect(json['type'], equals('call_reject'));
+        expect(json['callId'], equals('call-123'));
+        expect(json['targetId'], equals('PEER01'));
+        expect(json['reason'], equals('busy'));
+      });
+
+      test('toJson produces correct format without reason', () {
+        final message = CallRejectMessage(
+          callId: 'call-123',
+          targetId: 'PEER01',
+        );
+
+        final json = message.toJson();
+
+        expect(json['type'], equals('call_reject'));
+        expect(json['callId'], equals('call-123'));
+        expect(json.containsKey('reason'), isFalse);
+      });
+
+      test('fromJson parses correctly with reason', () {
+        final json = {
+          'type': 'call_reject',
+          'callId': 'call-456',
+          'from': 'PEER02',
+          'reason': 'declined',
+        };
+
+        final message = CallRejectMessage.fromJson(json);
+
+        expect(message.callId, equals('call-456'));
+        expect(message.targetId, equals('PEER02'));
+        expect(message.reason, equals('declined'));
+      });
+
+      test('fromJson parses correctly without reason', () {
+        final json = {
+          'type': 'call_reject',
+          'callId': 'call-789',
+          'from': 'PEER03',
+        };
+
+        final message = CallRejectMessage.fromJson(json);
+
+        expect(message.callId, equals('call-789'));
+        expect(message.reason, isNull);
+      });
+    });
+
+    group('CallHangupMessage', () {
+      test('toJson produces correct format', () {
+        final message = CallHangupMessage(
+          callId: 'call-123',
+          targetId: 'PEER01',
+        );
+
+        final json = message.toJson();
+
+        expect(json['type'], equals('call_hangup'));
+        expect(json['callId'], equals('call-123'));
+        expect(json['targetId'], equals('PEER01'));
+      });
+
+      test('fromJson parses correctly', () {
+        final json = {
+          'type': 'call_hangup',
+          'callId': 'call-456',
+          'from': 'PEER02',
+        };
+
+        final message = CallHangupMessage.fromJson(json);
+
+        expect(message.callId, equals('call-456'));
+        expect(message.targetId, equals('PEER02'));
+      });
+    });
+
+    group('CallIceMessage', () {
+      test('toJson produces correct format', () {
+        final message = CallIceMessage(
+          callId: 'call-123',
+          targetId: 'PEER01',
+          candidate: '{"candidate":"candidate:1 1 UDP ...","sdpMid":"0","sdpMLineIndex":0}',
+        );
+
+        final json = message.toJson();
+
+        expect(json['type'], equals('call_ice'));
+        expect(json['callId'], equals('call-123'));
+        expect(json['targetId'], equals('PEER01'));
+        expect(json['candidate'], contains('candidate:'));
+      });
+
+      test('fromJson parses correctly', () {
+        final json = {
+          'type': 'call_ice',
+          'callId': 'call-456',
+          'from': 'PEER02',
+          'candidate': '{"candidate":"candidate:1 1 UDP ..."}',
+        };
+
+        final message = CallIceMessage.fromJson(json);
+
+        expect(message.callId, equals('call-456'));
+        expect(message.targetId, equals('PEER02'));
+        expect(message.candidate, contains('candidate:'));
+      });
+    });
+  });
+
+  group('SignalingClient call signaling streams', () {
+    late SignalingClient client;
+    bool disposed = false;
+
+    setUp(() {
+      disposed = false;
+      client = SignalingClient(
+        serverUrl: 'wss://test.example.com',
+        pairingCode: 'ABC123',
+        publicKey: 'testPublicKey123',
+      );
+    });
+
+    tearDown(() async {
+      if (!disposed) {
+        await client.dispose();
+      }
+    });
+
+    test('exposes onCallOffer stream', () {
+      expect(client.onCallOffer, isA<Stream<CallOfferMessage>>());
+    });
+
+    test('exposes onCallAnswer stream', () {
+      expect(client.onCallAnswer, isA<Stream<CallAnswerMessage>>());
+    });
+
+    test('exposes onCallReject stream', () {
+      expect(client.onCallReject, isA<Stream<CallRejectMessage>>());
+    });
+
+    test('exposes onCallHangup stream', () {
+      expect(client.onCallHangup, isA<Stream<CallHangupMessage>>());
+    });
+
+    test('exposes onCallIce stream', () {
+      expect(client.onCallIce, isA<Stream<CallIceMessage>>());
+    });
+
+    test('dispose closes call signaling streams without errors', () async {
+      disposed = true;
+      await client.dispose();
+      // Should complete without throwing
+    });
+  });
+
+  group('Call signaling message parsing simulation', () {
+    // These tests simulate what _handleMessage would do for call messages
+
+    CallOfferMessage? parseCallOffer(String jsonStr) {
+      try {
+        final json = jsonDecode(jsonStr) as Map<String, dynamic>;
+        if (json['type'] == 'call_offer') {
+          return CallOfferMessage.fromJson(json);
+        }
+      } catch (_) {
+        return null;
+      }
+      return null;
+    }
+
+    CallAnswerMessage? parseCallAnswer(String jsonStr) {
+      try {
+        final json = jsonDecode(jsonStr) as Map<String, dynamic>;
+        if (json['type'] == 'call_answer') {
+          return CallAnswerMessage.fromJson(json);
+        }
+      } catch (_) {
+        return null;
+      }
+      return null;
+    }
+
+    CallRejectMessage? parseCallReject(String jsonStr) {
+      try {
+        final json = jsonDecode(jsonStr) as Map<String, dynamic>;
+        if (json['type'] == 'call_reject') {
+          return CallRejectMessage.fromJson(json);
+        }
+      } catch (_) {
+        return null;
+      }
+      return null;
+    }
+
+    CallHangupMessage? parseCallHangup(String jsonStr) {
+      try {
+        final json = jsonDecode(jsonStr) as Map<String, dynamic>;
+        if (json['type'] == 'call_hangup') {
+          return CallHangupMessage.fromJson(json);
+        }
+      } catch (_) {
+        return null;
+      }
+      return null;
+    }
+
+    CallIceMessage? parseCallIce(String jsonStr) {
+      try {
+        final json = jsonDecode(jsonStr) as Map<String, dynamic>;
+        if (json['type'] == 'call_ice') {
+          return CallIceMessage.fromJson(json);
+        }
+      } catch (_) {
+        return null;
+      }
+      return null;
+    }
+
+    test('parses call_offer message', () {
+      final json = jsonEncode({
+        'type': 'call_offer',
+        'callId': 'call-001',
+        'from': 'PEER01',
+        'sdp': 'v=0\r\no=- 123...',
+        'withVideo': true,
+      });
+
+      final message = parseCallOffer(json);
+      expect(message, isNotNull);
+      expect(message!.callId, equals('call-001'));
+      expect(message.targetId, equals('PEER01'));
+      expect(message.withVideo, isTrue);
+    });
+
+    test('parses call_answer message', () {
+      final json = jsonEncode({
+        'type': 'call_answer',
+        'callId': 'call-002',
+        'from': 'PEER02',
+        'sdp': 'v=0\r\no=- 456...',
+      });
+
+      final message = parseCallAnswer(json);
+      expect(message, isNotNull);
+      expect(message!.callId, equals('call-002'));
+      expect(message.targetId, equals('PEER02'));
+    });
+
+    test('parses call_reject message with reason', () {
+      final json = jsonEncode({
+        'type': 'call_reject',
+        'callId': 'call-003',
+        'from': 'PEER03',
+        'reason': 'busy',
+      });
+
+      final message = parseCallReject(json);
+      expect(message, isNotNull);
+      expect(message!.callId, equals('call-003'));
+      expect(message.reason, equals('busy'));
+    });
+
+    test('parses call_reject message without reason', () {
+      final json = jsonEncode({
+        'type': 'call_reject',
+        'callId': 'call-004',
+        'from': 'PEER04',
+      });
+
+      final message = parseCallReject(json);
+      expect(message, isNotNull);
+      expect(message!.reason, isNull);
+    });
+
+    test('parses call_hangup message', () {
+      final json = jsonEncode({
+        'type': 'call_hangup',
+        'callId': 'call-005',
+        'from': 'PEER05',
+      });
+
+      final message = parseCallHangup(json);
+      expect(message, isNotNull);
+      expect(message!.callId, equals('call-005'));
+      expect(message.targetId, equals('PEER05'));
+    });
+
+    test('parses call_ice message', () {
+      final json = jsonEncode({
+        'type': 'call_ice',
+        'callId': 'call-006',
+        'from': 'PEER06',
+        'candidate': '{"candidate":"candidate:1 1 UDP 2130706431 ..."}',
+      });
+
+      final message = parseCallIce(json);
+      expect(message, isNotNull);
+      expect(message!.callId, equals('call-006'));
+      expect(message.targetId, equals('PEER06'));
+      expect(message.candidate, contains('candidate:'));
+    });
+
+    test('handles invalid JSON gracefully for call_offer', () {
+      final message = parseCallOffer('not valid json');
+      expect(message, isNull);
+    });
+
+    test('handles missing required fields gracefully for call_offer', () {
+      final json = jsonEncode({
+        'type': 'call_offer',
+        // Missing required fields
+      });
+      final message = parseCallOffer(json);
+      expect(message, isNull);
+    });
+  });
+
+  group('Call signaling message serialization for sending', () {
+    test('call_offer message format', () {
+      final message = CallOfferMessage(
+        callId: 'call-001',
+        targetId: 'PEER01',
+        sdp: 'v=0\r\no=- 123...',
+        withVideo: true,
+      ).toJson();
+
+      final json = jsonEncode(message);
+      final decoded = jsonDecode(json) as Map<String, dynamic>;
+
+      expect(decoded['type'], equals('call_offer'));
+      expect(decoded['callId'], equals('call-001'));
+      expect(decoded['targetId'], equals('PEER01'));
+      expect(decoded['sdp'], equals('v=0\r\no=- 123...'));
+      expect(decoded['withVideo'], isTrue);
+    });
+
+    test('call_answer message format', () {
+      final message = CallAnswerMessage(
+        callId: 'call-002',
+        targetId: 'PEER02',
+        sdp: 'v=0\r\no=- 456...',
+      ).toJson();
+
+      final json = jsonEncode(message);
+      final decoded = jsonDecode(json) as Map<String, dynamic>;
+
+      expect(decoded['type'], equals('call_answer'));
+      expect(decoded['callId'], equals('call-002'));
+      expect(decoded['sdp'], isNotEmpty);
+    });
+
+    test('call_reject message format with reason', () {
+      final message = CallRejectMessage(
+        callId: 'call-003',
+        targetId: 'PEER03',
+        reason: 'declined',
+      ).toJson();
+
+      final json = jsonEncode(message);
+      final decoded = jsonDecode(json) as Map<String, dynamic>;
+
+      expect(decoded['type'], equals('call_reject'));
+      expect(decoded['reason'], equals('declined'));
+    });
+
+    test('call_reject message format without reason', () {
+      final message = CallRejectMessage(
+        callId: 'call-004',
+        targetId: 'PEER04',
+      ).toJson();
+
+      final json = jsonEncode(message);
+      final decoded = jsonDecode(json) as Map<String, dynamic>;
+
+      expect(decoded['type'], equals('call_reject'));
+      expect(decoded.containsKey('reason'), isFalse);
+    });
+
+    test('call_hangup message format', () {
+      final message = CallHangupMessage(
+        callId: 'call-005',
+        targetId: 'PEER05',
+      ).toJson();
+
+      final json = jsonEncode(message);
+      final decoded = jsonDecode(json) as Map<String, dynamic>;
+
+      expect(decoded['type'], equals('call_hangup'));
+      expect(decoded['callId'], equals('call-005'));
+      expect(decoded['targetId'], equals('PEER05'));
+    });
+
+    test('call_ice message format', () {
+      final message = CallIceMessage(
+        callId: 'call-006',
+        targetId: 'PEER06',
+        candidate: '{"candidate":"candidate:1 1 UDP 2130706431 ...","sdpMid":"0"}',
+      ).toJson();
+
+      final json = jsonEncode(message);
+      final decoded = jsonDecode(json) as Map<String, dynamic>;
+
+      expect(decoded['type'], equals('call_ice'));
+      expect(decoded['callId'], equals('call-006'));
+      expect(decoded['candidate'], contains('candidate:'));
+    });
+  });
 }

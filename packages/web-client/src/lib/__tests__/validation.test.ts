@@ -943,3 +943,304 @@ describe('safeJsonParse', () => {
     expect(safeJsonParse('0')).toBe(0);
   });
 });
+
+// Call signaling message validators
+describe('Call signaling message validators', () => {
+  // Valid test data
+  const VALID_UUID = '550e8400-e29b-41d4-a716-446655440000';
+  const VALID_CALL_SDP = 'v=0\r\no=- 123 456 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n';
+  const VALID_ICE_CANDIDATE = JSON.stringify({ candidate: 'candidate:123', sdpMid: '0' });
+
+  describe('call_offer message', () => {
+    it('should validate valid call_offer message', () => {
+      const result = validateServerMessage({
+        type: 'call_offer',
+        callId: VALID_UUID,
+        from: 'peer123',
+        sdp: VALID_CALL_SDP,
+        withVideo: true,
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.type).toBe('call_offer');
+      }
+    });
+
+    it('should validate call_offer with withVideo false', () => {
+      const result = validateServerMessage({
+        type: 'call_offer',
+        callId: VALID_UUID,
+        from: 'peer123',
+        sdp: VALID_CALL_SDP,
+        withVideo: false,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject call_offer with invalid UUID', () => {
+      const result = validateServerMessage({
+        type: 'call_offer',
+        callId: 'not-a-uuid',
+        from: 'peer123',
+        sdp: VALID_CALL_SDP,
+        withVideo: true,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('callId');
+      }
+    });
+
+    it('should reject call_offer with empty from', () => {
+      const result = validateServerMessage({
+        type: 'call_offer',
+        callId: VALID_UUID,
+        from: '',
+        sdp: VALID_CALL_SDP,
+        withVideo: true,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('from');
+      }
+    });
+
+    it('should reject call_offer with invalid SDP', () => {
+      const result = validateServerMessage({
+        type: 'call_offer',
+        callId: VALID_UUID,
+        from: 'peer123',
+        sdp: 'invalid-sdp',
+        withVideo: true,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('sdp');
+      }
+    });
+
+    it('should reject call_offer with missing withVideo', () => {
+      const result = validateServerMessage({
+        type: 'call_offer',
+        callId: VALID_UUID,
+        from: 'peer123',
+        sdp: VALID_CALL_SDP,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('withVideo');
+      }
+    });
+
+    it('should reject call_offer with non-boolean withVideo', () => {
+      const result = validateServerMessage({
+        type: 'call_offer',
+        callId: VALID_UUID,
+        from: 'peer123',
+        sdp: VALID_CALL_SDP,
+        withVideo: 'true',
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('call_answer message', () => {
+    it('should validate valid call_answer message', () => {
+      const result = validateServerMessage({
+        type: 'call_answer',
+        callId: VALID_UUID,
+        from: 'peer123',
+        sdp: VALID_CALL_SDP,
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.type).toBe('call_answer');
+      }
+    });
+
+    it('should reject call_answer with invalid UUID', () => {
+      const result = validateServerMessage({
+        type: 'call_answer',
+        callId: 'invalid',
+        from: 'peer123',
+        sdp: VALID_CALL_SDP,
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject call_answer with empty SDP', () => {
+      const result = validateServerMessage({
+        type: 'call_answer',
+        callId: VALID_UUID,
+        from: 'peer123',
+        sdp: '',
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject call_answer with malformed SDP', () => {
+      const result = validateServerMessage({
+        type: 'call_answer',
+        callId: VALID_UUID,
+        from: 'peer123',
+        sdp: 'v=1\r\nmalformed',
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('call_reject message', () => {
+    it('should validate valid call_reject message without reason', () => {
+      const result = validateServerMessage({
+        type: 'call_reject',
+        callId: VALID_UUID,
+        from: 'peer123',
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.type).toBe('call_reject');
+      }
+    });
+
+    it('should validate call_reject with busy reason', () => {
+      const result = validateServerMessage({
+        type: 'call_reject',
+        callId: VALID_UUID,
+        from: 'peer123',
+        reason: 'busy',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('should validate call_reject with declined reason', () => {
+      const result = validateServerMessage({
+        type: 'call_reject',
+        callId: VALID_UUID,
+        from: 'peer123',
+        reason: 'declined',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('should validate call_reject with timeout reason', () => {
+      const result = validateServerMessage({
+        type: 'call_reject',
+        callId: VALID_UUID,
+        from: 'peer123',
+        reason: 'timeout',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject call_reject with invalid reason', () => {
+      const result = validateServerMessage({
+        type: 'call_reject',
+        callId: VALID_UUID,
+        from: 'peer123',
+        reason: 'invalid_reason',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('reason');
+      }
+    });
+
+    it('should reject call_reject with invalid UUID', () => {
+      const result = validateServerMessage({
+        type: 'call_reject',
+        callId: 'bad-uuid',
+        from: 'peer123',
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('call_hangup message', () => {
+    it('should validate valid call_hangup message', () => {
+      const result = validateServerMessage({
+        type: 'call_hangup',
+        callId: VALID_UUID,
+        from: 'peer123',
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.type).toBe('call_hangup');
+      }
+    });
+
+    it('should reject call_hangup with invalid UUID', () => {
+      const result = validateServerMessage({
+        type: 'call_hangup',
+        callId: 'not-uuid',
+        from: 'peer123',
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject call_hangup with empty from', () => {
+      const result = validateServerMessage({
+        type: 'call_hangup',
+        callId: VALID_UUID,
+        from: '',
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('call_ice message', () => {
+    it('should validate valid call_ice message', () => {
+      const result = validateServerMessage({
+        type: 'call_ice',
+        callId: VALID_UUID,
+        from: 'peer123',
+        candidate: VALID_ICE_CANDIDATE,
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.type).toBe('call_ice');
+      }
+    });
+
+    it('should reject call_ice with invalid UUID', () => {
+      const result = validateServerMessage({
+        type: 'call_ice',
+        callId: 'bad',
+        from: 'peer123',
+        candidate: VALID_ICE_CANDIDATE,
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject call_ice with invalid JSON candidate', () => {
+      const result = validateServerMessage({
+        type: 'call_ice',
+        callId: VALID_UUID,
+        from: 'peer123',
+        candidate: 'not-valid-json',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('candidate');
+      }
+    });
+
+    it('should reject call_ice with empty candidate', () => {
+      const result = validateServerMessage({
+        type: 'call_ice',
+        callId: VALID_UUID,
+        from: 'peer123',
+        candidate: '',
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject call_ice without candidate', () => {
+      const result = validateServerMessage({
+        type: 'call_ice',
+        callId: VALID_UUID,
+        from: 'peer123',
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+});
