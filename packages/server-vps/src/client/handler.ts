@@ -294,6 +294,36 @@ export class ClientHandler extends EventEmitter {
   }
 
   /**
+   * Clear a pair request timer and remove it from the map
+   */
+  private clearPairRequestTimer(timerKey: string): void {
+    const timer = this.pairRequestTimers.get(timerKey);
+    if (timer) {
+      clearTimeout(timer);
+      this.pairRequestTimers.delete(timerKey);
+    }
+  }
+
+  /**
+   * Clear a pair request warning timer and remove it from the map
+   */
+  private clearPairRequestWarningTimer(timerKey: string): void {
+    const timer = this.pairRequestWarningTimers.get(timerKey);
+    if (timer) {
+      clearTimeout(timer);
+      this.pairRequestWarningTimers.delete(timerKey);
+    }
+  }
+
+  /**
+   * Clear both pair request and warning timers for a given key
+   */
+  private clearPairRequestTimers(timerKey: string): void {
+    this.clearPairRequestTimer(timerKey);
+    this.clearPairRequestWarningTimer(timerKey);
+  }
+
+  /**
    * Handle new WebSocket connection
    */
   handleConnection(ws: WebSocket): void {
@@ -806,13 +836,9 @@ export class ClientHandler extends EventEmitter {
     // Remove any existing request from the same requester (in-place modification)
     const existingIndex = pending.findIndex(r => r.requesterCode === requesterCode);
     if (existingIndex !== -1) {
-      // Clear the existing timer for this request
+      // Clear the existing timers for this request
       const timerKey = `${requesterCode}:${targetCode}`;
-      const existingTimer = this.pairRequestTimers.get(timerKey);
-      if (existingTimer) {
-        clearTimeout(existingTimer);
-        this.pairRequestTimers.delete(timerKey);
-      }
+      this.clearPairRequestTimers(timerKey);
       pending.splice(existingIndex, 1);
     }
 
@@ -851,13 +877,8 @@ export class ClientHandler extends EventEmitter {
     const timerKey = `${requesterCode}:${targetCode}`;
     const timer = setTimeout(() => {
       this.expirePairRequest(requesterCode, targetCode);
-      this.pairRequestTimers.delete(timerKey);
-      // Also clean up warning timer if it exists
-      const warningTimer = this.pairRequestWarningTimers.get(timerKey);
-      if (warningTimer) {
-        clearTimeout(warningTimer);
-        this.pairRequestWarningTimers.delete(timerKey);
-      }
+      // Clean up both timers
+      this.clearPairRequestTimers(timerKey);
     }, this.pairRequestTimeout);
     this.pairRequestTimers.set(timerKey, timer);
 
@@ -942,22 +963,11 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
-    // Clear the timer for this request
+    // Clear the timers for this request
     const timerKey = `${targetCode}:${responderCode}`;
-    const existingTimer = this.pairRequestTimers.get(timerKey);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
-      this.pairRequestTimers.delete(timerKey);
-    }
+    this.clearPairRequestTimers(timerKey);
 
     // Remove the request from pending
-
-    // Clear the warning timer for this request
-    const existingWarningTimer = this.pairRequestWarningTimers.get(timerKey);
-    if (existingWarningTimer) {
-      clearTimeout(existingWarningTimer);
-      this.pairRequestWarningTimers.delete(timerKey);
-    }
     pending.splice(requestIndex, 1);
     if (pending.length === 0) {
       this.pendingPairRequests.delete(responderCode);
@@ -1443,12 +1453,7 @@ export class ClientHandler extends EventEmitter {
       const pendingAsTarget = this.pendingPairRequests.get(pairingCode) || [];
       for (const request of pendingAsTarget) {
         const timerKey = `${request.requesterCode}:${pairingCode}`;
-        
-        const timer = this.pairRequestTimers.get(timerKey);
-        if (timer) {
-          clearTimeout(timer);
-          this.pairRequestTimers.delete(timerKey);
-        }
+        this.clearPairRequestTimers(timerKey);
       }
       this.pendingPairRequests.delete(pairingCode);
 
@@ -1456,14 +1461,9 @@ export class ClientHandler extends EventEmitter {
       for (const [targetCode, requests] of this.pendingPairRequests) {
         const filtered = requests.filter(r => {
           if (r.requesterCode === pairingCode) {
-            // Clear the timer for this request
+            // Clear the timers for this request
             const timerKey = `${pairingCode}:${targetCode}`;
-            
-        const timer = this.pairRequestTimers.get(timerKey);
-            if (timer) {
-              clearTimeout(timer);
-              this.pairRequestTimers.delete(timerKey);
-            }
+            this.clearPairRequestTimers(timerKey);
             return false;
           }
           return true;

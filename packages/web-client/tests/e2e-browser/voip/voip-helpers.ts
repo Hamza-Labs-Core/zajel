@@ -447,12 +447,33 @@ if (navigator.mediaDevices) {
   });
 }
 
-// Override global constructors
-window.RTCPeerConnection = MockRTCPeerConnection;
-window.RTCSessionDescription = MockRTCSessionDescription;
-window.RTCIceCandidate = MockRTCIceCandidate;
-window.MediaStream = MockMediaStream;
-window.MediaStreamTrack = MockMediaStreamTrack;
+// Override global constructors using Object.defineProperty for better compatibility
+// configurable: true allows cleanup/restoration if needed
+Object.defineProperty(window, 'RTCPeerConnection', {
+  value: MockRTCPeerConnection,
+  writable: true,
+  configurable: true,
+});
+Object.defineProperty(window, 'RTCSessionDescription', {
+  value: MockRTCSessionDescription,
+  writable: true,
+  configurable: true,
+});
+Object.defineProperty(window, 'RTCIceCandidate', {
+  value: MockRTCIceCandidate,
+  writable: true,
+  configurable: true,
+});
+Object.defineProperty(window, 'MediaStream', {
+  value: MockMediaStream,
+  writable: true,
+  configurable: true,
+});
+Object.defineProperty(window, 'MediaStreamTrack', {
+  value: MockMediaStreamTrack,
+  writable: true,
+  configurable: true,
+});
 
 // Expose test control functions
 window.__voipTestHelpers = {
