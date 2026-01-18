@@ -59,7 +59,9 @@ jobs:
       - name: Build
         run: npm run build --workspace=@zajel/web-client
         env:
-          VITE_SIGNALING_URL: ws://localhost:3000
+          # Use deployed VPS server discovered from bootstrap service
+          # Bootstrap: https://zajel-signaling.mahmoud-s-darwish.workers.dev/servers
+          VITE_SIGNALING_URL: ws://65.21.54.26:9000
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
