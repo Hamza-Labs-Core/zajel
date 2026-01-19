@@ -89,7 +89,8 @@ class MockMediaStream implements MediaStream {
   @override
   String get ownerTag => '';
 
-  @override
+  // Note: ownerTag setter is not in the MediaStream interface,
+  // but may be needed for some WebRTC implementations
   set ownerTag(String ownerTag) {}
 
   @override

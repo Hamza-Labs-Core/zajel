@@ -34,6 +34,7 @@ void main() {
         ),
         displayNameProvider.overrideWith((ref) => displayName),
         pairingCodeProvider.overrideWith((ref) => 'ABC123'),
+        signalingDisplayStateProvider.overrideWith((ref) => SignalingDisplayState.disconnected),
         connectionManagerProvider.overrideWithValue(mockConnectionManager),
         peersProvider.overrideWith((ref) {
           if (error != null) {
@@ -73,11 +74,11 @@ void main() {
       expect(find.text('Code: ABC123'), findsOneWidget);
     });
 
-    testWidgets('displays "Nearby Devices" header', (tester) async {
+    testWidgets('displays "Connected Peers" header', (tester) async {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
-      expect(find.text('Nearby Devices'), findsOneWidget);
+      expect(find.text('Connected Peers'), findsOneWidget);
     });
 
     testWidgets('shows loading indicator when loading', (tester) async {
@@ -231,11 +232,12 @@ void main() {
       expect(find.text('Connect'), findsWidgets); // FAB + possibly empty state
     });
 
-    testWidgets('displays Discovering status indicator', (tester) async {
+    testWidgets('displays connection status indicator', (tester) async {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
-      expect(find.text('Discovering'), findsOneWidget);
+      // Default state is disconnected, showing "Offline"
+      expect(find.text('Offline'), findsOneWidget);
     });
   });
 }
