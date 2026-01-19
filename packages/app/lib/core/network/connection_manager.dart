@@ -178,8 +178,8 @@ class ConnectionManager {
   /// Stream of incoming link requests.
   Stream<(String, String, String)> get linkRequests => _linkRequestController.stream;
 
-  /// Connect to signaling server for external connections.
-  Future<String> enableExternalConnections({
+  /// Connect to the signaling server to enable peer connections.
+  Future<String> connect({
     required String serverUrl,
     String? pairingCode,
   }) async {
@@ -222,8 +222,8 @@ class ConnectionManager {
     return code;
   }
 
-  /// Disable external connections.
-  Future<void> disableExternalConnections() async {
+  /// Disconnect from the signaling server.
+  Future<void> disconnect() async {
     // Cancel signaling events subscription first to prevent stale callbacks
     await _signalingEventsSubscription?.cancel();
     _signalingEventsSubscription = null;
@@ -239,9 +239,9 @@ class ConnectionManager {
     _signalingState = SignalingDisconnected();
   }
 
-  /// Request to connect to an external peer using their pairing code.
+  /// Request to connect to a peer using their pairing code.
   /// This sends a pair request that the peer must approve.
-  Future<void> connectToExternalPeer(String pairingCode) async {
+  Future<void> connectToPeer(String pairingCode) async {
     // Normalize and validate pairing code format
     final normalizedCode = pairingCode.toUpperCase().trim();
     if (!_isValidPairingCode(normalizedCode)) {

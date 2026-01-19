@@ -11,7 +11,7 @@ import 'dart:io';
 /// Example usage:
 /// ```dart
 /// final config = TestConfig.fromEnvironment();
-/// await connectionManager.enableExternalConnections(serverUrl: config.vpsServerUrl);
+/// await connectionManager.connect(serverUrl: config.vpsServerUrl);
 /// ```
 class TestConfig {
   /// VPS signaling server WebSocket URL.

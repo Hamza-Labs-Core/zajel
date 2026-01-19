@@ -110,7 +110,9 @@ class SignalingClient {
   })  : _pairingCode = pairingCode,
         _publicKey = publicKey,
         // Use pinned WebSocket on non-web platforms by default
-        _usePinnedWebSocket = usePinnedWebSocket ?? !kIsWeb;
+        // Disable in test environment to avoid MissingPluginException
+        _usePinnedWebSocket = usePinnedWebSocket ??
+            (!kIsWeb && !const bool.fromEnvironment('FLUTTER_TEST', defaultValue: false));
 
   /// Stream of incoming signaling messages.
   Stream<SignalingMessage> get messages => _messageController.stream;

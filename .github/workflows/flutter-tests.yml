@@ -106,10 +106,12 @@ jobs:
         run: flutter pub get
 
       - name: Run integration tests
-        run: xvfb-run flutter test integration_test/ -d linux
+        run: xvfb-run flutter test integration_test/ -d linux --dart-define=FLUTTER_TEST=true
         continue-on-error: true
         env:
           CI: true
+          FLUTTER_TEST: true
+          TEST_VPS_SERVER_URL: ws://65.21.54.26:9000
 
   build-android:
     name: Build Android

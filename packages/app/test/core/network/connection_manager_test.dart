@@ -41,16 +41,16 @@ void main() {
       });
     });
 
-    group('enableExternalConnections', () {
+    group('connect', () {
       test('throws when cryptoService not initialized (publicKeyBase64 throws)', () async {
         // When publicKeyBase64 is accessed before initialize(), it throws
         when(() => mockCryptoService.publicKeyBase64).thenThrow(
           CryptoException('CryptoService not initialized. Call initialize() first.'),
         );
 
-        // Attempting to enable external connections should throw
+        // Attempting to connect should throw
         expect(
-          () => connectionManager.enableExternalConnections(
+          () => connectionManager.connect(
             serverUrl: 'wss://example.com',
           ),
           throwsA(isA<CryptoException>().having(
@@ -62,11 +62,11 @@ void main() {
       });
     });
 
-    group('connectToExternalPeer', () {
+    group('connectToPeer', () {
       test('throws when not connected to signaling server', () async {
         // Use valid pairing code format (6 chars from A-Z excluding O,I + 2-9)
         expect(
-          () => connectionManager.connectToExternalPeer('ABC234'),
+          () => connectionManager.connectToPeer('ABC234'),
           throwsA(isA<ConnectionException>().having(
             (e) => e.message,
             'message',
@@ -78,7 +78,7 @@ void main() {
       test('throws for invalid pairing code format', () async {
         // Code with invalid character '1' (only 2-9 allowed)
         expect(
-          () => connectionManager.connectToExternalPeer('PEER12'),
+          () => connectionManager.connectToPeer('PEER12'),
           throwsA(isA<ConnectionException>().having(
             (e) => e.message,
             'message',

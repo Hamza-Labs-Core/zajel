@@ -15,7 +15,8 @@
  * media devices or secure contexts.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect as vitestExpect, beforeAll, afterAll } from 'vitest';
+import { expect as playwrightExpect } from '@playwright/test';
 import { TestOrchestrator, delay, waitFor, TIMEOUTS, isCI, safeCleanup } from '../orchestrator';
 import type { Page } from 'playwright';
 
@@ -203,9 +204,8 @@ async function setupVoIPMocks(page: Page): Promise<void> {
   await page.addInitScript(VOIP_MOCK_SCRIPT);
 }
 
-// TODO: Re-enable when Vite env loading is fixed (same issue as web-to-web tests)
-// The test infrastructure works but web client doesn't pick up test VPS URL from env
-describe.skip('VoIP Integration Tests', () => {
+// VoIP Integration Tests - Test call initiation, acceptance, rejection, hangup
+describe('VoIP Integration Tests', () => {
   let orchestrator: TestOrchestrator;
   let webClientPort: number;
 
@@ -245,8 +245,8 @@ describe.skip('VoIP Integration Tests', () => {
         const voiceBtn1 = browser1.page.getByRole('button', { name: /voice call/i });
         const videoBtn1 = browser1.page.getByRole('button', { name: /video call/i });
 
-        await expect(voiceBtn1).toBeVisible({ timeout: TIMEOUTS.SHORT });
-        await expect(videoBtn1).toBeVisible({ timeout: TIMEOUTS.SHORT });
+        await playwrightExpect(voiceBtn1).toBeVisible({ timeout: TIMEOUTS.SHORT });
+        await playwrightExpect(videoBtn1).toBeVisible({ timeout: TIMEOUTS.SHORT });
       } finally {
         await browser1.browser.close();
         await browser2.browser.close();
@@ -273,7 +273,7 @@ describe.skip('VoIP Integration Tests', () => {
         }, TIMEOUTS.MEDIUM);
 
         const statusText = await browser1.page.locator('.call-status, #call-status').textContent();
-        expect(statusText?.toLowerCase()).toContain('calling');
+        vitestExpect(statusText?.toLowerCase()).toContain('calling');
       } finally {
         await browser1.browser.close();
         await browser2.browser.close();
@@ -301,7 +301,7 @@ describe.skip('VoIP Integration Tests', () => {
 
         // Should show caller info
         const callerName = await browser2.page.locator('#incoming-call-title, .caller-name').textContent();
-        expect(callerName).toBeTruthy();
+        vitestExpect(callerName).toBeTruthy();
       } finally {
         await browser1.browser.close();
         await browser2.browser.close();
@@ -334,7 +334,7 @@ describe.skip('VoIP Integration Tests', () => {
         await waitFor(async () => {
           const status1 = await browser1.page.locator('.call-status').textContent();
           const status2 = await browser2.page.locator('.call-status').textContent();
-          return (
+          return !!(
             status1?.toLowerCase().includes('connecting') ||
             status1?.match(/\d{2}:\d{2}/) ||
             status2?.toLowerCase().includes('connecting') ||
@@ -353,7 +353,7 @@ describe.skip('VoIP Integration Tests', () => {
         // Should show duration timer (connected state)
         await delay(1500);
         const status1 = await browser1.page.locator('.call-status').textContent();
-        expect(status1).toMatch(/\d{2}:\d{2}/); // HH:MM format
+        vitestExpect(status1).toMatch(/\d{2}:\d{2}/); // HH:MM format
       } finally {
         await browser1.browser.close();
         await browser2.browser.close();
@@ -463,12 +463,12 @@ describe.skip('VoIP Integration Tests', () => {
         // Find and click mute button
         const muteBtn = browser1.page.locator('button[aria-label*="mute" i][aria-label*="microphone" i]');
         const initialPressed = await muteBtn.getAttribute('aria-pressed');
-        expect(initialPressed).toBe('false');
+        vitestExpect(initialPressed).toBe('false');
 
         await muteBtn.click();
 
         const afterPressed = await muteBtn.getAttribute('aria-pressed');
-        expect(afterPressed).toBe('true');
+        vitestExpect(afterPressed).toBe('true');
       } finally {
         await browser1.browser.close();
         await browser2.browser.close();
@@ -497,12 +497,12 @@ describe.skip('VoIP Integration Tests', () => {
         // Find and click video toggle button
         const videoBtn = browser1.page.locator('button[aria-label*="camera" i]');
         const initialPressed = await videoBtn.getAttribute('aria-pressed');
-        expect(initialPressed).toBe('false'); // Video starts ON, so aria-pressed for "turn off" is false
+        vitestExpect(initialPressed).toBe('false'); // Video starts ON, so aria-pressed for "turn off" is false
 
         await videoBtn.click();
 
         const afterPressed = await videoBtn.getAttribute('aria-pressed');
-        expect(afterPressed).toBe('true'); // Now video is OFF
+        vitestExpect(afterPressed).toBe('true'); // Now video is OFF
       } finally {
         await browser1.browser.close();
         await browser2.browser.close();

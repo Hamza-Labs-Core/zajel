@@ -683,11 +683,11 @@ void main() {
       try {
         // Enable external connections
         final pairingCode = await TestUtils.withTimeout(
-          connectionManager.enableExternalConnections(
+          connectionManager.connect(
             serverUrl: config.vpsServerUrl,
           ),
           timeout: config.connectionTimeout,
-          operationName: 'enableExternalConnections',
+          operationName: 'connect',
         );
 
         expect(pairingCode, isNotNull);
@@ -700,7 +700,7 @@ void main() {
         }
 
         // Clean up
-        await connectionManager.disableExternalConnections();
+        await connectionManager.disconnect();
       } catch (e) {
         if (config.verboseLogging) {
           debugPrint('Enable external connections failed: $e');

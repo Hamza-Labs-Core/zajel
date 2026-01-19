@@ -33,7 +33,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    _enableExternalConnections();
+    _connectToServer();
     _listenForLinkRequests();
   }
 
@@ -180,7 +180,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
     ).trim();
   }
 
-  Future<void> _enableExternalConnections() async {
+  Future<void> _connectToServer() async {
+    // Update UI state to show "Connecting..."
+    ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.connecting;
+
     try {
       // First, discover and select a VPS server
       final discoveryService = ref.read(serverDiscoveryServiceProvider);
@@ -188,6 +191,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
       if (selectedServer == null) {
         setState(() => _error = 'No servers available. Please try again later.');
+        ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.disconnected;
         return;
       }
 
@@ -199,14 +203,16 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
       // Now connect to the VPS server
       final connectionManager = ref.read(connectionManagerProvider);
-      final code = await connectionManager.enableExternalConnections(
+      final code = await connectionManager.connect(
         serverUrl: serverUrl,
       );
 
       ref.read(pairingCodeProvider.notifier).state = code;
-      ref.read(externalConnectionEnabledProvider.notifier).state = true;
+      ref.read(signalingConnectedProvider.notifier).state = true;
+      ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.connected;
     } catch (e) {
-      setState(() => _error = 'Failed to enable external connections: $e');
+      setState(() => _error = 'Failed to connect to server: $e');
+      ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.disconnected;
     }
   }
 
@@ -267,7 +273,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
               ),
               const SizedBox(height: 16),
               ElevatedButton(
-                onPressed: _enableExternalConnections,
+                onPressed: _connectToServer,
                 child: const Text('Retry'),
               ),
             ],
@@ -754,7 +760,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
     try {
       final connectionManager = ref.read(connectionManagerProvider);
-      await connectionManager.connectToExternalPeer(code);
+      await connectionManager.connectToPeer(code);
 
       if (mounted) {
         context.pop();

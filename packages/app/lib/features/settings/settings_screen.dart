@@ -38,7 +38,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final displayName = ref.watch(displayNameProvider);
-    final externalEnabled = ref.watch(externalConnectionEnabledProvider);
+    final externalEnabled = ref.watch(signalingConnectedProvider);
     final pairingCode = ref.watch(pairingCodeProvider);
 
     return Scaffold(
@@ -109,7 +109,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       : 'Connect to peers outside local network',
                 ),
                 value: externalEnabled,
-                onChanged: (value) => _toggleExternalConnections(value),
+                onChanged: (value) => _toggleSignalingConnection(value),
               ),
               _buildSelectedServerTile(),
               ListTile(
@@ -277,7 +277,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   Widget _buildSelectedServerTile() {
     final selectedServer = ref.watch(selectedServerProvider);
-    final externalEnabled = ref.watch(externalConnectionEnabledProvider);
+    final externalEnabled = ref.watch(signalingConnectedProvider);
 
     if (!externalEnabled || selectedServer == null) {
       return const SizedBox.shrink();
@@ -347,10 +347,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
-  Future<void> _toggleExternalConnections(bool enabled) async {
+  Future<void> _toggleSignalingConnection(bool enabled) async {
     final connectionManager = ref.read(connectionManagerProvider);
 
     if (enabled) {
+      ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.connecting;
       try {
         // Discover and select a VPS server
         final discoveryService = ref.read(serverDiscoveryServiceProvider);
@@ -362,6 +363,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               const SnackBar(content: Text('No servers available. Please try again later.')),
             );
           }
+          ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.disconnected;
           return;
         }
 
@@ -371,21 +373,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         // Get the WebSocket URL for the selected server
         final serverUrl = discoveryService.getWebSocketUrl(selectedServer);
 
-        final code = await connectionManager.enableExternalConnections(
+        final code = await connectionManager.connect(
           serverUrl: serverUrl,
         );
         ref.read(pairingCodeProvider.notifier).state = code;
-        ref.read(externalConnectionEnabledProvider.notifier).state = true;
+        ref.read(signalingConnectedProvider.notifier).state = true;
+        ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.connected;
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to enable: $e')),
+            SnackBar(content: Text('Failed to connect: $e')),
           );
         }
+        ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.disconnected;
       }
     } else {
-      await connectionManager.disableExternalConnections();
-      ref.read(externalConnectionEnabledProvider.notifier).state = false;
+      await connectionManager.disconnect();
+      ref.read(signalingConnectedProvider.notifier).state = false;
+      ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.disconnected;
       ref.read(pairingCodeProvider.notifier).state = null;
       ref.read(selectedServerProvider.notifier).state = null;
     }

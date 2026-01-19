@@ -109,7 +109,7 @@ void main() {
 
         // Act & Assert
         expect(
-          () => connectionManager.enableExternalConnections(
+          () => connectionManager.connect(
             serverUrl: 'wss://vps1.example.com',
           ),
           throwsA(isA<CryptoException>()),
@@ -142,7 +142,7 @@ void main() {
 
         // Act & Assert - Invalid characters
         expect(
-          () => connectionManager.connectToExternalPeer('ABC1O0'), // Contains 1, O, 0
+          () => connectionManager.connectToPeer('ABC1O0'), // Contains 1, O, 0
           throwsA(isA<ConnectionException>().having(
             (e) => e.message,
             'message',
@@ -157,7 +157,7 @@ void main() {
 
         // Act & Assert
         expect(
-          () => connectionManager.connectToExternalPeer('ABC23'), // Only 5 chars
+          () => connectionManager.connectToPeer('ABC23'), // Only 5 chars
           throwsA(isA<ConnectionException>().having(
             (e) => e.message,
             'message',
@@ -172,7 +172,7 @@ void main() {
 
         // Act & Assert
         expect(
-          () => connectionManager.connectToExternalPeer('ABC2345'), // 7 chars
+          () => connectionManager.connectToPeer('ABC2345'), // 7 chars
           throwsA(isA<ConnectionException>().having(
             (e) => e.message,
             'message',
@@ -188,7 +188,7 @@ void main() {
         // Both should fail the same way (not connected) - proving normalization works
         // Lower case should be normalized to upper case
         expect(
-          () => connectionManager.connectToExternalPeer('abc234'),
+          () => connectionManager.connectToPeer('abc234'),
           throwsA(isA<ConnectionException>().having(
             (e) => e.message,
             'message',
@@ -443,7 +443,7 @@ void main() {
 
         // Act & Assert
         expect(
-          () => connectionManager.connectToExternalPeer('!!!!!!'),
+          () => connectionManager.connectToPeer('!!!!!!'),
           throwsA(isA<ConnectionException>()),
         );
       });
@@ -451,7 +451,7 @@ void main() {
       test('connecting without signaling server throws ConnectionException', () async {
         // Act & Assert
         expect(
-          () => connectionManager.connectToExternalPeer('ABC234'),
+          () => connectionManager.connectToPeer('ABC234'),
           throwsA(isA<ConnectionException>().having(
             (e) => e.message,
             'message',

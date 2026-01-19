@@ -231,8 +231,19 @@ class BlockedPeersNotifier extends StateNotifier<Set<String>> {
   bool isBlocked(String peerId) => state.contains(peerId);
 }
 
-/// Provider for external connection status.
-final externalConnectionEnabledProvider = StateProvider<bool>((ref) => false);
+/// Provider for signaling connection status.
+final signalingConnectedProvider = StateProvider<bool>((ref) => false);
+
+/// Provider for signaling connection state (for UI display).
+enum SignalingDisplayState {
+  disconnected,
+  connecting,
+  connected,
+}
+
+final signalingDisplayStateProvider = StateProvider<SignalingDisplayState>((ref) {
+  return SignalingDisplayState.disconnected;
+});
 
 /// Default bootstrap server URL (CF Workers).
 const defaultBootstrapUrl = 'https://zajel-signaling.mahmoud-s-darwish.workers.dev';
