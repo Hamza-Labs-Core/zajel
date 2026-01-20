@@ -1,4 +1,4 @@
-/// Integration tests for VoIP UI functionality.
+/// E2E widget tests for VoIP UI functionality.
 ///
 /// These tests verify the VoIP call flow from the user interface:
 /// - Call screen display states
@@ -8,7 +8,7 @@
 ///
 /// Run with:
 /// ```bash
-/// flutter test integration_test/voip_ui_test.dart -d <device>
+/// flutter test test/e2e/voip_ui_test.dart
 /// ```
 library;
 
@@ -17,7 +17,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:integration_test/integration_test.dart';
 import 'package:mocktail/mocktail.dart';
 
 import 'package:zajel/core/media/media_service.dart';
@@ -33,8 +32,6 @@ class MockMediaService extends Mock implements MediaService {}
 class MockMediaStream extends Mock implements MediaStream {}
 
 void main() {
-  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-
   late MockVoIPService mockVoIPService;
   late MockMediaService mockMediaService;
   late StreamController<CallState> stateController;

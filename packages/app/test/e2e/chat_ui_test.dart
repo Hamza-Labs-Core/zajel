@@ -1,4 +1,4 @@
-/// Integration tests for Chat UI functionality.
+/// E2E widget tests for Chat UI functionality.
 ///
 /// These tests verify the chat messaging flow from the user interface:
 /// - Chat screen display with peer info
@@ -10,7 +10,7 @@
 ///
 /// Run with:
 /// ```bash
-/// flutter test integration_test/chat_ui_test.dart -d <device>
+/// flutter test test/e2e/chat_ui_test.dart
 /// ```
 library;
 
@@ -21,7 +21,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart' hide MessageType;
-import 'package:integration_test/integration_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:zajel/core/media/media_service.dart';
@@ -39,8 +38,6 @@ class MockVoIPService extends Mock implements VoIPService {}
 class MockMediaService extends Mock implements MediaService {}
 
 void main() {
-  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-
   late MockConnectionManager mockConnectionManager;
   late MockVoIPService mockVoIPService;
   late MockMediaService mockMediaService;
