@@ -105,8 +105,142 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Run integration tests
-        run: xvfb-run flutter test integration_test/ -d linux --dart-define=FLUTTER_TEST=true
+      - name: Run VoIP UI tests
+        run: xvfb-run flutter test integration_test/voip_ui_test.dart -d linux --dart-define=FLUTTER_TEST=true
+        env:
+          CI: true
+          FLUTTER_TEST: true
+          TEST_VPS_SERVER_URL: ws://65.21.54.26:9000
+
+      - name: Run Chat UI tests
+        run: xvfb-run flutter test integration_test/chat_ui_test.dart -d linux --dart-define=FLUTTER_TEST=true
+        env:
+          CI: true
+          FLUTTER_TEST: true
+          TEST_VPS_SERVER_URL: ws://65.21.54.26:9000
+
+  integration-windows:
+    name: Integration Tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Install dependencies
+        run: flutter pub get
+        working-directory: packages/app
+
+      - name: Run VoIP UI tests
+        run: flutter test integration_test/voip_ui_test.dart -d windows --dart-define=FLUTTER_TEST=true
+        working-directory: packages/app
+        env:
+          CI: true
+          FLUTTER_TEST: true
+          TEST_VPS_SERVER_URL: ws://65.21.54.26:9000
+
+      - name: Run Chat UI tests
+        run: flutter test integration_test/chat_ui_test.dart -d windows --dart-define=FLUTTER_TEST=true
+        working-directory: packages/app
+        env:
+          CI: true
+          FLUTTER_TEST: true
+          TEST_VPS_SERVER_URL: ws://65.21.54.26:9000
+
+  integration-android:
+    name: Integration Tests (Android)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+        working-directory: packages/app
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run VoIP UI tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          profile: pixel_6
+          working-directory: packages/app
+          script: flutter test integration_test/voip_ui_test.dart -d emulator-5554 --dart-define=FLUTTER_TEST=true
+        env:
+          CI: true
+          FLUTTER_TEST: true
+          TEST_VPS_SERVER_URL: ws://65.21.54.26:9000
+
+      - name: Run Chat UI tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          profile: pixel_6
+          working-directory: packages/app
+          script: flutter test integration_test/chat_ui_test.dart -d emulator-5554 --dart-define=FLUTTER_TEST=true
+        env:
+          CI: true
+          FLUTTER_TEST: true
+          TEST_VPS_SERVER_URL: ws://65.21.54.26:9000
+
+  integration-ios:
+    name: Integration Tests (iOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+        working-directory: packages/app
+
+      - name: Start iOS Simulator
+        run: |
+          DEVICE_ID=$(xcrun simctl list devices available | grep "iPhone 15" | head -1 | grep -oE '[A-F0-9-]{36}')
+          xcrun simctl boot "$DEVICE_ID" || true
+          xcrun simctl bootstatus "$DEVICE_ID" -b
+
+      - name: Run VoIP UI tests
+        run: flutter test integration_test/voip_ui_test.dart -d iPhone --dart-define=FLUTTER_TEST=true
+        working-directory: packages/app
+        env:
+          CI: true
+          FLUTTER_TEST: true
+          TEST_VPS_SERVER_URL: ws://65.21.54.26:9000
+
+      - name: Run Chat UI tests
+        run: flutter test integration_test/chat_ui_test.dart -d iPhone --dart-define=FLUTTER_TEST=true
+        working-directory: packages/app
         env:
           CI: true
           FLUTTER_TEST: true

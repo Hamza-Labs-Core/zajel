@@ -63,9 +63,11 @@ class _CallScreenState extends State<CallScreen> {
       _localRenderer.srcObject = widget.mediaService.localStream;
     }
 
-    setState(() {
-      _renderersInitialized = true;
-    });
+    if (mounted) {
+      setState(() {
+        _renderersInitialized = true;
+      });
+    }
   }
 
   void _setupListeners() {
