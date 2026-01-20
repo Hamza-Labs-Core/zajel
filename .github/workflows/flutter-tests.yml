@@ -106,14 +106,14 @@ jobs:
         run: flutter pub get
 
       - name: Run VoIP UI tests
-        run: xvfb-run flutter test integration_test/voip_ui_test.dart -d linux --dart-define=FLUTTER_TEST=true
+        run: xvfb-run -a -s "-screen 0 1024x768x24" flutter test integration_test/voip_ui_test.dart -d linux --dart-define=FLUTTER_TEST=true
         env:
           CI: true
           FLUTTER_TEST: true
           TEST_VPS_SERVER_URL: ws://65.21.54.26:9000
 
       - name: Run Chat UI tests
-        run: xvfb-run flutter test integration_test/chat_ui_test.dart -d linux --dart-define=FLUTTER_TEST=true
+        run: xvfb-run -a -s "-screen 0 1024x768x24" flutter test integration_test/chat_ui_test.dart -d linux --dart-define=FLUTTER_TEST=true
         env:
           CI: true
           FLUTTER_TEST: true
@@ -185,9 +185,12 @@ jobs:
       - name: Run VoIP UI tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: 31
           arch: x86_64
           profile: pixel_6
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
           working-directory: packages/app
           script: flutter test integration_test/voip_ui_test.dart -d emulator-5554 --dart-define=FLUTTER_TEST=true
         env:
@@ -198,9 +201,12 @@ jobs:
       - name: Run Chat UI tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: 31
           arch: x86_64
           profile: pixel_6
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
           working-directory: packages/app
           script: flutter test integration_test/chat_ui_test.dart -d emulator-5554 --dart-define=FLUTTER_TEST=true
         env:
@@ -226,7 +232,16 @@ jobs:
 
       - name: Start iOS Simulator
         run: |
-          DEVICE_ID=$(xcrun simctl list devices available | grep "iPhone 15" | head -1 | grep -oE '[A-F0-9-]{36}')
+          # List available devices for debugging
+          xcrun simctl list devices available
+          # Get first available iPhone simulator
+          DEVICE_ID=$(xcrun simctl list devices available | grep -E "iPhone" | head -1 | grep -oE '[A-F0-9-]{36}')
+          echo "Found device: $DEVICE_ID"
+          if [ -z "$DEVICE_ID" ]; then
+            echo "No iPhone simulator found, creating one..."
+            xcrun simctl create "TestiPhone" "iPhone 14" || true
+            DEVICE_ID=$(xcrun simctl list devices available | grep "TestiPhone" | grep -oE '[A-F0-9-]{36}')
+          fi
           xcrun simctl boot "$DEVICE_ID" || true
           xcrun simctl bootstatus "$DEVICE_ID" -b
 
