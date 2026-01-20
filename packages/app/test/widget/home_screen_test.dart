@@ -81,11 +81,12 @@ void main() {
       expect(find.text('Connected Peers'), findsOneWidget);
     });
 
-    testWidgets('shows loading indicator when loading', (tester) async {
+    testWidgets('shows empty peer list when loading', (tester) async {
       await tester.pumpWidget(createTestWidget(isLoading: true));
       await tester.pump();
 
-      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      // Loading state now shows empty peer list instead of spinner
+      expect(find.text('No devices found'), findsOneWidget);
     });
 
     testWidgets('shows empty state when no peers', (tester) async {
