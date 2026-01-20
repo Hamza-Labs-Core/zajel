@@ -1,4 +1,4 @@
-/// Real E2E widget tests for VoIP UI functionality.
+/// Real E2E integration tests for VoIP UI functionality.
 ///
 /// These tests verify the VoIP call flow with REAL services:
 /// - Auto-discovers VPS servers via Cloudflare bootstrap
@@ -12,12 +12,13 @@
 ///
 /// Run with:
 /// ```bash
-/// flutter test test/e2e/voip_ui_test.dart
+/// flutter test integration_test/voip_ui_e2e_test.dart
 /// ```
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:integration_test/integration_test.dart';
 
 import 'package:zajel/core/crypto/crypto_service.dart';
 import 'package:zajel/core/network/connection_manager.dart';
@@ -29,12 +30,13 @@ import 'package:zajel/core/network/webrtc_service.dart';
 import 'package:zajel/features/call/call_screen.dart';
 import 'package:zajel/features/call/incoming_call_dialog.dart';
 
-import '../../integration_test/helpers/mock_media.dart';
+import 'helpers/mock_media.dart';
 
 /// Bootstrap server URL (Cloudflare Workers).
 const _bootstrapUrl = 'https://zajel-signaling.mahmoud-s-darwish.workers.dev';
 
 void main() {
+  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   // Server discovery
   late ServerDiscoveryService serverDiscovery;
   late String? serverUrl;

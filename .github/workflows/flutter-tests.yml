@@ -62,8 +62,8 @@ jobs:
         env:
           CI: true
 
-  e2e-tests:
-    name: E2E Tests
+  integration-tests:
+    name: Integration Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,8 +77,8 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Run E2E tests
-        run: flutter test test/e2e/
+      - name: Run integration tests
+        run: flutter test integration_test/
         env:
           CI: true
 

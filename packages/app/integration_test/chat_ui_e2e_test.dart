@@ -1,4 +1,4 @@
-/// Real E2E widget tests for Chat UI functionality.
+/// Real E2E integration tests for Chat UI functionality.
 ///
 /// These tests verify the chat messaging flow with REAL services:
 /// - Auto-discovers VPS servers via Cloudflare bootstrap
@@ -11,7 +11,7 @@
 ///
 /// Run with:
 /// ```bash
-/// flutter test test/e2e/chat_ui_test.dart
+/// flutter test integration_test/chat_ui_e2e_test.dart
 /// ```
 library;
 
@@ -20,6 +20,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:integration_test/integration_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:zajel/core/crypto/crypto_service.dart';
@@ -35,6 +36,7 @@ import 'package:zajel/features/chat/chat_screen.dart';
 const _bootstrapUrl = 'https://zajel-signaling.mahmoud-s-darwish.workers.dev';
 
 void main() {
+  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   // Server discovery service
   late ServerDiscoveryService serverDiscovery;
   late String? serverUrl;
