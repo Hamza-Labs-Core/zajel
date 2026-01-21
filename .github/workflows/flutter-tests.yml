@@ -62,16 +62,16 @@ jobs:
         env:
           CI: true
 
-  integration-tests:
-    name: Integration Tests
+  # NOTE: Flutter integration tests with IntegrationTestWidgetsFlutterBinding
+  # have VmServiceDisappearedException issues on Linux desktop in CI.
+  # These tests are UI E2E tests that were moved to integration_test/ folder
+  # but need to run as widget tests (without -d linux flag) to work reliably.
+  # See: https://github.com/flutter/flutter/issues/120055
+  widget-e2e-tests:
+    name: Widget E2E Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libasound2-dev libsecret-1-dev xvfb
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -82,8 +82,9 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Run integration tests
-        run: xvfb-run -a flutter test integration_test/ -d linux
+      - name: Run widget E2E tests
+        # Run as widget tests without -d linux to avoid VM service issues
+        run: flutter test integration_test/
         env:
           CI: true
 
