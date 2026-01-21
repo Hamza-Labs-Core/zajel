@@ -83,8 +83,8 @@ jobs:
         run: flutter pub get
 
       - name: Run widget E2E tests
-        # Run as widget tests without -d linux to avoid VM service issues
-        run: flutter test integration_test/
+        # Run on Chrome which is more stable than Linux desktop in CI
+        run: flutter test integration_test/ -d chrome --platform chrome
         env:
           CI: true
 
