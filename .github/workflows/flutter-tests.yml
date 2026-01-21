@@ -62,31 +62,16 @@ jobs:
         env:
           CI: true
 
-  # NOTE: Flutter integration tests with IntegrationTestWidgetsFlutterBinding
-  # have VmServiceDisappearedException issues on Linux desktop in CI.
-  # These tests are UI E2E tests that were moved to integration_test/ folder
-  # but need to run as widget tests (without -d linux flag) to work reliably.
+  # NOTE: Flutter integration tests are skipped in CI:
+  # - Linux desktop: VmServiceDisappearedException issues
+  # - Web: "Web devices are not supported for integration tests yet"
+  # - macOS: Available but adds cost
+  #
+  # Run integration tests locally with:
+  #   flutter test integration_test/ -d linux
+  #   flutter test integration_test/ -d macos
+  #
   # See: https://github.com/flutter/flutter/issues/120055
-  widget-e2e-tests:
-    name: Widget E2E Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          cache: true
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Run widget E2E tests
-        # Run on Chrome which is more stable than Linux desktop in CI
-        run: flutter test integration_test/ -d chrome --platform chrome
-        env:
-          CI: true
 
   build-android:
     name: Build Android
