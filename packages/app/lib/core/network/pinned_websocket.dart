@@ -152,17 +152,15 @@ class PinnedWebSocket {
         throw PinnedWebSocketException(error.toString());
       }
     } on MissingPluginException catch (e) {
-      // This happens when there's no native implementation for this platform
-      // (e.g., on Windows, Linux, macOS desktop builds)
+      // This happens when the native plugin failed to register
       _setState(PinnedWebSocketState.error);
-      final message = 'Certificate pinning not available on this platform. '
-          'Native implementation missing. Please use standard WebSocket.';
+      final message = 'Certificate pinning plugin not registered. '
+          'Please ensure the native plugin is properly initialized.';
       _errorController.add(message);
       _logger.error(
         'PinnedWebSocket',
-        'MissingPluginException: No native implementation for pinned WebSocket. '
-        'This typically means the app is running on a desktop platform (Windows/Linux/macOS) '
-        'which does not have native certificate pinning support.',
+        'MissingPluginException: Native pinned WebSocket plugin not registered. '
+        'This may indicate a plugin registration issue or unsupported platform.',
         e,
       );
       throw PinnedWebSocketException(message);

@@ -53,6 +53,15 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 # System-level dependencies.
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0)
+pkg_check_modules(OPENSSL IMPORTED_TARGET openssl)
+
+if(NOT OPENSSL_FOUND)
+  message(STATUS "OpenSSL not found - pinned_websocket_plugin will be built without TLS support")
+  message(STATUS "To enable TLS, install OpenSSL: sudo apt-get install libssl-dev")
+endif()
+
+# Custom plugins
+add_subdirectory("plugins/pinned_websocket")
 
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
