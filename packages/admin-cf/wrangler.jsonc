@@ -1,0 +1,35 @@
+{
+  // Zajel Admin Dashboard - Cloudflare Worker Configuration
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "zajel-admin",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-01-01",
+
+  // Durable Object for admin user management
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ADMIN_USERS",
+        "class_name": "AdminUsersDO"
+      }
+    ]
+  },
+
+  // Migrations for Durable Objects
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["AdminUsersDO"]
+    }
+  ],
+
+  // Secrets (already exists in secret store as ZAJEL_ADMIN_JWT_SECRET)
+  // The secret is automatically available as env.ZAJEL_ADMIN_JWT_SECRET
+  // To update: wrangler secret put ZAJEL_ADMIN_JWT_SECRET
+
+  // Development settings
+  "dev": {
+    "port": 8787,
+    "local_protocol": "http"
+  }
+}

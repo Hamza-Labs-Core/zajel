@@ -20,6 +20,7 @@ import { RendezvousRegistry } from './registry/rendezvous-registry.js';
 import { DistributedRendezvous } from './registry/distributed-rendezvous.js';
 import { ClientHandler, type ClientHandlerConfig } from './client/handler.js';
 import { logger } from './utils/logger.js';
+import { createAdminModule, type AdminModule } from './admin/index.js';
 
 export interface ZajelServer {
   httpServer: HttpServer;
@@ -27,6 +28,7 @@ export interface ZajelServer {
   federation: FederationManager;
   bootstrap: BootstrapClient;
   clientHandler: ClientHandler;
+  adminModule: AdminModule;
   config: ServerConfig;
   identity: ServerIdentity;
   shutdown: () => Promise<void>;
@@ -63,8 +65,23 @@ export async function createZajelServer(
   // Mutable reference for clientHandler (set after creation, used in HTTP handlers)
   let clientHandlerRef: ClientHandler | null = null;
 
+  // Mutable reference for admin module (set after creation)
+  let adminModuleRef: AdminModule | null = null;
+
   // Create HTTP server
-  const httpServer = createServer((req, res) => {
+  const httpServer = createServer(async (req, res) => {
+    // Admin dashboard routes (handled first)
+    if (req.url?.startsWith('/admin')) {
+      if (adminModuleRef) {
+        const handled = await adminModuleRef.handleRequest(req, res);
+        if (handled) return;
+      } else {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Admin module not initialized' }));
+        return;
+      }
+    }
+
     // Health check endpoint
     if (req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -78,13 +95,18 @@ export async function createZajelServer(
 
     // Stats endpoint
     if (req.url === '/stats') {
+      const handler = clientHandlerRef;
       const stats = {
         serverId: identity.serverId,
         nodeId: identity.nodeId,
         endpoint: config.network.publicEndpoint,
         region: config.network.region,
         uptime: process.uptime(),
-        // Add more stats later
+        connections: handler ? handler.clientCount + handler.signalingClientCount : 0,
+        relayConnections: handler?.clientCount || 0,
+        signalingConnections: handler?.signalingClientCount || 0,
+        activeCodes: handler?.getEntropyMetrics().activeCodes || 0,
+        collisionRisk: handler?.getEntropyMetrics().collisionRisk || 'low',
       };
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -213,6 +235,13 @@ export async function createZajelServer(
   httpServer.on('upgrade', (request: IncomingMessage, socket, head) => {
     const pathname = new URL(request.url || '/', `http://${request.headers.host}`).pathname;
 
+    // Admin WebSocket (real-time metrics)
+    if (pathname === '/admin/ws') {
+      if (adminModuleRef?.handleUpgrade(request, socket, head as Buffer)) {
+        return;
+      }
+    }
+
     if (pathname === '/federation' || pathname === '/server') {
       // Server-to-server connections
       federationWss.handleUpgrade(request, socket, head, (ws) => {
@@ -236,6 +265,8 @@ export async function createZajelServer(
 
     // Handle messages
     ws.on('message', async (data) => {
+      // Track message for admin metrics
+      adminModuleRef?.recordMessage();
       await clientHandler.handleMessage(ws, data.toString());
     });
 
@@ -273,6 +304,20 @@ export async function createZajelServer(
 
   // Start bootstrap heartbeat
   bootstrap.startHeartbeat();
+
+  // Create admin module (requires clientHandler and federation)
+  const adminModule = createAdminModule({
+    clientHandler,
+    federation,
+    serverId: identity.serverId,
+    jwtSecret: config.admin.jwtSecret,
+    cfAdminUrl: config.admin.cfAdminUrl,
+  });
+  adminModuleRef = adminModule;
+
+  if (config.admin.jwtSecret) {
+    console.log('[Zajel] Admin dashboard enabled at /admin/');
+  }
 
   // Set up cleanup interval
   const cleanupInterval = setInterval(async () => {
@@ -313,6 +358,9 @@ export async function createZajelServer(
 
     clearInterval(cleanupInterval);
 
+    // Stop admin module
+    adminModule.shutdown();
+
     // Stop bootstrap heartbeat and unregister
     bootstrap.stopHeartbeat();
     await bootstrap.unregister();
@@ -347,6 +395,7 @@ export async function createZajelServer(
     federation,
     bootstrap,
     clientHandler,
+    adminModule,
     config,
     identity,
     shutdown,

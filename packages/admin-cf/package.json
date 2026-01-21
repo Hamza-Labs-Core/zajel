@@ -1,0 +1,32 @@
+{
+  "name": "@zajel/admin-cf",
+  "version": "1.0.0",
+  "description": "Zajel Admin Dashboard - Cloudflare Workers",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build:dashboard": "vite build",
+    "dev:dashboard": "vite"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250210.0",
+    "@preact/preset-vite": "^2.9.4",
+    "preact": "^10.26.5",
+    "typescript": "^5.8.3",
+    "vite": "^6.2.3",
+    "vitest": "^4.0.16",
+    "wrangler": "^4.58.0"
+  },
+  "keywords": [
+    "zajel",
+    "admin",
+    "dashboard",
+    "cloudflare-workers"
+  ],
+  "license": "MIT"
+}
