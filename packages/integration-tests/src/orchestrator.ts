@@ -358,11 +358,11 @@ export class TestOrchestrator {
     // Use shell: true to find npm via PATH, and resolve cwd dynamically
     const webClientDir = resolve(PROJECT_ROOT, 'packages/web-client');
 
-    // Write a temporary .env file for Vite to pick up
-    // Vite loads env vars from .env files, not just process.env
-    this.tempEnvFile = resolve(webClientDir, 'src/.env');
+    // Write a temporary .env.local file for Vite to pick up
+    // Vite loads env vars from .env.local in the project root (highest priority)
+    this.tempEnvFile = resolve(webClientDir, '.env.local');
     const envContent = `VITE_SIGNALING_URL=${vpsEndpoint}\n`;
-    this.log(`Writing temp .env file: ${this.tempEnvFile}`);
+    this.log(`Writing temp .env.local file: ${this.tempEnvFile}`);
     writeFileSync(this.tempEnvFile, envContent);
 
     this.webClientProcess = spawn('npm', ['run', 'dev', '--', '--port', String(this.webClientPort)], {

@@ -36,7 +36,7 @@ class HomeScreen extends ConsumerWidget {
           Expanded(
             child: peersAsync.when(
               data: (peers) => _buildPeerList(context, ref, peers),
-              loading: () => const Center(child: CircularProgressIndicator()),
+              loading: () => _buildPeerList(context, ref, []),
               error: (e, _) => Center(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -68,6 +68,14 @@ class HomeScreen extends ConsumerWidget {
   Widget _buildHeader(BuildContext context, WidgetRef ref) {
     final displayName = ref.watch(displayNameProvider);
     final pairingCode = ref.watch(pairingCodeProvider);
+    final signalingState = ref.watch(signalingDisplayStateProvider);
+
+    // Determine status indicator based on signaling connection state
+    final (statusColor, statusBgColor, statusText) = switch (signalingState) {
+      SignalingDisplayState.connected => (Colors.green, Colors.green.shade100, 'Online'),
+      SignalingDisplayState.connecting => (Colors.orange, Colors.orange.shade100, 'Connecting...'),
+      SignalingDisplayState.disconnected => (Colors.red, Colors.red.shade100, 'Offline'),
+    };
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -108,7 +116,7 @@ class HomeScreen extends ConsumerWidget {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.green.shade100,
+                  color: statusBgColor,
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Row(
@@ -117,17 +125,17 @@ class HomeScreen extends ConsumerWidget {
                     Container(
                       width: 8,
                       height: 8,
-                      decoration: const BoxDecoration(
-                        color: Colors.green,
+                      decoration: BoxDecoration(
+                        color: statusColor,
                         shape: BoxShape.circle,
                       ),
                     ),
                     const SizedBox(width: 4),
-                    const Text(
-                      'Discovering',
+                    Text(
+                      statusText,
                       style: TextStyle(
                         fontSize: 12,
-                        color: Colors.green,
+                        color: statusColor,
                         fontWeight: FontWeight.w500,
                       ),
                     ),
@@ -138,7 +146,7 @@ class HomeScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 16),
           Text(
-            'Nearby Devices',
+            'Connected Peers',
             style: Theme.of(context).textTheme.titleSmall?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
@@ -378,7 +386,7 @@ class _PeerCard extends ConsumerWidget {
   Future<void> _connect(BuildContext context, WidgetRef ref) async {
     final connectionManager = ref.read(connectionManagerProvider);
     try {
-      await connectionManager.connectToExternalPeer(peer.id);
+      await connectionManager.connectToPeer(peer.id);
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
