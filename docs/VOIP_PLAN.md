@@ -1,7 +1,49 @@
 # VoIP Implementation Plan (Audio + Video)
 
+## Status
+
+VoIP implementation is **COMPLETE**. All planned features have been implemented and tested.
+
+- [x] Call signaling protocol (offer, answer, reject, hangup, ICE)
+- [x] Media service (Web + Flutter)
+- [x] VoIP service (Web + Flutter)
+- [x] Call UI components (Web + Flutter)
+- [x] Integration with chat screens
+- [x] Unit tests
+- [x] Widget tests
+- [x] Integration tests
+- [x] Cross-platform testing
+
 ## Overview
 Add voice and video calling to Zajel using WebRTC native media tracks with DTLS-SRTP encryption.
+
+## Related Test Files
+
+The VoIP implementation has comprehensive test coverage across all layers:
+
+### Flutter Tests
+- **Unit Tests:**
+  - [`packages/app/test/core/network/voip_service_test.dart`](../packages/app/test/core/network/voip_service_test.dart) - VoIP service logic
+  - [`packages/app/test/core/media/media_service_test.dart`](../packages/app/test/core/media/media_service_test.dart) - Media handling
+- **Widget Tests:**
+  - [`packages/app/test/widget/call/call_screen_test.dart`](../packages/app/test/widget/call/call_screen_test.dart) - Call screen UI
+  - [`packages/app/test/widget/call/incoming_call_dialog_test.dart`](../packages/app/test/widget/call/incoming_call_dialog_test.dart) - Incoming call dialog
+- **Integration Tests:**
+  - [`packages/app/integration_test/voip_test.dart`](../packages/app/integration_test/voip_test.dart) - VoIP flow
+  - [`packages/app/integration_test/voip_ui_e2e_test.dart`](../packages/app/integration_test/voip_ui_e2e_test.dart) - End-to-end UI
+
+### Web Tests
+- **Unit Tests:**
+  - [`packages/web-client/src/lib/__tests__/voip.test.ts`](../packages/web-client/src/lib/__tests__/voip.test.ts) - VoIP service
+  - [`packages/web-client/src/lib/__tests__/media.test.ts`](../packages/web-client/src/lib/__tests__/media.test.ts) - Media service
+- **Component Tests:**
+  - [`packages/web-client/src/components/__tests__/ChatView.call.test.tsx`](../packages/web-client/src/components/__tests__/ChatView.call.test.tsx) - Chat integration
+
+### Server Tests
+- [`packages/server-vps/tests/unit/client-handler-call-signaling.test.ts`](../packages/server-vps/tests/unit/client-handler-call-signaling.test.ts) - Call signaling relay
+
+### Cross-Platform Tests
+- [`packages/integration-tests/src/scenarios/voip-flow.test.ts`](../packages/integration-tests/src/scenarios/voip-flow.test.ts) - Multi-platform flow
 
 ## Security Model
 - **Audio/Video**: WebRTC DTLS-SRTP (AES-128-GCM, ECDHE key exchange)
@@ -9,6 +51,76 @@ Add voice and video calling to Zajel using WebRTC native media tracks with DTLS-
 - **Data channels**: Existing X25519 + ChaCha20-Poly1305
 
 Both encryption layers provide forward secrecy and are industry-standard secure.
+
+## Basic Call Flow
+
+The following diagram shows the typical flow for a successful voice/video call:
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant SignalingServer
+    participant Callee
+
+    Note over Caller,Callee: Call Initiation
+    Caller->>Caller: Start call (audio/video)
+    Caller->>Caller: Create RTCPeerConnection
+    Caller->>Caller: Add local media tracks
+    Caller->>Caller: Create SDP offer
+    Caller->>SignalingServer: call_offer (with SDP)
+    SignalingServer->>Callee: Forward call_offer
+
+    Note over Caller,Callee: Ringing State
+    Callee->>Callee: Show incoming call dialog
+    Callee->>Caller: (Optional) call_ringing notification
+
+    Note over Caller,Callee: Call Acceptance
+    Callee->>Callee: User accepts call
+    Callee->>Callee: Create RTCPeerConnection
+    Callee->>Callee: Add local media tracks
+    Callee->>Callee: Set remote description (offer)
+    Callee->>Callee: Create SDP answer
+    Callee->>SignalingServer: call_answer (with SDP)
+    SignalingServer->>Caller: Forward call_answer
+    Caller->>Caller: Set remote description (answer)
+
+    Note over Caller,Callee: ICE Negotiation
+    Caller->>SignalingServer: call_ice (ICE candidates)
+    SignalingServer->>Callee: Forward call_ice
+    Callee->>SignalingServer: call_ice (ICE candidates)
+    SignalingServer->>Caller: Forward call_ice
+
+    Note over Caller,Callee: Connected
+    Caller<-->Callee: Direct P2P media flow (DTLS-SRTP)
+    Note over Caller,Callee: Audio/video streaming via WebRTC
+
+    Note over Caller,Callee: Call End
+    Caller->>SignalingServer: call_hangup
+    SignalingServer->>Callee: Forward call_hangup
+    Callee->>Callee: Close connection
+    Caller->>Caller: Close connection
+```
+
+### Alternative Flows
+
+**Call Rejection:**
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant SignalingServer
+    participant Callee
+
+    Caller->>SignalingServer: call_offer
+    SignalingServer->>Callee: Forward call_offer
+    Callee->>Callee: User declines call
+    Callee->>SignalingServer: call_reject
+    SignalingServer->>Caller: Forward call_reject
+    Caller->>Caller: End call attempt
+```
+
+**Timeout (No Answer):**
+- After 60 seconds (RINGING_TIMEOUT_MS), caller automatically hangs up
+- Sends `call_hangup` message to callee
 
 ## Architecture Reminder
 - `packages/server` (CF Workers) = **Bootstrap server** (server discovery registry only)

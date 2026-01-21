@@ -179,6 +179,16 @@ class ConnectionManager {
   Stream<(String, String, String)> get linkRequests => _linkRequestController.stream;
 
   /// Connect to the signaling server to enable peer connections.
+  ///
+  /// Opens a WebSocket connection to [serverUrl] and registers with the signaling
+  /// server using a pairing code. If [pairingCode] is provided, attempts to reuse
+  /// it; otherwise, generates a new random 6-character code.
+  ///
+  /// Returns the pairing code (newly generated or provided) that others can use
+  /// to request pairing with this client via [connectToPeer].
+  ///
+  /// Can be called multiple times safely - existing connections are cleaned up first.
+  /// Call [disconnect] when done to release resources.
   Future<String> connect({
     required String serverUrl,
     String? pairingCode,

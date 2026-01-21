@@ -32,8 +32,7 @@ import 'package:zajel/core/network/webrtc_service.dart';
 import 'package:zajel/core/providers/app_providers.dart';
 import 'package:zajel/features/chat/chat_screen.dart';
 
-/// Bootstrap server URL (Cloudflare Workers).
-const _bootstrapUrl = 'https://zajel-signaling.mahmoud-s-darwish.workers.dev';
+import 'test_config.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -59,8 +58,9 @@ void main() {
   bool isConnected = false;
 
   setUpAll(() async {
-    // Discover servers from Cloudflare bootstrap
-    serverDiscovery = ServerDiscoveryService(bootstrapUrl: _bootstrapUrl);
+    // Discover servers from Cloudflare bootstrap using TestConfig
+    final config = TestConfig.auto();
+    serverDiscovery = ServerDiscoveryService(bootstrapUrl: config.bootstrapServerUrl);
     final server = await serverDiscovery.selectServer();
 
     if (server != null) {
@@ -121,14 +121,18 @@ void main() {
       deviceLinkService: deviceLinkB,
     );
 
-    // Connect to discovered server
+    // Connect to discovered server with exponential backoff retry
     try {
-      pairingCodeA = await connectionManagerA
-          .connect(serverUrl: serverUrl!)
-          .timeout(const Duration(seconds: 30));
-      pairingCodeB = await connectionManagerB
-          .connect(serverUrl: serverUrl!)
-          .timeout(const Duration(seconds: 30));
+      pairingCodeA = await TestUtils.connectWithRetry(
+        connectionManagerA,
+        serverUrl!,
+        log: debugPrint,
+      );
+      pairingCodeB = await TestUtils.connectWithRetry(
+        connectionManagerB,
+        serverUrl!,
+        log: debugPrint,
+      );
 
       debugPrint('Device A code: $pairingCodeA');
       debugPrint('Device B code: $pairingCodeB');
@@ -142,7 +146,7 @@ void main() {
       await connectionManagerA.connectToPeer(pairingCodeB);
 
       // Wait for connection
-      isConnected = await _waitFor(
+      isConnected = await TestUtils.waitFor(
         () => connectionManagerA.currentPeers.any((p) =>
             p.id == pairingCodeB &&
             p.connectionState == PeerConnectionState.connected),
@@ -156,8 +160,16 @@ void main() {
   });
 
   tearDown(() async {
-    await connectionManagerA.dispose();
-    await connectionManagerB.dispose();
+    try {
+      await connectionManagerA.dispose();
+    } catch (e) {
+      debugPrint('Error disposing connectionManagerA: $e');
+    }
+    try {
+      await connectionManagerB.dispose();
+    } catch (e) {
+      debugPrint('Error disposing connectionManagerB: $e');
+    }
   });
 
   Widget createChatScreenTestWidget({
@@ -297,7 +309,7 @@ void main() {
       await tester.pump();
 
       // Wait for messages to be delivered
-      await _waitFor(
+      await TestUtils.waitFor(
         () => messagesAtB.length >= 2,
         timeout: const Duration(seconds: 15),
       );
@@ -431,20 +443,6 @@ void main() {
       expect(find.text('Second message'), findsOneWidget);
     });
   });
-}
-
-/// Wait for a condition to be true with timeout.
-Future<bool> _waitFor(
-  bool Function() condition, {
-  Duration timeout = const Duration(seconds: 10),
-  Duration pollInterval = const Duration(milliseconds: 100),
-}) async {
-  final deadline = DateTime.now().add(timeout);
-  while (DateTime.now().isBefore(deadline)) {
-    if (condition()) return true;
-    await Future.delayed(pollInterval);
-  }
-  return false;
 }
 
 /// Helper function to mark a test as skipped.

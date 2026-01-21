@@ -62,16 +62,21 @@ jobs:
         env:
           CI: true
 
-  # NOTE: Flutter integration tests are skipped in CI:
-  # - Linux desktop: VmServiceDisappearedException issues
-  # - Web: "Web devices are not supported for integration tests yet"
-  # - macOS: Available but adds cost
+  # NOTE: Flutter integration tests are skipped in CI due to platform limitations:
+  # - Linux desktop: VmServiceDisappearedException issues (flutter/flutter#101031)
+  # - Web: Not supported by Flutter integration test framework
+  # - macOS: Available but skipped to reduce runner costs
+  # - Android/iOS: Emulator/simulator complexity and CI runtime costs
   #
-  # Run integration tests locally with:
+  # For detailed information and local testing instructions, see:
+  #   docs/testing/CI_LIMITATIONS.md
+  #
+  # Run integration tests locally with the test runner script:
+  #   packages/app/run_integration_tests.sh
+  #
+  # Or run directly with Flutter:
   #   flutter test integration_test/ -d linux
   #   flutter test integration_test/ -d macos
-  #
-  # See: https://github.com/flutter/flutter/issues/120055
 
   build-android:
     name: Build Android

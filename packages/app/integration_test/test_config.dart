@@ -215,6 +215,59 @@ class TestUtils {
       },
     );
   }
+
+  /// Connect to server with exponential backoff retry logic.
+  ///
+  /// Attempts connection up to [maxAttempts] times with increasing timeouts:
+  /// - Attempt 1: 10 seconds
+  /// - Attempt 2: 20 seconds
+  /// - Attempt 3: 40 seconds
+  ///
+  /// Backoff delays between attempts: 1 second, then 2 seconds.
+  ///
+  /// Returns the pairing code on success, throws on all failures.
+  static Future<String> connectWithRetry(
+    dynamic connectionManager,
+    String serverUrl, {
+    int maxAttempts = 3,
+    void Function(String)? log,
+  }) async {
+    const baseTimeout = Duration(seconds: 10);
+    const backoffDelays = [Duration(seconds: 1), Duration(seconds: 2)];
+    final logFn = log ?? ((_) {});
+
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      final timeout = baseTimeout * (1 << (attempt - 1)); // 10s, 20s, 40s
+      logFn('Connection attempt $attempt/$maxAttempts with ${timeout.inSeconds}s timeout');
+
+      try {
+        final pairingCode = await (connectionManager.connect(serverUrl: serverUrl) as Future<String>)
+            .timeout(timeout);
+        logFn('Connected on attempt $attempt');
+        return pairingCode;
+      } on TimeoutException {
+        logFn('Attempt $attempt timed out after ${timeout.inSeconds}s');
+        if (attempt < maxAttempts) {
+          final delay = backoffDelays[attempt - 1];
+          logFn('Waiting ${delay.inSeconds}s before retry...');
+          await Future.delayed(delay);
+        } else {
+          rethrow;
+        }
+      } catch (e) {
+        logFn('Attempt $attempt failed: $e');
+        if (attempt < maxAttempts) {
+          final delay = backoffDelays[attempt - 1];
+          logFn('Waiting ${delay.inSeconds}s before retry...');
+          await Future.delayed(delay);
+        } else {
+          rethrow;
+        }
+      }
+    }
+
+    throw TimeoutException('Failed to connect after $maxAttempts attempts');
+  }
 }
 
 /// Custom exception for test timeouts.

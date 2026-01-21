@@ -31,9 +31,7 @@ import 'package:zajel/features/call/call_screen.dart';
 import 'package:zajel/features/call/incoming_call_dialog.dart';
 
 import 'helpers/mock_media.dart';
-
-/// Bootstrap server URL (Cloudflare Workers).
-const _bootstrapUrl = 'https://zajel-signaling.mahmoud-s-darwish.workers.dev';
+import 'test_config.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -64,8 +62,9 @@ void main() {
   bool isConnected = false;
 
   setUpAll(() async {
-    // Discover servers from Cloudflare bootstrap
-    serverDiscovery = ServerDiscoveryService(bootstrapUrl: _bootstrapUrl);
+    // Discover servers from Cloudflare bootstrap using TestConfig
+    final config = TestConfig.auto();
+    serverDiscovery = ServerDiscoveryService(bootstrapUrl: config.bootstrapServerUrl);
     final server = await serverDiscovery.selectServer();
 
     if (server != null) {
@@ -124,14 +123,18 @@ void main() {
     mockMediaA = MockMediaService();
     mockMediaB = MockMediaService();
 
-    // Connect to discovered server
+    // Connect to discovered server with exponential backoff retry
     try {
-      pairingCodeA = await connectionManagerA
-          .connect(serverUrl: serverUrl!)
-          .timeout(const Duration(seconds: 30));
-      pairingCodeB = await connectionManagerB
-          .connect(serverUrl: serverUrl!)
-          .timeout(const Duration(seconds: 30));
+      pairingCodeA = await TestUtils.connectWithRetry(
+        connectionManagerA,
+        serverUrl!,
+        log: debugPrint,
+      );
+      pairingCodeB = await TestUtils.connectWithRetry(
+        connectionManagerB,
+        serverUrl!,
+        log: debugPrint,
+      );
 
       debugPrint('Device A code: $pairingCodeA');
       debugPrint('Device B code: $pairingCodeB');
@@ -165,16 +168,48 @@ void main() {
   });
 
   tearDown(() async {
-    mockMediaA.dispose();
-    mockMediaB.dispose();
-    if (isConnected) {
-      voipA.dispose();
-      voipB.dispose();
-      await signalingA.dispose();
-      await signalingB.dispose();
+    try {
+      mockMediaA.dispose();
+    } catch (e) {
+      debugPrint('Error disposing mockMediaA: $e');
     }
-    await connectionManagerA.dispose();
-    await connectionManagerB.dispose();
+    try {
+      mockMediaB.dispose();
+    } catch (e) {
+      debugPrint('Error disposing mockMediaB: $e');
+    }
+    if (isConnected) {
+      try {
+        voipA.dispose();
+      } catch (e) {
+        debugPrint('Error disposing voipA: $e');
+      }
+      try {
+        voipB.dispose();
+      } catch (e) {
+        debugPrint('Error disposing voipB: $e');
+      }
+      try {
+        await signalingA.dispose();
+      } catch (e) {
+        debugPrint('Error disposing signalingA: $e');
+      }
+      try {
+        await signalingB.dispose();
+      } catch (e) {
+        debugPrint('Error disposing signalingB: $e');
+      }
+    }
+    try {
+      await connectionManagerA.dispose();
+    } catch (e) {
+      debugPrint('Error disposing connectionManagerA: $e');
+    }
+    try {
+      await connectionManagerB.dispose();
+    } catch (e) {
+      debugPrint('Error disposing connectionManagerB: $e');
+    }
   });
 
   Widget createCallScreenTestWidget({
@@ -394,7 +429,7 @@ void main() {
 
       await voipA.startCall(pairingCodeB, false);
 
-      final receivedIncoming = await _waitFor(
+      final receivedIncoming = await TestUtils.waitFor(
         () => voipB.state == CallState.incoming,
         timeout: const Duration(seconds: 10),
       );
@@ -450,7 +485,7 @@ void main() {
 
       await voipA.startCall(pairingCodeB, false);
 
-      final receivedIncoming = await _waitFor(
+      final receivedIncoming = await TestUtils.waitFor(
         () => voipB.state == CallState.incoming,
         timeout: const Duration(seconds: 10),
       );
@@ -482,7 +517,7 @@ void main() {
       expect(voipB.state, equals(CallState.idle));
       expect(voipB.hasActiveCall, isFalse);
 
-      final aEnded = await _waitFor(
+      final aEnded = await TestUtils.waitFor(
         () => voipA.state == CallState.idle || voipA.state == CallState.ended,
         timeout: const Duration(seconds: 5),
       );
@@ -498,7 +533,7 @@ void main() {
 
       await voipA.startCall(pairingCodeB, false);
 
-      final receivedIncoming = await _waitFor(
+      final receivedIncoming = await TestUtils.waitFor(
         () => voipB.state == CallState.incoming,
         timeout: const Duration(seconds: 10),
       );
@@ -584,7 +619,7 @@ void main() {
 
       expect(find.text('Calling...'), findsOneWidget);
 
-      final receivedIncoming = await _waitFor(
+      final receivedIncoming = await TestUtils.waitFor(
         () => voipB.state == CallState.incoming,
         timeout: const Duration(seconds: 10),
       );
@@ -597,7 +632,7 @@ void main() {
 
       await voipB.acceptCall(voipB.currentCall!.callId, false);
 
-      final connected = await _waitFor(
+      final connected = await TestUtils.waitFor(
         () => voipA.state == CallState.connected && voipB.state == CallState.connected,
         timeout: const Duration(seconds: 30),
       );
@@ -612,7 +647,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
 
-      final bothEnded = await _waitFor(
+      final bothEnded = await TestUtils.waitFor(
         () => voipA.state == CallState.idle && voipB.state == CallState.idle,
         timeout: const Duration(seconds: 5),
       );
@@ -703,20 +738,6 @@ void main() {
       voipA.hangup();
     });
   });
-}
-
-/// Wait for a condition to be true with timeout.
-Future<bool> _waitFor(
-  bool Function() condition, {
-  Duration timeout = const Duration(seconds: 10),
-  Duration pollInterval = const Duration(milliseconds: 100),
-}) async {
-  final deadline = DateTime.now().add(timeout);
-  while (DateTime.now().isBefore(deadline)) {
-    if (condition()) return true;
-    await Future.delayed(pollInterval);
-  }
-  return false;
 }
 
 /// Helper function to mark a test as skipped.

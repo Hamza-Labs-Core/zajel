@@ -14,6 +14,44 @@ import { test, expect, Page, BrowserContext } from '@playwright/test';
  * - The signaling server must be running
  */
 
+/**
+ * Wait for the connection state to reach a specific status.
+ * Uses condition-based waiting instead of fixed timeouts.
+ */
+async function waitForConnectionState(
+  page: Page,
+  state: 'connected' | 'disconnected' | 'ready' = 'connected',
+  timeout = 15000
+): Promise<void> {
+  const statusIndicator = page.locator('.status-indicator');
+  await expect(statusIndicator).toContainText(new RegExp(state, 'i'), { timeout });
+}
+
+/**
+ * Wait for a message to appear in the message list.
+ * Uses condition-based waiting instead of fixed timeouts.
+ */
+async function waitForMessageInList(
+  page: Page,
+  messageText: string,
+  timeout = 10000
+): Promise<void> {
+  const messageList = page.locator('.message-list, [role="log"], .message, [class*="message"]');
+  await expect(messageList).toContainText(messageText, { timeout });
+}
+
+/**
+ * Wait for a minimum number of messages to appear.
+ */
+async function waitForMessageCount(
+  page: Page,
+  minCount: number,
+  timeout = 10000
+): Promise<void> {
+  const messages = page.locator('.message, [class*="message"]');
+  await expect(messages).toHaveCount(minCount, { timeout });
+}
+
 test.describe('Zajel Web Client - Messaging', () => {
   let contextA: BrowserContext;
   let contextB: BrowserContext;
@@ -120,19 +158,13 @@ test.describe('Zajel Web Client - Messaging', () => {
       console.log('Note: Pairing request auto-accepted or different UI flow');
     }
 
-    // Wait for connection to establish
-    await browserA.waitForTimeout(3000);
+    // Wait for connection to establish using condition-based waiting
+    await waitForConnectionState(browserA, 'connected');
 
-    // Check for "Connected" status in either browser
+    // Connection is established - status should show connected
     const statusA = browserA.locator('.status-indicator');
-    const statusB = browserB.locator('.status-indicator');
-
-    // One of them should show connected (or we might have a different UI for connected state)
     const statusTextA = await statusA.textContent();
-    const statusTextB = await statusB.textContent();
-
-    // Verify at least we got past the initial state
-    expect(statusTextA || statusTextB).toBeTruthy();
+    expect(statusTextA?.toLowerCase()).toContain('connected');
   });
 
   test('can send and receive text messages between browsers', async () => {
@@ -151,8 +183,8 @@ test.describe('Zajel Web Client - Messaging', () => {
     await enterPeerCode(browserA, codeB);
     await acceptPairingRequest(browserB);
 
-    // Wait for connection
-    await browserA.waitForTimeout(5000);
+    // Wait for connection using condition-based waiting
+    await waitForConnectionState(browserA, 'connected');
 
     // Look for message input area (may vary based on UI)
     const messageInputA = browserA.locator('input[placeholder*="message" i], textarea[placeholder*="message" i]');
@@ -164,15 +196,8 @@ test.describe('Zajel Web Client - Messaging', () => {
       await messageInputA.fill('Hello from Browser A!');
       await browserA.keyboard.press('Enter');
 
-      // Wait for message to appear in B
-      await browserB.waitForTimeout(2000);
-
-      // Check if message appeared in B's message list
-      const messageList = browserB.locator('.message-list, [role="log"]');
-      const content = await messageList.textContent().catch(() => '');
-
-      // Message might be encrypted/decrypted, check for some form of it
-      expect(content).toBeTruthy();
+      // Wait for message to appear in B using condition-based waiting
+      await waitForMessageInList(browserB, 'Hello from Browser A!');
     } else {
       console.log('Note: Messaging UI not visible after connection');
     }
@@ -193,7 +218,9 @@ test.describe('Zajel Web Client - Messaging', () => {
     // Connect
     await enterPeerCode(browserA, codeB);
     await acceptPairingRequest(browserB);
-    await browserA.waitForTimeout(5000);
+
+    // Wait for connection using condition-based waiting
+    await waitForConnectionState(browserA, 'connected');
 
     // Get message inputs
     const messageInputA = browserA.locator('input[placeholder*="message" i], textarea[placeholder*="message" i]');
@@ -216,19 +243,10 @@ test.describe('Zajel Web Client - Messaging', () => {
       await messageInputB.fill('Message 2 from B');
       await browserB.keyboard.press('Enter');
 
-      // Wait for messages to be exchanged
-      await browserA.waitForTimeout(3000);
-
-      // Both should have messages
-      const messagesA = browserA.locator('.message, [class*="message"]');
-      const messagesB = browserB.locator('.message, [class*="message"]');
-
-      const countA = await messagesA.count().catch(() => 0);
-      const countB = await messagesB.count().catch(() => 0);
-
-      // Each should have received at least 2 messages
-      expect(countA).toBeGreaterThanOrEqual(2);
-      expect(countB).toBeGreaterThanOrEqual(2);
+      // Wait for messages to be received using condition-based waiting
+      // Each browser should have at least 2 messages (sent + received)
+      await waitForMessageCount(browserA, 2);
+      await waitForMessageCount(browserB, 2);
     } else {
       console.log('Note: Messaging UI not available');
     }
@@ -250,22 +268,12 @@ test.describe('Zajel Web Client - Messaging', () => {
     await enterPeerCode(browserA, codeB);
     await acceptPairingRequest(browserB);
 
-    // Wait for WebRTC connection
-    await browserA.waitForTimeout(10000);
+    // Wait for WebRTC connection using condition-based waiting (with longer timeout for WebRTC)
+    await waitForConnectionState(browserA, 'connected', 20000);
 
-    // Check for connected indicator
-    // This could be in the status indicator, a peer list, or elsewhere
-    const bodyA = await browserA.textContent('body');
-    const bodyB = await browserB.textContent('body');
-
-    // Should see some indication of connection
-    const hasConnectionIndicator =
-      bodyA?.toLowerCase().includes('connected') ||
-      bodyB?.toLowerCase().includes('connected') ||
-      bodyA?.toLowerCase().includes('peer') ||
-      bodyB?.toLowerCase().includes('peer');
-
-    expect(hasConnectionIndicator).toBeTruthy();
+    // Verify connected status is shown
+    const statusA = browserA.locator('.status-indicator');
+    await expect(statusA).toContainText(/connected/i);
   });
 
   test('handles disconnection gracefully', async () => {
@@ -283,19 +291,16 @@ test.describe('Zajel Web Client - Messaging', () => {
     // Connect
     await enterPeerCode(browserA, codeB);
     await acceptPairingRequest(browserB);
-    await browserA.waitForTimeout(5000);
+
+    // Wait for connection using condition-based waiting
+    await waitForConnectionState(browserA, 'connected');
 
     // Close Browser B (simulates disconnect)
     await browserB.close();
 
-    // Wait for A to detect disconnection
-    await browserA.waitForTimeout(5000);
-
-    // A should show some indication of disconnection or return to ready state
+    // Wait for A to detect disconnection using condition-based waiting
+    // Should show disconnected, offline, or return to ready state
     const statusA = browserA.locator('.status-indicator');
-    const statusText = await statusA.textContent();
-
-    // Should show disconnected, offline, or return to ready
-    expect(statusText?.toLowerCase()).toMatch(/disconnected|offline|ready|connecting/i);
+    await expect(statusA).toContainText(/disconnected|offline|ready|connecting/i, { timeout: 15000 });
   });
 });
