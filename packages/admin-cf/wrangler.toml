@@ -1,0 +1,33 @@
+# Zajel Admin Dashboard - Cloudflare Worker Configuration
+name = "zajel-admin"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# Durable Object for admin user management
+[durable_objects]
+bindings = [
+  { name = "ADMIN_USERS", class_name = "AdminUsersDO" }
+]
+
+# KV namespace for session cache (optional)
+# [[kv_namespaces]]
+# binding = "SESSION_CACHE"
+# id = "<your-kv-namespace-id>"
+
+# Migrations for Durable Objects
+[[migrations]]
+tag = "v1"
+new_classes = ["AdminUsersDO"]
+
+# Environment variables (set via wrangler secret)
+# JWT_SECRET - Shared secret for JWT signing
+# Run: wrangler secret put JWT_SECRET
+
+# Development settings
+[dev]
+port = 8787
+local_protocol = "http"
+
+# Site configuration for serving static dashboard
+[site]
+bucket = "./dist"

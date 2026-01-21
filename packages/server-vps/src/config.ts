@@ -84,6 +84,13 @@ export function loadConfig(): ServerConfig {
       dailyPointTtl: envNumber('ZAJEL_DAILY_POINT_TTL', 48 * 60 * 60 * 1000), // 48 hours
       hourlyTokenTtl: envNumber('ZAJEL_HOURLY_TOKEN_TTL', 3 * 60 * 60 * 1000), // 3 hours
     },
+
+    admin: {
+      // JWT secret shared with CF Workers admin dashboard
+      jwtSecret: envString('ZAJEL_ADMIN_JWT_SECRET', ''),
+      // CF Admin dashboard URL for CORS
+      cfAdminUrl: process.env['ZAJEL_CF_ADMIN_URL'],
+    },
   };
 }
 

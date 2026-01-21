@@ -264,4 +264,8 @@ export interface ServerConfig {
     dailyPointTtl: number;
     hourlyTokenTtl: number;
   };
+  admin: {
+    jwtSecret: string;
+    cfAdminUrl?: string;
+  };
 }

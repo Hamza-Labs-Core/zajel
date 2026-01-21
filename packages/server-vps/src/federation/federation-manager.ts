@@ -194,6 +194,13 @@ export class FederationManager extends EventEmitter {
   }
 
   /**
+   * Get all members
+   */
+  getMembers(): MembershipEntry[] {
+    return this.gossip.getMembership().getAll();
+  }
+
+  /**
    * Check if we should handle a hash locally
    */
   shouldHandleLocally(hash: string): boolean {
