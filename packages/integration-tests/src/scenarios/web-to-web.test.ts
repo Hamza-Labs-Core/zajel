@@ -13,6 +13,11 @@
  * - Two browsers connecting and pairing via real VPS
  * - Message exchange between paired browsers
  * - Connection resilience and error handling
+ *
+ * NOTE: These tests require access to external VPS servers on port 9000.
+ * GitHub Actions blocks outbound connections to non-standard ports, so these
+ * tests will skip in CI unless VPS is reachable. To run locally or in a
+ * self-hosted runner, ensure the VPS server is accessible.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -22,12 +27,17 @@ import { readFileSync, existsSync } from 'fs';
 import { resolve, join, extname } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { createConnection } from 'net';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 // Go up 4 levels: scenarios -> src -> integration-tests -> packages -> root
 const PROJECT_ROOT = resolve(__dirname, '../../../..');
 const WEB_CLIENT_DIST = resolve(PROJECT_ROOT, 'packages/web-client/dist');
+
+// VPS server config (must match what's baked into web client at build time)
+const VPS_HOST = '65.21.54.26';
+const VPS_PORT = 9000;
 
 // Timeouts for real network operations
 const TIMEOUTS = {
@@ -36,6 +46,28 @@ const TIMEOUTS = {
   LONG: 30000,
   VERY_LONG: 60000,
 };
+
+/**
+ * Check if the VPS server is reachable on the WebSocket port.
+ * This is used to skip tests in environments where outbound port 9000 is blocked.
+ */
+async function isVpsReachable(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({ host: VPS_HOST, port: VPS_PORT, timeout: 5000 });
+    socket.on('connect', () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.on('error', () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.on('timeout', () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
+}
 
 // MIME types for serving static files
 const MIME_TYPES: Record<string, string> = {
@@ -72,8 +104,20 @@ describe('Web-to-Web Integration Tests', () => {
   let browser2: Browser;
   let page1: Page;
   let page2: Page;
+  let vpsReachable: boolean = false;
 
   beforeAll(async () => {
+    // Check if VPS server is reachable (GitHub Actions blocks port 9000)
+    vpsReachable = await isVpsReachable();
+    if (!vpsReachable) {
+      console.log(`[Test] SKIP: VPS server at ${VPS_HOST}:${VPS_PORT} is not reachable.`);
+      console.log(`[Test] This is expected in GitHub Actions which blocks non-standard ports.`);
+      console.log(`[Test] To run these tests, use a self-hosted runner or run locally.`);
+      return;
+    }
+
+    console.log(`[Test] VPS server is reachable at ${VPS_HOST}:${VPS_PORT}`);
+
     // Check if web client is built
     if (!existsSync(WEB_CLIENT_DIST)) {
       throw new Error(
@@ -121,7 +165,12 @@ describe('Web-to-Web Integration Tests', () => {
     // Collect console errors for debugging
     const consoleErrors: string[] = [];
 
-    it('should load web client in both browsers', async () => {
+    it('should load web client in both browsers', async (ctx) => {
+      if (!vpsReachable) {
+        ctx.skip();
+        return;
+      }
+
       browser1 = await chromium.launch({ headless: true });
       browser2 = await chromium.launch({ headless: true });
 
@@ -162,7 +211,12 @@ describe('Web-to-Web Integration Tests', () => {
       expect(content2.toLowerCase()).toContain('zajel');
     }, TIMEOUTS.LONG);
 
-    it('should generate unique pairing codes for each client', async () => {
+    it('should generate unique pairing codes for each client', async (ctx) => {
+      if (!vpsReachable) {
+        ctx.skip();
+        return;
+      }
+
       // Wait for both clients to connect to VPS and get pairing codes
       await waitForPairingCode(page1);
       await waitForPairingCode(page2);
@@ -181,7 +235,12 @@ describe('Web-to-Web Integration Tests', () => {
       expect(code1).not.toBe(code2);
     }, TIMEOUTS.LONG);
 
-    it('should complete pairing flow between two browsers', async () => {
+    it('should complete pairing flow between two browsers', async (ctx) => {
+      if (!vpsReachable) {
+        ctx.skip();
+        return;
+      }
+
       // Get browser2's code
       const code2 = await getPairingCode(page2);
       console.log(`[Test] Initiating pairing with code: ${code2}`);
@@ -203,7 +262,12 @@ describe('Web-to-Web Integration Tests', () => {
       console.log(`[Test] Both browsers connected!`);
     }, TIMEOUTS.VERY_LONG);
 
-    it('should send and receive text messages', async () => {
+    it('should send and receive text messages', async (ctx) => {
+      if (!vpsReachable) {
+        ctx.skip();
+        return;
+      }
+
       // Send message from browser1 to browser2
       const testMessage = 'Hello from test ' + Date.now();
       console.log(`[Test] Sending message: ${testMessage}`);
@@ -217,7 +281,12 @@ describe('Web-to-Web Integration Tests', () => {
       console.log(`[Test] Message received by browser 2`);
     }, TIMEOUTS.LONG);
 
-    it('should handle bidirectional messaging', async () => {
+    it('should handle bidirectional messaging', async (ctx) => {
+      if (!vpsReachable) {
+        ctx.skip();
+        return;
+      }
+
       // Browser1 sends
       const msg1 = 'From browser1: ' + Date.now();
       await sendMessage(page1, msg1);
