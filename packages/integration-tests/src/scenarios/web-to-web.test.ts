@@ -25,7 +25,8 @@ import { dirname } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const PROJECT_ROOT = resolve(__dirname, '../../..');
+// Go up 4 levels: scenarios -> src -> integration-tests -> packages -> root
+const PROJECT_ROOT = resolve(__dirname, '../../../..');
 const WEB_CLIENT_DIST = resolve(PROJECT_ROOT, 'packages/web-client/dist');
 
 // Timeouts for real network operations
