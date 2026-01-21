@@ -24,9 +24,9 @@ import type {
 
 export class AdminUsersDO implements DurableObject {
   private state: DurableObjectState;
-  private env: { JWT_SECRET: string };
+  private env: { ZAJEL_ADMIN_JWT_SECRET: string };
 
-  constructor(state: DurableObjectState, env: { JWT_SECRET: string }) {
+  constructor(state: DurableObjectState, env: { ZAJEL_ADMIN_JWT_SECRET: string }) {
     this.state = state;
     this.env = env;
   }
@@ -148,7 +148,7 @@ export class AdminUsersDO implements DurableObject {
         username: user.username,
         role: user.role,
       },
-      this.env.JWT_SECRET,
+      this.env.ZAJEL_ADMIN_JWT_SECRET,
       15 // 15 minutes
     );
 
@@ -174,7 +174,7 @@ export class AdminUsersDO implements DurableObject {
     }
 
     const token = authHeader.substring(7);
-    const payload = await verifyJwt<JwtPayload>(token, this.env.JWT_SECRET);
+    const payload = await verifyJwt<JwtPayload>(token, this.env.ZAJEL_ADMIN_JWT_SECRET);
     if (!payload) {
       return this.jsonResponse(
         { success: false, error: 'Invalid or expired token' },
@@ -315,7 +315,7 @@ export class AdminUsersDO implements DurableObject {
     }
 
     const token = authHeader.substring(7);
-    const payload = await verifyJwt<JwtPayload>(token, this.env.JWT_SECRET);
+    const payload = await verifyJwt<JwtPayload>(token, this.env.ZAJEL_ADMIN_JWT_SECRET);
     if (!payload) {
       return this.jsonResponse(
         { success: false, error: 'Invalid or expired token' },

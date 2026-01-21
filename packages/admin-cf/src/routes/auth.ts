@@ -79,7 +79,7 @@ export async function extractAuthPayload(
   const authHeader = request.headers.get('Authorization');
   if (authHeader?.startsWith('Bearer ')) {
     const token = authHeader.substring(7);
-    return verifyJwt<JwtPayload>(token, env.JWT_SECRET);
+    return verifyJwt<JwtPayload>(token, env.ZAJEL_ADMIN_JWT_SECRET);
   }
 
   // Then check cookie
@@ -87,7 +87,7 @@ export async function extractAuthPayload(
   if (cookie) {
     const match = cookie.match(/zajel_admin_token=([^;]+)/);
     if (match?.[1]) {
-      return verifyJwt<JwtPayload>(match[1], env.JWT_SECRET);
+      return verifyJwt<JwtPayload>(match[1], env.ZAJEL_ADMIN_JWT_SECRET);
     }
   }
 

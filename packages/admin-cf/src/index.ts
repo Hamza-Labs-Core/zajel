@@ -42,10 +42,10 @@ export default {
     try {
       let response: Response;
 
-      // Check if JWT_SECRET is configured
-      if (!env.JWT_SECRET && path.startsWith('/admin/api/')) {
+      // Check if ZAJEL_ADMIN_JWT_SECRET is configured
+      if (!env.ZAJEL_ADMIN_JWT_SECRET && path.startsWith('/admin/api/')) {
         return jsonResponse(
-          { success: false, error: 'Server not configured: JWT_SECRET missing' },
+          { success: false, error: 'Server not configured: ZAJEL_ADMIN_JWT_SECRET missing' },
           500,
           corsHeaders
         );

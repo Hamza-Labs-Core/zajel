@@ -56,7 +56,7 @@ export interface JwtPayload {
  */
 export interface Env {
   ADMIN_USERS: DurableObjectNamespace;
-  JWT_SECRET: string;
+  ZAJEL_ADMIN_JWT_SECRET: string;
   ZAJEL_BOOTSTRAP_URL?: string;
 }
 
