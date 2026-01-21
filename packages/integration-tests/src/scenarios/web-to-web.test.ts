@@ -118,6 +118,9 @@ describe('Web-to-Web Integration Tests', () => {
   });
 
   describe('Two Browsers Connecting via Real VPS', () => {
+    // Collect console errors for debugging
+    const consoleErrors: string[] = [];
+
     it('should load web client in both browsers', async () => {
       browser1 = await chromium.launch({ headless: true });
       browser2 = await chromium.launch({ headless: true });
@@ -127,6 +130,18 @@ describe('Web-to-Web Integration Tests', () => {
 
       page1 = await context1.newPage();
       page2 = await context2.newPage();
+
+      // Capture console errors for debugging
+      page1.on('console', msg => {
+        if (msg.type() === 'error') {
+          consoleErrors.push(`[Browser1] ${msg.text()}`);
+        }
+      });
+      page2.on('console', msg => {
+        if (msg.type() === 'error') {
+          consoleErrors.push(`[Browser2] ${msg.text()}`);
+        }
+      });
 
       // Load web client in both browsers
       await page1.goto(`http://127.0.0.1:${serverPort}`, { waitUntil: 'networkidle' });
@@ -224,15 +239,36 @@ async function waitForPairingCode(page: Page, timeout = TIMEOUTS.LONG): Promise<
   const start = Date.now();
 
   while (Date.now() - start < timeout) {
-    // Look for 6-character code pattern in page content
     const content = await page.content();
+
+    // Check for error messages on the page (ErrorBanner component)
+    const errorEl = await page.$('.error-banner, [role="alert"]');
+    if (errorEl) {
+      const errorText = await errorEl.textContent();
+      console.log(`[Test] Error found on page: ${errorText}`);
+    }
+
+    // Look for 6-character code pattern in page content
     if (/[A-HJ-NP-Z2-9]{6}/.test(content)) {
       return;
     }
+
+    // Log status indicator state for debugging
+    const statusEl = await page.$('.status-indicator, [role="status"]');
+    if (statusEl && Date.now() - start > 5000) {  // Only log after 5 seconds
+      const statusText = await statusEl.textContent();
+      console.log(`[Test] Status indicator: ${statusText}`);
+    }
+
     await delay(500);
   }
 
-  throw new Error('Timed out waiting for pairing code');
+  // Before failing, get page state for debugging
+  const content = await page.content();
+  const bodyText = await page.evaluate(() => document.body.innerText);
+  console.log(`[Test] Page body text at timeout: ${bodyText.substring(0, 500)}`);
+
+  throw new Error('Timed out waiting for pairing code. The VPS server may be unreachable from this environment.');
 }
 
 async function getPairingCode(page: Page): Promise<string> {
