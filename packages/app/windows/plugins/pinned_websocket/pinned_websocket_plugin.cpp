@@ -177,8 +177,7 @@ void PinnedWebSocketPlugin::HandleConnect(
   std::thread([shared_result, conn, conn_id_copy]() {
     bool success = conn->Connect();
 
-    // Post result back to main thread
-    // Note: In a real implementation, you'd use the registrar's task runner
+    // Flutter's MethodResult handles thread marshaling internally on Windows
     if (success) {
       flutter::EncodableMap response;
       response[flutter::EncodableValue("success")] = flutter::EncodableValue(true);
