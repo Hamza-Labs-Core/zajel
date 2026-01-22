@@ -122,14 +122,24 @@ class ConnectionManager {
   StreamSubscription? _signalingEventsSubscription;
 
 
+  /// Callback to check if a public key is blocked.
+  bool Function(String publicKey)? _isPublicKeyBlocked;
+
   ConnectionManager({
     required CryptoService cryptoService,
     required WebRTCService webrtcService,
     required DeviceLinkService deviceLinkService,
+    bool Function(String publicKey)? isPublicKeyBlocked,
   })  : _cryptoService = cryptoService,
         _webrtcService = webrtcService,
-        _deviceLinkService = deviceLinkService {
+        _deviceLinkService = deviceLinkService,
+        _isPublicKeyBlocked = isPublicKeyBlocked {
     _setupCallbacks();
+  }
+
+  /// Update the blocked check callback (for provider updates).
+  void setBlockedCheck(bool Function(String publicKey) callback) {
+    _isPublicKeyBlocked = callback;
   }
 
   /// Stream of all known peers.
@@ -532,22 +542,31 @@ class ConnectionManager {
     try {
       switch (message) {
         case SignalingPairIncoming(fromCode: final fromCode, fromPublicKey: final fromPublicKey):
+          // Check if this public key is blocked
+          if (_isPublicKeyBlocked != null && _isPublicKeyBlocked!(fromPublicKey)) {
+            // Auto-reject blocked users silently
+            final state = _signalingState;
+            if (state is SignalingConnected) {
+              state.client.respondToPairing(fromCode, accept: false);
+            }
+            break;
+          }
           // Someone wants to pair with us - emit event for UI to show approval dialog
           _pairRequestController.add((fromCode, fromPublicKey));
           break;
 
         case SignalingPairMatched(peerCode: final peerCode, peerPublicKey: final peerPublicKey, isInitiator: final isInitiator):
           // Pairing approved by both sides - start WebRTC connection
-          if (!_peers.containsKey(peerCode)) {
-            _peers[peerCode] = Peer(
-              id: peerCode,
-              displayName: 'Peer $peerCode',
-              connectionState: PeerConnectionState.connecting,
-              lastSeen: DateTime.now(),
-              isLocal: false,
-            );
-            _notifyPeersChanged();
-          }
+          // Update or create peer with public key for blocking support
+          _peers[peerCode] = Peer(
+            id: peerCode,
+            displayName: _peers[peerCode]?.displayName ?? 'Peer $peerCode',
+            publicKey: peerPublicKey,
+            connectionState: PeerConnectionState.connecting,
+            lastSeen: DateTime.now(),
+            isLocal: false,
+          );
+          _notifyPeersChanged();
           await _startWebRTCConnection(peerCode, peerPublicKey, isInitiator);
           break;
 
@@ -579,10 +598,13 @@ class ConnectionManager {
           final client = signalingState.client;
 
           // Offer from matched peer (we're the non-initiator)
-          if (!_peers.containsKey(from)) {
+          // Get public key from crypto service (stored during pairing)
+          final peerPublicKey = _cryptoService.getPeerPublicKey(from);
+          if (!_peers.containsKey(from) || _peers[from]?.publicKey == null) {
             _peers[from] = Peer(
               id: from,
-              displayName: 'Peer $from',
+              displayName: _peers[from]?.displayName ?? 'Peer $from',
+              publicKey: peerPublicKey,
               connectionState: PeerConnectionState.connecting,
               lastSeen: DateTime.now(),
               isLocal: false,

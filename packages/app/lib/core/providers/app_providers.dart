@@ -101,11 +101,13 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
   final cryptoService = ref.watch(cryptoServiceProvider);
   final webrtcService = ref.watch(webrtcServiceProvider);
   final deviceLinkService = ref.watch(deviceLinkServiceProvider);
+  final blockedNotifier = ref.watch(blockedPeersProvider.notifier);
 
   return ConnectionManager(
     cryptoService: cryptoService,
     webrtcService: webrtcService,
     deviceLinkService: deviceLinkService,
+    isPublicKeyBlocked: blockedNotifier.isBlocked,
   );
 });
 
@@ -126,13 +128,17 @@ final peersProvider = StreamProvider<List<Peer>>((ref) {
   return connectionManager.peers;
 });
 
-/// Provider for visible peers (excluding blocked).
+/// Provider for visible peers (excluding blocked by public key).
 final visiblePeersProvider = Provider<AsyncValue<List<Peer>>>((ref) {
   final peersAsync = ref.watch(peersProvider);
-  final blockedPeers = ref.watch(blockedPeersProvider);
+  final blockedPublicKeys = ref.watch(blockedPeersProvider);
 
   return peersAsync.whenData((peers) {
-    return peers.where((peer) => !blockedPeers.contains(peer.id)).toList();
+    return peers.where((peer) {
+      // Filter by public key if available, otherwise allow (for backwards compatibility)
+      if (peer.publicKey == null) return true;
+      return !blockedPublicKeys.contains(peer.publicKey);
+    }).toList();
   });
 });
 
@@ -174,14 +180,15 @@ class ChatMessagesNotifier extends StateNotifier<List<Message>> {
 /// Provider for the currently selected peer.
 final selectedPeerProvider = StateProvider<Peer?>((ref) => null);
 
-/// Provider for blocked peer IDs (for efficient lookup).
+/// Provider for blocked public keys (for efficient lookup).
+/// Blocking by public key ensures users can't bypass blocks by regenerating codes.
 final blockedPeersProvider =
     StateNotifierProvider<BlockedPeersNotifier, Set<String>>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
   return BlockedPeersNotifier(prefs);
 });
 
-/// Provider for blocked peer details (id -> name mapping).
+/// Provider for blocked peer details (publicKey -> name mapping).
 final blockedPeerDetailsProvider = StateProvider<Map<String, String>>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
   final detailsJson = prefs.getStringList('blockedPeerDetails') ?? [];
@@ -196,39 +203,45 @@ final blockedPeerDetailsProvider = StateProvider<Map<String, String>>((ref) {
 });
 
 /// Notifier for managing blocked peers with persistence.
+/// Stores public keys (not pairing codes) to prevent bypass via code regeneration.
 class BlockedPeersNotifier extends StateNotifier<Set<String>> {
   final SharedPreferences _prefs;
 
   BlockedPeersNotifier(this._prefs) : super(_load(_prefs));
 
   static Set<String> _load(SharedPreferences prefs) {
-    final blocked = prefs.getStringList('blockedPeers') ?? [];
+    final blocked = prefs.getStringList('blockedPublicKeys') ?? [];
     return blocked.toSet();
   }
 
-  Future<void> block(String peerId, {String? displayName}) async {
-    state = {...state, peerId};
-    await _prefs.setStringList('blockedPeers', state.toList());
+  /// Block a user by their public key.
+  Future<void> block(String publicKey, {String? displayName}) async {
+    state = {...state, publicKey};
+    await _prefs.setStringList('blockedPublicKeys', state.toList());
 
     // Store display name if provided
     if (displayName != null) {
       final details = _prefs.getStringList('blockedPeerDetails') ?? [];
-      details.add('$peerId::$displayName');
+      // Remove any existing entry for this key first
+      details.removeWhere((entry) => entry.startsWith('$publicKey::'));
+      details.add('$publicKey::$displayName');
       await _prefs.setStringList('blockedPeerDetails', details);
     }
   }
 
-  Future<void> unblock(String peerId) async {
-    state = {...state}..remove(peerId);
-    await _prefs.setStringList('blockedPeers', state.toList());
+  /// Unblock a user by their public key.
+  Future<void> unblock(String publicKey) async {
+    state = {...state}..remove(publicKey);
+    await _prefs.setStringList('blockedPublicKeys', state.toList());
 
     // Remove from details
     final details = _prefs.getStringList('blockedPeerDetails') ?? [];
-    details.removeWhere((entry) => entry.startsWith('$peerId::'));
+    details.removeWhere((entry) => entry.startsWith('$publicKey::'));
     await _prefs.setStringList('blockedPeerDetails', details);
   }
 
-  bool isBlocked(String peerId) => state.contains(peerId);
+  /// Check if a public key is blocked.
+  bool isBlocked(String publicKey) => state.contains(publicKey);
 }
 
 /// Provider for signaling connection status.
