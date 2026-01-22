@@ -1,11 +1,20 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../constants.dart';
 import '../logging/logger_service.dart';
 import 'pinned_websocket.dart';
+
+/// Check if current platform supports pinned WebSocket (mobile only).
+/// Only Android and iOS have native implementations for certificate pinning.
+bool get _supportsPinnedWebSocket {
+  if (kIsWeb) return false;
+  // Only Android and iOS have native pinned WebSocket implementations
+  return Platform.isAndroid || Platform.isIOS;
+}
 
 /// Client for connecting to the signaling server for external peer connections.
 ///
@@ -109,10 +118,16 @@ class SignalingClient {
     bool? usePinnedWebSocket,
   })  : _pairingCode = pairingCode,
         _publicKey = publicKey,
-        // Use pinned WebSocket on non-web platforms by default
-        // Disable in test environment to avoid MissingPluginException
+        // Use pinned WebSocket only on platforms with native implementations (Android/iOS)
+        // Disabled on: web (no native access), desktop (no native impl), and test env
         _usePinnedWebSocket = usePinnedWebSocket ??
-            (!kIsWeb && !const bool.fromEnvironment('FLUTTER_TEST', defaultValue: false));
+            (_supportsPinnedWebSocket && !const bool.fromEnvironment('FLUTTER_TEST', defaultValue: false)) {
+    _logger.debug(
+      'SignalingClient',
+      'Initialized: usePinnedWebSocket=$_usePinnedWebSocket, '
+      'isWeb=$kIsWeb, supportsPinnedWS=$_supportsPinnedWebSocket',
+    );
+  }
 
   /// Stream of incoming signaling messages.
   Stream<SignalingMessage> get messages => _messageController.stream;
@@ -145,24 +160,36 @@ class SignalingClient {
   /// Connect to the signaling server.
   ///
   /// On mobile platforms (Android/iOS), uses certificate pinning via
-  /// platform-specific native WebSocket implementations. On web, uses
-  /// standard WebSocket (browser handles TLS validation).
+  /// platform-specific native WebSocket implementations. On web and desktop,
+  /// uses standard WebSocket (browser/OS handles TLS validation).
   Future<void> connect() async {
-    if (_isConnected) return;
+    if (_isConnected) {
+      _logger.debug('SignalingClient', 'Already connected, skipping');
+      return;
+    }
+
+    _logger.info(
+      'SignalingClient',
+      'Connecting to $serverUrl (usePinnedWebSocket=$_usePinnedWebSocket)',
+    );
 
     try {
       _connectionStateController.add(SignalingConnectionState.connecting);
 
       if (_usePinnedWebSocket) {
+        _logger.debug('SignalingClient', 'Using pinned WebSocket connection');
         await _connectWithPinning();
       } else {
+        _logger.debug('SignalingClient', 'Using standard WebSocket connection');
         await _connectStandard();
       }
 
       _isConnected = true;
       _connectionStateController.add(SignalingConnectionState.connected);
+      _logger.info('SignalingClient', 'Connected successfully');
 
       // Register with our pairing code and public key
+      _logger.debug('SignalingClient', 'Registering with pairing code: $_pairingCode');
       _send({
         'type': 'register',
         'pairingCode': _pairingCode,
@@ -171,7 +198,13 @@ class SignalingClient {
 
       // Start heartbeat
       _startHeartbeat();
-    } catch (e) {
+    } catch (e, stackTrace) {
+      _logger.error(
+        'SignalingClient',
+        'Connection failed to $serverUrl',
+        e,
+        stackTrace,
+      );
       // Clean up resources on connection error
       await _cleanupConnection();
       _connectionStateController.add(SignalingConnectionState.failed);
@@ -181,15 +214,19 @@ class SignalingClient {
 
   /// Connect using standard WebSocket (no pinning).
   Future<void> _connectStandard() async {
+    _logger.debug('SignalingClient', 'Creating standard WebSocket to $serverUrl');
     _channel = WebSocketChannel.connect(Uri.parse(serverUrl));
 
+    _logger.debug('SignalingClient', 'Waiting for WebSocket ready...');
     await _channel!.ready;
+    _logger.debug('SignalingClient', 'WebSocket ready, setting up stream listener');
 
     _subscription = _channel!.stream.listen(
       _handleMessage,
       onError: _handleError,
       onDone: _handleDisconnect,
     );
+    _logger.debug('SignalingClient', 'Standard WebSocket connected successfully');
   }
 
   /// Connect using pinned WebSocket (certificate pinning enabled).
@@ -572,23 +609,38 @@ class SignalingClient {
         case 'pong':
         case 'registered':
           // Heartbeat and registration confirmation, ignore
+          _logger.debug('SignalingClient', 'Received $type message');
+          break;
+
+        default:
+          _logger.warning('SignalingClient', 'Unknown message type: $type');
           break;
       }
-    } catch (e) {
-      // Intentionally silenced: Malformed messages from server are dropped.
+    } catch (e, stackTrace) {
+      // Malformed messages from server are dropped but logged for debugging.
       // This handles JSON parse errors, missing fields, type mismatches.
       // Server message validation failures are non-fatal - connection continues.
-      debugPrint('[SignalingClient] Invalid message format: $e');
+      _logger.warning(
+        'SignalingClient',
+        'Invalid message format: $e\nMessage: $data',
+      );
+      _logger.debug('SignalingClient', 'Message parse stack trace: $stackTrace');
     }
   }
 
   void _handleError(Object error) {
+    _logger.error(
+      'SignalingClient',
+      'WebSocket error occurred',
+      error,
+    );
     // Clean up resources on WebSocket error
     _cleanupConnection();
     _connectionStateController.add(SignalingConnectionState.failed);
   }
 
   void _handleDisconnect() {
+    _logger.info('SignalingClient', 'WebSocket disconnected');
     // Clean up resources on disconnect
     _cleanupConnection();
     _connectionStateController.add(SignalingConnectionState.disconnected);

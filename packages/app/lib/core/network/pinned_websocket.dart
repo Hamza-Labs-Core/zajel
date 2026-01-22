@@ -107,10 +107,12 @@ class PinnedWebSocket {
   Future<void> connect() async {
     if (_state == PinnedWebSocketState.connected ||
         _state == PinnedWebSocketState.connecting) {
+      _logger.debug('PinnedWebSocket', 'Already connecting or connected, skipping');
       return;
     }
 
     _setState(PinnedWebSocketState.connecting);
+    _logger.info('PinnedWebSocket', 'Attempting to connect to $url');
 
     try {
       // On web platform, certificate pinning is not possible
@@ -125,6 +127,8 @@ class PinnedWebSocket {
 
       // Set up event listener before connecting
       _setupEventListener();
+
+      _logger.debug('PinnedWebSocket', 'Invoking native connect method');
 
       // Connect via platform channel
       final result = await _channel.invokeMethod<Map<dynamic, dynamic>>(
@@ -147,23 +151,37 @@ class PinnedWebSocket {
         final error = result?['error'] ?? 'Unknown connection error';
         throw PinnedWebSocketException(error.toString());
       }
+    } on MissingPluginException catch (e) {
+      // This happens when the native plugin failed to register
+      _setState(PinnedWebSocketState.error);
+      final message = 'Certificate pinning plugin not registered. '
+          'Please ensure the native plugin is properly initialized.';
+      _errorController.add(message);
+      _logger.error(
+        'PinnedWebSocket',
+        'MissingPluginException: Native pinned WebSocket plugin not registered. '
+        'This may indicate a plugin registration issue or unsupported platform.',
+        e,
+      );
+      throw PinnedWebSocketException(message);
     } on PlatformException catch (e) {
       _setState(PinnedWebSocketState.error);
       final message = e.message ?? 'Platform error';
       _errorController.add(message);
       _logger.error(
         'PinnedWebSocket',
-        'Connection failed: $message',
+        'PlatformException during connection: $message',
         e,
       );
       rethrow;
-    } catch (e) {
+    } catch (e, stackTrace) {
       _setState(PinnedWebSocketState.error);
       _errorController.add(e.toString());
       _logger.error(
         'PinnedWebSocket',
-        'Connection failed: $e',
+        'Unexpected error during connection: $e',
         e,
+        stackTrace,
       );
       rethrow;
     }

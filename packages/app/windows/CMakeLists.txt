@@ -49,6 +49,9 @@ endfunction()
 set(FLUTTER_MANAGED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/flutter")
 add_subdirectory(${FLUTTER_MANAGED_DIR})
 
+# Custom plugins
+add_subdirectory("plugins/pinned_websocket")
+
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 
