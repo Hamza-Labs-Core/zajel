@@ -8,12 +8,16 @@ import '../constants.dart';
 import '../logging/logger_service.dart';
 import 'pinned_websocket.dart';
 
-/// Check if current platform supports pinned WebSocket (mobile only).
-/// Only Android and iOS have native implementations for certificate pinning.
+/// Check if current platform supports pinned WebSocket.
+/// Android, iOS, macOS, Linux, and Windows have native implementations.
 bool get _supportsPinnedWebSocket {
   if (kIsWeb) return false;
-  // Only Android and iOS have native pinned WebSocket implementations
-  return Platform.isAndroid || Platform.isIOS;
+  // All native platforms have pinned WebSocket implementations
+  return Platform.isAndroid ||
+      Platform.isIOS ||
+      Platform.isMacOS ||
+      Platform.isLinux ||
+      Platform.isWindows;
 }
 
 /// Client for connecting to the signaling server for external peer connections.
