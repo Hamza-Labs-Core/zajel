@@ -9,8 +9,11 @@
 #include <flutter/plugin_registrar_windows.h>
 #include <flutter/standard_method_codec.h>
 
+#include <windows.h>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -18,6 +21,9 @@
 namespace pinned_websocket {
 
 namespace {
+
+// Custom window message for main thread callbacks
+#define WM_FLUTTER_CALLBACK (WM_USER + 1)
 
 class PinnedWebSocketPlugin : public flutter::Plugin {
  public:
@@ -51,11 +57,28 @@ class PinnedWebSocketPlugin : public flutter::Plugin {
                  const std::string& connection_id,
                  const std::string& data);
 
+  // Post a callback to run on the main thread
+  void PostToMainThread(std::function<void()> callback);
+
+  // Process pending callbacks (called from main thread)
+  void ProcessPendingCallbacks();
+
+  // Window procedure hook
+  static LRESULT CALLBACK WndProcHook(HWND hwnd, UINT message, WPARAM wparam,
+                                      LPARAM lparam, UINT_PTR subclass_id,
+                                      DWORD_PTR ref_data);
+
   flutter::PluginRegistrarWindows* registrar_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> method_channel_;
   std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>> event_channel_;
   std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> event_sink_;
   std::mutex event_mutex_;
+
+  // Main thread callback queue
+  std::mutex callback_mutex_;
+  std::queue<std::function<void()>> pending_callbacks_;
+  HWND window_handle_;
+  int window_proc_id_;
 };
 
 void PinnedWebSocketPlugin::RegisterWithRegistrar(
@@ -64,9 +87,33 @@ void PinnedWebSocketPlugin::RegisterWithRegistrar(
   registrar->AddPlugin(std::move(plugin));
 }
 
+LRESULT CALLBACK PinnedWebSocketPlugin::WndProcHook(
+    HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam,
+    UINT_PTR subclass_id, DWORD_PTR ref_data) {
+  auto* plugin = reinterpret_cast<PinnedWebSocketPlugin*>(ref_data);
+  if (message == WM_FLUTTER_CALLBACK) {
+    plugin->ProcessPendingCallbacks();
+    return 0;
+  }
+  return DefSubclassProc(hwnd, message, wparam, lparam);
+}
+
 PinnedWebSocketPlugin::PinnedWebSocketPlugin(
     flutter::PluginRegistrarWindows* registrar)
-    : registrar_(registrar) {
+    : registrar_(registrar), window_handle_(nullptr), window_proc_id_(0) {
+  // Get the window handle for main thread callbacks
+  window_handle_ = registrar->GetView()->GetWindowHandle();
+  if (window_handle_) {
+    window_proc_id_ = registrar->RegisterTopLevelWindowProcDelegate(
+        [this](HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) -> std::optional<LRESULT> {
+          if (message == WM_FLUTTER_CALLBACK) {
+            ProcessPendingCallbacks();
+            return 0;
+          }
+          return std::nullopt;
+        });
+  }
+
   // Method channel
   method_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
       registrar->messenger(), "zajel/pinned_websocket",
@@ -100,7 +147,33 @@ PinnedWebSocketPlugin::PinnedWebSocketPlugin(
   event_channel_->SetStreamHandler(std::move(handler));
 }
 
-PinnedWebSocketPlugin::~PinnedWebSocketPlugin() {}
+PinnedWebSocketPlugin::~PinnedWebSocketPlugin() {
+  if (window_proc_id_ != 0) {
+    registrar_->UnregisterTopLevelWindowProcDelegate(window_proc_id_);
+  }
+}
+
+void PinnedWebSocketPlugin::PostToMainThread(std::function<void()> callback) {
+  {
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    pending_callbacks_.push(std::move(callback));
+  }
+  if (window_handle_) {
+    PostMessage(window_handle_, WM_FLUTTER_CALLBACK, 0, 0);
+  }
+}
+
+void PinnedWebSocketPlugin::ProcessPendingCallbacks() {
+  std::queue<std::function<void()>> callbacks;
+  {
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    std::swap(callbacks, pending_callbacks_);
+  }
+  while (!callbacks.empty()) {
+    callbacks.front()();
+    callbacks.pop();
+  }
+}
 
 void PinnedWebSocketPlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue>& method_call,
@@ -174,18 +247,20 @@ void PinnedWebSocketPlugin::HandleConnect(
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>>(std::move(result));
   auto conn_id_copy = connection_id;
 
-  std::thread([shared_result, conn, conn_id_copy]() {
+  std::thread([this, shared_result, conn, conn_id_copy]() {
     bool success = conn->Connect();
 
-    // Flutter's MethodResult handles thread marshaling internally on Windows
-    if (success) {
-      flutter::EncodableMap response;
-      response[flutter::EncodableValue("success")] = flutter::EncodableValue(true);
-      response[flutter::EncodableValue("connectionId")] = flutter::EncodableValue(conn_id_copy);
-      (*shared_result)->Success(flutter::EncodableValue(response));
-    } else {
-      (*shared_result)->Error("CONNECTION_FAILED", "Connection failed");
-    }
+    // Post result back to main thread
+    PostToMainThread([shared_result, conn_id_copy, success]() {
+      if (success) {
+        flutter::EncodableMap response;
+        response[flutter::EncodableValue("success")] = flutter::EncodableValue(true);
+        response[flutter::EncodableValue("connectionId")] = flutter::EncodableValue(conn_id_copy);
+        (*shared_result)->Success(flutter::EncodableValue(response));
+      } else {
+        (*shared_result)->Error("CONNECTION_FAILED", "Connection failed");
+      }
+    });
   }).detach();
 }
 
@@ -252,40 +327,43 @@ void PinnedWebSocketPlugin::HandleClose(
 void PinnedWebSocketPlugin::SendEvent(EventType type,
                                       const std::string& connection_id,
                                       const std::string& data) {
-  std::lock_guard<std::mutex> lock(event_mutex_);
-  if (!event_sink_) return;
+  // Post event sending to main thread
+  PostToMainThread([this, type, connection_id, data]() {
+    std::lock_guard<std::mutex> lock(event_mutex_);
+    if (!event_sink_) return;
 
-  flutter::EncodableMap event;
+    flutter::EncodableMap event;
 
-  const char* type_str = nullptr;
-  switch (type) {
-    case EventType::kConnected:
-      type_str = "connected";
-      break;
-    case EventType::kMessage:
-      type_str = "message";
-      break;
-    case EventType::kDisconnected:
-      type_str = "disconnected";
-      break;
-    case EventType::kError:
-      type_str = "error";
-      break;
-    case EventType::kPinningFailed:
-      type_str = "pinning_failed";
-      break;
-  }
+    const char* type_str = nullptr;
+    switch (type) {
+      case EventType::kConnected:
+        type_str = "connected";
+        break;
+      case EventType::kMessage:
+        type_str = "message";
+        break;
+      case EventType::kDisconnected:
+        type_str = "disconnected";
+        break;
+      case EventType::kError:
+        type_str = "error";
+        break;
+      case EventType::kPinningFailed:
+        type_str = "pinning_failed";
+        break;
+    }
 
-  event[flutter::EncodableValue("type")] = flutter::EncodableValue(type_str);
-  event[flutter::EncodableValue("connectionId")] = flutter::EncodableValue(connection_id);
+    event[flutter::EncodableValue("type")] = flutter::EncodableValue(type_str);
+    event[flutter::EncodableValue("connectionId")] = flutter::EncodableValue(connection_id);
 
-  if (type == EventType::kMessage) {
-    event[flutter::EncodableValue("data")] = flutter::EncodableValue(data);
-  } else if (type == EventType::kError || type == EventType::kPinningFailed) {
-    event[flutter::EncodableValue("error")] = flutter::EncodableValue(data);
-  }
+    if (type == EventType::kMessage) {
+      event[flutter::EncodableValue("data")] = flutter::EncodableValue(data);
+    } else if (type == EventType::kError || type == EventType::kPinningFailed) {
+      event[flutter::EncodableValue("error")] = flutter::EncodableValue(data);
+    }
 
-  event_sink_->Success(flutter::EncodableValue(event));
+    event_sink_->Success(flutter::EncodableValue(event));
+  });
 }
 
 }  // namespace
