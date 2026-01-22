@@ -8,20 +8,12 @@ import '../constants.dart';
 import '../logging/logger_service.dart';
 import 'pinned_websocket.dart';
 
-/// Check if current platform is desktop (Windows, Linux, or macOS).
-/// Returns false on web since dart:io's Platform is not available.
-bool get _isDesktopPlatform {
-  if (kIsWeb) return false;
-  return Platform.isWindows || Platform.isLinux || Platform.isMacOS;
-}
-
 /// Check if current platform supports pinned WebSocket (mobile only).
 /// Only Android and iOS have native implementations for certificate pinning.
 bool get _supportsPinnedWebSocket {
   if (kIsWeb) return false;
-  if (_isDesktopPlatform) return false;
-  // Only true for Android and iOS
-  return true;
+  // Only Android and iOS have native pinned WebSocket implementations
+  return Platform.isAndroid || Platform.isIOS;
 }
 
 /// Client for connecting to the signaling server for external peer connections.
@@ -133,8 +125,7 @@ class SignalingClient {
     _logger.debug(
       'SignalingClient',
       'Initialized: usePinnedWebSocket=$_usePinnedWebSocket, '
-      'isWeb=$kIsWeb, isDesktop=$_isDesktopPlatform, '
-      'supportsPinnedWS=$_supportsPinnedWebSocket',
+      'isWeb=$kIsWeb, supportsPinnedWS=$_supportsPinnedWebSocket',
     );
   }
 

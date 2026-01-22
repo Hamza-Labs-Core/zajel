@@ -5,9 +5,12 @@
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/random.h>
 
 #include <algorithm>
 #include <cstring>
+#include <iomanip>
 #include <random>
 #include <sstream>
 
@@ -17,6 +20,10 @@
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 #endif
+
+// Debug logging macro for production troubleshooting
+#define PWSLOG(fmt, ...) \
+  fprintf(stderr, "[PinnedWebSocket] " fmt "\n", ##__VA_ARGS__)
 
 namespace pinned_websocket {
 
@@ -123,30 +130,74 @@ void SHA1Hash(const unsigned char* data, size_t len, unsigned char* out) {
 }
 #endif
 
-// Generate random bytes for WebSocket key
-std::string GenerateWebSocketKey() {
-  unsigned char key[16];
+// Generate cryptographically secure random bytes using getrandom() or /dev/urandom
+// Falls back to mt19937 if crypto RNG fails (should not happen on modern Linux)
+bool CryptoRandomBytes(unsigned char* buffer, size_t len) {
+  // Try getrandom() first (available on Linux 3.17+)
+  ssize_t result = getrandom(buffer, len, 0);
+  if (result == static_cast<ssize_t>(len)) {
+    return true;
+  }
+
+  // Fallback to /dev/urandom
+  int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+  if (fd >= 0) {
+    size_t total_read = 0;
+    while (total_read < len) {
+      ssize_t bytes_read = read(fd, buffer + total_read, len - total_read);
+      if (bytes_read <= 0) {
+        close(fd);
+        return false;
+      }
+      total_read += bytes_read;
+    }
+    close(fd);
+    return true;
+  }
+
+  return false;
+}
+
+// Fallback using mt19937 (NOT cryptographically secure, used only if crypto RNG fails)
+void InsecureRandomBytes(unsigned char* buffer, size_t len) {
   std::random_device rd;
   std::mt19937 gen(rd());
   std::uniform_int_distribution<> dis(0, 255);
-  for (int i = 0; i < 16; ++i) {
-    key[i] = static_cast<unsigned char>(dis(gen));
+  for (size_t i = 0; i < len; ++i) {
+    buffer[i] = static_cast<unsigned char>(dis(gen));
+  }
+}
+
+// Generate random bytes for WebSocket key
+std::string GenerateWebSocketKey() {
+  unsigned char key[16];
+  if (!CryptoRandomBytes(key, 16)) {
+    // Fallback to insecure RNG if crypto RNG fails
+    InsecureRandomBytes(key, 16);
   }
   return Base64Encode(key, 16);
 }
 
 // Generate UUID for connection ID
 std::string GenerateUUID() {
-  std::random_device rd;
-  std::mt19937 gen(rd());
-  std::uniform_int_distribution<uint32_t> dis;
+  unsigned char random_bytes[16];
+  if (!CryptoRandomBytes(random_bytes, 16)) {
+    // Fallback to insecure RNG if crypto RNG fails
+    InsecureRandomBytes(random_bytes, 16);
+  }
+
+  // Set UUID version 4 (random) and variant bits
+  random_bytes[6] = (random_bytes[6] & 0x0F) | 0x40;  // Version 4
+  random_bytes[8] = (random_bytes[8] & 0x3F) | 0x80;  // Variant 1
 
   std::stringstream ss;
-  ss << std::hex;
-  ss << dis(gen) << "-" << (dis(gen) & 0xFFFF) << "-";
-  ss << ((dis(gen) & 0x0FFF) | 0x4000) << "-";
-  ss << ((dis(gen) & 0x3FFF) | 0x8000) << "-";
-  ss << dis(gen) << dis(gen);
+  ss << std::hex << std::setfill('0');
+  for (int i = 0; i < 16; ++i) {
+    if (i == 4 || i == 6 || i == 8 || i == 10) {
+      ss << '-';
+    }
+    ss << std::setw(2) << static_cast<int>(random_bytes[i]);
+  }
   return ss.str();
 }
 
@@ -212,10 +263,16 @@ bool WebSocketConnection::ParseUrl() {
 }
 
 bool WebSocketConnection::Connect() {
+  PWSLOG("Connect: url=%s, pins_count=%zu", url_.c_str(), pins_.size());
+
   if (!ParseUrl()) {
+    PWSLOG("Connect: Invalid URL");
     callback_(EventType::kError, connection_id_, "Invalid URL");
     return false;
   }
+
+  PWSLOG("Connect: host=%s, port=%d, tls=%d, path=%s",
+         host_.c_str(), port_, use_tls_ ? 1 : 0, path_.c_str());
 
   // Resolve hostname
   struct addrinfo hints = {};
@@ -226,10 +283,13 @@ bool WebSocketConnection::Connect() {
   int status = getaddrinfo(host_.c_str(), std::to_string(port_).c_str(),
                            &hints, &result);
   if (status != 0) {
+    PWSLOG("Connect: DNS resolution failed: %s", gai_strerror(status));
     callback_(EventType::kError, connection_id_,
               std::string("DNS resolution failed: ") + gai_strerror(status));
     return false;
   }
+
+  PWSLOG("Connect: DNS resolved, attempting TCP connection");
 
   socket_fd_ = -1;
   for (struct addrinfo* rp = result; rp != nullptr; rp = rp->ai_next) {
@@ -246,6 +306,7 @@ bool WebSocketConnection::Connect() {
     setsockopt(socket_fd_, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive));
 
     if (connect(socket_fd_, rp->ai_addr, rp->ai_addrlen) == 0) {
+      PWSLOG("Connect: TCP connection established");
       break;
     }
 
@@ -256,24 +317,32 @@ bool WebSocketConnection::Connect() {
   freeaddrinfo(result);
 
   if (socket_fd_ == -1) {
+    PWSLOG("Connect: Failed to connect to server");
     callback_(EventType::kError, connection_id_, "Failed to connect to server");
     return false;
   }
 
   if (use_tls_) {
+    PWSLOG("Connect: Starting TLS handshake");
     if (!PerformTlsHandshake()) {
+      PWSLOG("Connect: TLS handshake failed");
       close(socket_fd_);
       socket_fd_ = -1;
       return false;
     }
+    PWSLOG("Connect: TLS handshake successful");
   }
 
+  PWSLOG("Connect: Starting WebSocket handshake");
   if (!PerformWebSocketHandshake()) {
+    PWSLOG("Connect: WebSocket handshake failed");
     Close();
     return false;
   }
+  PWSLOG("Connect: WebSocket handshake successful");
 
   is_connected_ = true;
+  PWSLOG("Connect: Connection established, id=%s", connection_id_.c_str());
   callback_(EventType::kConnected, connection_id_, "");
 
   should_stop_ = false;
@@ -284,6 +353,7 @@ bool WebSocketConnection::Connect() {
 
 bool WebSocketConnection::PerformTlsHandshake() {
 #if HAVE_OPENSSL
+  PWSLOG("TLS: Initializing OpenSSL");
   // Initialize OpenSSL - use version-appropriate function
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
   SSL_library_init();
@@ -295,6 +365,7 @@ bool WebSocketConnection::PerformTlsHandshake() {
   const SSL_METHOD* method = TLS_client_method();
   ssl_ctx_ = SSL_CTX_new(method);
   if (!ssl_ctx_) {
+    PWSLOG("TLS: Failed to create SSL context");
     callback_(EventType::kError, connection_id_, "Failed to create SSL context");
     return false;
   }
@@ -302,6 +373,7 @@ bool WebSocketConnection::PerformTlsHandshake() {
   SSL_CTX_set_min_proto_version(ssl_ctx_, TLS1_2_VERSION);
 
   if (!SSL_CTX_set_default_verify_paths(ssl_ctx_)) {
+    PWSLOG("TLS: Failed to load CA certificates");
     callback_(EventType::kError, connection_id_, "Failed to load CA certificates");
     SSL_CTX_free(ssl_ctx_);
     ssl_ctx_ = nullptr;
@@ -310,6 +382,7 @@ bool WebSocketConnection::PerformTlsHandshake() {
 
   ssl_ = SSL_new(ssl_ctx_);
   if (!ssl_) {
+    PWSLOG("TLS: Failed to create SSL object");
     callback_(EventType::kError, connection_id_, "Failed to create SSL object");
     SSL_CTX_free(ssl_ctx_);
     ssl_ctx_ = nullptr;
@@ -319,10 +392,12 @@ bool WebSocketConnection::PerformTlsHandshake() {
   SSL_set_tlsext_host_name(ssl_, host_.c_str());
   SSL_set_fd(ssl_, socket_fd_);
 
+  PWSLOG("TLS: Performing SSL_connect to %s", host_.c_str());
   int ret = SSL_connect(ssl_);
   if (ret != 1) {
     char err_buf[256];
     ERR_error_string_n(ERR_get_error(), err_buf, sizeof(err_buf));
+    PWSLOG("TLS: SSL_connect failed: %s", err_buf);
     callback_(EventType::kError, connection_id_,
               std::string("TLS handshake failed: ") + err_buf);
     SSL_free(ssl_);
@@ -331,9 +406,12 @@ bool WebSocketConnection::PerformTlsHandshake() {
     ssl_ctx_ = nullptr;
     return false;
   }
+  PWSLOG("TLS: SSL_connect successful");
 
   long verify_result = SSL_get_verify_result(ssl_);
   if (verify_result != X509_V_OK) {
+    PWSLOG("TLS: Certificate verification failed: %s",
+           X509_verify_cert_error_string(verify_result));
     callback_(EventType::kError, connection_id_,
               std::string("Certificate verification failed: ") +
               X509_verify_cert_error_string(verify_result));
@@ -343,11 +421,14 @@ bool WebSocketConnection::PerformTlsHandshake() {
     ssl_ctx_ = nullptr;
     return false;
   }
+  PWSLOG("TLS: Certificate verification passed");
 
   // Certificate pinning
   if (!pins_.empty()) {
+    PWSLOG("TLS: Checking certificate pins (count=%zu)", pins_.size());
     X509* cert = SSL_get_peer_certificate(ssl_);
     if (!cert) {
+      PWSLOG("TLS: No server certificate received");
       callback_(EventType::kPinningFailed, connection_id_,
                 "No server certificate received");
       SSL_free(ssl_);
@@ -361,16 +442,25 @@ bool WebSocketConnection::PerformTlsHandshake() {
     X509_free(cert);
 
     if (!pin_matched) {
+      PWSLOG("TLS: Leaf cert pin mismatch, checking chain");
       STACK_OF(X509)* chain = SSL_get_peer_cert_chain(ssl_);
       if (chain) {
-        for (int i = 0; i < sk_X509_num(chain) && !pin_matched; ++i) {
+        int chain_len = sk_X509_num(chain);
+        PWSLOG("TLS: Certificate chain length: %d", chain_len);
+        for (int i = 0; i < chain_len && !pin_matched; ++i) {
           X509* chain_cert = sk_X509_value(chain, i);
           pin_matched = VerifyCertificatePins(chain_cert);
+          if (pin_matched) {
+            PWSLOG("TLS: Pin matched at chain index %d", i);
+          }
         }
       }
+    } else {
+      PWSLOG("TLS: Leaf certificate pin matched");
     }
 
     if (!pin_matched) {
+      PWSLOG("TLS: Certificate pinning failed - no matching pin found");
       callback_(EventType::kPinningFailed, connection_id_,
                 "Certificate pinning failed - no matching pin found");
       SSL_free(ssl_);
@@ -379,10 +469,14 @@ bool WebSocketConnection::PerformTlsHandshake() {
       ssl_ctx_ = nullptr;
       return false;
     }
+    PWSLOG("TLS: Certificate pinning verification successful");
+  } else {
+    PWSLOG("TLS: No pins configured, skipping pinning");
   }
 
   return true;
 #else
+  PWSLOG("TLS: OpenSSL not available");
   if (!pins_.empty()) {
     callback_(EventType::kPinningFailed, connection_id_,
               "Certificate pinning requires OpenSSL, which is not available");
@@ -431,6 +525,7 @@ std::string WebSocketConnection::CalculateSpkiPin(X509* cert) {
 #endif
 
 bool WebSocketConnection::PerformWebSocketHandshake() {
+  PWSLOG("WebSocket: Starting handshake");
   std::string ws_key = GenerateWebSocketKey();
 
   std::ostringstream request;
@@ -448,6 +543,7 @@ bool WebSocketConnection::PerformWebSocketHandshake() {
 
   std::string req_str = request.str();
 
+  PWSLOG("WebSocket: Sending upgrade request");
   int sent;
 #if HAVE_OPENSSL
   if (ssl_) {
@@ -459,9 +555,11 @@ bool WebSocketConnection::PerformWebSocketHandshake() {
   }
 
   if (sent <= 0) {
+    PWSLOG("WebSocket: Failed to send handshake request");
     callback_(EventType::kError, connection_id_, "Failed to send WebSocket handshake");
     return false;
   }
+  PWSLOG("WebSocket: Upgrade request sent (%d bytes)", sent);
 
   char buffer[4096];
   int received;
@@ -475,18 +573,22 @@ bool WebSocketConnection::PerformWebSocketHandshake() {
   }
 
   if (received <= 0) {
+    PWSLOG("WebSocket: Failed to receive handshake response");
     callback_(EventType::kError, connection_id_, "Failed to receive WebSocket handshake response");
     return false;
   }
+  PWSLOG("WebSocket: Received response (%d bytes)", received);
 
   buffer[received] = '\0';
   std::string response(buffer);
 
   if (response.find("HTTP/1.1 101") == std::string::npos) {
+    PWSLOG("WebSocket: Handshake failed, no 101 response");
     callback_(EventType::kError, connection_id_,
               "WebSocket handshake failed: " + response.substr(0, 50));
     return false;
   }
+  PWSLOG("WebSocket: Received 101 Switching Protocols");
 
   // Verify Sec-WebSocket-Accept
   std::string accept_key = ws_key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -496,9 +598,11 @@ bool WebSocketConnection::PerformWebSocketHandshake() {
   std::string expected_accept = Base64Encode(sha1_hash, 20);
 
   if (response.find(expected_accept) == std::string::npos) {
+    PWSLOG("WebSocket: Accept key mismatch");
     callback_(EventType::kError, connection_id_, "WebSocket accept key mismatch");
     return false;
   }
+  PWSLOG("WebSocket: Handshake completed successfully");
 
   return true;
 }
@@ -532,11 +636,9 @@ bool WebSocketConnection::SendFrame(uint8_t opcode, const std::string& payload) 
   }
 
   uint8_t mask[4];
-  std::random_device rd;
-  std::mt19937 gen(rd());
-  std::uniform_int_distribution<> dis(0, 255);
-  for (int i = 0; i < 4; ++i) {
-    mask[i] = static_cast<uint8_t>(dis(gen));
+  if (!CryptoRandomBytes(mask, 4)) {
+    // Fallback to insecure RNG if crypto RNG fails
+    InsecureRandomBytes(mask, 4);
   }
   frame.insert(frame.end(), mask, mask + 4);
 
@@ -653,12 +755,14 @@ bool WebSocketConnection::ReadFrame(uint8_t& opcode, std::string& payload) {
 }
 
 void WebSocketConnection::ReceiveLoop() {
+  PWSLOG("ReceiveLoop: Started for connection %s", connection_id_.c_str());
   while (!should_stop_ && is_connected_) {
     uint8_t opcode;
     std::string payload;
 
     if (!ReadFrame(opcode, payload)) {
       if (!should_stop_) {
+        PWSLOG("ReceiveLoop: ReadFrame failed, disconnecting");
         is_connected_ = false;
         callback_(EventType::kDisconnected, connection_id_, "");
       }
@@ -672,11 +776,13 @@ void WebSocketConnection::ReceiveLoop() {
         break;
 
       case 0x08:
+        PWSLOG("ReceiveLoop: Received close frame");
         is_connected_ = false;
         callback_(EventType::kDisconnected, connection_id_, "");
         return;
 
       case 0x09:
+        PWSLOG("ReceiveLoop: Received ping, sending pong");
         {
           std::lock_guard<std::mutex> lock(send_mutex_);
           SendFrame(0x0A, payload);
@@ -687,22 +793,27 @@ void WebSocketConnection::ReceiveLoop() {
         break;
 
       default:
+        PWSLOG("ReceiveLoop: Unknown opcode 0x%02x", opcode);
         break;
     }
   }
+  PWSLOG("ReceiveLoop: Ended for connection %s", connection_id_.c_str());
 }
 
 void WebSocketConnection::Close() {
+  PWSLOG("Close: Closing connection %s", connection_id_.c_str());
   should_stop_ = true;
   is_connected_ = false;
 
   if (receive_thread_.joinable()) {
+    PWSLOG("Close: Sending close frame");
     {
       std::lock_guard<std::mutex> lock(send_mutex_);
       SendFrame(0x08, "");
     }
 
     if (receive_thread_.get_id() != std::this_thread::get_id()) {
+      PWSLOG("Close: Waiting for receive thread to finish");
       receive_thread_.join();
     } else {
       receive_thread_.detach();
@@ -711,6 +822,7 @@ void WebSocketConnection::Close() {
 
 #if HAVE_OPENSSL
   if (ssl_) {
+    PWSLOG("Close: Shutting down SSL");
     SSL_shutdown(ssl_);
     SSL_free(ssl_);
     ssl_ = nullptr;
@@ -723,9 +835,11 @@ void WebSocketConnection::Close() {
 #endif
 
   if (socket_fd_ >= 0) {
+    PWSLOG("Close: Closing socket");
     close(socket_fd_);
     socket_fd_ = -1;
   }
+  PWSLOG("Close: Connection closed");
 }
 
 // ConnectionManager implementation

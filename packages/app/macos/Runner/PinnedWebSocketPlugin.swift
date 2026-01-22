@@ -1,6 +1,12 @@
 import FlutterMacOS
 import Foundation
 import CommonCrypto
+import os.log
+
+/// Debug logging for production troubleshooting
+private func pwsLog(_ message: String) {
+    NSLog("[PinnedWebSocket] %@", message)
+}
 
 /// Flutter plugin for WebSocket connections with certificate pinning.
 ///
@@ -49,12 +55,15 @@ class PinnedWebSocketPlugin: NSObject, FlutterPlugin {
         guard let args = call.arguments as? [String: Any],
               let urlString = args["url"] as? String,
               let url = URL(string: urlString) else {
+            pwsLog("handleConnect: Invalid arguments - URL is required")
             result(FlutterError(code: "INVALID_ARGS", message: "URL is required", details: nil))
             return
         }
 
         let pins = args["pins"] as? [String] ?? []
         let timeoutMs = args["timeoutMs"] as? Int ?? 30000
+
+        pwsLog("handleConnect: url=\(urlString), pins_count=\(pins.count), timeout=\(timeoutMs)ms")
 
         let connectionId = UUID().uuidString
 
@@ -72,11 +81,13 @@ class PinnedWebSocketPlugin: NSObject, FlutterPlugin {
 
         connection.connect { success, error in
             if success {
+                pwsLog("handleConnect: Connection successful, id=\(connectionId)")
                 result([
                     "success": true,
                     "connectionId": connectionId
                 ])
             } else {
+                pwsLog("handleConnect: Connection failed - \(error ?? "unknown error")")
                 self.connections.removeValue(forKey: connectionId)
                 result(FlutterError(
                     code: "CONNECTION_FAILED",
@@ -112,12 +123,17 @@ class PinnedWebSocketPlugin: NSObject, FlutterPlugin {
     private func handleClose(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],
               let connectionId = args["connectionId"] as? String else {
+            pwsLog("handleClose: Invalid arguments - connectionId required")
             result(FlutterError(code: "INVALID_ARGS", message: "connectionId required", details: nil))
             return
         }
 
+        pwsLog("handleClose: Closing connection \(connectionId)")
         if let connection = connections.removeValue(forKey: connectionId) {
             connection.close()
+            pwsLog("handleClose: Connection closed")
+        } else {
+            pwsLog("handleClose: Connection not found")
         }
         result(true)
     }
@@ -167,6 +183,9 @@ private class WebSocketConnection: NSObject {
     }
 
     func connect(completion: @escaping (Bool, String?) -> Void) {
+        pwsLog("Connect: Starting connection to \(url.absoluteString)")
+        pwsLog("Connect: pins_count=\(pins.count), timeout=\(timeout)s")
+
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = timeout
         config.timeoutIntervalForResource = timeout
@@ -174,6 +193,7 @@ private class WebSocketConnection: NSObject {
         session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         webSocketTask = session?.webSocketTask(with: url)
 
+        pwsLog("Connect: Resuming WebSocket task")
         webSocketTask?.resume()
 
         // Capture timeout for async context
@@ -182,20 +202,25 @@ private class WebSocketConnection: NSObject {
         // Wait for connection or timeout
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self = self else {
+                pwsLog("Connect: Connection deallocated")
                 completion(false, "Connection deallocated")
                 return
             }
 
             if self.isConnected {
+                pwsLog("Connect: Connection established (fast path)")
                 completion(true, nil)
                 self.receiveMessage()
             } else {
                 // Give it more time
                 let remainingTimeout = max(capturedTimeout - 0.5, 0.1)
+                pwsLog("Connect: Waiting additional \(remainingTimeout)s for connection")
                 DispatchQueue.global().asyncAfter(deadline: .now() + remainingTimeout) { [weak self] in
                     if self?.isConnected == true {
+                        pwsLog("Connect: Connection established (slow path)")
                         completion(true, nil)
                     } else {
+                        pwsLog("Connect: Connection timeout")
                         completion(false, "Connection timeout")
                     }
                 }
@@ -214,9 +239,11 @@ private class WebSocketConnection: NSObject {
     }
 
     func close() {
+        pwsLog("Close: Closing WebSocket connection \(connectionId)")
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         session?.invalidateAndCancel()
         isConnected = false
+        pwsLog("Close: Connection closed")
     }
 
     private func receiveMessage() {
@@ -241,12 +268,14 @@ private class WebSocketConnection: NSObject {
                         ])
                     }
                 @unknown default:
+                    pwsLog("ReceiveMessage: Unknown message type received")
                     break
                 }
                 // Continue receiving
                 self.receiveMessage()
 
             case .failure(let error):
+                pwsLog("ReceiveMessage: Error - \(error.localizedDescription)")
                 self.isConnected = false
                 self.onEvent([
                     "type": "error",
@@ -264,23 +293,30 @@ extension WebSocketConnection: URLSessionDelegate {
 
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
 
+        pwsLog("TLS: Received authentication challenge: \(challenge.protectionSpace.authenticationMethod)")
+
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let serverTrust = challenge.protectionSpace.serverTrust else {
+            pwsLog("TLS: Not server trust challenge, using default handling")
             completionHandler(.performDefaultHandling, nil)
             return
         }
 
         // If no pins configured, use default handling
         if pins.isEmpty {
+            pwsLog("TLS: No pins configured, using default handling")
             completionHandler(.performDefaultHandling, nil)
             return
         }
+
+        pwsLog("TLS: Checking certificate pins (count=\(pins.count))")
 
         // Evaluate the server trust
         var error: CFError?
         let isValid = SecTrustEvaluateWithError(serverTrust, &error)
 
         guard isValid else {
+            pwsLog("TLS: Certificate validation failed: \(error?.localizedDescription ?? "Unknown")")
             completionHandler(.cancelAuthenticationChallenge, nil)
             onEvent([
                 "type": "pinning_failed",
@@ -289,15 +325,19 @@ extension WebSocketConnection: URLSessionDelegate {
             ])
             return
         }
+        pwsLog("TLS: Certificate validation passed")
 
         // Check certificate pins
         let certificateCount = SecTrustGetCertificateCount(serverTrust)
+        pwsLog("TLS: Certificate chain length: \(certificateCount)")
         var matched = false
 
         for i in 0..<certificateCount {
             if let certificate = SecTrustGetCertificateAtIndex(serverTrust, i) {
                 let pin = sha256Pin(for: certificate)
+                pwsLog("TLS: Checking pin at index \(i)")
                 if pins.contains(pin) {
+                    pwsLog("TLS: Pin matched at chain index \(i)")
                     matched = true
                     break
                 }
@@ -305,6 +345,7 @@ extension WebSocketConnection: URLSessionDelegate {
         }
 
         if matched {
+            pwsLog("TLS: Certificate pinning verification successful")
             isConnected = true
             onEvent([
                 "type": "connected",
@@ -312,6 +353,7 @@ extension WebSocketConnection: URLSessionDelegate {
             ])
             completionHandler(.useCredential, URLCredential(trust: serverTrust))
         } else {
+            pwsLog("TLS: Certificate pinning failed - no matching pin found")
             onEvent([
                 "type": "pinning_failed",
                 "connectionId": connectionId,
@@ -350,79 +392,33 @@ extension WebSocketConnection: URLSessionDelegate {
     /// Wraps raw public key data in SubjectPublicKeyInfo (SPKI) ASN.1 structure.
     /// This makes macOS pins compatible with Android's cert.publicKey.encoded format.
     private func wrapInSPKI(publicKey: SecKey, rawKeyData: Data) -> Data? {
-        // ASN.1 headers for different key types (algorithm identifier + bit string wrapper)
-        // These headers are the DER encoding of the AlgorithmIdentifier and BitString wrapper
-
-        // RSA SPKI header: SEQUENCE { SEQUENCE { OID rsaEncryption, NULL }, BIT STRING { ... } }
-        // OID 1.2.840.113549.1.1.1 = rsaEncryption
-        let rsa2048Header: [UInt8] = [
-            0x30, 0x82, 0x01, 0x22,  // SEQUENCE, length 290
-            0x30, 0x0d,              // SEQUENCE, length 13
-            0x06, 0x09,              // OID, length 9
-            0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01,  // rsaEncryption OID
-            0x05, 0x00,              // NULL
-            0x03, 0x82, 0x01, 0x0f,  // BIT STRING, length 271
-            0x00                     // unused bits = 0
-        ]
-
-        let rsa4096Header: [UInt8] = [
-            0x30, 0x82, 0x02, 0x22,  // SEQUENCE, length 546
-            0x30, 0x0d,              // SEQUENCE, length 13
-            0x06, 0x09,              // OID, length 9
-            0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01,  // rsaEncryption OID
-            0x05, 0x00,              // NULL
-            0x03, 0x82, 0x02, 0x0f,  // BIT STRING, length 527
-            0x00                     // unused bits = 0
-        ]
-
-        // EC P-256 SPKI header: SEQUENCE { SEQUENCE { OID ecPublicKey, OID prime256v1 }, BIT STRING { ... } }
-        // OID 1.2.840.10045.2.1 = ecPublicKey, OID 1.2.840.10045.3.1.7 = prime256v1
-        let ecP256Header: [UInt8] = [
-            0x30, 0x59,              // SEQUENCE, length 89
-            0x30, 0x13,              // SEQUENCE, length 19
-            0x06, 0x07,              // OID, length 7
-            0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,  // ecPublicKey OID
-            0x06, 0x08,              // OID, length 8
-            0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07,  // prime256v1 OID
-            0x03, 0x42,              // BIT STRING, length 66
-            0x00                     // unused bits = 0
-        ]
-
-        // EC P-384 SPKI header
-        // OID 1.3.132.0.34 = secp384r1
-        let ecP384Header: [UInt8] = [
-            0x30, 0x76,              // SEQUENCE, length 118
-            0x30, 0x10,              // SEQUENCE, length 16
-            0x06, 0x07,              // OID, length 7
-            0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,  // ecPublicKey OID
-            0x06, 0x05,              // OID, length 5
-            0x2b, 0x81, 0x04, 0x00, 0x22,  // secp384r1 OID
-            0x03, 0x62,              // BIT STRING, length 98
-            0x00                     // unused bits = 0
-        ]
-
         // Determine key type from attributes
         guard let attributes = SecKeyCopyAttributes(publicKey) as? [String: Any],
-              let keyType = attributes[kSecAttrKeyType as String] as? String,
-              let keySize = attributes[kSecAttrKeySizeInBits as String] as? Int else {
+              let keyType = attributes[kSecAttrKeyType as String] as? String else {
             return nil
         }
 
         var header: [UInt8]
 
         if keyType == (kSecAttrKeyTypeRSA as String) {
-            if keySize <= 2048 {
-                header = rsa2048Header
-            } else {
-                header = rsa4096Header
+            // RSA SPKI header: SEQUENCE { SEQUENCE { OID rsaEncryption, NULL }, BIT STRING { ... } }
+            // OID 1.2.840.113549.1.1.1 = rsaEncryption
+            // Use actual raw key data size to compute correct ASN.1 lengths
+            guard let rsaHeader = buildRSASPKIHeader(rawKeySize: rawKeyData.count) else {
+                return nil
             }
+            header = rsaHeader
         } else if keyType == (kSecAttrKeyTypeECSECPrimeRandom as String) ||
                   keyType == (kSecAttrKeyTypeEC as String) {
-            if keySize <= 256 {
-                header = ecP256Header
-            } else {
-                header = ecP384Header
+            // EC SPKI header: SEQUENCE { SEQUENCE { OID ecPublicKey, OID curve }, BIT STRING { ... } }
+            // Determine curve from raw key data size:
+            // P-256: 65 bytes (04 + 32 + 32)
+            // P-384: 97 bytes (04 + 48 + 48)
+            // P-521: 133 bytes (04 + 66 + 66)
+            guard let ecHeader = buildECSPKIHeader(rawKeySize: rawKeyData.count) else {
+                return nil
             }
+            header = ecHeader
         } else {
             // Unknown key type, return nil
             return nil
@@ -434,11 +430,124 @@ extension WebSocketConnection: URLSessionDelegate {
 
         return spkiData
     }
+
+    /// Builds RSA SPKI ASN.1 header based on actual raw key data size.
+    /// Supports 2048, 3072, and 4096 bit keys.
+    private func buildRSASPKIHeader(rawKeySize: Int) -> [UInt8]? {
+        // RSA Algorithm Identifier: SEQUENCE { OID rsaEncryption, NULL }
+        // OID 1.2.840.113549.1.1.1 = rsaEncryption
+        let algorithmIdentifier: [UInt8] = [
+            0x30, 0x0d,              // SEQUENCE, length 13
+            0x06, 0x09,              // OID, length 9
+            0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01,  // rsaEncryption OID
+            0x05, 0x00               // NULL
+        ]
+
+        // BIT STRING has 1 byte for "unused bits" (always 0) + raw key data
+        let bitStringContentLength = 1 + rawKeySize
+
+        // Calculate total lengths:
+        // BIT STRING = tag(1) + length(varies) + 0x00(1) + rawKeyData
+        // SEQUENCE content = algorithmIdentifier + BIT STRING
+        let bitStringTotalLength = 1 + encodeASN1Length(bitStringContentLength).count + bitStringContentLength
+        let sequenceLength = algorithmIdentifier.count + bitStringTotalLength
+
+        // Build SEQUENCE header
+        var sequenceHeader: [UInt8] = [0x30]  // SEQUENCE tag
+        sequenceHeader.append(contentsOf: encodeASN1Length(sequenceLength))
+
+        // Combine: SEQUENCE header + algorithmIdentifier + BIT STRING header (without raw data)
+        var header = sequenceHeader
+        header.append(contentsOf: algorithmIdentifier)
+        header.append(0x03)  // BIT STRING tag
+        header.append(contentsOf: encodeASN1Length(bitStringContentLength))
+        header.append(0x00)  // unused bits = 0
+
+        return header
+    }
+
+    /// Builds EC SPKI ASN.1 header based on actual raw key data size.
+    /// Supports P-256 (65 bytes), P-384 (97 bytes), and P-521 (133 bytes).
+    private func buildECSPKIHeader(rawKeySize: Int) -> [UInt8]? {
+        // EC Algorithm Identifier: SEQUENCE { OID ecPublicKey, OID curve }
+        // OID 1.2.840.10045.2.1 = ecPublicKey
+        let ecPublicKeyOID: [UInt8] = [
+            0x06, 0x07,              // OID, length 7
+            0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01  // ecPublicKey OID
+        ]
+
+        // Determine curve OID based on raw key size
+        var curveOID: [UInt8]
+        switch rawKeySize {
+        case 65:  // P-256: 04 + 32 + 32
+            // OID 1.2.840.10045.3.1.7 = prime256v1 (secp256r1)
+            curveOID = [
+                0x06, 0x08,          // OID, length 8
+                0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07
+            ]
+        case 97:  // P-384: 04 + 48 + 48
+            // OID 1.3.132.0.34 = secp384r1
+            curveOID = [
+                0x06, 0x05,          // OID, length 5
+                0x2b, 0x81, 0x04, 0x00, 0x22
+            ]
+        case 133:  // P-521: 04 + 66 + 66
+            // OID 1.3.132.0.35 = secp521r1
+            curveOID = [
+                0x06, 0x05,          // OID, length 5
+                0x2b, 0x81, 0x04, 0x00, 0x23
+            ]
+        default:
+            // Unsupported curve
+            return nil
+        }
+
+        // Build Algorithm Identifier SEQUENCE
+        let algorithmIdentifierContent = ecPublicKeyOID + curveOID
+        var algorithmIdentifier: [UInt8] = [0x30]  // SEQUENCE tag
+        algorithmIdentifier.append(contentsOf: encodeASN1Length(algorithmIdentifierContent.count))
+        algorithmIdentifier.append(contentsOf: algorithmIdentifierContent)
+
+        // BIT STRING has 1 byte for "unused bits" (always 0) + raw key data
+        let bitStringContentLength = 1 + rawKeySize
+
+        // Total SEQUENCE content length
+        let bitStringTotalLength = 1 + encodeASN1Length(bitStringContentLength).count + bitStringContentLength
+        let sequenceLength = algorithmIdentifier.count + bitStringTotalLength
+
+        // Build SEQUENCE header
+        var sequenceHeader: [UInt8] = [0x30]  // SEQUENCE tag
+        sequenceHeader.append(contentsOf: encodeASN1Length(sequenceLength))
+
+        // Combine: SEQUENCE header + algorithmIdentifier + BIT STRING header (without raw data)
+        var header = sequenceHeader
+        header.append(contentsOf: algorithmIdentifier)
+        header.append(0x03)  // BIT STRING tag
+        header.append(contentsOf: encodeASN1Length(bitStringContentLength))
+        header.append(0x00)  // unused bits = 0
+
+        return header
+    }
+
+    /// Encodes a length value in ASN.1 DER format.
+    /// - For lengths 0-127: single byte
+    /// - For lengths 128-255: 0x81 followed by length byte
+    /// - For lengths 256-65535: 0x82 followed by two length bytes (big-endian)
+    private func encodeASN1Length(_ length: Int) -> [UInt8] {
+        if length < 128 {
+            return [UInt8(length)]
+        } else if length < 256 {
+            return [0x81, UInt8(length)]
+        } else {
+            return [0x82, UInt8((length >> 8) & 0xFF), UInt8(length & 0xFF)]
+        }
+    }
 }
 
 extension WebSocketConnection: URLSessionWebSocketDelegate {
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
+        pwsLog("WebSocket: Connection opened, protocol=\(`protocol` ?? "none")")
         isConnected = true
         onEvent([
             "type": "connected",
@@ -447,6 +556,7 @@ extension WebSocketConnection: URLSessionWebSocketDelegate {
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        pwsLog("WebSocket: Connection closed, code=\(closeCode.rawValue)")
         isConnected = false
         onEvent([
             "type": "disconnected",
