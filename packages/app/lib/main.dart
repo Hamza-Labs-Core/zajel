@@ -87,6 +87,9 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
       // Set up file transfer listeners
       _setupFileTransferListeners();
 
+      // Auto-connect to signaling server
+      await _connectToSignaling(connectionManager);
+
       logger.info('ZajelApp', 'Initialization complete');
     } catch (e, stack) {
       logger.error('ZajelApp', 'Initialization failed', e, stack);
@@ -94,6 +97,45 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
 
     if (mounted) {
       setState(() => _initialized = true);
+    }
+  }
+
+  Future<void> _connectToSignaling(dynamic connectionManager) async {
+    try {
+      logger.info('ZajelApp', 'Auto-connecting to signaling server...');
+      ref.read(signalingDisplayStateProvider.notifier).state =
+          SignalingDisplayState.connecting;
+
+      // Discover and select a VPS server
+      final discoveryService = ref.read(serverDiscoveryServiceProvider);
+      final selectedServer = await discoveryService.selectServer();
+
+      if (selectedServer == null) {
+        logger.warning('ZajelApp', 'No servers available from discovery');
+        ref.read(signalingDisplayStateProvider.notifier).state =
+            SignalingDisplayState.disconnected;
+        return;
+      }
+
+      // Store the selected server
+      ref.read(selectedServerProvider.notifier).state = selectedServer;
+      logger.info(
+          'ZajelApp', 'Selected server: ${selectedServer.region} - ${selectedServer.endpoint}');
+
+      // Get the WebSocket URL for the selected server
+      final serverUrl = discoveryService.getWebSocketUrl(selectedServer);
+      logger.debug('ZajelApp', 'Connecting to WebSocket URL: $serverUrl');
+
+      final code = await connectionManager.connect(serverUrl: serverUrl);
+      logger.info('ZajelApp', 'Connected to signaling with pairing code: $code');
+      ref.read(pairingCodeProvider.notifier).state = code;
+      ref.read(signalingConnectedProvider.notifier).state = true;
+      ref.read(signalingDisplayStateProvider.notifier).state =
+          SignalingDisplayState.connected;
+    } catch (e, stack) {
+      logger.error('ZajelApp', 'Failed to auto-connect to signaling', e, stack);
+      ref.read(signalingDisplayStateProvider.notifier).state =
+          SignalingDisplayState.disconnected;
     }
   }
 

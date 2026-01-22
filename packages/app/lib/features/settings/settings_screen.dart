@@ -100,16 +100,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             context,
             title: 'External Connections',
             children: [
-              SwitchListTile(
-                secondary: const Icon(Icons.public),
-                title: const Text('Enable External Connections'),
+              ListTile(
+                leading: Icon(
+                  externalEnabled ? Icons.cloud_done : Icons.cloud_off,
+                  color: externalEnabled ? Colors.green : Colors.grey,
+                ),
+                title: Text(externalEnabled ? 'Connected' : 'Connecting...'),
                 subtitle: Text(
                   externalEnabled
-                      ? 'Code: ${pairingCode ?? "Generating..."}'
-                      : 'Connect to peers outside local network',
+                      ? 'Pairing Code: ${pairingCode ?? "..."}'
+                      : 'Establishing connection to signaling server',
                 ),
-                value: externalEnabled,
-                onChanged: (value) => _toggleSignalingConnection(value),
               ),
               _buildSelectedServerTile(),
               ListTile(
@@ -344,64 +345,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ref.read(bootstrapServerUrlProvider.notifier).state = result;
       final prefs = ref.read(sharedPreferencesProvider);
       await prefs.setString('bootstrapServerUrl', result);
-    }
-  }
-
-  Future<void> _toggleSignalingConnection(bool enabled) async {
-    final connectionManager = ref.read(connectionManagerProvider);
-
-    if (enabled) {
-      logger.info('Settings', 'User enabling external connections');
-      ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.connecting;
-      try {
-        // Discover and select a VPS server
-        logger.debug('Settings', 'Starting server discovery...');
-        final discoveryService = ref.read(serverDiscoveryServiceProvider);
-        final selectedServer = await discoveryService.selectServer();
-
-        if (selectedServer == null) {
-          logger.warning('Settings', 'No servers available from discovery');
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('No servers available. Please try again later.')),
-            );
-          }
-          ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.disconnected;
-          return;
-        }
-
-        // Store the selected server
-        ref.read(selectedServerProvider.notifier).state = selectedServer;
-        logger.info('Settings', 'Selected server: ${selectedServer.region} - ${selectedServer.endpoint}');
-
-        // Get the WebSocket URL for the selected server
-        final serverUrl = discoveryService.getWebSocketUrl(selectedServer);
-        logger.debug('Settings', 'Connecting to WebSocket URL: $serverUrl');
-
-        final code = await connectionManager.connect(
-          serverUrl: serverUrl,
-        );
-        logger.info('Settings', 'Connected successfully with pairing code: $code');
-        ref.read(pairingCodeProvider.notifier).state = code;
-        ref.read(signalingConnectedProvider.notifier).state = true;
-        ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.connected;
-      } catch (e, stackTrace) {
-        logger.error('Settings', 'Failed to enable external connections', e, stackTrace);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to connect: $e')),
-          );
-        }
-        ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.disconnected;
-      }
-    } else {
-      logger.info('Settings', 'User disabling external connections');
-      await connectionManager.disconnect();
-      ref.read(signalingConnectedProvider.notifier).state = false;
-      ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.disconnected;
-      ref.read(pairingCodeProvider.notifier).state = null;
-      ref.read(selectedServerProvider.notifier).state = null;
-      logger.debug('Settings', 'External connections disabled');
     }
   }
 
