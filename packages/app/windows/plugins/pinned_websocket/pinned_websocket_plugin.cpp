@@ -63,11 +63,6 @@ class PinnedWebSocketPlugin : public flutter::Plugin {
   // Process pending callbacks (called from main thread)
   void ProcessPendingCallbacks();
 
-  // Window procedure hook
-  static LRESULT CALLBACK WndProcHook(HWND hwnd, UINT message, WPARAM wparam,
-                                      LPARAM lparam, UINT_PTR subclass_id,
-                                      DWORD_PTR ref_data);
-
   flutter::PluginRegistrarWindows* registrar_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> method_channel_;
   std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>> event_channel_;
@@ -87,32 +82,22 @@ void PinnedWebSocketPlugin::RegisterWithRegistrar(
   registrar->AddPlugin(std::move(plugin));
 }
 
-LRESULT CALLBACK PinnedWebSocketPlugin::WndProcHook(
-    HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam,
-    UINT_PTR subclass_id, DWORD_PTR ref_data) {
-  auto* plugin = reinterpret_cast<PinnedWebSocketPlugin*>(ref_data);
-  if (message == WM_FLUTTER_CALLBACK) {
-    plugin->ProcessPendingCallbacks();
-    return 0;
-  }
-  return DefSubclassProc(hwnd, message, wparam, lparam);
-}
-
 PinnedWebSocketPlugin::PinnedWebSocketPlugin(
     flutter::PluginRegistrarWindows* registrar)
     : registrar_(registrar), window_handle_(nullptr), window_proc_id_(0) {
-  // Get the window handle for main thread callbacks
-  window_handle_ = registrar->GetView()->GetWindowHandle();
-  if (window_handle_) {
-    window_proc_id_ = registrar->RegisterTopLevelWindowProcDelegate(
-        [this](HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) -> std::optional<LRESULT> {
-          if (message == WM_FLUTTER_CALLBACK) {
-            ProcessPendingCallbacks();
-            return 0;
-          }
-          return std::nullopt;
-        });
-  }
+  // Register window proc delegate for main thread callbacks
+  window_proc_id_ = registrar->RegisterTopLevelWindowProcDelegate(
+      [this](HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) -> std::optional<LRESULT> {
+        // Capture window handle on first message
+        if (!window_handle_ && hwnd) {
+          window_handle_ = hwnd;
+        }
+        if (message == WM_FLUTTER_CALLBACK) {
+          ProcessPendingCallbacks();
+          return 0;
+        }
+        return std::nullopt;
+      });
 
   // Method channel
   method_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
