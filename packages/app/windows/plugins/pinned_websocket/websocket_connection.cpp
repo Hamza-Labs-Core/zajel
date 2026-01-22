@@ -317,8 +317,13 @@ bool WebSocketConnection::Connect() {
 
 bool WebSocketConnection::PerformTlsHandshake() {
 #if HAVE_OPENSSL
+  // Initialize OpenSSL - use version-appropriate function
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
   SSL_library_init();
   SSL_load_error_strings();
+#else
+  OPENSSL_init_ssl(0, nullptr);
+#endif
 
   const SSL_METHOD* method = TLS_client_method();
   ssl_ctx_ = SSL_CTX_new(method);
