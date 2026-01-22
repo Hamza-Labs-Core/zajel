@@ -176,8 +176,8 @@ private class WebSocketConnection: NSObject {
 
         webSocketTask?.resume()
 
-        // Capture timeout value before entering async context to avoid force unwrap crash
-        let connectionTimeout = timeout
+        // Capture timeout for async context
+        let capturedTimeout = timeout
 
         // Wait for connection or timeout
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -190,8 +190,8 @@ private class WebSocketConnection: NSObject {
                 completion(true, nil)
                 self.receiveMessage()
             } else {
-                // Give it more time using captured timeout value
-                let remainingTimeout = max(connectionTimeout - 0.5, 0.1)
+                // Give it more time
+                let remainingTimeout = max(capturedTimeout - 0.5, 0.1)
                 DispatchQueue.global().asyncAfter(deadline: .now() + remainingTimeout) { [weak self] in
                     if self?.isConnected == true {
                         completion(true, nil)
