@@ -88,8 +88,8 @@ export async function createZajelServer(
       res.end(JSON.stringify({
         status: 'healthy',
         serverId: identity.serverId,
-        version: process.env.APP_VERSION || 'unknown',
-        env: process.env.NODE_ENV || 'development',
+        version: process.env['APP_VERSION'] || 'unknown',
+        env: process.env['NODE_ENV'] || 'development',
         uptime: process.uptime(),
         timestamp: new Date().toISOString(),
       }));
