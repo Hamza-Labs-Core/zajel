@@ -18,8 +18,17 @@ void main() {
     });
 
     tearDown(() async {
-      await subscription.cancel();
-      await client.dispose();
+      // Only clean up if client was initialized (some tests only test data classes)
+      try {
+        await subscription.cancel();
+      } catch (_) {
+        // subscription might not be initialized
+      }
+      try {
+        await client.dispose();
+      } catch (_) {
+        // client might not be initialized
+      }
       fakeChannel.dispose();
     });
 
