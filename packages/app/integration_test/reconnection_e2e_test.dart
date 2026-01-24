@@ -1,12 +1,10 @@
-import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:zajel/core/logging/logger_service.dart';
-import 'package:zajel/core/network/peer_reconnection_service.dart';
 import 'package:zajel/core/providers/app_providers.dart';
 import 'package:zajel/main.dart';
 
@@ -150,8 +148,8 @@ void main() {
       expect(meetingPointService, isNotNull);
 
       // Test that derivation is deterministic
-      final publicKey1 = List.generate(32, (i) => i);
-      final publicKey2 = List.generate(32, (i) => i + 100);
+      final publicKey1 = Uint8List.fromList(List.generate(32, (i) => i));
+      final publicKey2 = Uint8List.fromList(List.generate(32, (i) => i + 100));
 
       final points1 = meetingPointService.deriveDailyPoints(
         publicKey1,

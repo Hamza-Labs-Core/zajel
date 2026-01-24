@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -9,10 +8,7 @@ import 'package:zajel/core/network/connection_info.dart';
 import 'package:zajel/core/network/meeting_point_service.dart';
 import 'package:zajel/core/network/peer_reconnection_service.dart';
 import 'package:zajel/core/network/relay_client.dart';
-import 'package:zajel/core/network/signaling_client.dart';
 import 'package:zajel/core/storage/trusted_peers_storage.dart';
-
-import '../mocks/mocks.dart';
 
 // Mock implementations for integration testing
 class MockCryptoServiceImpl extends Mock implements CryptoService {}

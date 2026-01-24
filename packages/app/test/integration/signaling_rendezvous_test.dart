@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zajel/core/network/signaling_client.dart';
@@ -41,18 +40,6 @@ void main() {
       test('parses rendezvous_result message correctly', () async {
         // Create a SignalingClient - we'll test the message handler indirectly
         await setupClientWithMessageSimulation('wss://test.example.com');
-
-        // Create a simulated rendezvous_result message
-        final message = {
-          'type': 'rendezvous_result',
-          'liveMatches': [
-            {'peerId': 'peer1', 'relayId': 'relay1'},
-            {'peerId': 'peer2', 'relayId': null},
-          ],
-          'deadDrops': [
-            {'peerId': 'peer3', 'deadDrop': 'encrypted-data-1', 'relayId': 'relay2'},
-          ],
-        };
 
         // We can't inject the message directly, but we can verify the parsing logic
         // by testing the RendezvousResult class construction
@@ -133,9 +120,9 @@ void main() {
               expect(liveMatches, isA<List<LiveMatch>>());
               expect(deadDrops, isA<List<DeadDrop>>());
               expect(redirects, isA<List<RendezvousRedirect>>());
-            case RendezvousMatch(:final peerId, :final relayId, :final meetingPoint):
+            case RendezvousMatch(:final peerId, :final relayId, meetingPoint: _):
               expect(peerId, isA<String>());
-              expect(relayId, isNull.having((v) => v, 'value', isA<String?>()));
+              expect(relayId, anyOf(isNull, isA<String>()));
           }
         }
 
