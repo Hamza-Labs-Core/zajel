@@ -355,5 +355,6 @@ void pinned_websocket_plugin_register_with_registrar(FlPluginRegistrar* registra
       plugin->event_channel, event_channel_listen, event_channel_cancel,
       plugin, nullptr);
 
-  g_object_unref(plugin);
+  // Note: Don't unref plugin - it must stay alive for the app lifetime
+  // The registrar will clean it up on shutdown
 }
