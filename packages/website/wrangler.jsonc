@@ -4,8 +4,7 @@
   "name": "zajel-website",
   "compatibility_date": "2024-12-30",
   "assets": {
-    "directory": "./build/client",
-    "binding": "ASSETS"
+    "directory": "./build/client"
   },
 
   // QA Environment for PR testing
