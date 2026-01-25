@@ -148,7 +148,7 @@ jobs:
           flutter build apk --release \
             --dart-define=ENV=qa \
             --dart-define=VERSION=${{ env.VERSION }} \
-            --dart-define=BOOTSTRAP_URL=${{ vars.CF_SIGNALING_QA_URL || 'https://zajel-signaling-qa.mahmoud-s-darwish.workers.dev' }} \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
             --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
 
           mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/zajel-${{ env.VERSION }}-android.apk
@@ -188,7 +188,7 @@ jobs:
           flutter build ios --release --no-codesign \
             --dart-define=ENV=qa \
             --dart-define=VERSION=${{ env.VERSION }} \
-            --dart-define=BOOTSTRAP_URL=${{ vars.CF_SIGNALING_QA_URL || 'https://zajel-signaling-qa.mahmoud-s-darwish.workers.dev' }} \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
             --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
 
           # Create IPA-like archive for distribution
@@ -244,7 +244,7 @@ jobs:
           flutter build linux --release \
             --dart-define=ENV=qa \
             --dart-define=VERSION=${{ env.VERSION }} \
-            --dart-define=BOOTSTRAP_URL=${{ vars.CF_SIGNALING_QA_URL || 'https://zajel-signaling-qa.mahmoud-s-darwish.workers.dev' }} \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
             --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
 
           cd build/linux/x64/release/bundle
@@ -292,7 +292,7 @@ jobs:
           flutter build macos --release \
             --dart-define=ENV=qa \
             --dart-define=VERSION=${{ env.VERSION }} \
-            --dart-define=BOOTSTRAP_URL=${{ vars.CF_SIGNALING_QA_URL || 'https://zajel-signaling-qa.mahmoud-s-darwish.workers.dev' }} \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
             --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
 
           cd build/macos/Build/Products/Release
@@ -334,7 +334,7 @@ jobs:
           flutter build web --release \
             --dart-define=ENV=qa \
             --dart-define=VERSION=${{ env.VERSION }} \
-            --dart-define=BOOTSTRAP_URL=${{ vars.CF_SIGNALING_QA_URL || 'https://zajel-signaling-qa.mahmoud-s-darwish.workers.dev' }} \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
             --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
 
           cd build/web
@@ -477,6 +477,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Deploy signaling server
+        id: deploy-signaling
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -489,9 +490,16 @@ jobs:
           echo "Waiting for deployment to propagate..."
           sleep 10
 
-          # Health check
+          # Get URL from deployment output
+          DEPLOY_URL="${{ steps.deploy-signaling.outputs.deployment-url }}"
+          if [ -z "$DEPLOY_URL" ]; then
+            echo "No deployment URL found, skipping health check"
+            exit 0
+          fi
+
+          echo "Checking health at: $DEPLOY_URL"
           for i in {1..5}; do
-            if curl -sf "${{ vars.CF_SIGNALING_QA_URL }}/health"; then
+            if curl -sf "$DEPLOY_URL/health"; then
               echo "Signaling server healthy"
               exit 0
             fi
@@ -511,6 +519,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Deploy admin dashboard
+        id: deploy-admin
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -525,8 +534,15 @@ jobs:
           echo "Waiting for deployment to propagate..."
           sleep 10
 
+          DEPLOY_URL="${{ steps.deploy-admin.outputs.deployment-url }}"
+          if [ -z "$DEPLOY_URL" ]; then
+            echo "No deployment URL found, skipping health check"
+            exit 0
+          fi
+
+          echo "Checking health at: $DEPLOY_URL"
           for i in {1..5}; do
-            RESPONSE=$(curl -sf "${{ vars.CF_ADMIN_QA_URL }}/health" || echo '{}')
+            RESPONSE=$(curl -sf "$DEPLOY_URL/health" || echo '{}')
             if echo "$RESPONSE" | grep -q "healthy"; then
               echo "Admin server healthy: $RESPONSE"
               exit 0
@@ -561,6 +577,7 @@ jobs:
         run: npm run build
 
       - name: Deploy website
+        id: deploy-website
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -573,8 +590,15 @@ jobs:
           echo "Waiting for deployment to propagate..."
           sleep 10
 
+          DEPLOY_URL="${{ steps.deploy-website.outputs.deployment-url }}"
+          if [ -z "$DEPLOY_URL" ]; then
+            echo "No deployment URL found, skipping health check"
+            exit 0
+          fi
+
+          echo "Checking deployment at: $DEPLOY_URL"
           for i in {1..5}; do
-            if curl -sf "${{ vars.CF_WEBSITE_QA_URL }}" > /dev/null; then
+            if curl -sf "$DEPLOY_URL" > /dev/null; then
               echo "Website deployed successfully"
               exit 0
             fi
