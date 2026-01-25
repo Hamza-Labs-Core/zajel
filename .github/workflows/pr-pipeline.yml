@@ -851,6 +851,7 @@ jobs:
               # ============================================
               # Ensure build-tools is installed (contains aapt2 needed by Appium)
               # ============================================
+              BUILD_TOOLS_INSTALLED=false
               if [ ! -f "$ANDROID_HOME/build-tools/31.0.0/aapt2" ]; then
                 echo "Installing build-tools (aapt2 needed by Appium)..."
                 $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;31.0.0"
@@ -858,6 +859,7 @@ jobs:
                 if ! echo "$PATH" | grep -q "build-tools"; then
                   echo 'export PATH=$PATH:$ANDROID_HOME/build-tools/31.0.0' >> ~/.bashrc
                 fi
+                BUILD_TOOLS_INSTALLED=true
               else
                 echo "build-tools already installed"
               fi
@@ -976,10 +978,19 @@ jobs:
               fi
 
               # ============================================
-              # Start Appium if not running
+              # Start/Restart Appium (restart if build-tools was just installed)
               # ============================================
+              # Ensure PATH includes build-tools for aapt2
+              export PATH=$PATH:$ANDROID_HOME/build-tools/31.0.0
+
               if ! pgrep -f "appium" > /dev/null; then
                 echo "Starting Appium server..."
+                nohup appium --address 0.0.0.0 --port 4723 --relaxed-security > /tmp/appium.log 2>&1 &
+                sleep 5
+              elif [ "$BUILD_TOOLS_INSTALLED" = true ]; then
+                echo "Restarting Appium to pick up new build-tools..."
+                pkill -f "appium" || true
+                sleep 2
                 nohup appium --address 0.0.0.0 --port 4723 --relaxed-security > /tmp/appium.log 2>&1 &
                 sleep 5
               else
