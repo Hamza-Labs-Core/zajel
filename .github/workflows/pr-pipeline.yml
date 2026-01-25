@@ -838,14 +838,28 @@ jobs:
                 # Accept licenses
                 yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
 
-                # Install required SDK components
-                $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "emulator" "platforms;android-31" "system-images;android-31;google_apis;x86_64"
+                # Install required SDK components (build-tools contains aapt2 needed by Appium)
+                $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "emulator" "build-tools;31.0.0" "platforms;android-31" "system-images;android-31;google_apis;x86_64"
 
-                # Add to PATH permanently
+                # Add to PATH permanently (build-tools for aapt2)
                 echo 'export ANDROID_HOME=$HOME/android-sdk' >> ~/.bashrc
-                echo 'export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator' >> ~/.bashrc
+                echo 'export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/build-tools/31.0.0' >> ~/.bashrc
               else
                 echo "Android SDK already installed"
+              fi
+
+              # ============================================
+              # Ensure build-tools is installed (contains aapt2 needed by Appium)
+              # ============================================
+              if [ ! -f "$ANDROID_HOME/build-tools/31.0.0/aapt2" ]; then
+                echo "Installing build-tools (aapt2 needed by Appium)..."
+                $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;31.0.0"
+                # Add build-tools to PATH if not already
+                if ! echo "$PATH" | grep -q "build-tools"; then
+                  echo 'export PATH=$PATH:$ANDROID_HOME/build-tools/31.0.0' >> ~/.bashrc
+                fi
+              else
+                echo "build-tools already installed"
               fi
 
               # ============================================
