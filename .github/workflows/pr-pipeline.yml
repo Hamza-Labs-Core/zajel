@@ -732,22 +732,78 @@ jobs:
               fi
 
               # ============================================
+              # Check KVM support
+              # ============================================
+              echo "Checking KVM support..."
+              if [ -c /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+                echo "KVM is available - emulator will use hardware acceleration"
+                KVM_ENABLED=true
+              else
+                echo "WARNING: KVM is NOT available - emulator will run in software mode (SLOW)"
+                echo "This is expected on most VPS providers without nested virtualization"
+                KVM_ENABLED=false
+              fi
+
+              # ============================================
               # Start emulator if not running
               # ============================================
               if ! $ANDROID_HOME/platform-tools/adb devices 2>/dev/null | grep -q "emulator"; then
                 echo "Starting emulator..."
-                nohup $ANDROID_HOME/emulator/emulator -avd test_device -no-window -no-audio -no-snapshot -gpu swiftshader_indirect > /tmp/emulator.log 2>&1 &
 
-                # Wait for emulator to boot
-                echo "Waiting for emulator to boot..."
-                for i in {1..60}; do
-                  if $ANDROID_HOME/platform-tools/adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; then
-                    echo "Emulator booted successfully"
+                # Kill any zombie emulator processes
+                pkill -f "emulator" 2>/dev/null || true
+                sleep 2
+
+                # Start emulator with appropriate settings
+                if [ "$KVM_ENABLED" = true ]; then
+                  nohup $ANDROID_HOME/emulator/emulator -avd test_device -no-window -no-audio -no-snapshot -gpu swiftshader_indirect > /tmp/emulator.log 2>&1 &
+                else
+                  # For non-KVM: use -no-accel and lower memory
+                  nohup $ANDROID_HOME/emulator/emulator -avd test_device -no-window -no-audio -no-snapshot -gpu swiftshader_indirect -no-accel -memory 2048 > /tmp/emulator.log 2>&1 &
+                fi
+
+                EMULATOR_PID=$!
+                echo "Emulator started with PID: $EMULATOR_PID"
+
+                # Wait for emulator to boot (15 minutes for non-KVM)
+                MAX_WAIT=180
+                if [ "$KVM_ENABLED" = true ]; then
+                  MAX_WAIT=60
+                fi
+
+                echo "Waiting for emulator to boot (max $MAX_WAIT iterations)..."
+                for i in $(seq 1 $MAX_WAIT); do
+                  # Check if emulator process is still running
+                  if ! kill -0 $EMULATOR_PID 2>/dev/null; then
+                    echo "ERROR: Emulator process died!"
+                    echo "=== Emulator Log ==="
+                    tail -100 /tmp/emulator.log 2>/dev/null || echo "No log available"
+                    echo "==================="
                     break
                   fi
-                  echo "Waiting... ($i/60)"
+
+                  if $ANDROID_HOME/platform-tools/adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; then
+                    echo "Emulator booted successfully after $i iterations"
+                    break
+                  fi
+
+                  # Show progress every 10 iterations
+                  if [ $((i % 10)) -eq 0 ]; then
+                    echo "Still waiting... ($i/$MAX_WAIT) - checking emulator.log..."
+                    tail -3 /tmp/emulator.log 2>/dev/null || true
+                  else
+                    echo "Waiting... ($i/$MAX_WAIT)"
+                  fi
                   sleep 5
                 done
+
+                # Final check
+                if ! $ANDROID_HOME/platform-tools/adb devices 2>/dev/null | grep -q "emulator"; then
+                  echo "WARNING: Emulator may not have booted completely"
+                  echo "=== Last 50 lines of emulator log ==="
+                  tail -50 /tmp/emulator.log 2>/dev/null || echo "No log available"
+                  echo "======================================"
+                fi
               else
                 echo "Emulator already running"
               fi
