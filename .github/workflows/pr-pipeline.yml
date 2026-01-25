@@ -608,7 +608,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: packages/website
-          command: pages deploy ./build/client --project-name=zajel-website-qa
+          command: deploy -c wrangler.jsonc --env qa
 
       - name: Verify deployment
         run: |
