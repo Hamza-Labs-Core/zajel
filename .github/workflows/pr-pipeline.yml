@@ -183,7 +183,10 @@ jobs:
           cache: true
 
       - name: Enable Linux desktop
-        run: flutter config --enable-linux-desktop
+        working-directory: packages/app
+        run: |
+          flutter config --enable-linux-desktop
+          flutter create --platforms=linux . || true
 
       - name: Install dependencies
         working-directory: packages/app
@@ -224,8 +227,11 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
-      - name: Enable macOS desktop
-        run: flutter config --enable-macos-desktop
+      - name: Enable macOS desktop and prepare
+        working-directory: packages/app
+        run: |
+          flutter config --enable-macos-desktop
+          flutter create --platforms=macos . || true
 
       - name: Install dependencies
         working-directory: packages/app
