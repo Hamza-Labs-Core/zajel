@@ -464,17 +464,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ============================================
-  # PHASE 3: Deploy to QA Environment (with prerelease tag)
+  # PHASE 3: Deploy to QA Environment (parallel with builds)
   # ============================================
   deploy-cf-signaling:
     name: Deploy CF Signaling
-    needs: tag-prerelease
+    needs: [determine-version, unit-tests, server-tests]
     runs-on: ubuntu-latest
     environment: qa
+    env:
+      VERSION: ${{ needs.determine-version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.tag-prerelease.outputs.tag }}
 
       - name: Deploy signaling server
         uses: cloudflare/wrangler-action@v3
@@ -502,13 +502,13 @@ jobs:
 
   deploy-cf-admin:
     name: Deploy CF Admin
-    needs: tag-prerelease
+    needs: [determine-version, unit-tests, server-tests]
     runs-on: ubuntu-latest
     environment: qa
+    env:
+      VERSION: ${{ needs.determine-version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.tag-prerelease.outputs.tag }}
 
       - name: Deploy admin dashboard
         uses: cloudflare/wrangler-action@v3
@@ -518,7 +518,7 @@ jobs:
           workingDirectory: packages/admin-cf
           command: deploy -c wrangler.jsonc --env qa
         env:
-          APP_VERSION: ${{ needs.tag-prerelease.outputs.version }}
+          APP_VERSION: ${{ env.VERSION }}
 
       - name: Verify deployment
         run: |
@@ -538,13 +538,13 @@ jobs:
 
   deploy-cf-website:
     name: Deploy CF Website
-    needs: tag-prerelease
+    needs: [determine-version, unit-tests, server-tests]
     runs-on: ubuntu-latest
     environment: qa
+    env:
+      VERSION: ${{ needs.determine-version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.tag-prerelease.outputs.tag }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -585,13 +585,13 @@ jobs:
 
   deploy-vps:
     name: Deploy QA VPS
-    needs: tag-prerelease
+    needs: [determine-version, unit-tests, server-tests]
     runs-on: ubuntu-latest
     environment: qa
+    env:
+      VERSION: ${{ needs.determine-version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.tag-prerelease.outputs.tag }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -642,7 +642,7 @@ jobs:
       - name: Start server
         uses: appleboy/ssh-action@v1.0.3
         env:
-          APP_VERSION: ${{ needs.tag-prerelease.outputs.version }}
+          APP_VERSION: ${{ env.VERSION }}
           BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL }}
         with:
           host: ${{ secrets.QA_VPS_IP }}
@@ -732,7 +732,7 @@ jobs:
   # ============================================
   setup-appium:
     name: Setup Appium Servers
-    needs: [tag-prerelease, build-android]
+    needs: [determine-version, build-android]
     if: ${{ !inputs.skip_e2e }}
     runs-on: ubuntu-latest
     environment: qa
