@@ -1,14 +1,8 @@
 {
   // Zajel Website - Cloudflare Pages Configuration
+  // Note: Pages uses separate projects for QA (--project-name flag), not environments
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "zajel-website",
   "compatibility_date": "2024-12-30",
-  "pages_build_output_dir": "./build/client",
-
-  // QA Environment for PR testing
-  "env": {
-    "qa": {
-      "name": "zajel-website-qa"
-    }
-  }
+  "pages_build_output_dir": "./build/client"
 }
