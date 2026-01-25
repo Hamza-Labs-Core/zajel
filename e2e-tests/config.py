@@ -24,11 +24,12 @@ def get_server_url(index: int) -> str:
     """Get Appium server URL for given index (0-based).
 
     When using SSH tunnels, servers are on localhost with incrementing ports.
+    Note: Appium 2.x+ uses base path '/' instead of '/wd/hub'
     """
     if index >= SERVER_COUNT:
         raise ValueError(f"Server index {index} exceeds available servers ({SERVER_COUNT})")
     port = APPIUM_PORT + index
-    return f"http://localhost:{port}/wd/hub"
+    return f"http://localhost:{port}"
 
 
 def get_all_servers() -> list[str]:
