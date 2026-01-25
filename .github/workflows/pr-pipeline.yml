@@ -867,6 +867,13 @@ jobs:
               ls -la "$ANDROID_HOME/build-tools/" 2>/dev/null || echo "No build-tools dir"
               ls -la "$ANDROID_HOME/build-tools/31.0.0/" 2>/dev/null | head -5 || echo "No 31.0.0 dir"
 
+              # Create symlink for aapt2 in platform-tools (Appium fallback search path)
+              if [ ! -L "$ANDROID_HOME/platform-tools/aapt2" ]; then
+                echo "Creating aapt2 symlink in platform-tools for Appium compatibility..."
+                ln -sf "$ANDROID_HOME/build-tools/31.0.0/aapt2" "$ANDROID_HOME/platform-tools/aapt2"
+              fi
+              ls -la "$ANDROID_HOME/platform-tools/aapt2" || echo "Symlink failed"
+
               # ============================================
               # Create AVD if not present
               # ============================================
