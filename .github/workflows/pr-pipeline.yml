@@ -61,7 +61,7 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
   # ============================================
-  # PHASE 1: Unit Tests, Server Tests & Build APK (Parallel)
+  # PHASE 1: Tests
   # ============================================
   unit-tests:
     name: Unit Tests
@@ -114,9 +114,63 @@ jobs:
           npm ci
           npm test -- --run
 
-  # ----------------------------------------
-  # Build Android APK
-  # ----------------------------------------
+  phase-1-tests:
+    name: "✓ Phase 1: Tests"
+    needs: [unit-tests, server-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "All tests passed"
+
+  # ============================================
+  # PHASE 2: Tag Pre-release
+  # ============================================
+  tag-prerelease:
+    name: Tag Pre-release
+    needs: [determine-version, phase-1-tests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.determine-version.outputs.version }}
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ needs.determine-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create pre-release tag
+        id: tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Configure git identity for tagging
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          TAG="v${{ env.VERSION }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          # Delete existing tag if present (for re-runs)
+          git push origin :refs/tags/$TAG 2>/dev/null || true
+
+          # Create and push tag
+          git tag -a $TAG -m "Pre-release for PR #${{ github.event.pull_request.number || 'manual' }}"
+          git push origin $TAG
+
+          echo "Created tag: $TAG"
+
+  phase-2-tag:
+    name: "✓ Phase 2: Tag"
+    needs: [tag-prerelease]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Tag created - ${{ needs.tag-prerelease.outputs.tag }}"
+
+  # ============================================
+  # PHASE 3: Builds & Server Deployments (parallel)
+  # ============================================
   build-android:
     name: Build Android
     needs: [tag-prerelease]
@@ -158,7 +212,7 @@ jobs:
         with:
           name: android-build
           path: packages/app/build/app/outputs/flutter-apk/zajel-${{ env.VERSION }}-android.apk
-          retention-days: 7
+          retention-days: 1
 
   # ----------------------------------------
   # Build iOS
@@ -203,7 +257,7 @@ jobs:
         with:
           name: ios-build
           path: packages/app/zajel-${{ env.VERSION }}-ios.ipa
-          retention-days: 7
+          retention-days: 1
 
   # ----------------------------------------
   # Build Linux
@@ -256,7 +310,7 @@ jobs:
         with:
           name: linux-build
           path: packages/app/zajel-${{ env.VERSION }}-linux-x64.tar.gz
-          retention-days: 7
+          retention-days: 1
 
   # ----------------------------------------
   # Build macOS
@@ -304,7 +358,7 @@ jobs:
         with:
           name: macos-build
           path: packages/app/zajel-${{ env.VERSION }}-macos.zip
-          retention-days: 7
+          retention-days: 1
 
   # ----------------------------------------
   # Build Web
@@ -346,56 +400,27 @@ jobs:
         with:
           name: web-build
           path: packages/app/zajel-${{ env.VERSION }}-web.zip
-          retention-days: 7
+          retention-days: 1
 
-  # ============================================
-  # PHASE 2: Tag Pre-release & Create GitHub Release
-  # ============================================
-  tag-prerelease:
-    name: Tag Pre-release
-    needs: [determine-version, unit-tests, server-tests]
+  # Phase 3 gate - after all builds and deployments
+  phase-3-build-deploy:
+    name: "✓ Phase 3: Build & Deploy"
+    needs: [build-android, build-ios, build-linux, build-macos, build-web, deploy-cf-signaling, deploy-cf-admin, deploy-cf-website, deploy-vps]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      VERSION: ${{ needs.determine-version.outputs.version }}
-    outputs:
-      tag: ${{ steps.tag.outputs.tag }}
-      version: ${{ needs.determine-version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - run: echo "All builds and deployments completed"
 
-      - name: Create pre-release tag
-        id: tag
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Configure git identity for tagging
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          TAG="v${{ env.VERSION }}"
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-
-          # Delete existing tag if present (for re-runs)
-          git push origin :refs/tags/$TAG 2>/dev/null || true
-
-          # Create and push tag
-          git tag -a $TAG -m "Pre-release for PR #${{ github.event.pull_request.number || 'manual' }}"
-          git push origin $TAG
-
-          echo "Created tag: $TAG"
-
+  # ============================================
+  # PHASE 4: Release & APK Deployment
+  # ============================================
   create-prerelease:
     name: Create GitHub Pre-release
-    needs: [determine-version, tag-prerelease, build-android, build-ios, build-linux, build-macos, build-web]
+    needs: [phase-3-build-deploy, tag-prerelease]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
-      VERSION: ${{ needs.determine-version.outputs.version }}
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -1050,12 +1075,20 @@ jobs:
 
           done
 
+  phase-4-release-apk:
+    name: "✓ Phase 4: Release & APK"
+    needs: [create-prerelease, deploy-apk]
+    if: ${{ !inputs.skip_e2e }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Release created and APK deployed"
+
   # ============================================
-  # PHASE 5: Run E2E Tests
+  # PHASE 5: E2E Tests
   # ============================================
   e2e-tests:
     name: E2E Tests
-    needs: [deploy-apk]
+    needs: [phase-4-release-apk]
     if: ${{ !inputs.skip_e2e }}
     runs-on: ubuntu-latest
     environment: qa
@@ -1165,10 +1198,18 @@ jobs:
         with:
           name: e2e-test-artifacts
           path: test-artifacts/
-          retention-days: 7
+          retention-days: 1
+
+  phase-5-e2e:
+    name: "✓ Phase 5: E2E Tests"
+    needs: [e2e-tests]
+    if: ${{ !inputs.skip_e2e }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "E2E tests passed"
 
   # ============================================
-  # PHASE 6: Cleanup Pre-release Tag on Failure
+  # Cleanup Pre-release Tag on Failure
   # ============================================
   cleanup:
     name: Cleanup on Failure
@@ -1195,7 +1236,7 @@ jobs:
   # ============================================
   summary:
     name: Pipeline Summary
-    needs: [unit-tests, server-tests, build-android, build-ios, build-linux, build-macos, build-web, tag-prerelease, create-prerelease, deploy-cf-signaling, deploy-cf-admin, deploy-cf-website, deploy-vps, setup-appium, deploy-apk, e2e-tests]
+    needs: [phase-1-tests, phase-2-tag, phase-3-build-deploy, phase-4-release-apk, phase-5-e2e]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1203,42 +1244,10 @@ jobs:
         run: |
           echo "## PR Pipeline Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Tests" >> $GITHUB_STEP_SUMMARY
-          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Unit Tests | ${{ needs.unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Server Tests | ${{ needs.server-tests.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Builds" >> $GITHUB_STEP_SUMMARY
-          echo "| Platform | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Android | ${{ needs.build-android.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| iOS | ${{ needs.build-ios.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Linux | ${{ needs.build-linux.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| macOS | ${{ needs.build-macos.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Web | ${{ needs.build-web.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Release" >> $GITHUB_STEP_SUMMARY
-          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Tag Pre-release | ${{ needs.tag-prerelease.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Create Release | ${{ needs.create-prerelease.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Deployment" >> $GITHUB_STEP_SUMMARY
-          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| CF Signaling | ${{ needs.deploy-cf-signaling.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| CF Admin | ${{ needs.deploy-cf-admin.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| CF Website | ${{ needs.deploy-cf-website.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| VPS Server | ${{ needs.deploy-vps.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### E2E Testing" >> $GITHUB_STEP_SUMMARY
-          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Setup Appium | ${{ needs.setup-appium.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Deploy APK | ${{ needs.deploy-apk.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| E2E Tests | ${{ needs.e2e-tests.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** v${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Release URL:** https://github.com/${{ github.repository }}/releases/tag/v${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase 1: Tests | ${{ needs.phase-1-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase 2: Tag | ${{ needs.phase-2-tag.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase 3: Build & Deploy | ${{ needs.phase-3-build-deploy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase 4: Release & APK | ${{ needs.phase-4-release-apk.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase 5: E2E Tests | ${{ needs.phase-5-e2e.result }} |" >> $GITHUB_STEP_SUMMARY
