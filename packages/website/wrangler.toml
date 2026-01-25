@@ -1,4 +1,0 @@
-# Zajel Website - Cloudflare Pages Configuration
-name = "zajel-website"
-compatibility_date = "2024-12-30"
-pages_build_output_dir = "./build/client"

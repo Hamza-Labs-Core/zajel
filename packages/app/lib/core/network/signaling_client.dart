@@ -110,6 +110,9 @@ class SignalingClient {
   final _callHangupController = StreamController<CallHangupMessage>.broadcast();
   final _callIceController = StreamController<CallIceMessage>.broadcast();
 
+  // Rendezvous stream controller
+  final _rendezvousController = StreamController<RendezvousEvent>.broadcast();
+
   final _logger = LoggerService.instance;
 
   bool _isConnected = false;
@@ -154,6 +157,9 @@ class SignalingClient {
 
   /// Stream of incoming call ICE candidate messages.
   Stream<CallIceMessage> get onCallIce => _callIceController.stream;
+
+  /// Stream of rendezvous events (matches, dead drops, partial results).
+  Stream<RendezvousEvent> get rendezvousEvents => _rendezvousController.stream;
 
   /// Whether currently connected to the signaling server.
   bool get isConnected => _isConnected;
@@ -462,6 +468,8 @@ class SignalingClient {
     await _callRejectController.close();
     await _callHangupController.close();
     await _callIceController.close();
+    // Close rendezvous stream controller
+    await _rendezvousController.close();
   }
 
   // Private methods
@@ -610,6 +618,19 @@ class SignalingClient {
           _callIceController.add(CallIceMessage.fromJson(json));
           break;
 
+        // Rendezvous messages
+        case 'rendezvous_result':
+          _handleRendezvousResult(json);
+          break;
+
+        case 'rendezvous_partial':
+          _handleRendezvousPartial(json);
+          break;
+
+        case 'rendezvous_match':
+          _handleRendezvousMatch(json);
+          break;
+
         case 'pong':
         case 'registered':
           // Heartbeat and registration confirmation, ignore
@@ -661,6 +682,83 @@ class SignalingClient {
   void _stopHeartbeat() {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
+  }
+
+  // ==========================================================================
+  // Rendezvous Message Handlers
+  // ==========================================================================
+
+  /// Handle rendezvous_result message (all points handled locally).
+  void _handleRendezvousResult(Map<String, dynamic> json) {
+    final liveMatches = _parseLiveMatches(json['liveMatches']);
+    final deadDrops = _parseDeadDrops(json['deadDrops']);
+
+    _rendezvousController.add(RendezvousResult(
+      liveMatches: liveMatches,
+      deadDrops: deadDrops,
+    ));
+  }
+
+  /// Handle rendezvous_partial message (some points need redirect).
+  void _handleRendezvousPartial(Map<String, dynamic> json) {
+    final local = json['local'] as Map<String, dynamic>? ?? {};
+    final liveMatches = _parseLiveMatches(local['liveMatches']);
+    final deadDrops = _parseDeadDrops(local['deadDrops']);
+
+    final redirects = <RendezvousRedirect>[];
+    final redirectList = json['redirects'] as List<dynamic>? ?? [];
+    for (final r in redirectList) {
+      final redirect = r as Map<String, dynamic>;
+      redirects.add(RendezvousRedirect(
+        serverId: redirect['serverId'] as String? ?? '',
+        endpoint: redirect['endpoint'] as String? ?? '',
+        dailyPoints: List<String>.from(redirect['dailyPoints'] ?? []),
+        hourlyTokens: List<String>.from(redirect['hourlyTokens'] ?? []),
+      ));
+    }
+
+    _rendezvousController.add(RendezvousPartial(
+      liveMatches: liveMatches,
+      deadDrops: deadDrops,
+      redirects: redirects,
+    ));
+  }
+
+  /// Handle rendezvous_match message (live peer found).
+  void _handleRendezvousMatch(Map<String, dynamic> json) {
+    final match = json['match'] as Map<String, dynamic>? ?? {};
+    _rendezvousController.add(RendezvousMatch(
+      peerId: match['peerId'] as String? ?? '',
+      relayId: match['relayId'] as String?,
+      meetingPoint: match['meetingPoint'] as String?,
+    ));
+  }
+
+  /// Parse live matches from JSON.
+  List<LiveMatch> _parseLiveMatches(dynamic data) {
+    if (data == null) return [];
+    final list = data as List<dynamic>;
+    return list.map((m) {
+      final match = m as Map<String, dynamic>;
+      return LiveMatch(
+        peerId: match['peerId'] as String? ?? '',
+        relayId: match['relayId'] as String?,
+      );
+    }).toList();
+  }
+
+  /// Parse dead drops from JSON.
+  List<DeadDrop> _parseDeadDrops(dynamic data) {
+    if (data == null) return [];
+    final list = data as List<dynamic>;
+    return list.map((d) {
+      final drop = d as Map<String, dynamic>;
+      return DeadDrop(
+        peerId: drop['peerId'] as String? ?? '',
+        encryptedData: drop['deadDrop'] as String? ?? '',
+        relayId: drop['relayId'] as String?,
+      );
+    }).toList();
   }
 }
 
@@ -993,4 +1091,89 @@ class CallIceMessage {
         targetId: json['from'] as String? ?? json['targetId'] as String,
         candidate: json['candidate'] as String,
       );
+}
+
+// =============================================================================
+// Rendezvous Event Types
+// =============================================================================
+
+/// Sealed class for rendezvous events from the signaling server.
+sealed class RendezvousEvent {
+  const RendezvousEvent();
+}
+
+/// Full rendezvous result when all points are handled locally.
+class RendezvousResult extends RendezvousEvent {
+  final List<LiveMatch> liveMatches;
+  final List<DeadDrop> deadDrops;
+
+  const RendezvousResult({
+    required this.liveMatches,
+    required this.deadDrops,
+  });
+}
+
+/// Partial rendezvous result with redirects to other servers.
+class RendezvousPartial extends RendezvousEvent {
+  final List<LiveMatch> liveMatches;
+  final List<DeadDrop> deadDrops;
+  final List<RendezvousRedirect> redirects;
+
+  const RendezvousPartial({
+    required this.liveMatches,
+    required this.deadDrops,
+    required this.redirects,
+  });
+}
+
+/// Live match notification (peer found at meeting point).
+class RendezvousMatch extends RendezvousEvent {
+  final String peerId;
+  final String? relayId;
+  final String? meetingPoint;
+
+  const RendezvousMatch({
+    required this.peerId,
+    this.relayId,
+    this.meetingPoint,
+  });
+}
+
+/// Redirect information for federated servers.
+class RendezvousRedirect {
+  final String serverId;
+  final String endpoint;
+  final List<String> dailyPoints;
+  final List<String> hourlyTokens;
+
+  const RendezvousRedirect({
+    required this.serverId,
+    required this.endpoint,
+    required this.dailyPoints,
+    required this.hourlyTokens,
+  });
+}
+
+/// Live match info from rendezvous.
+class LiveMatch {
+  final String peerId;
+  final String? relayId;
+
+  const LiveMatch({
+    required this.peerId,
+    this.relayId,
+  });
+}
+
+/// Dead drop info from rendezvous.
+class DeadDrop {
+  final String peerId;
+  final String encryptedData;
+  final String? relayId;
+
+  const DeadDrop({
+    required this.peerId,
+    required this.encryptedData,
+    this.relayId,
+  });
 }
