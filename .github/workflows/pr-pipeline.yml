@@ -20,7 +20,6 @@ env:
   FLUTTER_VERSION: '3.27.1'
   NODE_VERSION: '20'
   # Version will be computed from latest release in determine-version job
-  QA_BOOTSTRAP_URL: 'https://zajel-signaling-qa.hamza-labs.workers.dev'
 
 jobs:
   # ============================================
@@ -597,7 +596,7 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           APP_VERSION: ${{ needs.tag-prerelease.outputs.version }}
-          BOOTSTRAP_URL: ${{ env.QA_BOOTSTRAP_URL }}
+          BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL }}
         with:
           host: ${{ secrets.QA_VPS_IP }}
           username: ${{ secrets.VPS_USER }}
