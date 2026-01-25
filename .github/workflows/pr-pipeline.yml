@@ -119,10 +119,10 @@ jobs:
   # ----------------------------------------
   build-android:
     name: Build Android
-    needs: [determine-version]
+    needs: [tag-prerelease]
     runs-on: ubuntu-latest
     env:
-      VERSION: ${{ needs.determine-version.outputs.version }}
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -165,10 +165,10 @@ jobs:
   # ----------------------------------------
   build-ios:
     name: Build iOS
-    needs: [determine-version]
+    needs: [tag-prerelease]
     runs-on: macos-latest
     env:
-      VERSION: ${{ needs.determine-version.outputs.version }}
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -210,10 +210,10 @@ jobs:
   # ----------------------------------------
   build-linux:
     name: Build Linux
-    needs: [determine-version]
+    needs: [tag-prerelease]
     runs-on: ubuntu-latest
     env:
-      VERSION: ${{ needs.determine-version.outputs.version }}
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -263,10 +263,10 @@ jobs:
   # ----------------------------------------
   build-macos:
     name: Build macOS
-    needs: [determine-version]
+    needs: [tag-prerelease]
     runs-on: macos-latest
     env:
-      VERSION: ${{ needs.determine-version.outputs.version }}
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -311,10 +311,10 @@ jobs:
   # ----------------------------------------
   build-web:
     name: Build Web
-    needs: [determine-version]
+    needs: [tag-prerelease]
     runs-on: ubuntu-latest
     env:
-      VERSION: ${{ needs.determine-version.outputs.version }}
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -353,7 +353,7 @@ jobs:
   # ============================================
   tag-prerelease:
     name: Tag Pre-release
-    needs: [determine-version, unit-tests, server-tests, build-android, build-ios, build-linux, build-macos, build-web]
+    needs: [determine-version, unit-tests, server-tests]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -468,11 +468,11 @@ jobs:
   # ============================================
   deploy-cf-signaling:
     name: Deploy CF Signaling
-    needs: [determine-version, unit-tests, server-tests]
+    needs: [tag-prerelease]
     runs-on: ubuntu-latest
     environment: qa
     env:
-      VERSION: ${{ needs.determine-version.outputs.version }}
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -502,11 +502,11 @@ jobs:
 
   deploy-cf-admin:
     name: Deploy CF Admin
-    needs: [determine-version, unit-tests, server-tests]
+    needs: [tag-prerelease]
     runs-on: ubuntu-latest
     environment: qa
     env:
-      VERSION: ${{ needs.determine-version.outputs.version }}
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -538,11 +538,11 @@ jobs:
 
   deploy-cf-website:
     name: Deploy CF Website
-    needs: [determine-version, unit-tests, server-tests]
+    needs: [tag-prerelease]
     runs-on: ubuntu-latest
     environment: qa
     env:
-      VERSION: ${{ needs.determine-version.outputs.version }}
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -585,11 +585,11 @@ jobs:
 
   deploy-vps:
     name: Deploy QA VPS
-    needs: [determine-version, unit-tests, server-tests]
+    needs: [tag-prerelease]
     runs-on: ubuntu-latest
     environment: qa
     env:
-      VERSION: ${{ needs.determine-version.outputs.version }}
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -642,7 +642,7 @@ jobs:
       - name: Start server
         uses: appleboy/ssh-action@v1.0.3
         env:
-          APP_VERSION: ${{ env.VERSION }}
+          APP_VERSION: ${{ needs.tag-prerelease.outputs.version }}
           BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL }}
         with:
           host: ${{ secrets.QA_VPS_IP }}
@@ -732,7 +732,7 @@ jobs:
   # ============================================
   setup-appium:
     name: Setup Appium Servers
-    needs: [determine-version, build-android]
+    needs: [tag-prerelease, build-android]
     if: ${{ !inputs.skip_e2e }}
     runs-on: ubuntu-latest
     environment: qa
