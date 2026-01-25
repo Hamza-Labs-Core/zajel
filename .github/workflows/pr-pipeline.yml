@@ -19,10 +19,48 @@ concurrency:
 env:
   FLUTTER_VERSION: '3.27.1'
   NODE_VERSION: '20'
-  # Pre-release version format: v0.0.0-pr.<PR_NUMBER>.<BUILD_NUMBER>
-  VERSION: "0.0.0-pr.${{ github.event.pull_request.number || 0 }}.${{ github.run_number }}"
+  # Version will be computed from latest release in determine-version job
+  QA_BOOTSTRAP_URL: 'https://zajel-signaling-qa.hamza-labs.workers.dev'
 
 jobs:
+  # ============================================
+  # Determine version from latest release
+  # ============================================
+  determine-version:
+    name: Determine Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Get latest release and compute version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Get latest release tag
+          LATEST=$(gh release view --repo ${{ github.repository }} --json tagName -q '.tagName' 2>/dev/null || echo "v0.0.0")
+          echo "Latest release: $LATEST"
+
+          # Strip 'v' prefix and extract major.minor.patch
+          LATEST_VERSION="${LATEST#v}"
+
+          # Parse version components
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_VERSION"
+          MAJOR=${MAJOR:-0}
+          MINOR=${MINOR:-0}
+          PATCH=${PATCH:-0}
+
+          # Increment patch for pre-release
+          NEXT_PATCH=$((PATCH + 1))
+
+          # Create pre-release version: X.Y.Z-pr.PR_NUMBER.BUILD_NUMBER
+          PR_NUM="${{ github.event.pull_request.number }}"
+          PR_NUM="${PR_NUM:-0}"
+          VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}-pr.${PR_NUM}.${{ github.run_number }}"
+
+          echo "Computed version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
   # ============================================
   # PHASE 1: Unit Tests, Server Tests & Build APK (Parallel)
   # ============================================
@@ -82,7 +120,10 @@ jobs:
   # ----------------------------------------
   build-android:
     name: Build Android
+    needs: [determine-version]
     runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.determine-version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -125,7 +166,10 @@ jobs:
   # ----------------------------------------
   build-ios:
     name: Build iOS
+    needs: [determine-version]
     runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.determine-version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -167,7 +211,10 @@ jobs:
   # ----------------------------------------
   build-linux:
     name: Build Linux
+    needs: [determine-version]
     runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.determine-version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -217,7 +264,10 @@ jobs:
   # ----------------------------------------
   build-macos:
     name: Build macOS
+    needs: [determine-version]
     runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.determine-version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -262,7 +312,10 @@ jobs:
   # ----------------------------------------
   build-web:
     name: Build Web
+    needs: [determine-version]
     runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.determine-version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -301,13 +354,15 @@ jobs:
   # ============================================
   tag-prerelease:
     name: Tag Pre-release
-    needs: [unit-tests, server-tests, build-android, build-ios, build-linux, build-macos, build-web]
+    needs: [determine-version, unit-tests, server-tests, build-android, build-ios, build-linux, build-macos, build-web]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      VERSION: ${{ needs.determine-version.outputs.version }}
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
-      version: ${{ env.VERSION }}
+      version: ${{ needs.determine-version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -336,10 +391,12 @@ jobs:
 
   create-prerelease:
     name: Create GitHub Pre-release
-    needs: [tag-prerelease, build-android, build-ios, build-linux, build-macos, build-web]
+    needs: [determine-version, tag-prerelease, build-android, build-ios, build-linux, build-macos, build-web]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      VERSION: ${{ needs.determine-version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -540,11 +597,13 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           APP_VERSION: ${{ needs.tag-prerelease.outputs.version }}
+          BOOTSTRAP_URL: ${{ env.QA_BOOTSTRAP_URL }}
         with:
           host: ${{ secrets.QA_VPS_IP }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
+          envs: APP_VERSION,BOOTSTRAP_URL
           script: |
             set -e
 
@@ -570,22 +629,21 @@ jobs:
             # Install dependencies
             npm ci --omit=dev
 
-            # Create QA startup script
+            # Create QA startup script with env vars
             PUBLIC_IP=$(curl -sf http://checkip.amazonaws.com || curl -sf http://ifconfig.me || echo "localhost")
-            cat > start-qa.sh << 'SCRIPT'
+            cat > start-qa.sh << EOF
             #!/bin/bash
             export ZAJEL_PORT=9001
             export ZAJEL_KEY_PATH=./data-qa/server.key
             export ZAJEL_DB_PATH=./data-qa/zajel.db
             export ZAJEL_PUBLIC_ENDPOINT=ws://${PUBLIC_IP}:9001
             export ZAJEL_REGION=qa
-            export ZAJEL_BOOTSTRAP_URL=${{ vars.CF_SIGNALING_QA_URL || 'https://zajel-signaling-qa.mahmoud-s-darwish.workers.dev' }}
+            export ZAJEL_BOOTSTRAP_URL=${BOOTSTRAP_URL}
             export NODE_ENV=qa
-            export APP_VERSION=${{ env.VERSION }}
+            export APP_VERSION=${APP_VERSION}
             cd /opt/zajel/server-vps-qa
             exec node dist/index.js
-            SCRIPT
-            sed -i "s/\${PUBLIC_IP}/$PUBLIC_IP/g" start-qa.sh
+            EOF
             chmod +x start-qa.sh
 
             mkdir -p data-qa
