@@ -988,6 +988,28 @@ jobs:
               fi
 
               # ============================================
+              # Wait for system services (settings) to be ready
+              # ============================================
+              echo "Waiting for system services to be ready..."
+              for i in $(seq 1 60); do
+                if $ANDROID_HOME/platform-tools/adb shell settings list global 2>/dev/null | grep -q "wifi"; then
+                  echo "System services ready after $i attempts"
+                  break
+                fi
+                if [ $((i % 10)) -eq 0 ]; then
+                  echo "Still waiting for services... ($i/60)"
+                fi
+                sleep 2
+              done
+
+              # Verify settings service is working
+              if ! $ANDROID_HOME/platform-tools/adb shell settings list global 2>/dev/null | grep -q "wifi"; then
+                echo "WARNING: Settings service may not be ready"
+              else
+                echo "Settings service is ready"
+              fi
+
+              # ============================================
               # Always restart Appium to ensure correct SDK environment
               # ============================================
               # Export PATH with build-tools for aapt2
