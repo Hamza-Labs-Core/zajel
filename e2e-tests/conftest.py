@@ -39,15 +39,15 @@ def create_driver(server_index: int, device_name: str = "emulator") -> webdriver
     options.set_capability("androidInstallTimeout", 180000)  # 3 min for APK install
     options.set_capability("ignoreHiddenApiPolicyError", True)  # Ignore hidden API errors
 
-    # Skip UiAutomator2 server reinstallation (we pre-install it)
-    options.set_capability("skipServerInstallation", True)
-
     # Skip some initialization to speed up on slow emulators
     options.set_capability("skipUnlock", True)  # Don't try to unlock screen
     options.set_capability("disableWindowAnimation", True)  # Disable animations for speed
 
     # Force launch the app even with noReset
     options.set_capability("forceAppLaunch", True)
+
+    # Allow Appium to install its dependencies (server, settings app)
+    # The emulator is freshly rebooted so services should be stable
 
     driver = webdriver.Remote(get_server_url(server_index), options=options)
     driver.implicitly_wait(APP_LAUNCH_TIMEOUT)
