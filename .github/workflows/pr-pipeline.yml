@@ -1205,7 +1205,7 @@ jobs:
         run: |
           pip install -r e2e-tests/requirements.txt
 
-      - name: Setup SSH tunnels to Appium servers
+      - name: Verify emulators are ready
         env:
           APPIUM_SERVERS: ${{ secrets.APPIUM_SERVERS }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
@@ -1219,43 +1219,6 @@ jobs:
           echo "StrictHostKeyChecking no" >> ~/.ssh/config
           echo "UserKnownHostsFile /dev/null" >> ~/.ssh/config
 
-          # Parse comma-separated server list
-          IFS=',' read -ra SERVERS <<< "$APPIUM_SERVERS"
-
-          PORT_BASE=4723
-          SERVER_COUNT=0
-
-          for SERVER in "${SERVERS[@]}"; do
-            SERVER=$(echo "$SERVER" | tr -d ' ')
-            LOCAL_PORT=$((PORT_BASE + SERVER_COUNT))
-
-            echo "Creating tunnel to $SERVER (local port $LOCAL_PORT)"
-
-            # Create SSH tunnel (Appium default port 4723)
-            ssh -f -N -L ${LOCAL_PORT}:localhost:4723 \
-              -p ${VPS_PORT} \
-              ${VPS_USER}@${SERVER}
-
-            SERVER_COUNT=$((SERVER_COUNT + 1))
-          done
-
-          echo "APPIUM_SERVER_COUNT=$SERVER_COUNT" >> $GITHUB_ENV
-          echo "Created $SERVER_COUNT SSH tunnels"
-
-          # Verify tunnels
-          sleep 2
-          for i in $(seq 0 $((SERVER_COUNT - 1))); do
-            PORT=$((PORT_BASE + i))
-            curl -sf http://localhost:$PORT/status && echo "Appium $i OK" || echo "Appium $i not responding"
-          done
-
-      - name: Verify emulators are ready
-        env:
-          APPIUM_SERVERS: ${{ secrets.APPIUM_SERVERS }}
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
-        run: |
           # Parse comma-separated server list
           IFS=',' read -ra SERVERS <<< "$APPIUM_SERVERS"
 
@@ -1339,6 +1302,43 @@ jobs:
           done
 
           echo "All emulators verified"
+
+      - name: Setup SSH tunnels to Appium servers
+        env:
+          APPIUM_SERVERS: ${{ secrets.APPIUM_SERVERS }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
+        run: |
+          # Parse comma-separated server list
+          IFS=',' read -ra SERVERS <<< "$APPIUM_SERVERS"
+
+          PORT_BASE=4723
+          SERVER_COUNT=0
+
+          for SERVER in "${SERVERS[@]}"; do
+            SERVER=$(echo "$SERVER" | tr -d ' ')
+            LOCAL_PORT=$((PORT_BASE + SERVER_COUNT))
+
+            echo "Creating tunnel to $SERVER (local port $LOCAL_PORT)"
+
+            # Create SSH tunnel (Appium default port 4723)
+            ssh -f -N -L ${LOCAL_PORT}:localhost:4723 \
+              -p ${VPS_PORT} \
+              ${VPS_USER}@${SERVER}
+
+            SERVER_COUNT=$((SERVER_COUNT + 1))
+          done
+
+          echo "APPIUM_SERVER_COUNT=$SERVER_COUNT" >> $GITHUB_ENV
+          echo "Created $SERVER_COUNT SSH tunnels"
+
+          # Verify tunnels
+          sleep 2
+          for i in $(seq 0 $((SERVER_COUNT - 1))); do
+            PORT=$((PORT_BASE + i))
+            curl -sf http://localhost:$PORT/status && echo "Appium $i OK" || echo "Appium $i not responding"
+          done
 
       - name: Run E2E tests
         env:
