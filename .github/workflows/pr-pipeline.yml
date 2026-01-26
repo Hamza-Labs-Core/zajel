@@ -991,35 +991,41 @@ jobs:
               # ============================================
               # Wait for system services to be fully ready
               # ============================================
-              # Wait for settings service first
+              # Wait for settings service
               echo "Waiting for settings service..."
               SETTINGS_READY=false
-              for i in $(seq 1 60); do
+              SETTINGS_ATTEMPTS=0
+              while [ "$SETTINGS_READY" = "false" ] && [ $SETTINGS_ATTEMPTS -lt 60 ]; do
+                SETTINGS_ATTEMPTS=$((SETTINGS_ATTEMPTS + 1))
                 if $ANDROID_HOME/platform-tools/adb shell settings list global 2>/dev/null | grep -q "wifi"; then
-                  echo "Settings service ready after $i attempts"
+                  echo "Settings service ready after $SETTINGS_ATTEMPTS attempts"
                   SETTINGS_READY=true
-                  break
+                else
+                  if [ $((SETTINGS_ATTEMPTS % 10)) -eq 0 ]; then
+                    echo "Still waiting for settings... ($SETTINGS_ATTEMPTS/60)"
+                  fi
+                  sleep 2
                 fi
-                if [ $((i % 10)) -eq 0 ]; then
-                  echo "Still waiting for settings... ($i/60)"
-                fi
-                sleep 2
               done
-              echo "DEBUG: Settings loop completed, SETTINGS_READY=$SETTINGS_READY"
+              echo "Settings wait completed"
 
               # Wait for package manager service (required for APK installs)
-              echo "DEBUG: About to wait for package manager..."
               echo "Waiting for package manager service..."
-              for i in $(seq 1 90); do
+              PM_READY=false
+              PM_ATTEMPTS=0
+              while [ "$PM_READY" = "false" ] && [ $PM_ATTEMPTS -lt 90 ]; do
+                PM_ATTEMPTS=$((PM_ATTEMPTS + 1))
                 if $ANDROID_HOME/platform-tools/adb shell pm list packages 2>/dev/null | grep -q "android"; then
-                  echo "Package manager ready after $i attempts"
-                  break
+                  echo "Package manager ready after $PM_ATTEMPTS attempts"
+                  PM_READY=true
+                else
+                  if [ $((PM_ATTEMPTS % 10)) -eq 0 ]; then
+                    echo "Still waiting for package manager... ($PM_ATTEMPTS/90)"
+                  fi
+                  sleep 2
                 fi
-                if [ $((i % 10)) -eq 0 ]; then
-                  echo "Still waiting for package manager... ($i/90)"
-                fi
-                sleep 2
               done
+              echo "Package manager wait completed"
 
               # Additional wait for system to stabilize
               echo "Waiting for system to stabilize..."
