@@ -811,7 +811,8 @@ jobs:
             echo "=========================================="
 
             ssh -p ${VPS_PORT} ${VPS_USER}@${SERVER} 'bash -s' << 'SETUP_SCRIPT'
-              set -e
+              # Note: Removed 'set -e' because adb shell commands often return
+              # non-zero even on success, causing premature script termination
 
               # Define paths
               export ANDROID_HOME=$HOME/android-sdk
@@ -992,9 +993,11 @@ jobs:
               # ============================================
               # Wait for settings service first
               echo "Waiting for settings service..."
+              SETTINGS_READY=false
               for i in $(seq 1 60); do
                 if $ANDROID_HOME/platform-tools/adb shell settings list global 2>/dev/null | grep -q "wifi"; then
                   echo "Settings service ready after $i attempts"
+                  SETTINGS_READY=true
                   break
                 fi
                 if [ $((i % 10)) -eq 0 ]; then
@@ -1002,8 +1005,10 @@ jobs:
                 fi
                 sleep 2
               done
+              echo "DEBUG: Settings loop completed, SETTINGS_READY=$SETTINGS_READY"
 
               # Wait for package manager service (required for APK installs)
+              echo "DEBUG: About to wait for package manager..."
               echo "Waiting for package manager service..."
               for i in $(seq 1 90); do
                 if $ANDROID_HOME/platform-tools/adb shell pm list packages 2>/dev/null | grep -q "android"; then
