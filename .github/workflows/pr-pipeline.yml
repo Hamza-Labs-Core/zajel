@@ -7,9 +7,12 @@ on:
   workflow_dispatch:
     inputs:
       skip_e2e:
-        description: 'Skip E2E tests'
+        # E2E tests require KVM-enabled VPS for stable Android emulation
+        # Without KVM, emulator services are unstable and tests fail
+        # Enable only when testing on proper hardware
+        description: 'Skip E2E tests (default: true - requires KVM-enabled VPS)'
         required: false
-        default: 'false'
+        default: 'true'
         type: boolean
 
 concurrency:
@@ -782,7 +785,7 @@ jobs:
   setup-appium:
     name: Setup Appium Servers
     needs: [tag-prerelease, build-android]
-    if: ${{ !inputs.skip_e2e }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_e2e == false }}
     runs-on: ubuntu-latest
     environment: qa
     steps:
@@ -1090,7 +1093,7 @@ jobs:
   deploy-apk:
     name: Deploy APK to Emulators
     needs: [setup-appium, build-android, deploy-cf-signaling, deploy-cf-admin, deploy-vps]
-    if: ${{ !inputs.skip_e2e }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_e2e == false }}
     runs-on: ubuntu-latest
     environment: qa
     steps:
@@ -1177,7 +1180,7 @@ jobs:
   phase-4-release-apk:
     name: "✓ Phase 4: Release & APK"
     needs: [create-prerelease, deploy-apk]
-    if: ${{ !inputs.skip_e2e }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_e2e == false }}
     runs-on: ubuntu-latest
     steps:
       - run: echo "Release created and APK deployed"
@@ -1188,7 +1191,7 @@ jobs:
   e2e-tests:
     name: E2E Tests
     needs: [phase-4-release-apk]
-    if: ${{ !inputs.skip_e2e }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_e2e == false }}
     runs-on: ubuntu-latest
     environment: qa
     steps:
@@ -1480,7 +1483,7 @@ jobs:
   phase-5-e2e:
     name: "✓ Phase 5: E2E Tests"
     needs: [e2e-tests]
-    if: ${{ !inputs.skip_e2e }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_e2e == false }}
     runs-on: ubuntu-latest
     steps:
       - run: echo "E2E tests passed"
