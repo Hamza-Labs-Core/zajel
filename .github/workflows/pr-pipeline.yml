@@ -1230,21 +1230,60 @@ jobs:
               export ANDROID_HOME=$HOME/android-sdk
               export PATH=$PATH:$ANDROID_HOME/platform-tools
 
-              # Wait for package manager service (required for APK installs)
-              echo "Waiting for package manager service..."
+              # Wait for ALL essential services (not just package manager)
+              # Software emulation without KVM requires more patience
+              echo "Waiting for essential Android services..."
+
+              # 1. Wait for package manager service
+              echo "  Checking package manager service..."
               PM_ATTEMPTS=0
               while [ $PM_ATTEMPTS -lt 60 ]; do
                 PM_ATTEMPTS=$((PM_ATTEMPTS + 1))
                 PM_OUTPUT=$($ANDROID_HOME/platform-tools/adb shell pm list packages < /dev/null 2>/dev/null || true)
                 if echo "$PM_OUTPUT" | grep -q "android"; then
-                  echo "✓ Package manager ready after $PM_ATTEMPTS attempts"
+                  echo "  ✓ Package manager ready after $PM_ATTEMPTS attempts"
                   break
                 fi
                 if [ $((PM_ATTEMPTS % 10)) -eq 0 ]; then
-                  echo "Still waiting for package manager... ($PM_ATTEMPTS/60)"
+                  echo "  Still waiting for package manager... ($PM_ATTEMPTS/60)"
                 fi
                 sleep 2
               done
+
+              # 2. Wait for activity manager service
+              echo "  Checking activity manager service..."
+              AM_ATTEMPTS=0
+              while [ $AM_ATTEMPTS -lt 30 ]; do
+                AM_ATTEMPTS=$((AM_ATTEMPTS + 1))
+                AM_OUTPUT=$($ANDROID_HOME/platform-tools/adb shell "dumpsys activity" < /dev/null 2>/dev/null | head -5 || true)
+                if echo "$AM_OUTPUT" | grep -q "ACTIVITY"; then
+                  echo "  ✓ Activity manager ready after $AM_ATTEMPTS attempts"
+                  break
+                fi
+                sleep 2
+              done
+
+              # 3. Wait for mount/storage service (critical for APK installs)
+              echo "  Checking mount/storage service..."
+              MOUNT_ATTEMPTS=0
+              while [ $MOUNT_ATTEMPTS -lt 30 ]; do
+                MOUNT_ATTEMPTS=$((MOUNT_ATTEMPTS + 1))
+                MOUNT_OUTPUT=$($ANDROID_HOME/platform-tools/adb shell "sm list-volumes" < /dev/null 2>/dev/null || true)
+                if echo "$MOUNT_OUTPUT" | grep -qE "(private|emulated)"; then
+                  echo "  ✓ Storage/mount service ready after $MOUNT_ATTEMPTS attempts"
+                  break
+                fi
+                # Alternative check
+                if $ANDROID_HOME/platform-tools/adb shell "ls /sdcard" < /dev/null 2>/dev/null | grep -qE "^[A-Za-z]"; then
+                  echo "  ✓ Storage accessible after $MOUNT_ATTEMPTS attempts"
+                  break
+                fi
+                sleep 2
+              done
+
+              # 4. Give extra time for slow emulators to stabilize
+              echo "  Allowing services to stabilize (15s)..."
+              sleep 15
 
               # Verify emulator is still responsive
               if ! $ANDROID_HOME/platform-tools/adb shell getprop sys.boot_completed < /dev/null 2>/dev/null | grep -q "1"; then

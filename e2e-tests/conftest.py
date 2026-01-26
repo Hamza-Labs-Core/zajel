@@ -21,7 +21,12 @@ def create_driver(server_index: int, device_name: str = "emulator") -> webdriver
     options.device_name = f"{device_name}-{server_index}"
     options.automation_name = "UiAutomator2"
     options.new_command_timeout = 300
-    options.no_reset = False  # Fresh app state for each test
+
+    # CRITICAL: Use noReset=True to avoid service calls that fail on slow emulators
+    # On VPS without KVM, the package/activity/storage services can be unstable
+    # and calling pm clear, pm install, etc. during teardown causes failures
+    options.no_reset = True  # Don't clear app data between tests
+    options.full_reset = False  # Don't uninstall/reinstall app
 
     # Android-specific settings
     options.auto_grant_permissions = True
@@ -34,8 +39,15 @@ def create_driver(server_index: int, device_name: str = "emulator") -> webdriver
     options.set_capability("androidInstallTimeout", 180000)  # 3 min for APK install
     options.set_capability("ignoreHiddenApiPolicyError", True)  # Ignore hidden API errors
 
+    # Skip UiAutomator2 server reinstallation (we pre-install it)
+    options.set_capability("skipServerInstallation", True)
+
     # Skip some initialization to speed up on slow emulators
     options.set_capability("skipUnlock", True)  # Don't try to unlock screen
+    options.set_capability("disableWindowAnimation", True)  # Disable animations for speed
+
+    # Force launch the app even with noReset
+    options.set_capability("forceAppLaunch", True)
 
     driver = webdriver.Remote(get_server_url(server_index), options=options)
     driver.implicitly_wait(APP_LAUNCH_TIMEOUT)
