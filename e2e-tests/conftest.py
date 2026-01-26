@@ -28,10 +28,14 @@ def create_driver(server_index: int, device_name: str = "emulator") -> webdriver
 
     # Extended timeouts for slow software emulators (VPS without KVM)
     options.set_capability("appWaitDuration", 120000)  # 2 minutes to wait for app
-    options.set_capability("uiautomator2ServerLaunchTimeout", 120000)  # 2 min for server
-    options.set_capability("uiautomator2ServerInstallTimeout", 120000)  # 2 min for install
-    options.set_capability("adbExecTimeout", 120000)  # 2 min for adb commands
+    options.set_capability("uiautomator2ServerLaunchTimeout", 180000)  # 3 min for server
+    options.set_capability("uiautomator2ServerInstallTimeout", 180000)  # 3 min for install
+    options.set_capability("adbExecTimeout", 180000)  # 3 min for adb commands
+    options.set_capability("androidInstallTimeout", 180000)  # 3 min for APK install
     options.set_capability("ignoreHiddenApiPolicyError", True)  # Ignore hidden API errors
+
+    # Skip some initialization to speed up on slow emulators
+    options.set_capability("skipUnlock", True)  # Don't try to unlock screen
 
     driver = webdriver.Remote(get_server_url(server_index), options=options)
     driver.implicitly_wait(APP_LAUNCH_TIMEOUT)

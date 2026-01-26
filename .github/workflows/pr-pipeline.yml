@@ -1265,15 +1265,26 @@ jobs:
               SETTINGS_APK=$(find ~/.appium -name "settings_apk-debug.apk" 2>/dev/null | head -1)
               if [ -n "$SETTINGS_APK" ]; then
                 $ANDROID_HOME/platform-tools/adb install -r "$SETTINGS_APK" < /dev/null 2>/dev/null || echo "Settings app already installed"
-                # Start the settings app so it's already running when tests begin
-                echo "Starting Appium Settings app..."
+                # Start the settings app and wait for it to be running (slow emulator needs more time)
+                echo "Starting Appium Settings app (this may take a while on slow emulators)..."
                 $ANDROID_HOME/platform-tools/adb shell am start -n io.appium.settings/.Settings < /dev/null 2>/dev/null || true
-                sleep 5
-                # Verify it's running
-                if $ANDROID_HOME/platform-tools/adb shell pidof io.appium.settings < /dev/null 2>/dev/null; then
-                  echo "✓ Appium Settings app is running"
-                else
-                  echo "⚠ Settings app may not be running"
+
+                # Wait up to 60 seconds for the app to start
+                SETTINGS_WAIT=0
+                while [ $SETTINGS_WAIT -lt 60 ]; do
+                  SETTINGS_WAIT=$((SETTINGS_WAIT + 1))
+                  if $ANDROID_HOME/platform-tools/adb shell "ps | grep io.appium.settings" < /dev/null 2>/dev/null | grep -q settings; then
+                    echo "✓ Appium Settings app is running (after ${SETTINGS_WAIT}s)"
+                    break
+                  fi
+                  if [ $((SETTINGS_WAIT % 10)) -eq 0 ]; then
+                    echo "Waiting for Settings app to start... (${SETTINGS_WAIT}s/60s)"
+                  fi
+                  sleep 1
+                done
+
+                if [ $SETTINGS_WAIT -eq 60 ]; then
+                  echo "⚠ Settings app may not be running after 60s"
                 fi
               else
                 echo "⚠ Settings APK not found - will be installed during test"
