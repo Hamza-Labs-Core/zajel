@@ -1249,6 +1249,65 @@ jobs:
             curl -sf http://localhost:$PORT/status && echo "Appium $i OK" || echo "Appium $i not responding"
           done
 
+      - name: Verify emulators are ready
+        env:
+          APPIUM_SERVERS: ${{ secrets.APPIUM_SERVERS }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
+        run: |
+          # Parse comma-separated server list
+          IFS=',' read -ra SERVERS <<< "$APPIUM_SERVERS"
+
+          for SERVER in "${SERVERS[@]}"; do
+            SERVER=$(echo "$SERVER" | tr -d ' ')
+            echo "Verifying emulator on $SERVER..."
+
+            ssh -p ${VPS_PORT} ${VPS_USER}@${SERVER} 'bash -s' << 'VERIFY_SCRIPT'
+              export ANDROID_HOME=$HOME/android-sdk
+              export PATH=$PATH:$ANDROID_HOME/platform-tools
+
+              # Wait for package manager service (required for APK installs)
+              echo "Waiting for package manager service..."
+              PM_ATTEMPTS=0
+              while [ $PM_ATTEMPTS -lt 60 ]; do
+                PM_ATTEMPTS=$((PM_ATTEMPTS + 1))
+                PM_OUTPUT=$($ANDROID_HOME/platform-tools/adb shell pm list packages < /dev/null 2>/dev/null || true)
+                if echo "$PM_OUTPUT" | grep -q "android"; then
+                  echo "✓ Package manager ready after $PM_ATTEMPTS attempts"
+                  break
+                fi
+                if [ $((PM_ATTEMPTS % 10)) -eq 0 ]; then
+                  echo "Still waiting for package manager... ($PM_ATTEMPTS/60)"
+                fi
+                sleep 2
+              done
+
+              # Verify emulator is still responsive
+              if ! $ANDROID_HOME/platform-tools/adb shell getprop sys.boot_completed < /dev/null 2>/dev/null | grep -q "1"; then
+                echo "⚠ WARNING: Emulator may not be fully booted"
+              else
+                echo "✓ Emulator is responsive"
+              fi
+
+              # Restart Appium to ensure fresh state
+              echo "Restarting Appium for fresh state..."
+              pkill -f "appium" 2>/dev/null || true
+              sleep 3
+              ANDROID_HOME=$ANDROID_HOME nohup appium --address 0.0.0.0 --port 4723 --relaxed-security > /tmp/appium.log 2>&1 &
+              sleep 5
+
+              # Verify Appium is running
+              if curl -sf http://localhost:4723/status > /dev/null; then
+                echo "✓ Appium is ready"
+              else
+                echo "⚠ WARNING: Appium may not be responding"
+              fi
+          VERIFY_SCRIPT
+          done
+
+          echo "All emulators verified"
+
       - name: Run E2E tests
         env:
           APK_PATH: /tmp/zajel-qa.apk
