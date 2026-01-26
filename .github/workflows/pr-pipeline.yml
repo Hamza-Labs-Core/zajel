@@ -992,38 +992,37 @@ jobs:
               # Wait for system services to be fully ready
               # ============================================
               # Wait for settings service
+              # Use < /dev/null to prevent adb from reading stdin (which can interfere with heredoc)
               echo "Waiting for settings service..."
-              SETTINGS_READY=false
               SETTINGS_ATTEMPTS=0
-              while [ "$SETTINGS_READY" = "false" ] && [ $SETTINGS_ATTEMPTS -lt 60 ]; do
+              while [ $SETTINGS_ATTEMPTS -lt 60 ]; do
                 SETTINGS_ATTEMPTS=$((SETTINGS_ATTEMPTS + 1))
-                if $ANDROID_HOME/platform-tools/adb shell settings list global 2>/dev/null | grep -q "wifi"; then
+                SETTINGS_OUTPUT=$($ANDROID_HOME/platform-tools/adb shell settings list global < /dev/null 2>/dev/null || true)
+                if echo "$SETTINGS_OUTPUT" | grep -q "wifi"; then
                   echo "Settings service ready after $SETTINGS_ATTEMPTS attempts"
-                  SETTINGS_READY=true
-                else
-                  if [ $((SETTINGS_ATTEMPTS % 10)) -eq 0 ]; then
-                    echo "Still waiting for settings... ($SETTINGS_ATTEMPTS/60)"
-                  fi
-                  sleep 2
+                  break
                 fi
+                if [ $((SETTINGS_ATTEMPTS % 10)) -eq 0 ]; then
+                  echo "Still waiting for settings... ($SETTINGS_ATTEMPTS/60)"
+                fi
+                sleep 2
               done
               echo "Settings wait completed"
 
               # Wait for package manager service (required for APK installs)
               echo "Waiting for package manager service..."
-              PM_READY=false
               PM_ATTEMPTS=0
-              while [ "$PM_READY" = "false" ] && [ $PM_ATTEMPTS -lt 90 ]; do
+              while [ $PM_ATTEMPTS -lt 90 ]; do
                 PM_ATTEMPTS=$((PM_ATTEMPTS + 1))
-                if $ANDROID_HOME/platform-tools/adb shell pm list packages 2>/dev/null | grep -q "android"; then
+                PM_OUTPUT=$($ANDROID_HOME/platform-tools/adb shell pm list packages < /dev/null 2>/dev/null || true)
+                if echo "$PM_OUTPUT" | grep -q "android"; then
                   echo "Package manager ready after $PM_ATTEMPTS attempts"
-                  PM_READY=true
-                else
-                  if [ $((PM_ATTEMPTS % 10)) -eq 0 ]; then
-                    echo "Still waiting for package manager... ($PM_ATTEMPTS/90)"
-                  fi
-                  sleep 2
+                  break
                 fi
+                if [ $((PM_ATTEMPTS % 10)) -eq 0 ]; then
+                  echo "Still waiting for package manager... ($PM_ATTEMPTS/90)"
+                fi
+                sleep 2
               done
               echo "Package manager wait completed"
 
