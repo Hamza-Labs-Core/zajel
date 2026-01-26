@@ -1297,6 +1297,24 @@ jobs:
               ANDROID_HOME=$ANDROID_HOME nohup appium --address 0.0.0.0 --port 4723 --relaxed-security > /tmp/appium.log 2>&1 &
               sleep 5
 
+              # Pre-install Appium Settings app to avoid timeout during tests
+              echo "Pre-installing Appium Settings app..."
+              SETTINGS_APK=$(find ~/.appium -name "settings_apk-debug.apk" 2>/dev/null | head -1)
+              if [ -n "$SETTINGS_APK" ]; then
+                $ANDROID_HOME/platform-tools/adb install -r "$SETTINGS_APK" < /dev/null 2>/dev/null || echo "Settings app already installed"
+                echo "✓ Appium Settings app pre-installed"
+              else
+                echo "⚠ Settings APK not found - will be installed during test"
+              fi
+
+              # Also pre-install UiAutomator2 server
+              echo "Pre-installing UiAutomator2 server..."
+              UA2_APK=$(find ~/.appium -name "appium-uiautomator2-server*.apk" 2>/dev/null | head -1)
+              if [ -n "$UA2_APK" ]; then
+                $ANDROID_HOME/platform-tools/adb install -r "$UA2_APK" < /dev/null 2>/dev/null || echo "UA2 server already installed"
+                echo "✓ UiAutomator2 server pre-installed"
+              fi
+
               # Verify Appium is running
               if curl -sf http://localhost:4723/status > /dev/null; then
                 echo "✓ Appium is ready"
