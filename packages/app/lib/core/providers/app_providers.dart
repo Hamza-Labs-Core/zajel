@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../config/environment.dart';
 import '../crypto/crypto_service.dart';
 import '../logging/logger_service.dart';
 import '../models/models.dart';
@@ -10,7 +11,8 @@ import '../network/meeting_point_service.dart';
 import '../network/peer_reconnection_service.dart';
 import '../network/relay_client.dart';
 import '../network/server_discovery_service.dart';
-import '../network/signaling_client.dart';
+import '../network/signaling_client.dart'
+    show SignalingClient, RendezvousResult, RendezvousPartial, RendezvousMatch;
 import '../network/webrtc_service.dart';
 import '../media/media_service.dart';
 import '../network/voip_service.dart';
@@ -68,18 +70,51 @@ final relayClientProvider = Provider<RelayClient?>((ref) {
 /// Provider for peer reconnection service (created lazily when relay is available).
 final peerReconnectionServiceProvider = Provider<PeerReconnectionService?>((ref) {
   final relayClient = ref.watch(relayClientProvider);
+  final signalingClient = ref.watch(signalingClientProvider);
   if (relayClient == null) return null;
 
   final cryptoService = ref.watch(cryptoServiceProvider);
   final trustedPeers = ref.watch(trustedPeersStorageProvider);
   final meetingPointService = ref.watch(meetingPointServiceProvider);
 
-  return PeerReconnectionService(
+  final service = PeerReconnectionService(
     cryptoService: cryptoService,
     trustedPeers: trustedPeers,
     meetingPointService: meetingPointService,
     relayClient: relayClient,
   );
+
+  // Wire up signaling rendezvous events if signaling is connected
+  if (signalingClient != null) {
+    signalingClient.rendezvousEvents.listen((event) {
+      switch (event) {
+        case RendezvousResult(:final liveMatches, :final deadDrops):
+          // Process live matches
+          for (final match in liveMatches) {
+            service.processLiveMatchFromRendezvous(match.peerId, match.relayId);
+          }
+          // Process dead drops
+          for (final drop in deadDrops) {
+            service.processDeadDropFromRendezvous(drop.peerId, drop.encryptedData, drop.relayId);
+          }
+        case RendezvousPartial(:final liveMatches, :final deadDrops, redirects: _):
+          // Process local results
+          for (final match in liveMatches) {
+            service.processLiveMatchFromRendezvous(match.peerId, match.relayId);
+          }
+          for (final drop in deadDrops) {
+            service.processDeadDropFromRendezvous(drop.peerId, drop.encryptedData, drop.relayId);
+          }
+          // Redirects are handled by the signaling layer - no action needed here
+          // Future: implement federated server connection for redirects
+        case RendezvousMatch(:final peerId, :final relayId, meetingPoint: _):
+          service.processLiveMatchFromRendezvous(peerId, relayId);
+      }
+    });
+  }
+
+  ref.onDispose(() => service.dispose());
+  return service;
 });
 
 /// Provider for device link service (for linking web clients).
@@ -259,12 +294,17 @@ final signalingDisplayStateProvider = StateProvider<SignalingDisplayState>((ref)
 });
 
 /// Default bootstrap server URL (CF Workers).
+/// Can be overridden at build time with --dart-define=BOOTSTRAP_URL=<url>
 const defaultBootstrapUrl = 'https://zajel-signaling.mahmoud-s-darwish.workers.dev';
+
+/// Effective bootstrap URL (compile-time override or default).
+String get _effectiveBootstrapUrl =>
+    Environment.hasCustomBootstrapUrl ? Environment.bootstrapUrl : defaultBootstrapUrl;
 
 /// Provider for the bootstrap server URL.
 final bootstrapServerUrlProvider = StateProvider<String>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
-  return prefs.getString('bootstrapServerUrl') ?? defaultBootstrapUrl;
+  return prefs.getString('bootstrapServerUrl') ?? _effectiveBootstrapUrl;
 });
 
 /// Provider for server discovery service.
@@ -285,7 +325,13 @@ final discoveredServersProvider = FutureProvider<List<DiscoveredServer>>((ref) a
 final selectedServerProvider = StateProvider<DiscoveredServer?>((ref) => null);
 
 /// Provider for the signaling server URL (from selected VPS server).
+/// Can be overridden at build time with --dart-define=SIGNALING_URL=<url>
 final signalingServerUrlProvider = Provider<String?>((ref) {
+  // If a direct signaling URL is provided via --dart-define, use it
+  if (Environment.hasDirectSignalingUrl) {
+    return Environment.signalingUrl;
+  }
+
   final selectedServer = ref.watch(selectedServerProvider);
   if (selectedServer == null) return null;
 
