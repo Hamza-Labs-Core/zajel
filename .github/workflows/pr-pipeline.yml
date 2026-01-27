@@ -1187,7 +1187,7 @@ jobs:
   # ============================================
   e2e-tests:
     name: E2E Tests
-    needs: [build-android, phase-3-build-deploy]
+    needs: [build-android, deploy-cf-signaling, deploy-cf-admin]
     if: ${{ !inputs.skip_e2e }}
     runs-on: macos-latest
     timeout-minutes: 30
