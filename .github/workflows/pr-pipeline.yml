@@ -1,0 +1,1353 @@
+name: PR Pipeline - E2E Tests
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      skip_e2e:
+        description: 'Skip E2E tests'
+        required: false
+        default: 'false'
+        type: boolean
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.27.1'
+  NODE_VERSION: '20'
+  # Version will be computed from latest release in determine-version job
+
+jobs:
+  # ============================================
+  # Determine version from latest release
+  # ============================================
+  determine-version:
+    name: Determine Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Get latest release and compute version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Get latest release tag
+          LATEST=$(gh release view --repo ${{ github.repository }} --json tagName -q '.tagName' 2>/dev/null || echo "v0.0.0")
+          echo "Latest release: $LATEST"
+
+          # Strip 'v' prefix and extract major.minor.patch
+          LATEST_VERSION="${LATEST#v}"
+
+          # Parse version components
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_VERSION"
+          MAJOR=${MAJOR:-0}
+          MINOR=${MINOR:-0}
+          PATCH=${PATCH:-0}
+
+          # Increment patch for pre-release
+          NEXT_PATCH=$((PATCH + 1))
+
+          # Create pre-release version: X.Y.Z-pr.PR_NUMBER.BUILD_NUMBER
+          PR_NUM="${{ github.event.pull_request.number }}"
+          PR_NUM="${PR_NUM:-0}"
+          VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}-pr.${PR_NUM}.${{ github.run_number }}"
+
+          echo "Computed version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+  # ============================================
+  # PHASE 1: Tests
+  # ============================================
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        working-directory: packages/app
+        run: flutter pub get
+
+      - name: Analyze code
+        working-directory: packages/app
+        run: flutter analyze --no-fatal-infos
+
+      - name: Run unit tests
+        working-directory: packages/app
+        run: flutter test test/
+
+  server-tests:
+    name: Server Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Test server-vps
+        working-directory: packages/server-vps
+        run: |
+          npm ci
+          npm test -- --run
+
+      - name: Test server (CF)
+        working-directory: packages/server
+        run: |
+          npm ci
+          npm test -- --run
+
+  phase-1-tests:
+    name: "✓ Phase 1: Tests"
+    needs: [unit-tests, server-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "All tests passed"
+
+  # ============================================
+  # PHASE 2: Tag Pre-release
+  # ============================================
+  tag-prerelease:
+    name: Tag Pre-release
+    needs: [determine-version, phase-1-tests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.determine-version.outputs.version }}
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ needs.determine-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create pre-release tag
+        id: tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Configure git identity for tagging
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          TAG="v${{ env.VERSION }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          # Delete existing tag if present (for re-runs)
+          git push origin :refs/tags/$TAG 2>/dev/null || true
+
+          # Create and push tag
+          git tag -a $TAG -m "Pre-release for PR #${{ github.event.pull_request.number || 'manual' }}"
+          git push origin $TAG
+
+          echo "Created tag: $TAG"
+
+  phase-2-tag:
+    name: "✓ Phase 2: Tag"
+    needs: [tag-prerelease]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Tag created - ${{ needs.tag-prerelease.outputs.tag }}"
+
+  # ============================================
+  # PHASE 3: Builds & Server Deployments (parallel)
+  # ============================================
+  build-android:
+    name: Build Android
+    needs: [tag-prerelease]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        working-directory: packages/app
+        run: flutter pub get
+
+      - name: Build APK with QA config
+        working-directory: packages/app
+        run: |
+          flutter build apk --release \
+            --dart-define=ENV=qa \
+            --dart-define=VERSION=${{ env.VERSION }} \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
+            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
+
+          mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/zajel-${{ env.VERSION }}-android.apk
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build
+          path: packages/app/build/app/outputs/flutter-apk/zajel-${{ env.VERSION }}-android.apk
+          retention-days: 1
+
+  # ----------------------------------------
+  # Build iOS
+  # ----------------------------------------
+  build-ios:
+    name: Build iOS
+    needs: [tag-prerelease]
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        working-directory: packages/app
+        run: flutter pub get
+
+      - name: Build iOS (no codesign)
+        working-directory: packages/app
+        run: |
+          flutter build ios --release --no-codesign \
+            --dart-define=ENV=qa \
+            --dart-define=VERSION=${{ env.VERSION }} \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
+            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
+
+          # Create IPA-like archive for distribution
+          cd build/ios/iphoneos
+          mkdir Payload
+          cp -r Runner.app Payload/
+          zip -r zajel-${{ env.VERSION }}-ios.ipa Payload
+          mv zajel-${{ env.VERSION }}-ios.ipa ../../../
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build
+          path: packages/app/zajel-${{ env.VERSION }}-ios.ipa
+          retention-days: 1
+
+  # ----------------------------------------
+  # Build Linux
+  # ----------------------------------------
+  build-linux:
+    name: Build Linux
+    needs: [tag-prerelease]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libsecret-1-dev libjsoncpp-dev
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Enable Linux desktop
+        working-directory: packages/app
+        run: |
+          flutter config --enable-linux-desktop
+          flutter create --platforms=linux . || true
+
+      - name: Install dependencies
+        working-directory: packages/app
+        run: flutter pub get
+
+      - name: Build Linux
+        working-directory: packages/app
+        run: |
+          flutter build linux --release \
+            --dart-define=ENV=qa \
+            --dart-define=VERSION=${{ env.VERSION }} \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
+            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
+
+          cd build/linux/x64/release/bundle
+          tar -czvf zajel-${{ env.VERSION }}-linux-x64.tar.gz *
+          mv zajel-${{ env.VERSION }}-linux-x64.tar.gz ../../../../../
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: packages/app/zajel-${{ env.VERSION }}-linux-x64.tar.gz
+          retention-days: 1
+
+  # ----------------------------------------
+  # Build macOS
+  # ----------------------------------------
+  build-macos:
+    name: Build macOS
+    needs: [tag-prerelease]
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Enable macOS desktop and prepare
+        working-directory: packages/app
+        run: |
+          flutter config --enable-macos-desktop
+          flutter create --platforms=macos . || true
+
+      - name: Install dependencies
+        working-directory: packages/app
+        run: flutter pub get
+
+      - name: Build macOS
+        working-directory: packages/app
+        run: |
+          flutter build macos --release \
+            --dart-define=ENV=qa \
+            --dart-define=VERSION=${{ env.VERSION }} \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
+            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
+
+          cd build/macos/Build/Products/Release
+          zip -r zajel-${{ env.VERSION }}-macos.zip zajel.app
+          mv zajel-${{ env.VERSION }}-macos.zip ../../../../../
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: packages/app/zajel-${{ env.VERSION }}-macos.zip
+          retention-days: 1
+
+  # ----------------------------------------
+  # Build Web
+  # ----------------------------------------
+  build-web:
+    name: Build Web
+    needs: [tag-prerelease]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        working-directory: packages/app
+        run: flutter pub get
+
+      - name: Build Web
+        working-directory: packages/app
+        run: |
+          flutter build web --release \
+            --dart-define=ENV=qa \
+            --dart-define=VERSION=${{ env.VERSION }} \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
+            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
+
+          cd build/web
+          zip -r zajel-${{ env.VERSION }}-web.zip *
+          mv zajel-${{ env.VERSION }}-web.zip ../../
+
+      - name: Upload Web artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: packages/app/zajel-${{ env.VERSION }}-web.zip
+          retention-days: 1
+
+  # Phase 3 gate - after all builds and deployments
+  phase-3-build-deploy:
+    name: "✓ Phase 3: Build & Deploy"
+    needs: [build-android, build-ios, build-linux, build-macos, build-web, deploy-cf-signaling, deploy-cf-admin, deploy-cf-website, deploy-vps]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "All builds and deployments completed"
+
+  # ============================================
+  # PHASE 4: Release & APK Deployment
+  # ============================================
+  create-prerelease:
+    name: Create GitHub Pre-release
+    needs: [phase-3-build-deploy, tag-prerelease]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get the base branch (usually main)
+          BASE_BRANCH="${{ github.base_ref || 'main' }}"
+
+          # Generate changelog from commits in this PR
+          echo "## What's Changed" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+
+          # Get commits between base and head
+          git log origin/${BASE_BRANCH}..HEAD --pretty=format:"- %s (%h)" >> CHANGELOG.md || echo "- Initial pre-release" >> CHANGELOG.md
+
+          echo "" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "---" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "### Build Info" >> CHANGELOG.md
+          echo "- **Version:** ${{ env.VERSION }}" >> CHANGELOG.md
+          echo "- **PR:** #${{ github.event.pull_request.number }}" >> CHANGELOG.md
+          echo "- **Branch:** ${{ github.head_ref }}" >> CHANGELOG.md
+          echo "- **Commit:** ${{ github.sha }}" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "### Downloads" >> CHANGELOG.md
+          echo "| Platform | File |" >> CHANGELOG.md
+          echo "|----------|------|" >> CHANGELOG.md
+          echo "| Android | zajel-${{ env.VERSION }}-android.apk |" >> CHANGELOG.md
+          echo "| iOS | zajel-${{ env.VERSION }}-ios.ipa |" >> CHANGELOG.md
+          echo "| Linux | zajel-${{ env.VERSION }}-linux-x64.tar.gz |" >> CHANGELOG.md
+          echo "| macOS | zajel-${{ env.VERSION }}-macos.zip |" >> CHANGELOG.md
+          echo "| Web | zajel-${{ env.VERSION }}-web.zip |" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "> ⚠️ **Pre-release:** This is a test build for PR #${{ github.event.pull_request.number }}. Not for production use." >> CHANGELOG.md
+
+          cat CHANGELOG.md
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+
+          # Move all artifacts to release-assets with proper names
+          find ./artifacts -type f \( -name "*.apk" -o -name "*.ipa" -o -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} ./release-assets/ \;
+
+          ls -la release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.tag-prerelease.outputs.tag }}
+          name: "Pre-release ${{ needs.tag-prerelease.outputs.tag }}"
+          body_path: CHANGELOG.md
+          prerelease: true
+          files: |
+            release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ============================================
+  # PHASE 3: Deploy to QA Environment (parallel with builds)
+  # ============================================
+  deploy-cf-signaling:
+    name: Deploy CF Signaling
+    needs: [tag-prerelease]
+    runs-on: ubuntu-latest
+    environment: qa
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy signaling server
+        id: deploy-signaling
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/server
+          command: deploy --env qa
+
+      - name: Verify deployment
+        run: |
+          echo "Waiting for deployment to propagate..."
+          sleep 10
+
+          # Get URL from deployment output
+          DEPLOY_URL="${{ steps.deploy-signaling.outputs.deployment-url }}"
+          if [ -z "$DEPLOY_URL" ]; then
+            echo "No deployment URL found, skipping health check"
+            exit 0
+          fi
+
+          echo "Checking health at: $DEPLOY_URL"
+          for i in {1..5}; do
+            if curl -sf "$DEPLOY_URL/health"; then
+              echo "Signaling server healthy"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying..."
+            sleep 5
+          done
+          echo "Warning: Health check failed, continuing anyway"
+
+  deploy-cf-admin:
+    name: Deploy CF Admin
+    needs: [tag-prerelease]
+    runs-on: ubuntu-latest
+    environment: qa
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy admin dashboard
+        id: deploy-admin
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/admin-cf
+          command: deploy -c wrangler.jsonc --env qa
+        env:
+          APP_VERSION: ${{ env.VERSION }}
+
+      - name: Verify deployment
+        run: |
+          echo "Waiting for deployment to propagate..."
+          sleep 10
+
+          DEPLOY_URL="${{ steps.deploy-admin.outputs.deployment-url }}"
+          if [ -z "$DEPLOY_URL" ]; then
+            echo "No deployment URL found, skipping health check"
+            exit 0
+          fi
+
+          echo "Checking health at: $DEPLOY_URL"
+          for i in {1..5}; do
+            RESPONSE=$(curl -sf "$DEPLOY_URL/health" || echo '{}')
+            if echo "$RESPONSE" | grep -q "healthy"; then
+              echo "Admin server healthy: $RESPONSE"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying..."
+            sleep 5
+          done
+          echo "Warning: Health check failed, continuing anyway"
+
+  deploy-cf-website:
+    name: Deploy CF Website
+    needs: [tag-prerelease]
+    runs-on: ubuntu-latest
+    environment: qa
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        working-directory: packages/website
+        run: npm ci
+
+      - name: Build website
+        working-directory: packages/website
+        run: npm run build
+
+      - name: Deploy website
+        id: deploy-website
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/website
+          command: deploy -c wrangler.jsonc --env qa
+
+      - name: Verify deployment
+        run: |
+          echo "Waiting for deployment to propagate..."
+          sleep 10
+
+          DEPLOY_URL="${{ steps.deploy-website.outputs.deployment-url }}"
+          if [ -z "$DEPLOY_URL" ]; then
+            echo "No deployment URL found, skipping health check"
+            exit 0
+          fi
+
+          echo "Checking deployment at: $DEPLOY_URL"
+          for i in {1..5}; do
+            if curl -sf "$DEPLOY_URL" > /dev/null; then
+              echo "Website deployed successfully"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying..."
+            sleep 5
+          done
+          echo "Warning: Health check failed, continuing anyway"
+
+  deploy-vps:
+    name: Deploy QA VPS
+    needs: [tag-prerelease]
+    runs-on: ubuntu-latest
+    environment: qa
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: packages/server-vps/package-lock.json
+
+      - name: Build server
+        working-directory: packages/server-vps
+        run: |
+          npm ci
+          npm run build
+
+      - name: Acquire deployment lock
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.QA_VPS_IP }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            LOCK_FILE="/tmp/zajel-deploy.lock"
+
+            # Check for test lock (wait up to 5 minutes)
+            for i in {1..30}; do
+              if [ ! -f "/tmp/zajel-e2e.lock" ]; then
+                break
+              fi
+              echo "Waiting for E2E tests to complete... ($i/30)"
+              sleep 10
+            done
+
+            # Create deployment lock
+            echo "PR-${{ github.event.pull_request.number }}-${{ github.run_id }}" > $LOCK_FILE
+
+      - name: Deploy to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.QA_VPS_IP }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          source: "packages/server-vps/dist/*,packages/server-vps/package*.json,packages/server-vps/migrations/*"
+          target: "/opt/zajel/server-vps-qa"
+          strip_components: 2
+
+      - name: Start server
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          APP_VERSION: ${{ needs.tag-prerelease.outputs.version }}
+          BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL }}
+        with:
+          host: ${{ secrets.QA_VPS_IP }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          envs: APP_VERSION,BOOTSTRAP_URL
+          script: |
+            set -e
+
+            # Install Node.js if not present
+            if ! command -v node &> /dev/null; then
+              echo "Installing Node.js..."
+              curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+              sudo apt-get install -y nodejs
+            fi
+
+            # Install pm2 if not present
+            if ! command -v pm2 &> /dev/null; then
+              echo "Installing pm2..."
+              sudo npm install -g pm2
+            fi
+
+            # Create deployment directory
+            sudo mkdir -p /opt/zajel/server-vps-qa
+            sudo chown -R $USER:$USER /opt/zajel
+
+            cd /opt/zajel/server-vps-qa
+
+            # Install dependencies
+            npm ci --omit=dev
+
+            # Create QA startup script with env vars
+            PUBLIC_IP=$(curl -sf http://checkip.amazonaws.com || curl -sf http://ifconfig.me || echo "localhost")
+            cat > start-qa.sh << EOF
+            #!/bin/bash
+            export ZAJEL_PORT=9001
+            export ZAJEL_KEY_PATH=./data-qa/server.key
+            export ZAJEL_DB_PATH=./data-qa/zajel.db
+            export ZAJEL_PUBLIC_ENDPOINT=ws://${PUBLIC_IP}:9001
+            export ZAJEL_REGION=qa
+            export ZAJEL_BOOTSTRAP_URL=${BOOTSTRAP_URL}
+            export NODE_ENV=qa
+            export APP_VERSION=${APP_VERSION}
+            cd /opt/zajel/server-vps-qa
+            exec node dist/index.js
+            EOF
+            chmod +x start-qa.sh
+
+            mkdir -p data-qa
+
+            # Stop existing QA server
+            pm2 delete zajel-server-qa 2>/dev/null || true
+
+            # Start QA server
+            pm2 start start-qa.sh --name zajel-server-qa --interpreter bash
+            pm2 save
+
+            # Health check
+            sleep 5
+            for i in {1..6}; do
+              if curl -sf http://localhost:9001/health | grep -q "healthy"; then
+                echo "Server healthy"
+                exit 0
+              fi
+              echo "Waiting for server... ($i/6)"
+              sleep 5
+            done
+
+            echo "Health check failed"
+            pm2 logs zajel-server-qa --lines 50 --nostream
+            exit 1
+
+      - name: Release deployment lock
+        if: always()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.QA_VPS_IP }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            rm -f /tmp/zajel-deploy.lock
+
+  # ============================================
+  # PHASE 4: Setup Appium & Deploy APK to Emulators
+  # ============================================
+  setup-appium:
+    name: Setup Appium Servers
+    needs: [tag-prerelease, build-android]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_e2e == false }}
+    runs-on: ubuntu-latest
+    environment: qa
+    steps:
+      - name: Setup SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          echo "StrictHostKeyChecking no" >> ~/.ssh/config
+          echo "UserKnownHostsFile /dev/null" >> ~/.ssh/config
+
+      - name: Setup Appium infrastructure on servers
+        env:
+          APPIUM_SERVERS: ${{ secrets.APPIUM_SERVERS }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
+        run: |
+          IFS=',' read -ra SERVERS <<< "$APPIUM_SERVERS"
+
+          for SERVER in "${SERVERS[@]}"; do
+            SERVER=$(echo "$SERVER" | tr -d ' ')
+            echo "=========================================="
+            echo "Setting up Appium infrastructure on $SERVER"
+            echo "=========================================="
+
+            ssh -p ${VPS_PORT} ${VPS_USER}@${SERVER} 'bash -s' << 'SETUP_SCRIPT'
+              # Note: Removed 'set -e' because adb shell commands often return
+              # non-zero even on success, causing premature script termination
+
+              # Define paths
+              export ANDROID_HOME=$HOME/android-sdk
+              export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator
+
+              # ============================================
+              # Install Android SDK if not present
+              # ============================================
+              if [ ! -f "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+                echo "Installing Android SDK..."
+
+                # Install dependencies
+                sudo apt-get update
+                sudo apt-get install -y openjdk-17-jdk wget unzip
+
+                # Download command line tools
+                mkdir -p $ANDROID_HOME/cmdline-tools
+                cd $ANDROID_HOME/cmdline-tools
+                wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O tools.zip
+                unzip -q tools.zip
+                mv cmdline-tools latest
+                rm tools.zip
+
+                # Accept licenses
+                yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+
+                # Install required SDK components (build-tools contains aapt2 needed by Appium)
+                $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "emulator" "build-tools;31.0.0" "platforms;android-31" "system-images;android-31;google_apis;x86_64"
+
+                # Add to PATH permanently (build-tools for aapt2)
+                echo 'export ANDROID_HOME=$HOME/android-sdk' >> ~/.bashrc
+                echo 'export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/build-tools/31.0.0' >> ~/.bashrc
+              else
+                echo "Android SDK already installed"
+              fi
+
+              # ============================================
+              # Ensure build-tools is installed (contains aapt2 needed by Appium)
+              # ============================================
+              if [ ! -f "$ANDROID_HOME/build-tools/31.0.0/aapt2" ]; then
+                echo "Installing build-tools (aapt2 needed by Appium)..."
+                $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;31.0.0"
+                # Add build-tools to PATH if not already
+                if ! echo "$PATH" | grep -q "build-tools"; then
+                  echo 'export PATH=$PATH:$ANDROID_HOME/build-tools/31.0.0' >> ~/.bashrc
+                fi
+              else
+                echo "build-tools already installed"
+              fi
+
+              # Show build-tools directory structure for debugging
+              echo "Build-tools directory:"
+              ls -la "$ANDROID_HOME/build-tools/" 2>/dev/null || echo "No build-tools dir"
+              ls -la "$ANDROID_HOME/build-tools/31.0.0/" 2>/dev/null | head -5 || echo "No 31.0.0 dir"
+
+              # Create symlink for aapt2 in platform-tools (Appium fallback search path)
+              if [ ! -L "$ANDROID_HOME/platform-tools/aapt2" ]; then
+                echo "Creating aapt2 symlink in platform-tools for Appium compatibility..."
+                ln -sf "$ANDROID_HOME/build-tools/31.0.0/aapt2" "$ANDROID_HOME/platform-tools/aapt2"
+              fi
+              ls -la "$ANDROID_HOME/platform-tools/aapt2" || echo "Symlink failed"
+
+              # ============================================
+              # Create AVD if not present
+              # ============================================
+              if ! $ANDROID_HOME/cmdline-tools/latest/bin/avdmanager list avd 2>/dev/null | grep -q "test_device"; then
+                echo "Creating AVD..."
+                echo "no" | $ANDROID_HOME/cmdline-tools/latest/bin/avdmanager create avd \
+                  -n test_device \
+                  -k "system-images;android-31;google_apis;x86_64" \
+                  -d "pixel_4" \
+                  --force
+              else
+                echo "AVD test_device already exists"
+              fi
+
+              # ============================================
+              # Install Node.js if not present
+              # ============================================
+              if ! command -v node &> /dev/null; then
+                echo "Installing Node.js..."
+                curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+                sudo apt-get install -y nodejs
+              else
+                echo "Node.js already installed: $(node --version)"
+              fi
+
+              # ============================================
+              # Install Appium if not present
+              # ============================================
+              if ! command -v appium &> /dev/null; then
+                echo "Installing Appium..."
+                sudo npm install -g appium
+                appium driver install uiautomator2
+              else
+                echo "Appium already installed: $(appium --version)"
+              fi
+
+              # ============================================
+              # Check KVM support
+              # ============================================
+              echo "Checking KVM support..."
+              if [ -c /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+                echo "KVM is available - emulator will use hardware acceleration"
+                KVM_ENABLED=true
+              else
+                echo "WARNING: KVM is NOT available - emulator will run in software mode (SLOW)"
+                echo "This is expected on most VPS providers without nested virtualization"
+                KVM_ENABLED=false
+              fi
+
+              # ============================================
+              # Start emulator if not running
+              # ============================================
+              if ! $ANDROID_HOME/platform-tools/adb devices 2>/dev/null | grep -q "emulator"; then
+                echo "Starting emulator..."
+
+                # Kill any zombie emulator processes
+                pkill -f "emulator" 2>/dev/null || true
+                sleep 2
+
+                # Start emulator with appropriate settings
+                if [ "$KVM_ENABLED" = true ]; then
+                  nohup $ANDROID_HOME/emulator/emulator -avd test_device -no-window -no-audio -no-snapshot -gpu swiftshader_indirect > /tmp/emulator.log 2>&1 &
+                else
+                  # For non-KVM: use -no-accel and lower memory
+                  nohup $ANDROID_HOME/emulator/emulator -avd test_device -no-window -no-audio -no-snapshot -gpu swiftshader_indirect -no-accel -memory 2048 > /tmp/emulator.log 2>&1 &
+                fi
+
+                EMULATOR_PID=$!
+                echo "Emulator started with PID: $EMULATOR_PID"
+
+                # Wait for emulator to boot (15 minutes for non-KVM)
+                MAX_WAIT=180
+                if [ "$KVM_ENABLED" = true ]; then
+                  MAX_WAIT=60
+                fi
+
+                echo "Waiting for emulator to boot (max $MAX_WAIT iterations)..."
+                for i in $(seq 1 $MAX_WAIT); do
+                  # Check if emulator process is still running
+                  if ! kill -0 $EMULATOR_PID 2>/dev/null; then
+                    echo "ERROR: Emulator process died!"
+                    echo "=== Emulator Log ==="
+                    tail -100 /tmp/emulator.log 2>/dev/null || echo "No log available"
+                    echo "==================="
+                    break
+                  fi
+
+                  if $ANDROID_HOME/platform-tools/adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; then
+                    echo "Emulator booted successfully after $i iterations"
+                    break
+                  fi
+
+                  # Show progress every 10 iterations
+                  if [ $((i % 10)) -eq 0 ]; then
+                    echo "Still waiting... ($i/$MAX_WAIT) - checking emulator.log..."
+                    tail -3 /tmp/emulator.log 2>/dev/null || true
+                  else
+                    echo "Waiting... ($i/$MAX_WAIT)"
+                  fi
+                  sleep 5
+                done
+
+                # Final check
+                if ! $ANDROID_HOME/platform-tools/adb devices 2>/dev/null | grep -q "emulator"; then
+                  echo "WARNING: Emulator may not have booted completely"
+                  echo "=== Last 50 lines of emulator log ==="
+                  tail -50 /tmp/emulator.log 2>/dev/null || echo "No log available"
+                  echo "======================================"
+                fi
+              else
+                echo "Emulator already running"
+              fi
+
+              # ============================================
+              # Wait for system services to be fully ready
+              # ============================================
+              # Wait for settings service
+              # Use < /dev/null to prevent adb from reading stdin (which can interfere with heredoc)
+              echo "Waiting for settings service..."
+              SETTINGS_ATTEMPTS=0
+              while [ $SETTINGS_ATTEMPTS -lt 60 ]; do
+                SETTINGS_ATTEMPTS=$((SETTINGS_ATTEMPTS + 1))
+                SETTINGS_OUTPUT=$($ANDROID_HOME/platform-tools/adb shell settings list global < /dev/null 2>/dev/null || true)
+                if echo "$SETTINGS_OUTPUT" | grep -q "wifi"; then
+                  echo "Settings service ready after $SETTINGS_ATTEMPTS attempts"
+                  break
+                fi
+                if [ $((SETTINGS_ATTEMPTS % 10)) -eq 0 ]; then
+                  echo "Still waiting for settings... ($SETTINGS_ATTEMPTS/60)"
+                fi
+                sleep 2
+              done
+              echo "Settings wait completed"
+
+              # Wait for package manager service (required for APK installs)
+              echo "Waiting for package manager service..."
+              PM_ATTEMPTS=0
+              while [ $PM_ATTEMPTS -lt 90 ]; do
+                PM_ATTEMPTS=$((PM_ATTEMPTS + 1))
+                PM_OUTPUT=$($ANDROID_HOME/platform-tools/adb shell pm list packages < /dev/null 2>/dev/null || true)
+                if echo "$PM_OUTPUT" | grep -q "android"; then
+                  echo "Package manager ready after $PM_ATTEMPTS attempts"
+                  break
+                fi
+                if [ $((PM_ATTEMPTS % 10)) -eq 0 ]; then
+                  echo "Still waiting for package manager... ($PM_ATTEMPTS/90)"
+                fi
+                sleep 2
+              done
+              echo "Package manager wait completed"
+
+              # Additional wait for system to stabilize
+              echo "Waiting for system to stabilize..."
+              sleep 10
+
+              # Verify services are working
+              if $ANDROID_HOME/platform-tools/adb shell settings list global 2>/dev/null | grep -q "wifi"; then
+                echo "✓ Settings service is ready"
+              else
+                echo "⚠ WARNING: Settings service may not be ready"
+              fi
+
+              if $ANDROID_HOME/platform-tools/adb shell pm list packages 2>/dev/null | grep -q "android"; then
+                echo "✓ Package manager service is ready"
+              else
+                echo "⚠ WARNING: Package manager may not be ready"
+              fi
+
+              # ============================================
+              # Always restart Appium to ensure correct SDK environment
+              # ============================================
+              # Export PATH with build-tools for aapt2
+              export PATH=$PATH:$ANDROID_HOME/build-tools/31.0.0
+
+              # Stop any existing Appium process
+              if pgrep -f "appium" > /dev/null; then
+                echo "Stopping existing Appium server..."
+                pkill -f "appium" || true
+                sleep 3
+              fi
+
+              # Start fresh Appium with correct environment
+              echo "Starting Appium server with build-tools in PATH..."
+              echo "ANDROID_HOME=$ANDROID_HOME"
+              echo "Build-tools path: $ANDROID_HOME/build-tools/31.0.0"
+              ls -la "$ANDROID_HOME/build-tools/31.0.0/aapt2" 2>/dev/null || echo "WARNING: aapt2 not found!"
+              which aapt2 2>/dev/null && echo "aapt2 in PATH" || echo "aapt2 NOT in PATH"
+
+              # Start Appium with explicit environment
+              ANDROID_HOME=$ANDROID_HOME nohup appium --address 0.0.0.0 --port 4723 --relaxed-security > /tmp/appium.log 2>&1 &
+              sleep 5
+
+              # Show Appium log for debugging
+              echo "Appium startup log:"
+              cat /tmp/appium.log | head -20 || echo "No log yet"
+
+              # Verify setup
+              echo ""
+              echo "=== Setup verification ==="
+              echo "ADB devices:"
+              $ANDROID_HOME/platform-tools/adb devices
+              echo ""
+              echo "Appium status:"
+              curl -sf http://localhost:4723/status || echo "Appium not responding yet"
+              echo ""
+              echo "Setup complete on $(hostname)"
+          SETUP_SCRIPT
+
+          done
+
+          echo "All Appium servers configured"
+
+  deploy-apk:
+    name: Deploy APK to Emulators
+    needs: [setup-appium, build-android, deploy-cf-signaling, deploy-cf-admin, deploy-vps]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_e2e == false }}
+    runs-on: ubuntu-latest
+    environment: qa
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: android-build
+          path: ./apk
+
+      - name: Setup SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          echo "StrictHostKeyChecking no" >> ~/.ssh/config
+          echo "UserKnownHostsFile /dev/null" >> ~/.ssh/config
+
+      - name: Acquire E2E test lock
+        env:
+          APPIUM_SERVERS: ${{ secrets.APPIUM_SERVERS }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
+        run: |
+          IFS=',' read -ra SERVERS <<< "$APPIUM_SERVERS"
+
+          for SERVER in "${SERVERS[@]}"; do
+            SERVER=$(echo "$SERVER" | tr -d ' ')
+
+            # Wait for deployment lock to clear
+            ssh -p ${VPS_PORT} ${VPS_USER}@${SERVER} '
+              for i in {1..30}; do
+                if [ ! -f "/tmp/zajel-deploy.lock" ]; then
+                  break
+                fi
+                echo "Waiting for deployment to complete... ($i/30)"
+                sleep 10
+              done
+
+              # Create E2E lock
+              echo "E2E-'${{ github.run_id }}'" > /tmp/zajel-e2e.lock
+            '
+          done
+
+      - name: Deploy APK to emulators
+        env:
+          APPIUM_SERVERS: ${{ secrets.APPIUM_SERVERS }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
+        run: |
+          IFS=',' read -ra SERVERS <<< "$APPIUM_SERVERS"
+
+          for SERVER in "${SERVERS[@]}"; do
+            SERVER=$(echo "$SERVER" | tr -d ' ')
+
+            echo "Deploying APK to $SERVER"
+
+            # Copy APK to server (find the APK file in artifacts)
+            APK_FILE=$(ls ./apk/*.apk | head -1)
+            scp -P ${VPS_PORT} "$APK_FILE" ${VPS_USER}@${SERVER}:/tmp/zajel-qa.apk
+
+            # Install on emulator
+            ssh -p ${VPS_PORT} ${VPS_USER}@${SERVER} 'bash -s' << 'DEPLOY_SCRIPT'
+              export ANDROID_HOME=$HOME/android-sdk
+              export PATH=$PATH:$ANDROID_HOME/platform-tools
+
+              # Find running emulator
+              EMULATOR=$($ANDROID_HOME/platform-tools/adb devices | grep emulator | head -1 | cut -f1)
+
+              if [ -z "$EMULATOR" ]; then
+                echo "ERROR: No emulator available"
+                exit 1
+              fi
+
+              echo "Installing APK on $EMULATOR"
+              $ANDROID_HOME/platform-tools/adb -s $EMULATOR install -r /tmp/zajel-qa.apk
+
+              echo "APK installed successfully"
+          DEPLOY_SCRIPT
+
+          done
+
+  phase-4-release-apk:
+    name: "✓ Phase 4: Release & APK"
+    needs: [create-prerelease, deploy-apk]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_e2e == false }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Release created and APK deployed"
+
+  # ============================================
+  # PHASE 5: E2E Tests (macOS with hardware-accelerated emulator)
+  # ============================================
+  e2e-tests:
+    name: E2E Tests
+    needs: [build-android, deploy-cf-signaling, deploy-cf-admin]
+    if: ${{ !inputs.skip_e2e }}
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Android APK
+        uses: actions/download-artifact@v4
+        with:
+          name: android-build
+          path: ./apk
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Create AVD and start emulator
+        run: |
+          # Install system image
+          echo "Installing Android system image..."
+          sdkmanager "system-images;android-31;google_apis;x86_64" --sdk_root=$ANDROID_HOME
+
+          # Create AVD
+          echo "Creating AVD..."
+          echo "no" | avdmanager create avd -n test_device -k "system-images;android-31;google_apis;x86_64" --force
+
+          # Start emulator in background
+          echo "Starting emulator..."
+          $ANDROID_HOME/emulator/emulator -avd test_device -no-window -no-audio -no-snapshot -gpu swiftshader_indirect &
+
+          # Wait for emulator to boot
+          echo "Waiting for emulator to boot..."
+          adb wait-for-device
+
+          # Wait for boot to complete
+          boot_completed=""
+          while [ "$boot_completed" != "1" ]; do
+            sleep 5
+            boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            echo "Waiting for boot... (sys.boot_completed=$boot_completed)"
+          done
+
+          echo "✓ Emulator is ready"
+          adb devices
+
+      - name: Install APK on emulator
+        run: |
+          APK_FILE=$(find ./apk -name "*.apk" | head -1)
+          echo "Installing APK: $APK_FILE"
+          adb install "$APK_FILE"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install and start Appium
+        run: |
+          npm install -g appium
+          appium driver install uiautomator2
+
+          # Start Appium in background
+          appium --address 127.0.0.1 --port 4723 --relaxed-security &
+
+          # Wait for Appium to be ready
+          sleep 10
+          curl -sf http://localhost:4723/status && echo "✓ Appium is ready"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: e2e-tests/requirements.txt
+
+      - name: Install E2E dependencies
+        run: pip install -r e2e-tests/requirements.txt
+
+      - name: Run E2E tests
+        env:
+          APK_PATH: ${{ github.workspace }}/apk
+          APPIUM_SERVER_COUNT: "1"
+        run: |
+          cd e2e-tests
+
+          # Find the APK path
+          APK_FILE=$(find $APK_PATH -name "*.apk" | head -1)
+          export APK_PATH="$APK_FILE"
+
+          # Run tests
+          pytest tests/test_pairing.py -v --timeout=300 -x
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          mkdir -p test-artifacts
+          adb logcat -d > test-artifacts/logcat.txt 2>&1 || true
+          cp /tmp/appium*.log test-artifacts/ 2>/dev/null || true
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-artifacts
+          path: test-artifacts/
+          retention-days: 1
+
+  phase-5-e2e:
+    name: "✓ Phase 5: E2E Tests"
+    needs: [e2e-tests]
+    if: ${{ !inputs.skip_e2e }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "E2E tests passed"
+
+  # ============================================
+  # Cleanup Pre-release Tag on Failure
+  # ============================================
+  cleanup:
+    name: Cleanup on Failure
+    needs: [tag-prerelease, e2e-tests]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Delete pre-release tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ env.VERSION }}"
+          git push origin :refs/tags/$TAG 2>/dev/null || true
+          echo "Deleted tag: $TAG"
+
+  # ============================================
+  # Summary
+  # ============================================
+  summary:
+    name: Pipeline Summary
+    needs: [phase-1-tests, phase-2-tag, phase-3-build-deploy, phase-4-release-apk, phase-5-e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## PR Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase 1: Tests | ${{ needs.phase-1-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase 2: Tag | ${{ needs.phase-2-tag.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase 3: Build & Deploy | ${{ needs.phase-3-build-deploy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase 4: Release & APK | ${{ needs.phase-4-release-apk.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase 5: E2E Tests | ${{ needs.phase-5-e2e.result }} |" >> $GITHUB_STEP_SUMMARY
