@@ -1188,7 +1188,8 @@ jobs:
   e2e-tests:
     name: E2E Tests
     needs: [build-android, deploy-cf-signaling, deploy-cf-admin]
-    if: ${{ !inputs.skip_e2e }}
+    # Run on PR events always, and on workflow_dispatch unless skip_e2e is true
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
     runs-on: macos-13  # Intel-based runner with HAXM support for x86_64 emulators
     timeout-minutes: 30
     steps:
@@ -1303,7 +1304,7 @@ jobs:
   phase-5-e2e:
     name: "✓ Phase 5: E2E Tests"
     needs: [e2e-tests]
-    if: ${{ !inputs.skip_e2e }}
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
     runs-on: ubuntu-latest
     steps:
       - run: echo "E2E tests passed"
