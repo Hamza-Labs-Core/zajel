@@ -8,11 +8,6 @@ on:
         required: true
         type: string
         default: 'production'
-      server:
-        description: 'Server to deploy (srv1, srv2, srv3, or all)'
-        required: false
-        type: string
-        default: 'all'
       version:
         description: 'Version tag to deploy'
         required: false
@@ -29,28 +24,17 @@ on:
         type: boolean
         default: false
     secrets:
-      VPS_SRV1_HOST:
-        required: false
-      VPS_SRV2_HOST:
-        required: false
-      VPS_SRV3_HOST:
-        required: false
       VPS_USER:
         required: true
       VPS_SSH_KEY:
         required: true
       VPS_PORT:
         required: false
-    outputs:
-      deployed_servers:
-        description: 'List of successfully deployed servers'
-        value: ${{ jobs.aggregate.outputs.servers }}
 
 env:
   NODE_VERSION: '20'
 
 jobs:
-  # Build once, deploy to many
   build:
     runs-on: ubuntu-latest
     outputs:
@@ -94,11 +78,9 @@ jobs:
             packages/server-vps/migrations
           retention-days: 1
 
-  # Deploy to srv1
-  deploy-srv1:
+  deploy:
     needs: build
     runs-on: ubuntu-latest
-    if: inputs.server == 'all' || inputs.server == 'srv1'
     outputs:
       status: ${{ steps.deploy.outcome }}
     steps:
@@ -112,7 +94,7 @@ jobs:
         if: ${{ !inputs.skip_lock }}
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.VPS_SRV1_HOST }}
+          host: ${{ vars.VPS_SERVERS }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
@@ -132,7 +114,7 @@ jobs:
         id: deploy
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.VPS_SRV1_HOST }}
+          host: ${{ vars.VPS_SERVERS }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
@@ -147,41 +129,42 @@ jobs:
           ENV: ${{ inputs.environment }}
           VERSION: ${{ inputs.version || github.sha }}
         with:
-          host: ${{ secrets.VPS_SRV1_HOST }}
+          host: ${{ vars.VPS_SERVERS }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
+          envs: PORT,ENV,VERSION
           script: |
             set -e
-            cd /opt/zajel/server-vps-${{ env.ENV }}
+            cd /opt/zajel/server-vps-$ENV
 
             npm ci --omit=dev
-            mkdir -p data-${{ env.ENV }}
+            mkdir -p data-$ENV
 
             PUBLIC_IP=$(curl -sf http://checkip.amazonaws.com || curl -sf http://ifconfig.me || echo "localhost")
 
-            cat > start-${{ env.ENV }}.sh << EOF
+            cat > start-$ENV.sh << EOF
             #!/bin/bash
-            export ZAJEL_PORT=${{ env.PORT }}
-            export ZAJEL_KEY_PATH=./data-${{ env.ENV }}/server.key
-            export ZAJEL_DB_PATH=./data-${{ env.ENV }}/zajel.db
-            export ZAJEL_PUBLIC_ENDPOINT=ws://${PUBLIC_IP}:${{ env.PORT }}
-            export ZAJEL_REGION=eu-central
-            export NODE_ENV=${{ env.ENV }}
-            export APP_VERSION=${{ env.VERSION }}
-            cd /opt/zajel/server-vps-${{ env.ENV }}
+            export ZAJEL_PORT=$PORT
+            export ZAJEL_KEY_PATH=./data-$ENV/server.key
+            export ZAJEL_DB_PATH=./data-$ENV/zajel.db
+            export ZAJEL_PUBLIC_ENDPOINT=ws://${PUBLIC_IP}:$PORT
+            export ZAJEL_REGION=auto
+            export NODE_ENV=$ENV
+            export APP_VERSION=$VERSION
+            cd /opt/zajel/server-vps-$ENV
             exec node dist/index.js
             EOF
-            chmod +x start-${{ env.ENV }}.sh
+            chmod +x start-$ENV.sh
 
-            pm2 delete zajel-server-${{ env.ENV }} 2>/dev/null || true
-            pm2 start start-${{ env.ENV }}.sh --name zajel-server-${{ env.ENV }} --interpreter bash
+            pm2 delete zajel-server-$ENV 2>/dev/null || true
+            pm2 start start-$ENV.sh --name zajel-server-$ENV --interpreter bash
             pm2 save
 
             # Health check
             sleep 5
             for i in {1..6}; do
-              if curl -sf http://localhost:${{ env.PORT }}/health | grep -q "healthy"; then
+              if curl -sf http://localhost:$PORT/health | grep -q "healthy"; then
                 echo "Server healthy"
                 exit 0
               fi
@@ -193,131 +176,8 @@ jobs:
         if: always()
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.VPS_SRV1_HOST }}
+          host: ${{ vars.VPS_SERVERS }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
           script: rm -f /tmp/zajel-deploy.lock
-
-  # Deploy to srv2
-  deploy-srv2:
-    needs: build
-    runs-on: ubuntu-latest
-    if: (inputs.server == 'all' || inputs.server == 'srv2') && secrets.VPS_SRV2_HOST != ''
-    outputs:
-      status: ${{ steps.deploy.outcome }}
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.build.outputs.artifact-name }}
-          path: deploy
-
-      - name: Acquire lock
-        if: ${{ !inputs.skip_lock }}
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.VPS_SRV2_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT || 22 }}
-          script: |
-            for i in {1..30}; do
-              if [ ! -f "/tmp/zajel-e2e.lock" ]; then
-                break
-              fi
-              echo "Waiting for E2E tests... ($i/30)"
-              sleep 10
-            done
-            echo "DEPLOY-${{ github.run_id }}" > /tmp/zajel-deploy.lock
-
-      - name: Deploy
-        id: deploy
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.VPS_SRV2_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT || 22 }}
-          source: "deploy/*"
-          target: "/opt/zajel/server-vps-${{ inputs.environment }}"
-          strip_components: 1
-
-      - name: Start server
-        uses: appleboy/ssh-action@v1.0.3
-        env:
-          PORT: ${{ inputs.port }}
-          ENV: ${{ inputs.environment }}
-          VERSION: ${{ inputs.version || github.sha }}
-        with:
-          host: ${{ secrets.VPS_SRV2_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT || 22 }}
-          script: |
-            set -e
-            cd /opt/zajel/server-vps-${{ env.ENV }}
-
-            npm ci --omit=dev
-            mkdir -p data-${{ env.ENV }}
-
-            PUBLIC_IP=$(curl -sf http://checkip.amazonaws.com || curl -sf http://ifconfig.me || echo "localhost")
-
-            cat > start-${{ env.ENV }}.sh << EOF
-            #!/bin/bash
-            export ZAJEL_PORT=${{ env.PORT }}
-            export ZAJEL_KEY_PATH=./data-${{ env.ENV }}/server.key
-            export ZAJEL_DB_PATH=./data-${{ env.ENV }}/zajel.db
-            export ZAJEL_PUBLIC_ENDPOINT=ws://${PUBLIC_IP}:${{ env.PORT }}
-            export ZAJEL_REGION=us-east
-            export NODE_ENV=${{ env.ENV }}
-            export APP_VERSION=${{ env.VERSION }}
-            cd /opt/zajel/server-vps-${{ env.ENV }}
-            exec node dist/index.js
-            EOF
-            chmod +x start-${{ env.ENV }}.sh
-
-            pm2 delete zajel-server-${{ env.ENV }} 2>/dev/null || true
-            pm2 start start-${{ env.ENV }}.sh --name zajel-server-${{ env.ENV }} --interpreter bash
-            pm2 save
-
-            sleep 5
-            for i in {1..6}; do
-              if curl -sf http://localhost:${{ env.PORT }}/health | grep -q "healthy"; then
-                echo "Server healthy"
-                exit 0
-              fi
-              sleep 5
-            done
-            exit 1
-
-      - name: Release lock
-        if: always()
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.VPS_SRV2_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT || 22 }}
-          script: rm -f /tmp/zajel-deploy.lock
-
-  # Aggregate results
-  aggregate:
-    needs: [deploy-srv1, deploy-srv2]
-    runs-on: ubuntu-latest
-    if: always()
-    outputs:
-      servers: ${{ steps.aggregate.outputs.servers }}
-    steps:
-      - name: Aggregate deployment status
-        id: aggregate
-        run: |
-          SERVERS=""
-          if [ "${{ needs.deploy-srv1.outputs.status }}" == "success" ]; then
-            SERVERS="srv1"
-          fi
-          if [ "${{ needs.deploy-srv2.outputs.status }}" == "success" ]; then
-            SERVERS="${SERVERS:+$SERVERS,}srv2"
-          fi
-          echo "servers=$SERVERS" >> $GITHUB_OUTPUT
-          echo "Deployed to: $SERVERS"
