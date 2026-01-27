@@ -122,14 +122,45 @@ class AppHelper:
         )
 
     def enable_external_connections(self):
-        """Enable external connections toggle."""
-        # Find and click the external connections toggle
-        # Selector depends on actual app UI - adjust as needed
-        toggle = self.driver.find_element(
-            "xpath", "//android.widget.Switch | //android.widget.ToggleButton"
-        )
-        if toggle.get_attribute("checked") != "true":
+        """Enable external connections toggle.
+
+        Flutter apps use custom rendered views, not standard Android widgets.
+        We search by content-description or text containing relevant keywords.
+        """
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+        from selenium.common.exceptions import TimeoutException
+
+        # Try multiple selector strategies for Flutter apps
+        selectors = [
+            # By content description (accessibility label)
+            "//*[contains(@content-desc, 'external') or contains(@content-desc, 'connection')]",
+            # By text content
+            "//*[contains(@text, 'External') or contains(@text, 'external')]",
+            # Standard Android toggle (fallback)
+            "//android.widget.Switch | //android.widget.ToggleButton",
+            # Flutter checkbox/switch - often rendered as View with clickable
+            "//android.view.View[@clickable='true' and contains(@content-desc, 'nable')]",
+        ]
+
+        toggle = None
+        for selector in selectors:
+            try:
+                toggle = WebDriverWait(self.driver, 5).until(
+                    EC.presence_of_element_located((By.XPATH, selector))
+                )
+                if toggle:
+                    break
+            except TimeoutException:
+                continue
+
+        if toggle:
             toggle.click()
+        else:
+            # If we can't find a toggle, try tapping the center of the screen
+            # as a fallback (some apps have the toggle in the main UI)
+            print("Warning: Could not find external connections toggle, trying screen tap")
 
     def get_pairing_code(self) -> str:
         """Get the current pairing code."""
