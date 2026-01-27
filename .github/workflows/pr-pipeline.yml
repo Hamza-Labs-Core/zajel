@@ -1267,6 +1267,14 @@ jobs:
 
             # Run E2E tests
             pytest tests/test_pairing.py -v --timeout=300 -x
+            TEST_EXIT_CODE=$?
+
+            # Explicitly kill the emulator to prevent cleanup hang
+            echo "Killing emulator to prevent cleanup hang..."
+            adb emu kill || true
+            sleep 5
+
+            exit $TEST_EXIT_CODE
 
       - name: Collect logs on failure
         if: failure()
