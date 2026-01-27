@@ -1,0 +1,16 @@
+{
+  // Zajel Website - Cloudflare Workers Static Assets
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "zajel-website",
+  "compatibility_date": "2024-12-30",
+  "assets": {
+    "directory": "./build/client"
+  },
+
+  // QA Environment for PR testing
+  "env": {
+    "qa": {
+      "name": "zajel-website-qa"
+    }
+  }
+}

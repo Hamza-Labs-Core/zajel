@@ -132,11 +132,63 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
       ref.read(signalingConnectedProvider.notifier).state = true;
       ref.read(signalingDisplayStateProvider.notifier).state =
           SignalingDisplayState.connected;
+
+      // Initialize peer reconnection after successful signaling connection
+      await _initializePeerReconnection(serverUrl);
     } catch (e, stack) {
       logger.error('ZajelApp', 'Failed to auto-connect to signaling', e, stack);
       ref.read(signalingDisplayStateProvider.notifier).state =
           SignalingDisplayState.disconnected;
     }
+  }
+
+  /// Initialize peer reconnection service for trusted peer discovery.
+  Future<void> _initializePeerReconnection(String serverUrl) async {
+    final reconnectionService = ref.read(peerReconnectionServiceProvider);
+    if (reconnectionService == null) {
+      logger.warning('ZajelApp', 'PeerReconnectionService not available');
+      return;
+    }
+
+    try {
+      // Connect to signaling for rendezvous
+      await reconnectionService.connect(serverUrl);
+      logger.info('ZajelApp', 'PeerReconnectionService connected');
+
+      // Set up reconnection event listeners
+      _setupReconnectionListeners(reconnectionService);
+    } catch (e, stack) {
+      logger.error('ZajelApp', 'Failed to initialize peer reconnection', e, stack);
+    }
+  }
+
+  /// Set up listeners for peer reconnection events.
+  void _setupReconnectionListeners(dynamic reconnectionService) {
+    // Listen for peers found via meeting points
+    reconnectionService.onPeerFound.listen((event) {
+      logger.info('ZajelApp', 'Peer found via meeting point: ${event.peerId}');
+
+      if (event.isLive) {
+        logger.debug('ZajelApp', 'Peer ${event.peerId} is live - can connect directly');
+        // Auto-connect to live peer if desired
+        // For now, just log the event
+      } else if (event.connectionInfo != null) {
+        logger.debug('ZajelApp', 'Peer ${event.peerId} has dead drop info - can connect via relay');
+        // Connect via dead drop info if desired
+        // For now, just log the event
+      }
+    });
+
+    // Listen for incoming connection requests
+    reconnectionService.onConnectionRequest.listen((event) {
+      logger.info('ZajelApp', 'Connection request from peer: ${event.peerId}');
+      // Handle incoming reconnection attempts
+    });
+
+    // Listen for status updates
+    reconnectionService.onStatus.listen((status) {
+      logger.debug('ZajelApp', 'Reconnection status: ${status.message}');
+    });
   }
 
   void _setupFileTransferListeners() {
