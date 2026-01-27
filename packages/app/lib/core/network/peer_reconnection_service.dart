@@ -354,6 +354,65 @@ class PeerReconnectionService with SubscriptionManager {
     }
   }
 
+  /// Process a live match from rendezvous response (peerId already known).
+  ///
+  /// This is called when the server provides the peerId directly in the
+  /// rendezvous result, rather than just the meeting point hash.
+  void processLiveMatchFromRendezvous(String peerId, String? relayId) {
+    logger.info(
+      'PeerReconnection',
+      'Live match from rendezvous: $peerId (relay: $relayId)',
+    );
+
+    _peerFoundController.add(PeerFoundEvent(
+      peerId: peerId,
+      meetingPoint: '', // Unknown - server matched by peerId
+      isLive: true,
+      connectionInfo: relayId != null
+          ? ConnectionInfo(
+              publicKey: '', // Will be fetched from trusted peers
+              relayId: relayId,
+              sourceId: null,
+              fallbackRelays: [],
+              timestamp: DateTime.now().toUtc(),
+            )
+          : null,
+    ));
+  }
+
+  /// Process a dead drop from rendezvous response (peerId already known).
+  ///
+  /// This is called when the server provides the peerId along with the
+  /// encrypted dead drop data in the rendezvous result.
+  Future<void> processDeadDropFromRendezvous(
+    String peerId,
+    String encryptedData,
+    String? relayId,
+  ) async {
+    logger.info(
+      'PeerReconnection',
+      'Dead drop from rendezvous: $peerId (relay: $relayId)',
+    );
+
+    try {
+      final connectionInfo = await _decryptDeadDrop(peerId, encryptedData);
+      if (connectionInfo != null) {
+        _peerFoundController.add(PeerFoundEvent(
+          peerId: peerId,
+          meetingPoint: '', // Unknown - server matched by peerId
+          isLive: false,
+          connectionInfo: connectionInfo,
+        ));
+      }
+    } catch (e) {
+      logger.error(
+        'PeerReconnection',
+        'Failed to decrypt dead drop from $peerId',
+        e,
+      );
+    }
+  }
+
   /// Add a new trusted peer after successful connection.
   Future<void> addTrustedPeer(TrustedPeer peer) async {
     await _trustedPeers.savePeer(peer);
