@@ -28,3 +28,7 @@ deleted_classes = ["SignalingRoom", "RelayRegistryDO"]
 [dev]
 port = 8080
 local_protocol = "http"
+
+# QA Environment for PR testing
+[env.qa]
+name = "zajel-signaling-qa"
