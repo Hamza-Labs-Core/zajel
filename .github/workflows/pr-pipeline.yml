@@ -1236,7 +1236,8 @@ jobs:
       - name: Find APK path
         id: apk
         run: |
-          APK_FILE=$(find ./apk -name "*.apk" | head -1)
+          # Use absolute path since the emulator runner uses a different working directory
+          APK_FILE=$(find ${{ github.workspace }}/apk -name "*.apk" | head -1)
           echo "APK_PATH=$APK_FILE" >> $GITHUB_OUTPUT
           echo "Found APK: $APK_FILE"
 
@@ -1269,10 +1270,14 @@ jobs:
 
       - name: Collect logs on failure
         if: failure()
+        timeout-minutes: 2
         run: |
           mkdir -p test-artifacts
-          adb logcat -d > test-artifacts/logcat.txt 2>&1 || true
+          # Use timeout command to prevent adb commands from hanging
+          timeout 30 adb logcat -d > test-artifacts/logcat.txt 2>&1 || true
           cp /tmp/appium*.log test-artifacts/ 2>/dev/null || true
+          # Capture emulator status
+          timeout 10 adb devices > test-artifacts/adb-devices.txt 2>&1 || true
 
       - name: Upload test artifacts
         if: failure()
