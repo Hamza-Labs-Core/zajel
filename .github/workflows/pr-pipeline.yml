@@ -1183,14 +1183,14 @@ jobs:
       - run: echo "Release created and APK deployed"
 
   # ============================================
-  # PHASE 5: E2E Tests (macOS with hardware-accelerated emulator)
+  # PHASE 5: E2E Tests (Ubuntu with KVM-accelerated emulator)
   # ============================================
   e2e-tests:
     name: E2E Tests
     needs: [build-android, deploy-cf-signaling, deploy-cf-admin]
     # Run on PR events always, and on workflow_dispatch unless skip_e2e is true
     if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
-    runs-on: macos-13  # Intel-based runner with HAXM support for x86_64 emulators
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -1207,60 +1207,21 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Create AVD and start emulator
+      - name: Enable KVM for hardware acceleration
         run: |
-          # Install system image (x86_64 for Intel-based macos-13 with HAXM)
-          echo "Installing Android system image..."
-          sdkmanager "system-images;android-31;google_apis;x86_64" --sdk_root=$ANDROID_HOME
-
-          # Create AVD
-          echo "Creating AVD..."
-          echo "no" | avdmanager create avd -n test_device -k "system-images;android-31;google_apis;x86_64" --force
-
-          # Start emulator in background with HAXM acceleration
-          echo "Starting emulator..."
-          $ANDROID_HOME/emulator/emulator -avd test_device -no-window -no-audio -no-snapshot -gpu swiftshader_indirect &
-
-          # Wait for emulator to boot
-          echo "Waiting for emulator to boot..."
-          adb wait-for-device
-
-          # Wait for boot to complete
-          boot_completed=""
-          while [ "$boot_completed" != "1" ]; do
-            sleep 5
-            boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
-            echo "Waiting for boot... (sys.boot_completed=$boot_completed)"
-          done
-
-          echo "✓ Emulator is ready"
-          adb devices
-
-      - name: Install APK on emulator
-        run: |
-          APK_FILE=$(find ./apk -name "*.apk" | head -1)
-          echo "Installing APK: $APK_FILE"
-          adb install "$APK_FILE"
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install and start Appium
+      - name: Install Appium
         run: |
           npm install -g appium
           appium driver install uiautomator2
-
-          # Start Appium in background
-          appium --address 127.0.0.1 --port 4723 --relaxed-security &
-
-          # Wait for Appium to be ready
-          sleep 10
-          curl -sf http://localhost:4723/status && echo "✓ Appium is ready"
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -1272,19 +1233,34 @@ jobs:
       - name: Install E2E dependencies
         run: pip install -r e2e-tests/requirements.txt
 
-      - name: Run E2E tests
-        env:
-          APK_PATH: ${{ github.workspace }}/apk
-          APPIUM_SERVER_COUNT: "1"
+      - name: Find APK path
+        id: apk
         run: |
-          cd e2e-tests
+          APK_FILE=$(find ./apk -name "*.apk" | head -1)
+          echo "APK_PATH=$APK_FILE" >> $GITHUB_OUTPUT
+          echo "Found APK: $APK_FILE"
 
-          # Find the APK path
-          APK_FILE=$(find $APK_PATH -name "*.apk" | head -1)
-          export APK_PATH="$APK_FILE"
+      - name: Run E2E tests with emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 31
+          arch: x86_64
+          emulator-boot-timeout: 600
+          disable-animations: true
+          script: |
+            # Install APK
+            adb install "${{ steps.apk.outputs.APK_PATH }}"
 
-          # Run tests
-          pytest tests/test_pairing.py -v --timeout=300 -x
+            # Start Appium in background
+            appium --address 127.0.0.1 --port 4723 --relaxed-security &
+            sleep 10
+            curl -sf http://localhost:4723/status && echo "✓ Appium is ready"
+
+            # Run E2E tests
+            cd e2e-tests
+            export APK_PATH="${{ steps.apk.outputs.APK_PATH }}"
+            export APPIUM_SERVER_COUNT="1"
+            pytest tests/test_pairing.py -v --timeout=300 -x
 
       - name: Collect logs on failure
         if: failure()
