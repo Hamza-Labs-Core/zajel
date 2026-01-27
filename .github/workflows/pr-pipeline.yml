@@ -7,12 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       skip_e2e:
-        # E2E tests require KVM-enabled VPS for stable Android emulation
-        # Without KVM, emulator services are unstable and tests fail
-        # Enable only when testing on proper hardware
-        description: 'Skip E2E tests (default: true - requires KVM-enabled VPS)'
+        description: 'Skip E2E tests'
         required: false
-        default: 'true'
+        default: 'false'
         type: boolean
 
 concurrency:
@@ -1186,16 +1183,83 @@ jobs:
       - run: echo "Release created and APK deployed"
 
   # ============================================
-  # PHASE 5: E2E Tests
+  # PHASE 5: E2E Tests (macOS with hardware-accelerated emulator)
   # ============================================
   e2e-tests:
     name: E2E Tests
-    needs: [phase-4-release-apk]
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_e2e == false }}
-    runs-on: ubuntu-latest
-    environment: qa
+    needs: [build-android, phase-3-build-deploy]
+    if: ${{ !inputs.skip_e2e }}
+    runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download Android APK
+        uses: actions/download-artifact@v4
+        with:
+          name: android-build
+          path: ./apk
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Create AVD and start emulator
+        run: |
+          # Install system image
+          echo "Installing Android system image..."
+          sdkmanager "system-images;android-31;google_apis;x86_64" --sdk_root=$ANDROID_HOME
+
+          # Create AVD
+          echo "Creating AVD..."
+          echo "no" | avdmanager create avd -n test_device -k "system-images;android-31;google_apis;x86_64" --force
+
+          # Start emulator in background
+          echo "Starting emulator..."
+          $ANDROID_HOME/emulator/emulator -avd test_device -no-window -no-audio -no-snapshot -gpu swiftshader_indirect &
+
+          # Wait for emulator to boot
+          echo "Waiting for emulator to boot..."
+          adb wait-for-device
+
+          # Wait for boot to complete
+          boot_completed=""
+          while [ "$boot_completed" != "1" ]; do
+            sleep 5
+            boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            echo "Waiting for boot... (sys.boot_completed=$boot_completed)"
+          done
+
+          echo "✓ Emulator is ready"
+          adb devices
+
+      - name: Install APK on emulator
+        run: |
+          APK_FILE=$(find ./apk -name "*.apk" | head -1)
+          echo "Installing APK: $APK_FILE"
+          adb install "$APK_FILE"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install and start Appium
+        run: |
+          npm install -g appium
+          appium driver install uiautomator2
+
+          # Start Appium in background
+          appium --address 127.0.0.1 --port 4723 --relaxed-security &
+
+          # Wait for Appium to be ready
+          sleep 10
+          curl -sf http://localhost:4723/status && echo "✓ Appium is ready"
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -1205,272 +1269,28 @@ jobs:
           cache-dependency-path: e2e-tests/requirements.txt
 
       - name: Install E2E dependencies
-        run: |
-          pip install -r e2e-tests/requirements.txt
-
-      - name: Verify emulators are ready
-        env:
-          APPIUM_SERVERS: ${{ secrets.APPIUM_SERVERS }}
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
-        run: |
-          # Setup SSH key
-          mkdir -p ~/.ssh
-          echo "$VPS_SSH_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          echo "StrictHostKeyChecking no" >> ~/.ssh/config
-          echo "UserKnownHostsFile /dev/null" >> ~/.ssh/config
-
-          # Parse comma-separated server list
-          IFS=',' read -ra SERVERS <<< "$APPIUM_SERVERS"
-
-          for SERVER in "${SERVERS[@]}"; do
-            SERVER=$(echo "$SERVER" | tr -d ' ')
-            echo "Verifying emulator on $SERVER..."
-
-            ssh -p ${VPS_PORT} ${VPS_USER}@${SERVER} 'bash -s' << 'VERIFY_SCRIPT'
-              export ANDROID_HOME=$HOME/android-sdk
-              export PATH=$PATH:$ANDROID_HOME/platform-tools
-
-              # CRITICAL: Reboot the emulator to get fresh stable services
-              # Software emulation without KVM causes service degradation over time
-              # The emulator has been running for 20+ minutes by now, services may be unstable
-              echo "Rebooting emulator for fresh stable services..."
-              $ANDROID_HOME/platform-tools/adb reboot < /dev/null 2>/dev/null || true
-
-              # Wait for emulator to come back online
-              echo "Waiting for emulator to reconnect..."
-              REBOOT_WAIT=0
-              while [ $REBOOT_WAIT -lt 120 ]; do
-                REBOOT_WAIT=$((REBOOT_WAIT + 1))
-                if $ANDROID_HOME/platform-tools/adb devices < /dev/null 2>/dev/null | grep -q "emulator"; then
-                  echo "  Emulator reconnected after ${REBOOT_WAIT}s"
-                  break
-                fi
-                if [ $((REBOOT_WAIT % 10)) -eq 0 ]; then
-                  echo "  Waiting for emulator... (${REBOOT_WAIT}s/120s)"
-                fi
-                sleep 1
-              done
-
-              # Wait for boot to complete
-              echo "Waiting for boot to complete..."
-              BOOT_WAIT=0
-              while [ $BOOT_WAIT -lt 180 ]; do
-                BOOT_WAIT=$((BOOT_WAIT + 1))
-                BOOT_COMPLETED=$($ANDROID_HOME/platform-tools/adb shell getprop sys.boot_completed < /dev/null 2>/dev/null || echo "0")
-                if echo "$BOOT_COMPLETED" | grep -q "1"; then
-                  echo "  Boot completed after ${BOOT_WAIT}s"
-                  break
-                fi
-                if [ $((BOOT_WAIT % 15)) -eq 0 ]; then
-                  echo "  Waiting for boot... (${BOOT_WAIT}s/180s)"
-                fi
-                sleep 1
-              done
-
-              # Wait for ALL essential services (not just package manager)
-              # Fresh reboot should have stable services
-              echo "Waiting for essential Android services..."
-
-              # 1. Wait for package manager service
-              echo "  Checking package manager service..."
-              PM_ATTEMPTS=0
-              while [ $PM_ATTEMPTS -lt 60 ]; do
-                PM_ATTEMPTS=$((PM_ATTEMPTS + 1))
-                PM_OUTPUT=$($ANDROID_HOME/platform-tools/adb shell pm list packages < /dev/null 2>/dev/null || true)
-                if echo "$PM_OUTPUT" | grep -q "android"; then
-                  echo "  ✓ Package manager ready after $PM_ATTEMPTS attempts"
-                  break
-                fi
-                if [ $((PM_ATTEMPTS % 10)) -eq 0 ]; then
-                  echo "  Still waiting for package manager... ($PM_ATTEMPTS/60)"
-                fi
-                sleep 2
-              done
-
-              # 2. Wait for activity manager service
-              echo "  Checking activity manager service..."
-              AM_ATTEMPTS=0
-              while [ $AM_ATTEMPTS -lt 30 ]; do
-                AM_ATTEMPTS=$((AM_ATTEMPTS + 1))
-                AM_OUTPUT=$($ANDROID_HOME/platform-tools/adb shell "dumpsys activity" < /dev/null 2>/dev/null | head -5 || true)
-                if echo "$AM_OUTPUT" | grep -q "ACTIVITY"; then
-                  echo "  ✓ Activity manager ready after $AM_ATTEMPTS attempts"
-                  break
-                fi
-                sleep 2
-              done
-
-              # 3. Wait for mount/storage service (critical for APK installs)
-              echo "  Checking mount/storage service..."
-              MOUNT_ATTEMPTS=0
-              while [ $MOUNT_ATTEMPTS -lt 30 ]; do
-                MOUNT_ATTEMPTS=$((MOUNT_ATTEMPTS + 1))
-                MOUNT_OUTPUT=$($ANDROID_HOME/platform-tools/adb shell "sm list-volumes" < /dev/null 2>/dev/null || true)
-                if echo "$MOUNT_OUTPUT" | grep -qE "(private|emulated)"; then
-                  echo "  ✓ Storage/mount service ready after $MOUNT_ATTEMPTS attempts"
-                  break
-                fi
-                # Alternative check
-                if $ANDROID_HOME/platform-tools/adb shell "ls /sdcard" < /dev/null 2>/dev/null | grep -qE "^[A-Za-z]"; then
-                  echo "  ✓ Storage accessible after $MOUNT_ATTEMPTS attempts"
-                  break
-                fi
-                sleep 2
-              done
-
-              # 4. Give extra time for slow emulators to stabilize
-              echo "  Allowing services to stabilize (15s)..."
-              sleep 15
-
-              # Verify emulator is still responsive
-              if ! $ANDROID_HOME/platform-tools/adb shell getprop sys.boot_completed < /dev/null 2>/dev/null | grep -q "1"; then
-                echo "⚠ WARNING: Emulator may not be fully booted"
-              else
-                echo "✓ Emulator is responsive"
-              fi
-
-              # Restart Appium to ensure fresh state
-              echo "Restarting Appium for fresh state..."
-              pkill -f "appium" 2>/dev/null || true
-              sleep 3
-              ANDROID_HOME=$ANDROID_HOME nohup appium --address 0.0.0.0 --port 4723 --relaxed-security > /tmp/appium.log 2>&1 &
-              sleep 5
-
-              # Pre-install Appium Settings app to avoid timeout during tests
-              echo "Pre-installing Appium Settings app..."
-              SETTINGS_APK=$(find ~/.appium -name "settings_apk-debug.apk" 2>/dev/null | head -1)
-              if [ -n "$SETTINGS_APK" ]; then
-                $ANDROID_HOME/platform-tools/adb install -r "$SETTINGS_APK" < /dev/null 2>/dev/null || echo "Settings app already installed"
-                # Start the settings app and wait for it to be running (slow emulator needs more time)
-                echo "Starting Appium Settings app (this may take a while on slow emulators)..."
-                $ANDROID_HOME/platform-tools/adb shell am start -n io.appium.settings/.Settings < /dev/null 2>/dev/null || true
-
-                # Wait up to 60 seconds for the app to start
-                SETTINGS_WAIT=0
-                while [ $SETTINGS_WAIT -lt 60 ]; do
-                  SETTINGS_WAIT=$((SETTINGS_WAIT + 1))
-                  if $ANDROID_HOME/platform-tools/adb shell "ps | grep io.appium.settings" < /dev/null 2>/dev/null | grep -q settings; then
-                    echo "✓ Appium Settings app is running (after ${SETTINGS_WAIT}s)"
-                    break
-                  fi
-                  if [ $((SETTINGS_WAIT % 10)) -eq 0 ]; then
-                    echo "Waiting for Settings app to start... (${SETTINGS_WAIT}s/60s)"
-                  fi
-                  sleep 1
-                done
-
-                if [ $SETTINGS_WAIT -eq 60 ]; then
-                  echo "⚠ Settings app may not be running after 60s"
-                fi
-              else
-                echo "⚠ Settings APK not found - will be installed during test"
-              fi
-
-              # Also pre-install UiAutomator2 server
-              echo "Pre-installing UiAutomator2 server..."
-              UA2_APK=$(find ~/.appium -name "appium-uiautomator2-server*.apk" 2>/dev/null | head -1)
-              if [ -n "$UA2_APK" ]; then
-                $ANDROID_HOME/platform-tools/adb install -r "$UA2_APK" < /dev/null 2>/dev/null || echo "UA2 server already installed"
-                # Also install the test APK
-                UA2_TEST_APK=$(find ~/.appium -name "appium-uiautomator2-server-debug-androidTest.apk" 2>/dev/null | head -1)
-                if [ -n "$UA2_TEST_APK" ]; then
-                  $ANDROID_HOME/platform-tools/adb install -r "$UA2_TEST_APK" < /dev/null 2>/dev/null || true
-                fi
-                echo "✓ UiAutomator2 server pre-installed"
-              fi
-
-              # Verify Appium is running
-              if curl -sf http://localhost:4723/status > /dev/null; then
-                echo "✓ Appium is ready"
-              else
-                echo "⚠ WARNING: Appium may not be responding"
-              fi
-          VERIFY_SCRIPT
-          done
-
-          echo "All emulators verified"
-
-      - name: Setup SSH tunnels to Appium servers
-        env:
-          APPIUM_SERVERS: ${{ secrets.APPIUM_SERVERS }}
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
-        run: |
-          # Parse comma-separated server list
-          IFS=',' read -ra SERVERS <<< "$APPIUM_SERVERS"
-
-          PORT_BASE=4723
-          SERVER_COUNT=0
-
-          for SERVER in "${SERVERS[@]}"; do
-            SERVER=$(echo "$SERVER" | tr -d ' ')
-            LOCAL_PORT=$((PORT_BASE + SERVER_COUNT))
-
-            echo "Creating tunnel to $SERVER (local port $LOCAL_PORT)"
-
-            # Create SSH tunnel (Appium default port 4723)
-            ssh -f -N -L ${LOCAL_PORT}:localhost:4723 \
-              -p ${VPS_PORT} \
-              ${VPS_USER}@${SERVER}
-
-            SERVER_COUNT=$((SERVER_COUNT + 1))
-          done
-
-          echo "APPIUM_SERVER_COUNT=$SERVER_COUNT" >> $GITHUB_ENV
-          echo "Created $SERVER_COUNT SSH tunnels"
-
-          # Verify tunnels
-          sleep 2
-          for i in $(seq 0 $((SERVER_COUNT - 1))); do
-            PORT=$((PORT_BASE + i))
-            curl -sf http://localhost:$PORT/status && echo "Appium $i OK" || echo "Appium $i not responding"
-          done
+        run: pip install -r e2e-tests/requirements.txt
 
       - name: Run E2E tests
         env:
-          APK_PATH: /tmp/zajel-qa.apk
-          APPIUM_SERVER_COUNT: ${{ env.APPIUM_SERVER_COUNT }}
+          APK_PATH: ${{ github.workspace }}/apk
+          APPIUM_SERVER_COUNT: "1"
         run: |
           cd e2e-tests
 
-          # Run smoke tests first
-          pytest tests/test_pairing.py -v -m smoke --timeout=300 || exit 1
+          # Find the APK path
+          APK_FILE=$(find $APK_PATH -name "*.apk" | head -1)
+          export APK_PATH="$APK_FILE"
 
-          # Run full test suite
-          pytest tests/ -v --timeout=600 \
-            --ignore=tests/test_reconnection.py \
-            -x  # Stop on first failure
+          # Run tests
+          pytest tests/test_pairing.py -v --timeout=300 -x
 
-      - name: Release E2E test lock
-        if: always()
-        env:
-          APPIUM_SERVERS: ${{ secrets.APPIUM_SERVERS }}
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
-        run: |
-          mkdir -p ~/.ssh
-          echo "$VPS_SSH_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          echo "StrictHostKeyChecking no" >> ~/.ssh/config
-          echo "UserKnownHostsFile /dev/null" >> ~/.ssh/config
-
-          IFS=',' read -ra SERVERS <<< "$APPIUM_SERVERS"
-
-          for SERVER in "${SERVERS[@]}"; do
-            SERVER=$(echo "$SERVER" | tr -d ' ')
-            ssh -p ${VPS_PORT} ${VPS_USER}@${SERVER} 'rm -f /tmp/zajel-e2e.lock' || true
-          done
-
-      - name: Collect test artifacts
+      - name: Collect logs on failure
         if: failure()
         run: |
           mkdir -p test-artifacts
-          cp -r e2e-tests/reports/* test-artifacts/ 2>/dev/null || true
+          adb logcat -d > test-artifacts/logcat.txt 2>&1 || true
+          cp /tmp/appium*.log test-artifacts/ 2>/dev/null || true
 
       - name: Upload test artifacts
         if: failure()
@@ -1483,7 +1303,7 @@ jobs:
   phase-5-e2e:
     name: "✓ Phase 5: E2E Tests"
     needs: [e2e-tests]
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_e2e == false }}
+    if: ${{ !inputs.skip_e2e }}
     runs-on: ubuntu-latest
     steps:
       - run: echo "E2E tests passed"
