@@ -1269,15 +1269,19 @@ jobs:
             pytest tests/test_pairing.py -v --timeout=300 -x
             TEST_EXIT_CODE=$?
 
-            # Aggressively kill the emulator and all related processes
-            # The reactivecircus action's cleanup hangs even after adb emu kill
-            echo "Killing emulator and all related processes..."
+            # Clean up emulator to prevent action cleanup from hanging
+            # IMPORTANT: Use specific binary names to avoid killing this script itself
+            # (pkill -f "emulator" would match our shell process and kill it prematurely)
+            echo "Killing emulator processes..."
             adb emu kill 2>/dev/null || true
             sleep 2
-            pkill -9 -f "emulator" 2>/dev/null || true
-            pkill -9 -f "qemu" 2>/dev/null || true
+
+            # Target specific emulator binaries by their actual process names
+            pkill -9 -f "qemu-system" 2>/dev/null || true
+            pkill -9 -f "emulator64" 2>/dev/null || true
+            pkill -9 -f "emulator-headless" 2>/dev/null || true
             adb kill-server 2>/dev/null || true
-            sleep 2
+            sleep 1
 
             echo "Cleanup complete, test exit code: $TEST_EXIT_CODE"
             exit $TEST_EXIT_CODE
