@@ -1275,20 +1275,14 @@ jobs:
             curl -sf http://localhost:4723/status && echo "✓ Appium is ready"
 
             # Run E2E tests
-            pytest tests/test_pairing.py -v --timeout=300 -x
-            TEST_EXIT_CODE=$?
+            pytest tests/test_pairing.py -v --timeout=300 -x || TEST_RESULT=$?
+            TEST_RESULT=${TEST_RESULT:-0}
 
-            # Kill emulator to speed up action cleanup
-            echo "Tests done. Killing emulator..."
-            adb emu kill 2>/dev/null || true
-            sleep 2
+            # Stop Appium
+            pkill -f appium || true
 
-            # Kill any remaining emulator processes to ensure cleanup doesn't hang
-            # Use specific patterns that won't match our shell
-            killall -9 qemu-system-x86_64 2>/dev/null || true
-            killall -9 adb 2>/dev/null || true
-
-            exit $TEST_EXIT_CODE
+            # Return test result - let the action handle emulator cleanup
+            exit $TEST_RESULT
 
       - name: Collect logs on failure
         if: failure()
