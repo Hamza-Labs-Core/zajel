@@ -1250,8 +1250,12 @@ jobs:
           arch: x86_64
           emulator-boot-timeout: 600
           disable-animations: true
-          working-directory: ${{ github.workspace }}
+          working-directory: ${{ github.workspace }}/e2e-tests
           script: |
+            # Show current directory
+            echo "Current directory: $(pwd)"
+            ls -la
+
             # Install APK
             adb install "$APK_PATH"
 
@@ -1260,8 +1264,7 @@ jobs:
             sleep 10
             curl -sf http://localhost:4723/status && echo "✓ Appium is ready"
 
-            # Run E2E tests from e2e-tests directory
-            cd ${{ github.workspace }}/e2e-tests
+            # Run E2E tests
             pytest tests/test_pairing.py -v --timeout=300 -x
 
       - name: Collect logs on failure
