@@ -1189,7 +1189,7 @@ jobs:
     name: E2E Tests
     needs: [build-android, deploy-cf-signaling, deploy-cf-admin]
     if: ${{ !inputs.skip_e2e }}
-    runs-on: macos-latest
+    runs-on: macos-13  # Intel-based runner with HAXM support for x86_64 emulators
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -1211,17 +1211,17 @@ jobs:
 
       - name: Create AVD and start emulator
         run: |
-          # Install system image (arm64-v8a for Apple Silicon macOS runners)
+          # Install system image (x86_64 for Intel-based macos-13 with HAXM)
           echo "Installing Android system image..."
-          sdkmanager "system-images;android-31;google_apis;arm64-v8a" --sdk_root=$ANDROID_HOME
+          sdkmanager "system-images;android-31;google_apis;x86_64" --sdk_root=$ANDROID_HOME
 
           # Create AVD
           echo "Creating AVD..."
-          echo "no" | avdmanager create avd -n test_device -k "system-images;android-31;google_apis;arm64-v8a" --force
+          echo "no" | avdmanager create avd -n test_device -k "system-images;android-31;google_apis;x86_64" --force
 
-          # Start emulator in background
+          # Start emulator in background with HAXM acceleration
           echo "Starting emulator..."
-          $ANDROID_HOME/emulator/emulator -avd test_device -no-window -no-audio -no-snapshot -gpu host &
+          $ANDROID_HOME/emulator/emulator -avd test_device -no-window -no-audio -no-snapshot -gpu swiftshader_indirect &
 
           # Wait for emulator to boot
           echo "Waiting for emulator to boot..."
