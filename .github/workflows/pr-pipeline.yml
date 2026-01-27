@@ -1275,14 +1275,8 @@ jobs:
             curl -sf http://localhost:4723/status && echo "✓ Appium is ready"
 
             # Run E2E tests
-            pytest tests/test_pairing.py -v --timeout=300 -x || TEST_RESULT=$?
-            TEST_RESULT=${TEST_RESULT:-0}
-
-            # Stop Appium
-            pkill -f appium || true
-
-            # Return test result - let the action handle emulator cleanup
-            exit $TEST_RESULT
+            pytest tests/test_pairing.py -v --timeout=300 -x
+            # Test result is returned automatically by the script exit code
 
       - name: Collect logs on failure
         if: failure()
