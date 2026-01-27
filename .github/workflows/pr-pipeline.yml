@@ -1242,24 +1242,26 @@ jobs:
 
       - name: Run E2E tests with emulator
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          APK_PATH: ${{ steps.apk.outputs.APK_PATH }}
+          APPIUM_SERVER_COUNT: "1"
         with:
           api-level: 31
           arch: x86_64
           emulator-boot-timeout: 600
           disable-animations: true
+          working-directory: ${{ github.workspace }}
           script: |
             # Install APK
-            adb install "${{ steps.apk.outputs.APK_PATH }}"
+            adb install "$APK_PATH"
 
             # Start Appium in background
             appium --address 127.0.0.1 --port 4723 --relaxed-security &
             sleep 10
             curl -sf http://localhost:4723/status && echo "✓ Appium is ready"
 
-            # Run E2E tests
-            cd e2e-tests
-            export APK_PATH="${{ steps.apk.outputs.APK_PATH }}"
-            export APPIUM_SERVER_COUNT="1"
+            # Run E2E tests from e2e-tests directory
+            cd ${{ github.workspace }}/e2e-tests
             pytest tests/test_pairing.py -v --timeout=300 -x
 
       - name: Collect logs on failure
