@@ -405,7 +405,9 @@ jobs:
   # Phase 3 gate - after all builds and deployments
   phase-3-build-deploy:
     name: "✓ Phase 3: Build & Deploy"
-    needs: [build-android, build-ios, build-linux, build-macos, build-web, deploy-cf-signaling, deploy-cf-admin, deploy-cf-website, deploy-vps]
+    # Note: deploy-vps removed from dependencies - VPS deployment failures should not block pipeline
+    # E2E tests now run on GitHub Actions runners with hardware-accelerated emulators
+    needs: [build-android, build-ios, build-linux, build-macos, build-web, deploy-cf-signaling, deploy-cf-admin, deploy-cf-website]
     runs-on: ubuntu-latest
     steps:
       - run: echo "All builds and deployments completed"
