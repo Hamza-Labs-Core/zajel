@@ -1255,6 +1255,9 @@ jobs:
           arch: x86_64
           emulator-boot-timeout: 600
           disable-animations: true
+          force-avd-creation: true
+          # Disable snapshots to prevent cleanup hanging
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           working-directory: ${{ github.workspace }}/e2e-tests
           script: |
             # Show current directory
@@ -1271,13 +1274,7 @@ jobs:
 
             # Run E2E tests
             pytest tests/test_pairing.py -v --timeout=300 -x
-            TEST_EXIT_CODE=$?
-
-            # Signal emulator to stop (helps action cleanup)
-            adb emu kill 2>/dev/null || true
-            sleep 3
-
-            exit $TEST_EXIT_CODE
+            # Script exits with test result - action handles emulator cleanup
 
       - name: Collect logs on failure
         if: failure()
