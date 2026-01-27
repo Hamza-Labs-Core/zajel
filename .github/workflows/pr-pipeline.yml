@@ -1248,6 +1248,8 @@ jobs:
         env:
           APK_PATH: ${{ steps.apk.outputs.APK_PATH }}
           APPIUM_SERVER_COUNT: "1"
+          # Skip the 20-second graceful shutdown wait to prevent action cleanup hanging
+          ANDROID_EMULATOR_WAIT_TIME_BEFORE_KILL: "0"
         with:
           api-level: 31
           arch: x86_64
@@ -1269,8 +1271,13 @@ jobs:
 
             # Run E2E tests
             pytest tests/test_pairing.py -v --timeout=300 -x
-            # Let the reactivecircus action handle emulator cleanup
-            # Manual cleanup was causing conflicts and hanging the job
+            TEST_EXIT_CODE=$?
+
+            # Signal emulator to stop (helps action cleanup)
+            adb emu kill 2>/dev/null || true
+            sleep 3
+
+            exit $TEST_EXIT_CODE
 
       - name: Collect logs on failure
         if: failure()
