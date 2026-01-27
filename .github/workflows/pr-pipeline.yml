@@ -1245,10 +1245,12 @@ jobs:
 
       - name: Run E2E tests with emulator
         uses: reactivecircus/android-emulator-runner@v2
+        # Step timeout to prevent action cleanup from hanging forever
+        timeout-minutes: 15
         env:
           APK_PATH: ${{ steps.apk.outputs.APK_PATH }}
           APPIUM_SERVER_COUNT: "1"
-          # Skip the 20-second graceful shutdown wait to prevent action cleanup hanging
+          # Skip the graceful shutdown wait to speed up cleanup
           ANDROID_EMULATOR_WAIT_TIME_BEFORE_KILL: "0"
         with:
           api-level: 31
@@ -1256,7 +1258,7 @@ jobs:
           emulator-boot-timeout: 600
           disable-animations: true
           force-avd-creation: true
-          # Disable snapshots to prevent cleanup hanging
+          # Disable snapshots to speed up startup and cleanup
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           working-directory: ${{ github.workspace }}/e2e-tests
           script: |
@@ -1274,7 +1276,19 @@ jobs:
 
             # Run E2E tests
             pytest tests/test_pairing.py -v --timeout=300 -x
-            # Script exits with test result - action handles emulator cleanup
+            TEST_EXIT_CODE=$?
+
+            # Kill emulator to speed up action cleanup
+            echo "Tests done. Killing emulator..."
+            adb emu kill 2>/dev/null || true
+            sleep 2
+
+            # Kill any remaining emulator processes to ensure cleanup doesn't hang
+            # Use specific patterns that won't match our shell
+            killall -9 qemu-system-x86_64 2>/dev/null || true
+            killall -9 adb 2>/dev/null || true
+
+            exit $TEST_EXIT_CODE
 
       - name: Collect logs on failure
         if: failure()
