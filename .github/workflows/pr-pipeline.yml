@@ -1245,38 +1245,43 @@ jobs:
 
       - name: Run E2E tests with emulator
         uses: reactivecircus/android-emulator-runner@v2
-        # Step timeout to prevent action cleanup from hanging forever
-        timeout-minutes: 15
+        timeout-minutes: 12
         env:
           APK_PATH: ${{ steps.apk.outputs.APK_PATH }}
           APPIUM_SERVER_COUNT: "1"
-          # Skip the graceful shutdown wait to speed up cleanup
-          ANDROID_EMULATOR_WAIT_TIME_BEFORE_KILL: "0"
         with:
           api-level: 31
           arch: x86_64
-          emulator-boot-timeout: 600
+          avd-name: test-avd
+          emulator-boot-timeout: 300
           disable-animations: true
           force-avd-creation: true
-          # Disable snapshots to speed up startup and cleanup
-          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          emulator-options: -no-snapshot-load -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -wipe-data
           working-directory: ${{ github.workspace }}/e2e-tests
           script: |
-            # Show current directory
             echo "Current directory: $(pwd)"
-            ls -la
 
             # Install APK
             adb install "$APK_PATH"
 
             # Start Appium in background
             appium --address 127.0.0.1 --port 4723 --relaxed-security &
+            APPIUM_PID=$!
             sleep 10
             curl -sf http://localhost:4723/status && echo "✓ Appium is ready"
 
             # Run E2E tests
+            set +e
             pytest tests/test_pairing.py -v --timeout=300 -x
-            # Test result is returned automatically by the script exit code
+            TEST_EXIT=$?
+            set -e
+
+            # Cleanup before action's cleanup to avoid hang
+            kill $APPIUM_PID 2>/dev/null || true
+            adb emu kill || true
+            sleep 3
+
+            exit $TEST_EXIT
 
       - name: Collect logs on failure
         if: failure()
