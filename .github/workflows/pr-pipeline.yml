@@ -1244,16 +1244,24 @@ jobs:
           echo "Found APK: $APK_FILE"
 
       - name: Create and start emulator
-        timeout-minutes: 6
+        timeout-minutes: 8
+        env:
+          ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
         run: |
           # Add Android SDK tools to PATH
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+
+          # Create AVD home directory
+          mkdir -p "$ANDROID_AVD_HOME"
 
           echo "Installing system image..."
           yes | sdkmanager "system-images;android-31;google_apis;x86_64" --channel=0
 
           echo "Creating AVD..."
           echo "no" | avdmanager create avd -n test-avd -k "system-images;android-31;google_apis;x86_64" --force
+
+          echo "Listing AVDs..."
+          avdmanager list avd
 
           echo "Starting emulator..."
           nohup $ANDROID_HOME/emulator/emulator -avd test-avd -no-snapshot-load -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -wipe-data 2>&1 &
