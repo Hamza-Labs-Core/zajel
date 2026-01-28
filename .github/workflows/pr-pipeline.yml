@@ -1244,20 +1244,26 @@ jobs:
           echo "Found APK: $APK_FILE"
 
       - name: Create and start emulator
-        timeout-minutes: 5
+        timeout-minutes: 6
         run: |
+          # Add Android SDK tools to PATH
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+
+          echo "Installing system image..."
+          yes | sdkmanager "system-images;android-31;google_apis;x86_64" --channel=0
+
           echo "Creating AVD..."
           echo "no" | avdmanager create avd -n test-avd -k "system-images;android-31;google_apis;x86_64" --force
 
           echo "Starting emulator..."
-          nohup $ANDROID_HOME/emulator/emulator -avd test-avd -no-snapshot-load -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -wipe-data &
+          nohup $ANDROID_HOME/emulator/emulator -avd test-avd -no-snapshot-load -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -wipe-data 2>&1 &
           EMULATOR_PID=$!
           echo "EMULATOR_PID=$EMULATOR_PID" >> $GITHUB_ENV
 
           echo "Waiting for emulator to boot..."
           adb wait-for-device
           timeout 180 adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 2; done'
-          echo "✅ Emulator booted"
+          echo "Emulator booted"
 
       - name: Run E2E tests
         timeout-minutes: 5
