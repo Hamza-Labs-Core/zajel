@@ -1263,12 +1263,17 @@ jobs:
           echo "Listing AVDs..."
           avdmanager list avd
 
+          echo "Restarting adb server..."
+          adb kill-server || true
+          adb start-server
+
           echo "Starting emulator..."
           nohup $ANDROID_HOME/emulator/emulator -avd test-avd -no-snapshot-load -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -wipe-data 2>&1 &
           EMULATOR_PID=$!
           echo "EMULATOR_PID=$EMULATOR_PID" >> $GITHUB_ENV
 
           echo "Waiting for emulator to boot..."
+          sleep 5
           adb wait-for-device
           timeout 180 adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 2; done'
           echo "Emulator booted"
