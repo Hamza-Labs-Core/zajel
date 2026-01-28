@@ -1243,56 +1243,66 @@ jobs:
           echo "APK_PATH=$APK_FILE" >> $GITHUB_OUTPUT
           echo "Found APK: $APK_FILE"
 
-      - name: Run E2E tests with emulator
-        uses: reactivecircus/android-emulator-runner@v2
-        timeout-minutes: 12
+      - name: Create and start emulator
+        timeout-minutes: 5
+        run: |
+          echo "Creating AVD..."
+          echo "no" | avdmanager create avd -n test-avd -k "system-images;android-31;google_apis;x86_64" --force
+
+          echo "Starting emulator..."
+          nohup $ANDROID_HOME/emulator/emulator -avd test-avd -no-snapshot-load -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -wipe-data &
+          EMULATOR_PID=$!
+          echo "EMULATOR_PID=$EMULATOR_PID" >> $GITHUB_ENV
+
+          echo "Waiting for emulator to boot..."
+          adb wait-for-device
+          timeout 180 adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 2; done'
+          echo "✅ Emulator booted"
+
+      - name: Run E2E tests
+        timeout-minutes: 5
         env:
           APK_PATH: ${{ steps.apk.outputs.APK_PATH }}
-          APPIUM_SERVER_COUNT: "1"
-        with:
-          api-level: 31
-          arch: x86_64
-          avd-name: test-avd
-          emulator-boot-timeout: 300
-          disable-animations: true
-          force-avd-creation: true
-          emulator-options: -no-snapshot-load -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -wipe-data
-          working-directory: ${{ github.workspace }}/e2e-tests
-          script: |
-            echo "Current directory: $(pwd)"
+        working-directory: ${{ github.workspace }}/e2e-tests
+        run: |
+          # Disable animations
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
 
-            # Install APK
-            adb install "$APK_PATH"
+          # Install APK
+          adb install "$APK_PATH"
 
-            # Start Appium in background
-            appium --address 127.0.0.1 --port 4723 --relaxed-security &
-            APPIUM_PID=$!
-            sleep 10
-            curl -sf http://localhost:4723/status && echo "✓ Appium is ready"
+          # Start Appium in background
+          appium --address 127.0.0.1 --port 4723 --relaxed-security &
+          APPIUM_PID=$!
+          sleep 10
+          curl -sf http://localhost:4723/status && echo "✓ Appium is ready"
 
-            # Run E2E tests
-            set +e
-            pytest tests/test_pairing.py -v --timeout=300 -x
-            TEST_EXIT=$?
-            set -e
+          # Run E2E tests
+          pytest tests/test_pairing.py -v --timeout=300 -x
+          TEST_RESULT=$?
 
-            # Cleanup before action's cleanup to avoid hang
-            kill $APPIUM_PID 2>/dev/null || true
-            adb emu kill || true
-            sleep 3
+          # Cleanup Appium
+          kill $APPIUM_PID 2>/dev/null || true
 
-            exit $TEST_EXIT
+          exit $TEST_RESULT
+
+      - name: Stop emulator
+        if: always()
+        timeout-minutes: 1
+        run: |
+          adb emu kill 2>/dev/null || true
+          kill $EMULATOR_PID 2>/dev/null || true
+          pkill -9 qemu-system-x86_64 2>/dev/null || true
 
       - name: Collect logs on failure
         if: failure()
-        timeout-minutes: 2
+        timeout-minutes: 1
         run: |
           mkdir -p test-artifacts
-          # Use timeout command to prevent adb commands from hanging
-          timeout 30 adb logcat -d > test-artifacts/logcat.txt 2>&1 || true
+          timeout 10 adb logcat -d > test-artifacts/logcat.txt 2>&1 || true
           cp /tmp/appium*.log test-artifacts/ 2>/dev/null || true
-          # Capture emulator status
-          timeout 10 adb devices > test-artifacts/adb-devices.txt 2>&1 || true
 
       - name: Upload test artifacts
         if: failure()
