@@ -1277,8 +1277,11 @@ jobs:
         timeout-minutes: 5
         env:
           APK_PATH: ${{ steps.apk.outputs.APK_PATH }}
+          ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
         working-directory: ${{ github.workspace }}/e2e-tests
         run: |
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+
           # Disable animations
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
@@ -1306,6 +1309,7 @@ jobs:
         if: always()
         timeout-minutes: 1
         run: |
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
           adb emu kill 2>/dev/null || true
           kill $EMULATOR_PID 2>/dev/null || true
           pkill -9 qemu-system-x86_64 2>/dev/null || true
@@ -1314,6 +1318,7 @@ jobs:
         if: failure()
         timeout-minutes: 1
         run: |
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
           mkdir -p test-artifacts
           timeout 10 adb logcat -d > test-artifacts/logcat.txt 2>&1 || true
           cp /tmp/appium*.log test-artifacts/ 2>/dev/null || true
