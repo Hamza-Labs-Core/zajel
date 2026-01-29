@@ -874,8 +874,8 @@ jobs:
 
           echo "Waiting for emulators to boot..."
           sleep 5
-          adb wait-for-device -s emulator-5554
-          adb wait-for-device -s emulator-5556
+          adb -s emulator-5554 wait-for-device
+          adb -s emulator-5556 wait-for-device
           timeout 180 adb -s emulator-5554 shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 2; done'
           echo "Emulator 1 booted"
           timeout 180 adb -s emulator-5556 shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 2; done'
