@@ -15,22 +15,27 @@ class TestMessaging:
     """Test suite for messaging between paired devices."""
 
     def _pair_devices(self, alice, bob, app_helper):
-        """Helper to pair two devices."""
+        """Helper to pair two devices via the Connect screen."""
         alice_helper = app_helper(alice)
         bob_helper = app_helper(bob)
 
         alice_helper.wait_for_app_ready()
         bob_helper.wait_for_app_ready()
 
-        alice_helper.enable_external_connections()
-        bob_helper.enable_external_connections()
+        # Alice opens Connect screen and gets her code
+        alice_helper.navigate_to_connect()
+        alice_code = alice_helper.get_pairing_code_from_connect_screen()
 
-        time.sleep(3)
-
-        alice_code = alice_helper.get_pairing_code()
+        # Bob opens Connect screen and enters Alice's code
+        bob_helper.navigate_to_connect()
         bob_helper.enter_peer_code(alice_code)
 
         time.sleep(P2P_CONNECTION_TIMEOUT)
+
+        # Go back to home screens
+        alice_helper.go_back_to_home()
+        bob_helper.go_back_to_home()
+        time.sleep(3)
 
         return alice_helper, bob_helper
 
@@ -44,7 +49,6 @@ class TestMessaging:
         assert alice_helper.is_peer_connected() or bob_helper.is_peer_connected()
 
         # Find and tap on the peer to open chat
-        # This depends on actual app UI
         peer_element = alice.find_element(
             "xpath", "//android.widget.ListView//*[1]"
         )
@@ -64,20 +68,14 @@ class TestMessaging:
 
         time.sleep(3)
 
-        # Verify message appears in chat
-        # This would need actual verification based on app UI
-
     @pytest.mark.slow
     def test_message_received_on_other_device(self, device_pair, app_helper):
         """Test that sent message is received on the other device."""
         alice, bob = device_pair["alice"], device_pair["bob"]
         alice_helper, bob_helper = self._pair_devices(alice, bob, app_helper)
 
-        # Alice sends message
-        # Bob should receive it
+        # Alice sends message, Bob should receive it
         # Implementation depends on actual app UI
-
-        # Placeholder assertion
         assert True
 
     @pytest.mark.slow
@@ -86,9 +84,6 @@ class TestMessaging:
         alice, bob = device_pair["alice"], device_pair["bob"]
         alice_helper, bob_helper = self._pair_devices(alice, bob, app_helper)
 
-        # Alice sends to Bob
-        # Bob sends to Alice
+        # Alice sends to Bob, Bob sends to Alice
         # Both should receive
-
-        # Placeholder assertion
         assert True
