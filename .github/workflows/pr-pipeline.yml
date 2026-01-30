@@ -892,6 +892,18 @@ jobs:
         run: |
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 
+          # Wait for package manager service to be ready on both emulators
+          for EMU in emulator-5554 emulator-5556; do
+            echo "Waiting for package manager on $EMU..."
+            for i in $(seq 1 30); do
+              if adb -s $EMU shell pm list packages 2>/dev/null | grep -q "android"; then
+                echo "Package manager ready on $EMU"
+                break
+              fi
+              sleep 2
+            done
+          done
+
           # Disable animations on both emulators
           for EMU in emulator-5554 emulator-5556; do
             adb -s $EMU shell settings put global window_animation_scale 0
