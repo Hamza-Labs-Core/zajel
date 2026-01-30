@@ -378,11 +378,9 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
-      - name: Enable Windows desktop and prepare
+      - name: Enable Windows desktop
         working-directory: packages/app
-        run: |
-          flutter config --enable-windows-desktop
-          flutter create --platforms=windows . 2>$null; $true
+        run: flutter config --enable-windows-desktop
 
       - name: Install dependencies
         working-directory: packages/app
@@ -536,6 +534,26 @@ jobs:
             release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup old pre-releases (keep latest 5)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Fetching all pre-releases..."
+          PRERELEASES=$(gh release list --limit 100 --json tagName,isPrerelease,createdAt \
+            --jq '[.[] | select(.isPrerelease)] | sort_by(.createdAt) | reverse | .[5:] | .[].tagName')
+
+          if [ -z "$PRERELEASES" ]; then
+            echo "No old pre-releases to clean up (5 or fewer exist)"
+            exit 0
+          fi
+
+          echo "Deleting old pre-releases:"
+          for TAG in $PRERELEASES; do
+            echo "  Deleting $TAG..."
+            gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          done
+          echo "Cleanup complete"
 
   # ============================================
   # PHASE 3: Deploy to QA Environment (parallel with builds)
@@ -956,6 +974,13 @@ jobs:
             adb -s $EMU shell settings put global window_animation_scale 0
             adb -s $EMU shell settings put global transition_animation_scale 0
             adb -s $EMU shell settings put global animator_duration_scale 0
+          done
+
+          # Enable accessibility so Flutter exposes its semantics tree to UiAutomator2
+          # Flutter only builds the semantics tree when accessibility is enabled
+          for EMU in emulator-5554 emulator-5556; do
+            adb -s $EMU shell settings put secure accessibility_enabled 1
+            echo "Accessibility enabled on $EMU"
           done
 
           # Install APK on both emulators

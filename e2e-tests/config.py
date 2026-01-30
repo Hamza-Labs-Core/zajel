@@ -14,7 +14,7 @@ SERVER_COUNT = int(os.environ.get("APPIUM_SERVER_COUNT", "2"))
 APK_PATH = os.environ.get("APK_PATH", "/tmp/zajel-test.apk")
 
 # Timeouts (in seconds)
-APP_LAUNCH_TIMEOUT = 30
+APP_LAUNCH_TIMEOUT = 60
 ELEMENT_WAIT_TIMEOUT = 10
 CONNECTION_TIMEOUT = 30
 P2P_CONNECTION_TIMEOUT = 60

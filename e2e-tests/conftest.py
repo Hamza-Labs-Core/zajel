@@ -133,12 +133,23 @@ class AppHelper:
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.common.by import By
 
-        WebDriverWait(self.driver, timeout).until(
-            EC.presence_of_element_located((
-                By.XPATH,
-                "//*[contains(@text, 'Zajel') or contains(@content-desc, 'Zajel')]"
-            ))
-        )
+        try:
+            WebDriverWait(self.driver, timeout).until(
+                EC.presence_of_element_located((
+                    By.XPATH,
+                    "//*[contains(@text, 'Zajel') or contains(@content-desc, 'Zajel')]"
+                ))
+            )
+        except Exception:
+            # Dump page source for debugging
+            print("=== PAGE SOURCE (app not ready) ===")
+            try:
+                source = self.driver.page_source
+                print(source[:5000] if source else "EMPTY PAGE SOURCE")
+            except Exception as e:
+                print(f"Failed to get page source: {e}")
+            print("=== END PAGE SOURCE ===")
+            raise
 
     def _find(self, text, timeout=10, partial=True):
         """Find an element by text, checking both @text and @content-desc.

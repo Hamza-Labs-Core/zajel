@@ -474,6 +474,25 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Delete all pre-releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Cleaning up all pre-releases after official release..."
+          PRERELEASES=$(gh release list --limit 100 --json tagName,isPrerelease \
+            --jq '[.[] | select(.isPrerelease)] | .[].tagName')
+
+          if [ -z "$PRERELEASES" ]; then
+            echo "No pre-releases to clean up"
+            exit 0
+          fi
+
+          for TAG in $PRERELEASES; do
+            echo "  Deleting pre-release $TAG..."
+            gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          done
+          echo "All pre-releases deleted"
+
   # Skip notification when no app changes
   skip-release:
     runs-on: ubuntu-latest
