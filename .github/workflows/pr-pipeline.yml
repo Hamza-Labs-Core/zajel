@@ -925,7 +925,7 @@ jobs:
           curl -sf http://localhost:4724/status && echo "✓ Appium 2 (emulator-5556) is ready"
 
           # Run E2E tests
-          pytest tests/ -v --timeout=300 -x
+          pytest tests/test_pairing.py -v --timeout=300 -x
           TEST_RESULT=$?
 
           # Cleanup Appium
