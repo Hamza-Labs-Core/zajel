@@ -977,11 +977,15 @@ jobs:
           done
 
           # Enable accessibility so Flutter exposes its semantics tree to UiAutomator2
-          # Flutter only builds the semantics tree when accessibility is enabled
+          # Flutter only builds the semantics tree when an accessibility service is active
           for EMU in emulator-5554 emulator-5556; do
+            # Enable TalkBack (available on google_apis images)
+            adb -s $EMU shell settings put secure enabled_accessibility_services com.google.android.marvin.talkback/com.google.android.marvin.talkback.TalkBackService 2>/dev/null || true
             adb -s $EMU shell settings put secure accessibility_enabled 1
+            adb -s $EMU shell settings put secure touch_exploration_enabled 1
             echo "Accessibility enabled on $EMU"
           done
+          sleep 3
 
           # Install APK on both emulators
           adb -s emulator-5554 install "$APK_PATH"
@@ -997,7 +1001,7 @@ jobs:
           curl -sf http://localhost:4724/status && echo "✓ Appium 2 (emulator-5556) is ready"
 
           # Run E2E tests (pairing first, then messaging, then reconnection)
-          pytest tests/test_pairing.py tests/test_messaging.py tests/test_reconnection.py -v --timeout=300
+          pytest tests/test_pairing.py tests/test_messaging.py tests/test_reconnection.py -v -s --timeout=300
           TEST_RESULT=$?
 
           # Cleanup Appium
