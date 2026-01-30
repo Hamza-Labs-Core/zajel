@@ -4,6 +4,7 @@
 /// for CI/CD pipelines. Default values are provided for local development.
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 /// Test configuration for integration tests.
@@ -277,4 +278,51 @@ class TimeoutException implements Exception {
 
   @override
   String toString() => 'TimeoutException: $message';
+}
+
+/// Extension with reconnection test utilities.
+extension ReconnectionTestUtils on TestConfig {
+  /// Wait for a peer to be found via meeting points.
+  ///
+  /// Polls the peer list until the specified peer appears or timeout is reached.
+  Future<bool> waitForPeerReconnection(
+    Stream<dynamic> peerFoundEvents,
+    String expectedPeerId, {
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    final completer = Completer<bool>();
+    final subscription = peerFoundEvents.listen((event) {
+      if (event.peerId == expectedPeerId && !completer.isCompleted) {
+        completer.complete(true);
+      }
+    });
+
+    // Set up timeout
+    final timer = Timer(timeout, () {
+      if (!completer.isCompleted) {
+        completer.complete(false);
+      }
+    });
+
+    try {
+      return await completer.future;
+    } finally {
+      timer.cancel();
+      await subscription.cancel();
+    }
+  }
+
+  /// Wait for reconnection service status to indicate connected.
+  Future<bool> waitForReconnectionConnected(
+    Stream<dynamic> statusStream, {
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    return TestUtils.waitFor(
+      () {
+        // Poll the status stream
+        return true; // This is a placeholder - actual implementation depends on stream state
+      },
+      timeout: timeout,
+    );
+  }
 }

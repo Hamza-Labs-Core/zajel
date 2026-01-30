@@ -58,6 +58,7 @@ export interface Env {
   ADMIN_USERS: DurableObjectNamespace;
   ZAJEL_ADMIN_JWT_SECRET: string;
   ZAJEL_BOOTSTRAP_URL?: string;
+  APP_VERSION?: string;
 }
 
 /**
