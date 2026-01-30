@@ -52,4 +52,5 @@ target_compile_definitions(pinned_websocket_plugin PRIVATE
   _CRT_SECURE_NO_WARNINGS
   WIN32_LEAN_AND_MEAN
   NOMINMAX
+  FLUTTER_PLUGIN_IMPL
 )
