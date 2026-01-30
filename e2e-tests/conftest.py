@@ -124,120 +124,169 @@ class AppHelper:
         self.driver = driver
 
     def wait_for_app_ready(self, timeout: int = APP_LAUNCH_TIMEOUT):
-        """Wait for the app to be fully loaded (home screen with 'Zajel' title)."""
+        """Wait for the app to be fully loaded (home screen with 'Zajel' title).
+
+        Flutter exposes text via @text or @content-desc depending on the widget.
+        AppBar title typically shows up as @text, but we check both to be safe.
+        """
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.common.by import By
 
         WebDriverWait(self.driver, timeout).until(
-            EC.presence_of_element_located((By.XPATH, "//*[contains(@text, 'Zajel')]"))
+            EC.presence_of_element_located((
+                By.XPATH,
+                "//*[contains(@text, 'Zajel') or contains(@content-desc, 'Zajel')]"
+            ))
         )
 
-    def navigate_to_connect(self):
-        """Navigate to the Connect screen by tapping the QR scanner icon or FAB."""
+    def _find(self, text, timeout=10, partial=True):
+        """Find an element by text, checking both @text and @content-desc.
+
+        Flutter renders its own widgets and may expose text content via either
+        attribute depending on the widget type and semantics configuration.
+        """
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.common.by import By
+
+        fn = "contains" if partial else ""
+        if partial:
+            xpath = f"//*[contains(@text, '{text}') or contains(@content-desc, '{text}')]"
+        else:
+            xpath = f"//*[@text='{text}' or @content-desc='{text}']"
+
+        return WebDriverWait(self.driver, timeout).until(
+            EC.presence_of_element_located((By.XPATH, xpath))
+        )
+
+    def navigate_to_connect(self):
+        """Navigate to the Connect screen by tapping the FAB or QR icon."""
         from selenium.common.exceptions import TimeoutException
 
-        # Try the FAB "Connect" button first (more reliable for Flutter)
+        # Try the FAB "Connect" button first
         try:
-            connect_btn = WebDriverWait(self.driver, 5).until(
-                EC.presence_of_element_located(
-                    (By.XPATH, "//*[contains(@text, 'Connect') and not(contains(@text, 'Connected'))]")
-                )
-            )
-            connect_btn.click()
+            btn = self._find("Connect", timeout=5)
+            # Avoid clicking "Connected" or "Connected Peers"
+            if btn.text and "Connected" in btn.text:
+                raise TimeoutException("Found 'Connected' not 'Connect'")
+            btn.click()
         except TimeoutException:
-            # Fallback: try the QR scanner icon button via tooltip/content-desc
+            # Fallback: QR scanner icon via tooltip
             self.driver.find_element(
                 "xpath", "//*[contains(@content-desc, 'Connect to peer')]"
             ).click()
 
-        # Wait for Connect screen to load (has "My Code" tab)
-        WebDriverWait(self.driver, 10).until(
-            EC.presence_of_element_located((By.XPATH, "//*[contains(@text, 'My Code')]"))
-        )
+        # Wait for Connect screen to load
+        self._find("My Code")
 
     def wait_for_signaling_connected(self, timeout: int = 60):
-        """Wait until signaling server connects and pairing code appears.
-
-        The Connect screen auto-connects to the signaling server on load.
-        The home screen shows 'Code: XXXXXX' when connected.
-        """
-        import time
-        from selenium.webdriver.common.by import By
+        """Wait until signaling server connects and pairing code appears."""
+        import time as _time
         from selenium.common.exceptions import NoSuchElementException
 
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        deadline = _time.time() + timeout
+        while _time.time() < deadline:
             try:
-                # Check for pairing code on home screen
-                el = self.driver.find_element("xpath", "//*[starts-with(@text, 'Code: ')]")
-                if el and el.text.startswith('Code: '):
+                el = self.driver.find_element(
+                    "xpath",
+                    "//*[starts-with(@text, 'Code: ') or starts-with(@content-desc, 'Code: ')]"
+                )
+                text = el.text or el.get_attribute("content-desc") or ""
+                if text.startswith('Code: '):
                     return
             except NoSuchElementException:
                 pass
-            time.sleep(2)
+            _time.sleep(2)
 
         raise TimeoutError("Signaling server did not connect within timeout")
 
     def get_pairing_code(self) -> str:
         """Get the pairing code from the home screen ('Code: XXXXXX' text)."""
-        code_element = self.driver.find_element(
-            "xpath", "//*[starts-with(@text, 'Code: ')]"
+        el = self.driver.find_element(
+            "xpath",
+            "//*[starts-with(@text, 'Code: ') or starts-with(@content-desc, 'Code: ')]"
         )
-        # Text is "Code: ABCDEF", extract just the code
-        return code_element.text.replace('Code: ', '').strip()
+        text = el.text or el.get_attribute("content-desc") or ""
+        return text.replace('Code: ', '').strip()
 
     def get_pairing_code_from_connect_screen(self) -> str:
-        """Get the pairing code from the Connect screen (large display text).
+        """Get the pairing code from the Connect screen (large 6-char display).
 
-        On the Connect screen "My Code" tab, the code is shown in large
-        headlineMedium text with letter-spacing. It's a 6-char uppercase string.
+        Waits for a 6-character uppercase alphanumeric string to appear.
         """
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.common.by import By
 
-        # Wait for the code to appear (not the hint text, not "Share this code...")
-        # The code is displayed as standalone uppercase text, 6 chars
-        WebDriverWait(self.driver, 30).until(
-            EC.presence_of_element_located(
-                (By.XPATH, "//*[string-length(@text) = 6 and translate(@text, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') = @text]")
-            )
+        # Match 6-char uppercase text (the pairing code)
+        xpath = (
+            "//*["
+            "(string-length(@text) = 6 and translate(@text, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') = @text)"
+            " or "
+            "(string-length(@content-desc) = 6 and translate(@content-desc, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') = @content-desc)"
+            "]"
         )
-        el = self.driver.find_element(
-            "xpath", "//*[string-length(@text) = 6 and translate(@text, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') = @text]"
+        el = WebDriverWait(self.driver, 30).until(
+            EC.presence_of_element_located((By.XPATH, xpath))
         )
-        return el.text.strip()
+        return (el.text or el.get_attribute("content-desc") or "").strip()
 
     def enter_peer_code(self, code: str):
-        """Enter a peer's pairing code on the Connect screen and submit.
-
-        Assumes we're already on the Connect screen "My Code" tab.
-        The tab has a TextField (hint: "Enter pairing code") and "Connect" button.
-        """
+        """Enter a peer's pairing code on the Connect screen and submit."""
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.common.by import By
 
-        # Find the text input field
         input_field = WebDriverWait(self.driver, 10).until(
             EC.presence_of_element_located((By.XPATH, "//android.widget.EditText"))
         )
         input_field.clear()
         input_field.send_keys(code)
 
-        # Tap the "Connect" button (the ElevatedButton, not the FAB)
-        # Look for a button-like element with "Connect" text near the input
+        # Tap the "Connect" ElevatedButton
         self.driver.find_element(
-            "xpath", "//*[contains(@text, 'Connect') and @clickable='true']"
+            "xpath",
+            "//*[(contains(@text, 'Connect') or contains(@content-desc, 'Connect')) and @clickable='true']"
         ).click()
 
     def go_back_to_home(self):
         """Navigate back to the home screen."""
         self.driver.back()
+
+    def open_chat_with_peer(self, peer_name: str = None):
+        """Tap on a connected peer to open the chat screen."""
+        if peer_name:
+            self._find(peer_name).click()
+        else:
+            # Tap the first peer card that shows "Connected"
+            self._find("Connected").click()
+
+    def send_message(self, text: str):
+        """Type and send a message in the chat screen."""
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+
+        input_field = WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, "//android.widget.EditText"))
+        )
+        input_field.send_keys(text)
+
+        # Tap send button (icon button with send content-desc or text)
+        self.driver.find_element(
+            "xpath",
+            "//*[contains(@content-desc, 'end') or contains(@content-desc, 'Send')]"
+        ).click()
+
+    def has_message(self, text: str) -> bool:
+        """Check if a message with the given text is visible."""
+        from selenium.common.exceptions import NoSuchElementException
+        try:
+            self._find(text, timeout=5)
+            return True
+        except Exception:
+            return False
 
     def is_peer_connected(self, peer_name: str = None) -> bool:
         """Check if a peer shows as 'Connected' on the home screen."""
@@ -245,21 +294,24 @@ class AppHelper:
         try:
             if peer_name:
                 self.driver.find_element(
-                    "xpath", f"//*[contains(@text, '{peer_name}')]"
+                    "xpath",
+                    f"//*[contains(@text, '{peer_name}') or contains(@content-desc, '{peer_name}')]"
                 )
-            # Look for "Connected" status text in a peer card
             self.driver.find_element(
-                "xpath", "//*[@text='Connected']"
+                "xpath",
+                "//*[@text='Connected' or @content-desc='Connected']"
             )
             return True
-        except NoSuchElementException:
+        except (NoSuchElementException, Exception):
             return False
 
     def is_status_online(self) -> bool:
         """Check if the signaling status shows 'Online'."""
         from selenium.common.exceptions import NoSuchElementException
         try:
-            self.driver.find_element("xpath", "//*[@text='Online']")
+            self.driver.find_element(
+                "xpath", "//*[@text='Online' or @content-desc='Online']"
+            )
             return True
         except NoSuchElementException:
             return False

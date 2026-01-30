@@ -48,25 +48,16 @@ class TestMessaging:
         # Verify connected
         assert alice_helper.is_peer_connected() or bob_helper.is_peer_connected()
 
-        # Find and tap on the peer to open chat
-        peer_element = alice.find_element(
-            "xpath", "//android.widget.ListView//*[1]"
-        )
-        peer_element.click()
-
+        # Alice opens chat with the connected peer
+        alice_helper.open_chat_with_peer()
         time.sleep(2)
 
-        # Find message input and send a message
-        message_input = alice.find_element("xpath", "//android.widget.EditText")
-        message_input.send_keys("Hello from Alice!")
-
-        # Find and click send button
-        send_button = alice.find_element(
-            "xpath", "//*[contains(@content-desc, 'send') or contains(@text, 'Send')]"
-        )
-        send_button.click()
-
+        # Alice sends a message
+        alice_helper.send_message("Hello from Alice!")
         time.sleep(3)
+
+        # Verify Alice can see her sent message
+        assert alice_helper.has_message("Hello from Alice!")
 
     @pytest.mark.slow
     def test_message_received_on_other_device(self, device_pair, app_helper):
@@ -74,9 +65,20 @@ class TestMessaging:
         alice, bob = device_pair["alice"], device_pair["bob"]
         alice_helper, bob_helper = self._pair_devices(alice, bob, app_helper)
 
-        # Alice sends message, Bob should receive it
-        # Implementation depends on actual app UI
-        assert True
+        assert alice_helper.is_peer_connected() or bob_helper.is_peer_connected()
+
+        # Alice opens chat and sends a message
+        alice_helper.open_chat_with_peer()
+        time.sleep(2)
+        alice_helper.send_message("Can you see this?")
+        time.sleep(5)
+
+        # Bob opens chat with Alice
+        bob_helper.open_chat_with_peer()
+        time.sleep(2)
+
+        # Bob should see Alice's message
+        assert bob_helper.has_message("Can you see this?")
 
     @pytest.mark.slow
     def test_bidirectional_messaging(self, device_pair, app_helper):
@@ -84,6 +86,21 @@ class TestMessaging:
         alice, bob = device_pair["alice"], device_pair["bob"]
         alice_helper, bob_helper = self._pair_devices(alice, bob, app_helper)
 
-        # Alice sends to Bob, Bob sends to Alice
-        # Both should receive
-        assert True
+        assert alice_helper.is_peer_connected() or bob_helper.is_peer_connected()
+
+        # Alice opens chat and sends message
+        alice_helper.open_chat_with_peer()
+        time.sleep(2)
+        alice_helper.send_message("Hello Bob!")
+        time.sleep(3)
+
+        # Bob opens chat and verifies Alice's message, then replies
+        bob_helper.open_chat_with_peer()
+        time.sleep(2)
+        assert bob_helper.has_message("Hello Bob!")
+
+        bob_helper.send_message("Hi Alice!")
+        time.sleep(3)
+
+        # Alice should see Bob's reply
+        assert alice_helper.has_message("Hi Alice!")
