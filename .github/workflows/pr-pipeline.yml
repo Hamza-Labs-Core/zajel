@@ -361,6 +361,52 @@ jobs:
           retention-days: 1
 
   # ----------------------------------------
+  # Build Windows
+  # ----------------------------------------
+  build-windows:
+    name: Build Windows
+    needs: [tag-prerelease]
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Enable Windows desktop and prepare
+        working-directory: packages/app
+        run: |
+          flutter config --enable-windows-desktop
+          flutter create --platforms=windows . 2>$null; $true
+
+      - name: Install dependencies
+        working-directory: packages/app
+        run: flutter pub get
+
+      - name: Build Windows
+        working-directory: packages/app
+        run: |
+          flutter build windows --release `
+            --dart-define=ENV=qa `
+            --dart-define=VERSION=${{ env.VERSION }} `
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} `
+            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
+
+          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath zajel-${{ env.VERSION }}-windows.zip
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: packages/app/zajel-${{ env.VERSION }}-windows.zip
+          retention-days: 1
+
+  # ----------------------------------------
   # Build Web
   # ----------------------------------------
   build-web:
@@ -407,7 +453,7 @@ jobs:
     name: "✓ Phase 3: Build & Deploy"
     # Note: deploy-vps removed from dependencies - VPS deployment failures should not block pipeline
     # E2E tests now run on GitHub Actions runners with hardware-accelerated emulators
-    needs: [build-android, build-ios, build-linux, build-macos, build-web, deploy-cf-signaling, deploy-cf-admin, deploy-cf-website]
+    needs: [build-android, build-ios, build-linux, build-macos, build-windows, build-web, deploy-cf-signaling, deploy-cf-admin, deploy-cf-website]
     runs-on: ubuntu-latest
     steps:
       - run: echo "All builds and deployments completed"
@@ -463,6 +509,7 @@ jobs:
           echo "| iOS | zajel-${{ env.VERSION }}-ios.ipa |" >> CHANGELOG.md
           echo "| Linux | zajel-${{ env.VERSION }}-linux-x64.tar.gz |" >> CHANGELOG.md
           echo "| macOS | zajel-${{ env.VERSION }}-macos.zip |" >> CHANGELOG.md
+          echo "| Windows | zajel-${{ env.VERSION }}-windows.zip |" >> CHANGELOG.md
           echo "| Web | zajel-${{ env.VERSION }}-web.zip |" >> CHANGELOG.md
           echo "" >> CHANGELOG.md
           echo "> ⚠️ **Pre-release:** This is a test build for PR #${{ github.event.pull_request.number }}. Not for production use." >> CHANGELOG.md
