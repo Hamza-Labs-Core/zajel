@@ -52,5 +52,8 @@ target_compile_definitions(pinned_websocket_plugin PRIVATE
   _CRT_SECURE_NO_WARNINGS
   WIN32_LEAN_AND_MEAN
   NOMINMAX
-  FLUTTER_PLUGIN_IMPL
 )
+
+# Export macro: PUBLIC so the runner (which includes pinned_websocket_plugin.h)
+# also gets FLUTTER_PLUGIN_IMPL defined, avoiding __declspec(dllimport) on a static lib.
+target_compile_definitions(pinned_websocket_plugin PUBLIC FLUTTER_PLUGIN_IMPL)

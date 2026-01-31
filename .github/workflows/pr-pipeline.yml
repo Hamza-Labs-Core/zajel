@@ -976,20 +976,19 @@ jobs:
             adb -s $EMU shell settings put global animator_duration_scale 0
           done
 
+          # Install APK on both emulators (before enabling accessibility)
+          adb -s emulator-5554 install "$APK_PATH"
+          adb -s emulator-5556 install "$APK_PATH"
+
           # Enable accessibility so Flutter exposes its semantics tree to UiAutomator2
           # Flutter only builds the semantics tree when an accessibility service is active
+          # Must be done AFTER APK install to avoid destabilizing package manager
           for EMU in emulator-5554 emulator-5556; do
-            # Enable TalkBack (available on google_apis images)
             adb -s $EMU shell settings put secure enabled_accessibility_services com.google.android.marvin.talkback/com.google.android.marvin.talkback.TalkBackService 2>/dev/null || true
             adb -s $EMU shell settings put secure accessibility_enabled 1
             adb -s $EMU shell settings put secure touch_exploration_enabled 1
             echo "Accessibility enabled on $EMU"
           done
-          sleep 3
-
-          # Install APK on both emulators
-          adb -s emulator-5554 install "$APK_PATH"
-          adb -s emulator-5556 install "$APK_PATH"
 
           # Start 2 Appium servers, each bound to a specific emulator
           appium --address 127.0.0.1 --port 4723 --relaxed-security --default-capabilities '{"appium:udid":"emulator-5554"}' &
