@@ -125,20 +125,41 @@ class AppHelper:
     def __init__(self, driver: webdriver.Remote):
         self.driver = driver
 
-    def wait_for_app_ready(self, timeout: int = APP_LAUNCH_TIMEOUT):
-        """Wait for the app to be fully loaded (home screen with 'Zajel' title).
+    def _dismiss_system_dialog(self):
+        """Dismiss 'System UI isn't responding' or similar ANR dialogs."""
+        from selenium.common.exceptions import NoSuchElementException
+        try:
+            wait_btn = self.driver.find_element(
+                "id", "android:id/aerr_wait"
+            )
+            print("Dismissing 'System UI isn't responding' dialog")
+            wait_btn.click()
+        except NoSuchElementException:
+            pass
 
-        Flutter exposes text via @text or @content-desc depending on the widget.
-        AppBar title typically shows up as @text, but we check both to be safe.
+    def wait_for_app_ready(self, timeout: int = APP_LAUNCH_TIMEOUT):
+        """Wait for the app to be fully loaded.
+
+        Detection strategy:
+        1. Dismiss any ANR dialogs (System UI not responding)
+        2. Wait for Flutter's focusable FrameLayout from the app package
+           (Flutter creates a focusable container with pane-title once the
+           first frame is rendered)
+        3. Then look for actual Flutter content (android.view.View children)
         """
         import time as _time
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.common.by import By
 
-        # Dump initial page source after a brief wait for debugging
-        _time.sleep(5)
-        print("=== INITIAL PAGE SOURCE (after 5s) ===")
+        # Brief wait for app to start rendering
+        _time.sleep(3)
+
+        # Dismiss any ANR dialog that might be blocking
+        self._dismiss_system_dialog()
+
+        # Dump page source for debugging
+        print("=== INITIAL PAGE SOURCE (after 3s) ===")
         try:
             source = self.driver.page_source
             print(source[:20000] if source else "EMPTY PAGE SOURCE")
@@ -146,27 +167,35 @@ class AppHelper:
             print(f"Failed to get page source: {e}")
         print("=== END INITIAL PAGE SOURCE ===")
 
-        # Flutter exposes AppBar title as pane-title on the FlutterView container,
-        # and Text widgets as @text or @content-desc on android.view.View nodes
+        # Wait for Flutter's app content to appear:
+        # - Flutter renders into a focusable FrameLayout from the app package
+        # - Once the semantics tree is built, android.view.View children appear
+        # We look for a View from the app package (Flutter semantics node)
         xpath = (
-            "//*[contains(@text, 'Zajel') or "
-            "contains(@content-desc, 'Zajel') or "
-            "contains(@pane-title, 'Zajel')]"
+            "//*[@package='com.zajel.zajel' and "
+            "@class='android.view.View']"
         )
         try:
             WebDriverWait(self.driver, timeout).until(
                 EC.presence_of_element_located((By.XPATH, xpath))
             )
         except Exception:
-            # Dump page source for debugging
-            print("=== PAGE SOURCE (app not ready) ===")
+            # Try dismissing dialog again and retry once
+            self._dismiss_system_dialog()
+            _time.sleep(3)
             try:
-                source = self.driver.page_source
-                print(source[:20000] if source else "EMPTY PAGE SOURCE")
-            except Exception as e:
-                print(f"Failed to get page source: {e}")
-            print("=== END PAGE SOURCE ===")
-            raise
+                WebDriverWait(self.driver, timeout).until(
+                    EC.presence_of_element_located((By.XPATH, xpath))
+                )
+            except Exception:
+                print("=== PAGE SOURCE (app not ready) ===")
+                try:
+                    source = self.driver.page_source
+                    print(source[:20000] if source else "EMPTY PAGE SOURCE")
+                except Exception as e:
+                    print(f"Failed to get page source: {e}")
+                print("=== END PAGE SOURCE ===")
+                raise
 
     def _find(self, text, timeout=10, partial=True):
         """Find an element by text, checking both @text and @content-desc.
