@@ -203,7 +203,8 @@ jobs:
             --dart-define=ENV=qa \
             --dart-define=VERSION=${{ env.VERSION }} \
             --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
-            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
+            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }} \
+            --dart-define=E2E_TEST=true
 
           mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/zajel-${{ env.VERSION }}-android.apk
 
@@ -976,19 +977,11 @@ jobs:
             adb -s $EMU shell settings put global animator_duration_scale 0
           done
 
-          # Install APK on both emulators (before enabling accessibility)
+          # Install APK on both emulators
+          # The APK is built with --dart-define=E2E_TEST=true which calls ensureSemantics()
+          # so Flutter exposes its widget tree to UiAutomator2 without needing TalkBack
           adb -s emulator-5554 install "$APK_PATH"
           adb -s emulator-5556 install "$APK_PATH"
-
-          # Enable accessibility so Flutter exposes its semantics tree to UiAutomator2
-          # Flutter only builds the semantics tree when an accessibility service is active
-          # Must be done AFTER APK install to avoid destabilizing package manager
-          for EMU in emulator-5554 emulator-5556; do
-            adb -s $EMU shell settings put secure enabled_accessibility_services com.google.android.marvin.talkback/com.google.android.marvin.talkback.TalkBackService 2>/dev/null || true
-            adb -s $EMU shell settings put secure accessibility_enabled 1
-            adb -s $EMU shell settings put secure touch_exploration_enabled 1
-            echo "Accessibility enabled on $EMU"
-          done
 
           # Start 2 Appium servers, each bound to a specific emulator
           appium --address 127.0.0.1 --port 4723 --relaxed-security --default-capabilities '{"appium:udid":"emulator-5554"}' &

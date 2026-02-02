@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -10,8 +11,15 @@ import 'core/models/models.dart';
 import 'core/providers/app_providers.dart';
 import 'shared/theme/app_theme.dart';
 
+const bool _isE2eTest = bool.fromEnvironment('E2E_TEST');
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Force semantics tree so UiAutomator2 can see Flutter widgets in E2E tests
+  if (_isE2eTest) {
+    SemanticsBinding.instance.ensureSemantics();
+  }
 
   // Initialize logger first
   await logger.initialize();
