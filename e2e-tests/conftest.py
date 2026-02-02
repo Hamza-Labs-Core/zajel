@@ -54,7 +54,9 @@ def create_driver(server_index: int, device_name: str = "emulator") -> webdriver
     options.set_capability("forceAppLaunch", True)
 
     driver = webdriver.Remote(get_server_url(server_index), options=options)
-    driver.implicitly_wait(APP_LAUNCH_TIMEOUT)
+    # Keep implicit wait short so WebDriverWait can poll effectively
+    # (implicit wait blocks each findElement call; long values + WebDriverWait = only 1 attempt)
+    driver.implicitly_wait(5)
 
     return driver
 
@@ -139,24 +141,28 @@ class AppHelper:
         print("=== INITIAL PAGE SOURCE (after 5s) ===")
         try:
             source = self.driver.page_source
-            print(source[:5000] if source else "EMPTY PAGE SOURCE")
+            print(source[:20000] if source else "EMPTY PAGE SOURCE")
         except Exception as e:
             print(f"Failed to get page source: {e}")
         print("=== END INITIAL PAGE SOURCE ===")
 
+        # Flutter exposes AppBar title as pane-title on the FlutterView container,
+        # and Text widgets as @text or @content-desc on android.view.View nodes
+        xpath = (
+            "//*[contains(@text, 'Zajel') or "
+            "contains(@content-desc, 'Zajel') or "
+            "contains(@pane-title, 'Zajel')]"
+        )
         try:
             WebDriverWait(self.driver, timeout).until(
-                EC.presence_of_element_located((
-                    By.XPATH,
-                    "//*[contains(@text, 'Zajel') or contains(@content-desc, 'Zajel')]"
-                ))
+                EC.presence_of_element_located((By.XPATH, xpath))
             )
         except Exception:
             # Dump page source for debugging
             print("=== PAGE SOURCE (app not ready) ===")
             try:
                 source = self.driver.page_source
-                print(source[:5000] if source else "EMPTY PAGE SOURCE")
+                print(source[:20000] if source else "EMPTY PAGE SOURCE")
             except Exception as e:
                 print(f"Failed to get page source: {e}")
             print("=== END PAGE SOURCE ===")
