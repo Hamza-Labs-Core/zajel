@@ -129,9 +129,20 @@ class AppHelper:
         Flutter exposes text via @text or @content-desc depending on the widget.
         AppBar title typically shows up as @text, but we check both to be safe.
         """
+        import time as _time
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.common.by import By
+
+        # Dump initial page source after a brief wait for debugging
+        _time.sleep(5)
+        print("=== INITIAL PAGE SOURCE (after 5s) ===")
+        try:
+            source = self.driver.page_source
+            print(source[:5000] if source else "EMPTY PAGE SOURCE")
+        except Exception as e:
+            print(f"Failed to get page source: {e}")
+        print("=== END INITIAL PAGE SOURCE ===")
 
         try:
             WebDriverWait(self.driver, timeout).until(

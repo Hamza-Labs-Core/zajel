@@ -983,6 +983,13 @@ jobs:
           adb -s emulator-5554 install "$APK_PATH"
           adb -s emulator-5556 install "$APK_PATH"
 
+          # Enable Android accessibility framework (required for UiAutomator2 to see Flutter nodes)
+          # ensureSemantics() builds the tree in Dart; this setting tells Android to expose it
+          # NOTE: We do NOT enable TalkBack (it crashes System UI on CI emulators)
+          for EMU in emulator-5554 emulator-5556; do
+            adb -s $EMU shell settings put secure accessibility_enabled 1
+          done
+
           # Start 2 Appium servers, each bound to a specific emulator
           appium --address 127.0.0.1 --port 4723 --relaxed-security --default-capabilities '{"appium:udid":"emulator-5554"}' &
           APPIUM1_PID=$!
