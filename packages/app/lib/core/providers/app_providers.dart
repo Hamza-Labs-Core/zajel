@@ -246,7 +246,8 @@ final selectedPeerProvider = StateProvider<Peer?>((ref) => null);
 final blockedPeersProvider =
     StateNotifierProvider<BlockedPeersNotifier, Set<String>>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
-  return BlockedPeersNotifier(prefs);
+  final trustedPeersStorage = ref.watch(trustedPeersStorageProvider);
+  return BlockedPeersNotifier(prefs, trustedPeersStorage);
 });
 
 /// Provider for blocked peer details (publicKey -> name mapping).
@@ -267,8 +268,10 @@ final blockedPeerDetailsProvider = StateProvider<Map<String, String>>((ref) {
 /// Stores public keys (not pairing codes) to prevent bypass via code regeneration.
 class BlockedPeersNotifier extends StateNotifier<Set<String>> {
   final SharedPreferences _prefs;
+  final TrustedPeersStorage _trustedPeersStorage;
 
-  BlockedPeersNotifier(this._prefs) : super(_load(_prefs));
+  BlockedPeersNotifier(this._prefs, this._trustedPeersStorage)
+      : super(_load(_prefs));
 
   static Set<String> _load(SharedPreferences prefs) {
     final blocked = prefs.getStringList('blockedPublicKeys') ?? [];
@@ -288,6 +291,9 @@ class BlockedPeersNotifier extends StateNotifier<Set<String>> {
       details.add('$publicKey::$displayName');
       await _prefs.setStringList('blockedPeerDetails', details);
     }
+
+    // Sync to TrustedPeersStorage so reconnection logic respects the block
+    await _syncBlockToTrustedPeers(publicKey, blocked: true);
   }
 
   /// Unblock a user by their public key.
@@ -299,10 +305,26 @@ class BlockedPeersNotifier extends StateNotifier<Set<String>> {
     final details = _prefs.getStringList('blockedPeerDetails') ?? [];
     details.removeWhere((entry) => entry.startsWith('$publicKey::'));
     await _prefs.setStringList('blockedPeerDetails', details);
+
+    // Sync to TrustedPeersStorage
+    await _syncBlockToTrustedPeers(publicKey, blocked: false);
   }
 
   /// Check if a public key is blocked.
   bool isBlocked(String publicKey) => state.contains(publicKey);
+
+  /// Update TrustedPeer.isBlocked to keep both storage layers in sync.
+  Future<void> _syncBlockToTrustedPeers(
+      String publicKey, {required bool blocked}) async {
+    final peers = await _trustedPeersStorage.getAllPeers();
+    for (final peer in peers) {
+      if (peer.publicKey == publicKey) {
+        await _trustedPeersStorage.savePeer(
+            peer.copyWith(isBlocked: blocked));
+        break;
+      }
+    }
+  }
 }
 
 /// Provider for signaling connection status.

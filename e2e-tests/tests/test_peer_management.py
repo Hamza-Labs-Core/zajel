@@ -182,13 +182,6 @@ class TestPeerManagement:
             empty = False
         assert empty, "After unblocking, blocked users list should be empty"
 
-    @pytest.mark.xfail(reason=(
-        "App bug: BlockedPeersNotifier stores blocks in SharedPreferences "
-        "(blockedPublicKeys) but ConnectionManager._reconnectTrustedPeers() "
-        "checks TrustedPeer.isBlocked which is never set by the block action. "
-        "The blocked peer reconnects because the two blocking mechanisms "
-        "are not synchronized."
-    ))
     def test_blocked_peer_cannot_reconnect(self, device_pair, app_helper):
         """Block Bob → restart both → Bob doesn't appear on Alice's home."""
         alice, bob = self._pair_devices(
