@@ -186,10 +186,20 @@ class SignalingClient {
     try {
       _connectionStateController.add(SignalingConnectionState.connecting);
 
-      if (_usePinnedWebSocket) {
+      // Only use pinned WebSocket for secure (wss://) connections.
+      // Plain ws:// has no TLS, so there's nothing to pin. OkHttp also
+      // blocks cleartext traffic by default on Android 9+.
+      final isSecure = serverUrl.startsWith('wss://');
+      if (_usePinnedWebSocket && isSecure) {
         _logger.debug('SignalingClient', 'Using pinned WebSocket connection');
         await _connectWithPinning();
       } else {
+        if (_usePinnedWebSocket && !isSecure) {
+          _logger.warning(
+            'SignalingClient',
+            'Skipping certificate pinning for non-TLS URL: $serverUrl',
+          );
+        }
         _logger.debug('SignalingClient', 'Using standard WebSocket connection');
         await _connectStandard();
       }
@@ -475,15 +485,31 @@ class SignalingClient {
   // Private methods
 
   void _send(Map<String, dynamic> message) {
-    if (!_isConnected) return;
+    if (!_isConnected) {
+      _logger.warning(
+        'SignalingClient',
+        'Attempted to send while not connected: ${message['type']}',
+      );
+      return;
+    }
 
     final encodedMessage = jsonEncode(message);
+    _logger.debug('SignalingClient', 'Sending message: ${message['type']} -> $encodedMessage');
 
     // Use pinned WebSocket if available, otherwise use standard
     if (_pinnedSocket != null) {
-      _pinnedSocket!.send(encodedMessage);
+      _pinnedSocket!.send(encodedMessage).catchError((error) {
+        _logger.error(
+          'SignalingClient',
+          'Send failed via pinned WebSocket: $error',
+          error,
+        );
+        _handleError(error);
+      });
     } else if (_channel != null) {
       _channel!.sink.add(encodedMessage);
+    } else {
+      _logger.error('SignalingClient', 'No socket available to send message: ${message['type']}');
     }
   }
 
@@ -620,14 +646,17 @@ class SignalingClient {
 
         // Rendezvous messages
         case 'rendezvous_result':
+          _logger.info('SignalingClient', 'Received rendezvous_result: liveMatches=${json['liveMatches']?.length ?? 0}, deadDrops=${json['deadDrops']?.length ?? 0}');
           _handleRendezvousResult(json);
           break;
 
         case 'rendezvous_partial':
+          _logger.info('SignalingClient', 'Received rendezvous_partial');
           _handleRendezvousPartial(json);
           break;
 
         case 'rendezvous_match':
+          _logger.info('SignalingClient', 'Received rendezvous_match: ${json['match']}');
           _handleRendezvousMatch(json);
           break;
 
@@ -975,19 +1004,23 @@ class CallOfferMessage {
 
   Map<String, dynamic> toJson() => {
         'type': 'call_offer',
-        'callId': callId,
-        'targetId': targetId,
-        'sdp': sdp,
-        'withVideo': withVideo,
+        'target': targetId,
+        'payload': {
+          'callId': callId,
+          'sdp': sdp,
+          'withVideo': withVideo,
+        },
       };
 
-  factory CallOfferMessage.fromJson(Map<String, dynamic> json) =>
-      CallOfferMessage(
-        callId: json['callId'] as String,
-        targetId: json['from'] as String? ?? json['targetId'] as String,
-        sdp: json['sdp'] as String,
-        withVideo: json['withVideo'] as bool,
-      );
+  factory CallOfferMessage.fromJson(Map<String, dynamic> json) {
+    final payload = json['payload'] as Map<String, dynamic>? ?? json;
+    return CallOfferMessage(
+      callId: payload['callId'] as String,
+      targetId: json['from'] as String? ?? json['target'] as String? ?? payload['targetId'] as String,
+      sdp: payload['sdp'] as String,
+      withVideo: payload['withVideo'] as bool,
+    );
+  }
 }
 
 /// Message for answering a call.
@@ -1004,17 +1037,21 @@ class CallAnswerMessage {
 
   Map<String, dynamic> toJson() => {
         'type': 'call_answer',
-        'callId': callId,
-        'targetId': targetId,
-        'sdp': sdp,
+        'target': targetId,
+        'payload': {
+          'callId': callId,
+          'sdp': sdp,
+        },
       };
 
-  factory CallAnswerMessage.fromJson(Map<String, dynamic> json) =>
-      CallAnswerMessage(
-        callId: json['callId'] as String,
-        targetId: json['from'] as String? ?? json['targetId'] as String,
-        sdp: json['sdp'] as String,
-      );
+  factory CallAnswerMessage.fromJson(Map<String, dynamic> json) {
+    final payload = json['payload'] as Map<String, dynamic>? ?? json;
+    return CallAnswerMessage(
+      callId: payload['callId'] as String,
+      targetId: json['from'] as String? ?? json['target'] as String? ?? payload['targetId'] as String,
+      sdp: payload['sdp'] as String,
+    );
+  }
 }
 
 /// Message for rejecting a call.
@@ -1031,17 +1068,21 @@ class CallRejectMessage {
 
   Map<String, dynamic> toJson() => {
         'type': 'call_reject',
-        'callId': callId,
-        'targetId': targetId,
-        if (reason != null) 'reason': reason,
+        'target': targetId,
+        'payload': {
+          'callId': callId,
+          if (reason != null) 'reason': reason,
+        },
       };
 
-  factory CallRejectMessage.fromJson(Map<String, dynamic> json) =>
-      CallRejectMessage(
-        callId: json['callId'] as String,
-        targetId: json['from'] as String? ?? json['targetId'] as String,
-        reason: json['reason'] as String?,
-      );
+  factory CallRejectMessage.fromJson(Map<String, dynamic> json) {
+    final payload = json['payload'] as Map<String, dynamic>? ?? json;
+    return CallRejectMessage(
+      callId: payload['callId'] as String,
+      targetId: json['from'] as String? ?? json['target'] as String? ?? payload['targetId'] as String,
+      reason: payload['reason'] as String?,
+    );
+  }
 }
 
 /// Message for ending a call.
@@ -1056,15 +1097,19 @@ class CallHangupMessage {
 
   Map<String, dynamic> toJson() => {
         'type': 'call_hangup',
-        'callId': callId,
-        'targetId': targetId,
+        'target': targetId,
+        'payload': {
+          'callId': callId,
+        },
       };
 
-  factory CallHangupMessage.fromJson(Map<String, dynamic> json) =>
-      CallHangupMessage(
-        callId: json['callId'] as String,
-        targetId: json['from'] as String? ?? json['targetId'] as String,
-      );
+  factory CallHangupMessage.fromJson(Map<String, dynamic> json) {
+    final payload = json['payload'] as Map<String, dynamic>? ?? json;
+    return CallHangupMessage(
+      callId: payload['callId'] as String,
+      targetId: json['from'] as String? ?? json['target'] as String? ?? payload['targetId'] as String,
+    );
+  }
 }
 
 /// Message for exchanging ICE candidates during call setup.
@@ -1081,16 +1126,21 @@ class CallIceMessage {
 
   Map<String, dynamic> toJson() => {
         'type': 'call_ice',
-        'callId': callId,
-        'targetId': targetId,
-        'candidate': candidate,
+        'target': targetId,
+        'payload': {
+          'callId': callId,
+          'candidate': candidate,
+        },
       };
 
-  factory CallIceMessage.fromJson(Map<String, dynamic> json) => CallIceMessage(
-        callId: json['callId'] as String,
-        targetId: json['from'] as String? ?? json['targetId'] as String,
-        candidate: json['candidate'] as String,
-      );
+  factory CallIceMessage.fromJson(Map<String, dynamic> json) {
+    final payload = json['payload'] as Map<String, dynamic>? ?? json;
+    return CallIceMessage(
+      callId: payload['callId'] as String,
+      targetId: json['from'] as String? ?? json['target'] as String? ?? payload['targetId'] as String,
+      candidate: payload['candidate'] as String,
+    );
+  }
 }
 
 // =============================================================================

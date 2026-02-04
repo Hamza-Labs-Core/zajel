@@ -7,11 +7,14 @@ Provides fixtures for:
 - All available devices
 """
 
+import subprocess
 import pytest
 from appium import webdriver
 from appium.options.android import UiAutomator2Options
 
-from config import get_server_url, APK_PATH, SERVER_COUNT, APP_LAUNCH_TIMEOUT
+from config import get_server_url, APK_PATH, SERVER_COUNT, APP_LAUNCH_TIMEOUT, ADB_PATH
+
+PACKAGE_NAME = "com.zajel.zajel"
 
 
 def create_driver(server_index: int, device_name: str = "emulator") -> webdriver.Remote:
@@ -21,16 +24,43 @@ def create_driver(server_index: int, device_name: str = "emulator") -> webdriver
     in CI. The udid is also set here to ensure the correct device is targeted.
     Emulator ports follow the pattern: 5554, 5556, 5558, etc.
     """
+    # Clear app data before each test to remove stale peers from previous runs.
+    # Without this, the app accumulates trusted peers across runs and floods
+    # the signaling server with reconnection attempts, preventing new pairings.
+    emulator_port = 5554 + (server_index * 2)
+    udid = f"emulator-{emulator_port}"
+    try:
+        subprocess.run(
+            [ADB_PATH, "-s", udid, "shell", "pm", "clear", PACKAGE_NAME],
+            capture_output=True, timeout=15
+        )
+    except Exception:
+        pass  # App may not be installed yet on first run
+
+    # Re-grant runtime permissions that pm clear revoked.
+    # autoGrantPermissions only works at install time, not after pm clear.
+    for perm in [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+    ]:
+        try:
+            subprocess.run(
+                [ADB_PATH, "-s", udid, "shell", "pm", "grant", PACKAGE_NAME, perm],
+                capture_output=True, timeout=10
+            )
+        except Exception:
+            pass
+
     options = UiAutomator2Options()
     options.app = APK_PATH
     options.device_name = f"{device_name}-{server_index}"
     options.automation_name = "UiAutomator2"
     options.new_command_timeout = 300
 
-    # Bind to the specific emulator for this server index
-    # Emulator console ports: 5554, 5556, 5558, ...
-    emulator_port = 5554 + (server_index * 2)
-    options.udid = f"emulator-{emulator_port}"
+    # Bind to the specific emulator
+    options.udid = udid
 
     options.no_reset = True  # Don't clear app data between tests
     options.full_reset = False  # Don't uninstall/reinstall app
@@ -294,30 +324,97 @@ class AppHelper:
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.common.by import By
+        import time
 
-        input_field = WebDriverWait(self.driver, 10).until(
-            EC.presence_of_element_located((By.XPATH, "//android.widget.EditText"))
+        # The TextField may be below the fold on small screens (320x640).
+        # Flutter's SingleChildScrollView won't add offscreen children to
+        # the accessibility tree until they're scrolled into view.
+        # Scroll down first to reveal the "Enter pairing code" input.
+        screen_size = self.driver.get_window_size()
+        start_y = int(screen_size['height'] * 0.8)
+        end_y = int(screen_size['height'] * 0.2)
+        center_x = int(screen_size['width'] * 0.5)
+
+        for attempt in range(3):
+            try:
+                input_field = WebDriverWait(self.driver, 5).until(
+                    EC.presence_of_element_located((By.XPATH, "//android.widget.EditText"))
+                )
+                break
+            except Exception:
+                # Scroll down to reveal the input field
+                self.driver.swipe(center_x, start_y, center_x, end_y, 500)
+                time.sleep(1)
+        else:
+            # Final attempt with longer timeout
+            input_field = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, "//android.widget.EditText"))
+            )
+
+        input_field.click()
+        # Use IME-based typing instead of setText (send_keys) because
+        # Flutter's TextEditingController is not updated by UiAutomator2's
+        # ACTION_SET_TEXT. The mobile: type command sends keystrokes through
+        # the input method, which properly flows through Flutter's text
+        # input pipeline into the TextEditingController.
+        self.driver.execute_script('mobile: type', {'text': code})
+
+        # Tap the "Connect" ElevatedButton (exact match to avoid
+        # hitting "Connect via QR code" which also contains "Connect")
+        connect_btn = WebDriverWait(self.driver, 5).until(
+            EC.element_to_be_clickable((
+                By.XPATH,
+                "//*[(@text='Connect' or @content-desc='Connect') and @clickable='true']"
+            ))
         )
-        input_field.clear()
-        input_field.send_keys(code)
-
-        # Tap the "Connect" ElevatedButton
-        self.driver.find_element(
-            "xpath",
-            "//*[(contains(@text, 'Connect') or contains(@content-desc, 'Connect')) and @clickable='true']"
-        ).click()
+        connect_btn.click()
 
     def go_back_to_home(self):
-        """Navigate back to the home screen."""
+        """Navigate back to the home screen.
+
+        Only presses back if we're not already on the home screen
+        (detected by pane-title='Zajel' or the presence of "Connected Peers").
+        """
+        from selenium.common.exceptions import NoSuchElementException
+        try:
+            # Check if we're already on the home screen (Flutter pane-title)
+            self.driver.find_element(
+                "xpath",
+                "//*[@package='com.zajel.zajel' and "
+                "contains(@content-desc, 'Connected Peers')]"
+            )
+            # Already on home screen
+            return
+        except (NoSuchElementException, Exception):
+            pass
         self.driver.back()
 
     def open_chat_with_peer(self, peer_name: str = None):
-        """Tap on a connected peer to open the chat screen."""
+        """Tap on a connected peer to open the chat screen.
+
+        Flutter merges ListTile title+subtitle into a single content-desc,
+        e.g. "Peer ABC123\nConnected". We match on "Peer" to avoid hitting
+        the "Connected Peers" section header.
+        """
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+
         if peer_name:
-            self._find(peer_name).click()
+            xpath = (
+                f"//*[contains(@content-desc, '{peer_name}') and "
+                f"contains(@content-desc, 'Connected')]"
+            )
         else:
-            # Tap the first peer card that shows "Connected"
-            self._find("Connected").click()
+            # Match peer cards: contain "Peer" AND "Connected" but not the header
+            xpath = (
+                "//*[contains(@content-desc, 'Peer') and "
+                "contains(@content-desc, 'Connected') and "
+                "not(contains(@content-desc, 'Connected Peers'))]"
+            )
+        WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, xpath))
+        ).click()
 
     def send_message(self, text: str):
         """Type and send a message in the chat screen."""
@@ -328,13 +425,19 @@ class AppHelper:
         input_field = WebDriverWait(self.driver, 10).until(
             EC.presence_of_element_located((By.XPATH, "//android.widget.EditText"))
         )
-        input_field.send_keys(text)
+        input_field.click()
+        # Use mobile: type for Flutter TextEditingController compatibility
+        self.driver.execute_script('mobile: type', {'text': text})
 
-        # Tap send button (icon button with send content-desc or text)
-        self.driver.find_element(
-            "xpath",
-            "//*[contains(@content-desc, 'end') or contains(@content-desc, 'Send')]"
-        ).click()
+        # Tap send button
+        send_btn = WebDriverWait(self.driver, 5).until(
+            EC.element_to_be_clickable((
+                By.XPATH,
+                "//*[contains(@content-desc, 'Send message') or "
+                "contains(@content-desc, 'Send')]"
+            ))
+        )
+        send_btn.click()
 
     def has_message(self, text: str) -> bool:
         """Check if a message with the given text is visible."""
@@ -346,7 +449,12 @@ class AppHelper:
             return False
 
     def is_peer_connected(self, peer_name: str = None) -> bool:
-        """Check if a peer shows as 'Connected' on the home screen."""
+        """Check if a peer shows as 'Connected' on the home screen.
+
+        Flutter merges ListTile title+subtitle into a single content-desc
+        separated by newlines, e.g. "Peer ABC123\nConnected".
+        We use contains() to match "Connected" within that merged text.
+        """
         from selenium.common.exceptions import NoSuchElementException
         try:
             if peer_name:
@@ -354,9 +462,11 @@ class AppHelper:
                     "xpath",
                     f"//*[contains(@text, '{peer_name}') or contains(@content-desc, '{peer_name}')]"
                 )
+            # Use contains() since Flutter merges title+subtitle in content-desc
             self.driver.find_element(
                 "xpath",
-                "//*[@text='Connected' or @content-desc='Connected']"
+                "//*[contains(@content-desc, 'Connected') and "
+                "not(contains(@content-desc, 'Connected Peers'))]"
             )
             return True
         except (NoSuchElementException, Exception):
@@ -372,6 +482,252 @@ class AppHelper:
             return True
         except NoSuchElementException:
             return False
+
+    # ── Call-related helpers ──────────────────────────────────────────
+
+    def start_voice_call(self):
+        """In chat screen, tap the 'Voice call' tooltip button."""
+        self._find("Voice call", timeout=10).click()
+
+    def start_video_call(self):
+        """In chat screen, tap the 'Video call' tooltip button."""
+        self._find("Video call", timeout=10).click()
+
+    def get_call_status(self) -> str:
+        """Return visible call status text.
+
+        Possible values: 'Calling...', 'Connecting...', 'Call ended',
+        or a duration string like '00:05'.
+        """
+        for status_text in ['Calling...', 'Connecting...', 'Call ended']:
+            try:
+                self._find(status_text, timeout=2)
+                return status_text
+            except Exception:
+                pass
+        # Check for duration timer (connected state)
+        try:
+            self._find('00:', timeout=2)
+            return 'connected'
+        except Exception:
+            return 'unknown'
+
+    def tap_call_button(self, label: str):
+        """Tap a call control button by its label text.
+
+        Labels: 'Mute', 'Unmute', 'End', 'Flip', 'Video Off', 'Video On'.
+        """
+        self._find(label, timeout=10, partial=False).click()
+
+    def accept_incoming_call(self, with_video: bool = False):
+        """Accept an incoming call.
+
+        For audio calls: taps 'Accept'.
+        For video calls: taps 'Video' (with_video=True) or 'Audio' (False).
+        """
+        if with_video:
+            self._find("Video", timeout=15, partial=False).click()
+        else:
+            # 'Accept' for audio calls, 'Audio' for video-call-as-audio
+            try:
+                self._find("Accept", timeout=5, partial=False).click()
+            except Exception:
+                self._find("Audio", timeout=5, partial=False).click()
+
+    def reject_incoming_call(self):
+        """Tap 'Decline' on incoming call dialog."""
+        self._find("Decline", timeout=15, partial=False).click()
+
+    def has_incoming_call_dialog(self, timeout: int = 15) -> bool:
+        """Check if an incoming call dialog is visible.
+
+        Polls for 'Incoming call' or 'Incoming video call' text, as well as
+        the 'Decline' button which is unique to the incoming call dialog.
+        """
+        import time as _time
+        deadline = _time.time() + timeout
+        while _time.time() < deadline:
+            try:
+                self._find("Incoming", timeout=2)
+                return True
+            except Exception:
+                pass
+            try:
+                self._find("Decline", timeout=1, partial=False)
+                return True
+            except Exception:
+                pass
+            _time.sleep(1)
+        return False
+
+    def end_call(self):
+        """Tap 'End' button to hang up."""
+        self._find("End", timeout=10, partial=False).click()
+
+    def wait_for_call_connected(self, timeout: int = 30) -> bool:
+        """Wait until call shows a duration timer ('00:'), indicating connected."""
+        import time as _time
+        deadline = _time.time() + timeout
+        while _time.time() < deadline:
+            try:
+                self._find('00:', timeout=2)
+                return True
+            except Exception:
+                _time.sleep(1)
+        return False
+
+    # ── Settings helpers ─────────────────────────────────────────────
+
+    def navigate_to_settings(self):
+        """Tap 'Settings' tooltip button from home screen app bar."""
+        self._find("Settings", timeout=10).click()
+        import time as _time
+        _time.sleep(1)
+
+    def change_display_name(self, name: str):
+        """In settings, tap display name row, clear field, type new name, save."""
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+
+        # Tap the profile/display name row
+        self._find("Tap to change display name", timeout=10).click()
+        import time as _time
+        _time.sleep(1)
+
+        # Find the EditText in the dialog, clear it, type new name
+        input_field = WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, "//android.widget.EditText"))
+        )
+        input_field.clear()
+        self.driver.execute_script('mobile: type', {'text': name})
+
+        # Tap Save
+        self._find("Save", timeout=5, partial=False).click()
+        _time.sleep(1)
+
+    def tap_settings_option(self, text: str):
+        """Tap a settings row by its title text."""
+        self._find(text, timeout=10).click()
+        import time as _time
+        _time.sleep(1)
+
+    def confirm_dialog(self, button_text: str):
+        """Tap a button in an alert dialog (e.g. 'Block', 'Clear All', 'Unblock')."""
+        self._find(button_text, timeout=10, partial=False).click()
+        import time as _time
+        _time.sleep(1)
+
+    def dismiss_dialog(self):
+        """Tap 'Cancel' in an alert dialog."""
+        self._find("Cancel", timeout=10, partial=False).click()
+        import time as _time
+        _time.sleep(1)
+
+    # ── Peer management helpers ──────────────────────────────────────
+
+    def open_peer_menu(self):
+        """Tap the overflow menu (more_vert) on the first visible peer card."""
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+
+        # The more_vert icon button has content-desc 'Show menu'
+        menu_btn = WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located((
+                By.XPATH,
+                "//*[contains(@content-desc, 'Show menu') or "
+                "contains(@content-desc, 'More options')]"
+            ))
+        )
+        menu_btn.click()
+        import time as _time
+        _time.sleep(1)
+
+    def tap_menu_option(self, option: str):
+        """Tap a popup menu item by text (e.g. 'Block')."""
+        self._find(option, timeout=10).click()
+        import time as _time
+        _time.sleep(1)
+
+    # ── File transfer helpers ────────────────────────────────────────
+
+    def tap_attach_file(self):
+        """Tap the attach file button in chat input bar."""
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+
+        # attach_file icon — no tooltip, find by class near the input area
+        attach_btn = WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located((
+                By.XPATH,
+                "//*[contains(@content-desc, 'Attach') or "
+                "contains(@content-desc, 'attach')]"
+            ))
+        )
+        attach_btn.click()
+
+    def select_file_in_picker(self, filename: str, timeout: int = 10) -> bool:
+        """Select a file in the Android Documents UI file picker.
+
+        After tap_attach_file() opens the system picker, this navigates
+        the picker to find and tap the file by its @text attribute.
+
+        The Documents UI (com.google.android.documentsui) shows recently
+        accessed files by default. The file must be pushed via adb and
+        indexed by the media scanner before calling this.
+
+        Returns True if the file was found and tapped, False otherwise.
+        """
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+        import time as _time
+
+        try:
+            # Wait for the file picker activity to load.
+            # Look for the file by @text (Documents UI uses android:id/title).
+            file_elem = WebDriverWait(self.driver, timeout).until(
+                EC.presence_of_element_located((
+                    By.XPATH,
+                    f"//*[contains(@text, '{filename}')]"
+                ))
+            )
+            file_elem.click()
+            _time.sleep(2)
+            return True
+        except Exception:
+            # File not in Recent — try navigating to Downloads via the drawer.
+            try:
+                # Tap "Show roots" hamburger menu
+                roots_btn = self.driver.find_element(
+                    By.XPATH,
+                    "//*[@content-desc='Show roots']"
+                )
+                roots_btn.click()
+                _time.sleep(1)
+
+                # Tap "Downloads"
+                downloads = self.driver.find_element(
+                    By.XPATH,
+                    "//*[contains(@text, 'Downloads')]"
+                )
+                downloads.click()
+                _time.sleep(2)
+
+                # Now find the file
+                file_elem = WebDriverWait(self.driver, timeout).until(
+                    EC.presence_of_element_located((
+                        By.XPATH,
+                        f"//*[contains(@text, '{filename}')]"
+                    ))
+                )
+                file_elem.click()
+                _time.sleep(2)
+                return True
+            except Exception:
+                return False
 
 
 @pytest.fixture

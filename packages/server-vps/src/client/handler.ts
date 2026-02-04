@@ -1585,10 +1585,15 @@ export class ClientHandler extends EventEmitter {
    * Notify a specific client
    */
   notifyClient(peerId: string, message: object): boolean {
+    // Check relay clients first
     const client = this.clients.get(peerId);
-    if (!client) return false;
+    if (client) return this.send(client.ws, message);
 
-    return this.send(client.ws, message);
+    // Fall back to signaling clients (pairing code registrations)
+    const signalingWs = this.pairingCodeToWs.get(peerId);
+    if (signalingWs) return this.send(signalingWs, message);
+
+    return false;
   }
 
   /**

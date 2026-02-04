@@ -34,15 +34,19 @@ class TestReconnection:
         bob_helper.navigate_to_connect()
         bob_helper.enter_peer_code(alice_code)
 
-        time.sleep(P2P_CONNECTION_TIMEOUT)
+        # Wait for P2P connection with retry (TURN relay can be slow)
+        connected = False
+        for attempt in range(6):
+            time.sleep(P2P_CONNECTION_TIMEOUT)
+            alice_helper.go_back_to_home()
+            bob_helper.go_back_to_home()
+            time.sleep(3)
 
-        # Go back to home screens
-        alice_helper.go_back_to_home()
-        bob_helper.go_back_to_home()
-        time.sleep(3)
+            if alice_helper.is_peer_connected() or bob_helper.is_peer_connected():
+                connected = True
+                break
 
-        # Verify initial connection
-        assert alice_helper.is_peer_connected() or bob_helper.is_peer_connected()
+        assert connected, "Initial pairing should succeed"
 
         return alice_helper, bob_helper
 
@@ -54,7 +58,7 @@ class TestReconnection:
         alice_helper, bob_helper = self._pair_and_trust(alice, bob, app_helper)
 
         # 2. Restart both apps
-        package_name = "com.zajel.app"
+        package_name = "com.zajel.zajel"
 
         alice.terminate_app(package_name)
         bob.terminate_app(package_name)
@@ -87,7 +91,7 @@ class TestReconnection:
     def test_reconnection_with_dead_drop(self, device_pair, app_helper):
         """Test reconnection when one device comes online after the other."""
         alice, bob = device_pair["alice"], device_pair["bob"]
-        package_name = "com.zajel.app"
+        package_name = "com.zajel.zajel"
 
         # 1. Pair devices
         alice_helper, bob_helper = self._pair_and_trust(alice, bob, app_helper)
@@ -123,7 +127,7 @@ class TestReconnection:
     def test_live_match_reconnection(self, device_pair, app_helper):
         """Test reconnection when both devices come online simultaneously."""
         alice, bob = device_pair["alice"], device_pair["bob"]
-        package_name = "com.zajel.app"
+        package_name = "com.zajel.zajel"
 
         # 1. Pair devices
         alice_helper, bob_helper = self._pair_and_trust(alice, bob, app_helper)

@@ -59,6 +59,11 @@ class Environment {
     defaultValue: '',
   );
 
+  /// Whether running in E2E test mode.
+  ///
+  /// Override with `--dart-define=E2E_TEST=true`
+  static const bool isE2eTest = bool.fromEnvironment('E2E_TEST');
+
   /// Whether running in QA environment.
   static bool get isQA => env == 'qa';
 

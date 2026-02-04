@@ -17,7 +17,15 @@ APK_PATH = os.environ.get("APK_PATH", "/tmp/zajel-test.apk")
 APP_LAUNCH_TIMEOUT = 60
 ELEMENT_WAIT_TIMEOUT = 10
 CONNECTION_TIMEOUT = 30
-P2P_CONNECTION_TIMEOUT = 60
+P2P_CONNECTION_TIMEOUT = 15
+CALL_CONNECT_TIMEOUT = 30
+CALL_RING_TIMEOUT = 30
+
+# ADB path (for file transfer tests)
+ADB_PATH = os.environ.get(
+    "ADB_PATH",
+    os.path.expanduser("~/Android/Sdk/platform-tools/adb")
+)
 
 
 def get_server_url(index: int) -> str:

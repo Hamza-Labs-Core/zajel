@@ -39,7 +39,29 @@ final cryptoServiceProvider = Provider<CryptoService>((ref) {
 /// Provider for WebRTC service.
 final webrtcServiceProvider = Provider<WebRTCService>((ref) {
   final cryptoService = ref.watch(cryptoServiceProvider);
-  return WebRTCService(cryptoService: cryptoService);
+  // In E2E test mode, add a TURN server so emulators on isolated virtual
+  // networks can relay media/data through a TURN server.
+  List<Map<String, dynamic>>? iceServers;
+  if (Environment.isE2eTest) {
+    const turnUrl = String.fromEnvironment('TURN_URL', defaultValue: '');
+    const turnUser = String.fromEnvironment('TURN_USER', defaultValue: '');
+    const turnPass = String.fromEnvironment('TURN_PASS', defaultValue: '');
+    if (turnUrl.isNotEmpty) {
+      iceServers = [
+        {'urls': 'stun:stun.l.google.com:19302'},
+        {
+          'urls': turnUrl,
+          'username': turnUser,
+          'credential': turnPass,
+        },
+      ];
+    }
+  }
+  return WebRTCService(
+    cryptoService: cryptoService,
+    iceServers: iceServers,
+    forceRelay: iceServers != null,
+  );
 });
 
 /// Provider for trusted peers storage.
@@ -136,12 +158,16 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
   final cryptoService = ref.watch(cryptoServiceProvider);
   final webrtcService = ref.watch(webrtcServiceProvider);
   final deviceLinkService = ref.watch(deviceLinkServiceProvider);
+  final trustedPeersStorage = ref.watch(trustedPeersStorageProvider);
+  final meetingPointService = ref.watch(meetingPointServiceProvider);
   final blockedNotifier = ref.watch(blockedPeersProvider.notifier);
 
   return ConnectionManager(
     cryptoService: cryptoService,
     webrtcService: webrtcService,
     deviceLinkService: deviceLinkService,
+    trustedPeersStorage: trustedPeersStorage,
+    meetingPointService: meetingPointService,
     isPublicKeyBlocked: blockedNotifier.isBlocked,
   );
 });
@@ -392,7 +418,26 @@ final voipServiceProvider = Provider<VoIPService?>((ref) {
   if (signalingClient == null) return null;
 
   final mediaService = ref.watch(mediaServiceProvider);
-  final voipService = VoIPService(mediaService, signalingClient);
+
+  // In E2E test mode, use TURN servers for VoIP calls too.
+  List<Map<String, dynamic>>? iceServers;
+  if (Environment.isE2eTest) {
+    const turnUrl = String.fromEnvironment('TURN_URL', defaultValue: '');
+    const turnUser = String.fromEnvironment('TURN_USER', defaultValue: '');
+    const turnPass = String.fromEnvironment('TURN_PASS', defaultValue: '');
+    if (turnUrl.isNotEmpty) {
+      iceServers = [
+        {'urls': 'stun:stun.l.google.com:19302'},
+        {
+          'urls': turnUrl,
+          'username': turnUser,
+          'credential': turnPass,
+        },
+      ];
+    }
+  }
+
+  final voipService = VoIPService(mediaService, signalingClient, iceServers: iceServers);
   ref.onDispose(() => voipService.dispose());
   return voipService;
 });

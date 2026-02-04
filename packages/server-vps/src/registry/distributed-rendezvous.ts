@@ -70,8 +70,11 @@ export class DistributedRendezvous extends EventEmitter {
     const localPoints: string[] = [];
     const remotePoints = new Map<string, string[]>(); // serverId -> points
 
+    // If ring has no active nodes, handle everything locally (solo mode)
+    const soloMode = this.ring.getActiveNodes().length <= 1;
+
     for (const point of points) {
-      if (this.routingTable.shouldHandleLocally(point)) {
+      if (soloMode || this.routingTable.shouldHandleLocally(point)) {
         localPoints.push(point);
       } else {
         // Find who should handle this point
@@ -82,6 +85,9 @@ export class DistributedRendezvous extends EventEmitter {
             remotePoints.set(server.serverId, []);
           }
           remotePoints.get(server.serverId)!.push(point);
+        } else {
+          // No responsible node found — handle locally as fallback
+          localPoints.push(point);
         }
       }
     }
@@ -128,8 +134,11 @@ export class DistributedRendezvous extends EventEmitter {
     const localTokens: string[] = [];
     const remoteTokens = new Map<string, string[]>();
 
+    // If ring has no active nodes, handle everything locally (solo mode)
+    const soloMode = this.ring.getActiveNodes().length <= 1;
+
     for (const token of tokens) {
-      if (this.routingTable.shouldHandleLocally(token)) {
+      if (soloMode || this.routingTable.shouldHandleLocally(token)) {
         localTokens.push(token);
       } else {
         const responsible = this.ring.getResponsibleNodes(token, 1);
@@ -139,6 +148,9 @@ export class DistributedRendezvous extends EventEmitter {
             remoteTokens.set(server.serverId, []);
           }
           remoteTokens.get(server.serverId)!.push(token);
+        } else {
+          // No responsible node found — handle locally as fallback
+          localTokens.push(token);
         }
       }
     }
@@ -179,7 +191,8 @@ export class DistributedRendezvous extends EventEmitter {
     local: DeadDropResult[] | null;
     redirect: { serverId: string; endpoint: string } | null;
   }> {
-    if (this.routingTable.shouldHandleLocally(point)) {
+    const soloMode = this.ring.getActiveNodes().length <= 1;
+    if (soloMode || this.routingTable.shouldHandleLocally(point)) {
       const entries = await this.registry.getDailyPoint(point);
       return {
         local: entries

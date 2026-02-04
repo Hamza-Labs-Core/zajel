@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_router.dart';
+import 'core/config/environment.dart';
 import 'core/logging/logger_service.dart';
 import 'core/models/models.dart';
 import 'core/providers/app_providers.dart';
@@ -114,89 +115,51 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
       ref.read(signalingDisplayStateProvider.notifier).state =
           SignalingDisplayState.connecting;
 
-      // Discover and select a VPS server
-      final discoveryService = ref.read(serverDiscoveryServiceProvider);
-      final selectedServer = await discoveryService.selectServer();
+      String serverUrl;
 
-      if (selectedServer == null) {
-        logger.warning('ZajelApp', 'No servers available from discovery');
-        ref.read(signalingDisplayStateProvider.notifier).state =
-            SignalingDisplayState.disconnected;
-        return;
+      // If a direct signaling URL is provided (e.g. E2E tests), use it
+      // directly and skip server discovery.
+      if (Environment.hasDirectSignalingUrl) {
+        serverUrl = Environment.signalingUrl;
+        logger.info('ZajelApp', 'Using direct signaling URL: $serverUrl');
+      } else {
+        // Discover and select a VPS server
+        final discoveryService = ref.read(serverDiscoveryServiceProvider);
+        final selectedServer = await discoveryService.selectServer();
+
+        if (selectedServer == null) {
+          logger.warning('ZajelApp', 'No servers available from discovery');
+          ref.read(signalingDisplayStateProvider.notifier).state =
+              SignalingDisplayState.disconnected;
+          return;
+        }
+
+        // Store the selected server
+        ref.read(selectedServerProvider.notifier).state = selectedServer;
+        logger.info(
+            'ZajelApp', 'Selected server: ${selectedServer.region} - ${selectedServer.endpoint}');
+
+        // Get the WebSocket URL for the selected server
+        serverUrl = discoveryService.getWebSocketUrl(selectedServer);
       }
 
-      // Store the selected server
-      ref.read(selectedServerProvider.notifier).state = selectedServer;
-      logger.info(
-          'ZajelApp', 'Selected server: ${selectedServer.region} - ${selectedServer.endpoint}');
-
-      // Get the WebSocket URL for the selected server
-      final serverUrl = discoveryService.getWebSocketUrl(selectedServer);
       logger.debug('ZajelApp', 'Connecting to WebSocket URL: $serverUrl');
 
       final code = await connectionManager.connect(serverUrl: serverUrl);
       logger.info('ZajelApp', 'Connected to signaling with pairing code: $code');
       ref.read(pairingCodeProvider.notifier).state = code;
+      ref.read(signalingClientProvider.notifier).state = connectionManager.signalingClient;
       ref.read(signalingConnectedProvider.notifier).state = true;
       ref.read(signalingDisplayStateProvider.notifier).state =
           SignalingDisplayState.connected;
 
-      // Initialize peer reconnection after successful signaling connection
-      await _initializePeerReconnection(serverUrl);
+      // Register meeting points for trusted peer reconnection
+      await connectionManager.reconnectTrustedPeers();
     } catch (e, stack) {
       logger.error('ZajelApp', 'Failed to auto-connect to signaling', e, stack);
       ref.read(signalingDisplayStateProvider.notifier).state =
           SignalingDisplayState.disconnected;
     }
-  }
-
-  /// Initialize peer reconnection service for trusted peer discovery.
-  Future<void> _initializePeerReconnection(String serverUrl) async {
-    final reconnectionService = ref.read(peerReconnectionServiceProvider);
-    if (reconnectionService == null) {
-      logger.warning('ZajelApp', 'PeerReconnectionService not available');
-      return;
-    }
-
-    try {
-      // Connect to signaling for rendezvous
-      await reconnectionService.connect(serverUrl);
-      logger.info('ZajelApp', 'PeerReconnectionService connected');
-
-      // Set up reconnection event listeners
-      _setupReconnectionListeners(reconnectionService);
-    } catch (e, stack) {
-      logger.error('ZajelApp', 'Failed to initialize peer reconnection', e, stack);
-    }
-  }
-
-  /// Set up listeners for peer reconnection events.
-  void _setupReconnectionListeners(dynamic reconnectionService) {
-    // Listen for peers found via meeting points
-    reconnectionService.onPeerFound.listen((event) {
-      logger.info('ZajelApp', 'Peer found via meeting point: ${event.peerId}');
-
-      if (event.isLive) {
-        logger.debug('ZajelApp', 'Peer ${event.peerId} is live - can connect directly');
-        // Auto-connect to live peer if desired
-        // For now, just log the event
-      } else if (event.connectionInfo != null) {
-        logger.debug('ZajelApp', 'Peer ${event.peerId} has dead drop info - can connect via relay');
-        // Connect via dead drop info if desired
-        // For now, just log the event
-      }
-    });
-
-    // Listen for incoming connection requests
-    reconnectionService.onConnectionRequest.listen((event) {
-      logger.info('ZajelApp', 'Connection request from peer: ${event.peerId}');
-      // Handle incoming reconnection attempts
-    });
-
-    // Listen for status updates
-    reconnectionService.onStatus.listen((status) {
-      logger.debug('ZajelApp', 'Reconnection status: ${status.message}');
-    });
   }
 
   void _setupFileTransferListeners() {
