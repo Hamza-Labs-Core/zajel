@@ -2,21 +2,21 @@
 cmake_minimum_required(VERSION 3.14)
 project(pinned_websocket_plugin LANGUAGES CXX)
 
-# Find OpenSSL - try multiple methods
+# Find OpenSSL - try multiple methods (all optional, graceful fallback)
 # 1. vcpkg (if available)
-# 2. System-installed OpenSSL
-# 3. Fallback to bundled (if provided)
+# 2. System-installed OpenSSL via OPENSSL_ROOT_DIR
+# 3. Build without SSL if not found
 find_package(OpenSSL QUIET)
 
+if(NOT OpenSSL_FOUND AND DEFINED ENV{OPENSSL_ROOT_DIR})
+  # Try with explicit root dir (e.g., chocolatey install location)
+  set(OPENSSL_ROOT_DIR $ENV{OPENSSL_ROOT_DIR})
+  find_package(OpenSSL QUIET)
+endif()
+
 if(NOT OpenSSL_FOUND)
-  # Try to find via environment variable
-  if(DEFINED ENV{OPENSSL_ROOT_DIR})
-    set(OPENSSL_ROOT_DIR $ENV{OPENSSL_ROOT_DIR})
-    find_package(OpenSSL REQUIRED)
-  else()
-    message(STATUS "OpenSSL not found - pinned_websocket_plugin will be built without SSL support")
-    message(STATUS "To enable SSL, install OpenSSL via vcpkg or set OPENSSL_ROOT_DIR environment variable")
-  endif()
+  message(STATUS "OpenSSL not found - pinned_websocket_plugin will be built without SSL support")
+  message(STATUS "To enable SSL, install OpenSSL via vcpkg or set OPENSSL_ROOT_DIR environment variable")
 endif()
 
 # Plugin library
