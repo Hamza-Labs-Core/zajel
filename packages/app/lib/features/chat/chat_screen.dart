@@ -29,8 +29,13 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
+  final _messageFocusNode = FocusNode();
   bool _isSending = false;
   StreamSubscription<CallState>? _voipStateSubscription;
+
+  /// Check if running on desktop platform
+  bool get _isDesktop =>
+      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
   @override
   void initState() {
@@ -105,7 +110,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _voipStateSubscription?.cancel();
     _messageController.dispose();
     _scrollController.dispose();
+    _messageFocusNode.dispose();
     super.dispose();
+  }
+
+  /// Handle key events for desktop: Enter sends, Shift+Enter creates newline
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (!_isDesktop) return KeyEventResult.ignored;
+
+    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.enter) {
+      final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+      if (!isShiftPressed && !_isSending) {
+        _sendMessage();
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
   }
 
   @override
@@ -299,13 +319,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             Expanded(
               child: TextField(
                 controller: _messageController,
+                focusNode: _messageFocusNode..onKeyEvent = _handleKeyEvent,
                 decoration: const InputDecoration(
                   hintText: 'Type a message...',
                   border: InputBorder.none,
                 ),
                 textCapitalization: TextCapitalization.sentences,
                 maxLines: null,
-                onSubmitted: (_) => _sendMessage(),
+                // On mobile, onSubmitted handles send; on desktop, key handler does
+                onSubmitted: _isDesktop ? null : (_) => _sendMessage(),
               ),
             ),
             _isSending
