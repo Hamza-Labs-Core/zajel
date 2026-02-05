@@ -990,6 +990,25 @@ jobs:
             --dart-define=ENV=qa \
             --dart-define=E2E_TEST=true
 
+      - name: Free up disk space
+        run: |
+          echo "Disk space before cleanup:"
+          df -h /
+          # Remove unnecessary large packages to free ~20GB
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android/sdk/ndk
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/lib/android/sdk/build-tools/33*
+          sudo rm -rf /usr/local/lib/android/sdk/build-tools/34*
+          sudo rm -rf /usr/share/swift
+          sudo rm -rf /usr/local/graalvm
+          # Clean docker
+          docker system prune -af || true
+          echo "Disk space after cleanup:"
+          df -h /
+
       - name: Create and start emulators
         timeout-minutes: 10
         env:
@@ -1011,12 +1030,12 @@ jobs:
           adb start-server
 
           echo "Starting emulator 1 (port 5554)..."
-          nohup $ANDROID_HOME/emulator/emulator -avd test-avd-1 -port 5554 -no-snapshot-load -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -wipe-data 2>&1 &
+          nohup $ANDROID_HOME/emulator/emulator -avd test-avd-1 -port 5554 -no-snapshot-load -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -wipe-data -partition-size 2048 2>&1 &
           EMULATOR1_PID=$!
           echo "EMULATOR1_PID=$EMULATOR1_PID" >> $GITHUB_ENV
 
           echo "Starting emulator 2 (port 5556)..."
-          nohup $ANDROID_HOME/emulator/emulator -avd test-avd-2 -port 5556 -no-snapshot-load -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -wipe-data 2>&1 &
+          nohup $ANDROID_HOME/emulator/emulator -avd test-avd-2 -port 5556 -no-snapshot-load -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -wipe-data -partition-size 2048 2>&1 &
           EMULATOR2_PID=$!
           echo "EMULATOR2_PID=$EMULATOR2_PID" >> $GITHUB_ENV
 
