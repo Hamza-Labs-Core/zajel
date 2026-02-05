@@ -41,8 +41,37 @@ if(OpenSSL_FOUND)
     OpenSSL::Crypto
   )
   target_compile_definitions(pinned_websocket_plugin PRIVATE HAVE_OPENSSL=1)
+
+  # Find and propagate OpenSSL DLLs for bundling with the application.
+  # The .lib import libraries are found by find_package, but the runtime
+  # .dll files must be shipped alongside the executable.
+  get_filename_component(_openssl_lib_dir "${OPENSSL_SSL_LIBRARY}" DIRECTORY)
+  get_filename_component(_openssl_root "${_openssl_lib_dir}" DIRECTORY)
+
+  # OpenSSL 3.x DLLs: libssl-3-x64.dll / libcrypto-3-x64.dll
+  # OpenSSL 1.1.x DLLs: libssl-1_1-x64.dll / libcrypto-1_1-x64.dll
+  set(_openssl_dll_search_dirs
+    "${_openssl_root}/bin"
+    "${_openssl_lib_dir}"
+    "${_openssl_root}"
+  )
+
+  set(OPENSSL_RUNTIME_DLLS "")
+  foreach(_dll_name libssl-3-x64.dll libcrypto-3-x64.dll
+                    libssl-1_1-x64.dll libcrypto-1_1-x64.dll)
+    find_file(_found_dll "${_dll_name}" PATHS ${_openssl_dll_search_dirs} NO_DEFAULT_PATH)
+    if(_found_dll)
+      list(APPEND OPENSSL_RUNTIME_DLLS "${_found_dll}")
+      message(STATUS "Found OpenSSL DLL: ${_found_dll}")
+    endif()
+    unset(_found_dll CACHE)
+  endforeach()
+
+  # Propagate to parent scope so the main CMakeLists.txt can install them
+  set(OPENSSL_RUNTIME_DLLS "${OPENSSL_RUNTIME_DLLS}" PARENT_SCOPE)
 else()
   target_compile_definitions(pinned_websocket_plugin PRIVATE HAVE_OPENSSL=0)
+  set(OPENSSL_RUNTIME_DLLS "" PARENT_SCOPE)
 endif()
 
 target_compile_features(pinned_websocket_plugin PUBLIC cxx_std_17)
