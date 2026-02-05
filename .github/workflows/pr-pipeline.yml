@@ -52,10 +52,10 @@ jobs:
           # Increment patch for pre-release
           NEXT_PATCH=$((PATCH + 1))
 
-          # Create pre-release version: X.Y.Z-pr.PR_NUMBER.BUILD_NUMBER
-          PR_NUM="${{ github.event.pull_request.number }}"
-          PR_NUM="${PR_NUM:-0}"
-          VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}-pr.${PR_NUM}.${{ github.run_number }}"
+          # Create pre-release version: X.Y.Z-build.NNNN
+          # Zero-pad build number to 4 digits for proper semver sorting
+          BUILD_NUM=$(printf "%04d" ${{ github.run_number }})
+          VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}-build.${BUILD_NUM}"
 
           echo "Computed version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
