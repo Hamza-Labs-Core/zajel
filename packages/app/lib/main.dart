@@ -51,6 +51,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
   StreamSubscription? _fileStartSubscription;
   StreamSubscription? _fileChunkSubscription;
   StreamSubscription? _fileCompleteSubscription;
+  StreamSubscription<(String, String)>? _pairRequestSubscription;
   bool _disposed = false;
 
   @override
@@ -95,6 +96,9 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
 
       // Set up file transfer listeners
       _setupFileTransferListeners();
+
+      // Set up pair request listener for incoming connection requests
+      _setupPairRequestListener();
 
       // Auto-connect to signaling server
       await _connectToSignaling(connectionManager);
@@ -213,6 +217,111 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
     });
   }
 
+  void _setupPairRequestListener() {
+    final connectionManager = ref.read(connectionManagerProvider);
+
+    _pairRequestSubscription = connectionManager.pairRequests.listen((event) {
+      final (fromCode, fromPublicKey) = event;
+      logger.info('ZajelApp', 'Showing pair request dialog for $fromCode');
+      _showPairRequestDialog(fromCode, fromPublicKey);
+    });
+  }
+
+  Future<void> _showPairRequestDialog(String fromCode, String fromPublicKey) async {
+    final context = rootNavigatorKey.currentContext;
+    if (context == null) {
+      logger.warning('ZajelApp', 'No context available to show pair request dialog');
+      return;
+    }
+
+    final accepted = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.person_add, color: Colors.blue),
+            SizedBox(width: 8),
+            Text('Connection Request'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Device with code $fromCode wants to connect.'),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Device Code',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                  Text(
+                    fromCode,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.shade200),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.warning_amber, color: Colors.orange, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Only accept if you know this device.',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Decline'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Accept'),
+          ),
+        ],
+      ),
+    );
+
+    // Respond to the pair request
+    final connectionManager = ref.read(connectionManagerProvider);
+    connectionManager.respondToPairRequest(fromCode, accept: accepted == true);
+
+    if (accepted == true) {
+      logger.info('ZajelApp', 'Pair request from $fromCode accepted');
+    } else {
+      logger.info('ZajelApp', 'Pair request from $fromCode declined');
+    }
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -220,6 +329,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
     _fileStartSubscription?.cancel();
     _fileChunkSubscription?.cancel();
     _fileCompleteSubscription?.cancel();
+    _pairRequestSubscription?.cancel();
 
     // Dispose native resources if not already done
     if (!_disposed) {

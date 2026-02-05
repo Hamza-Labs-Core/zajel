@@ -310,31 +310,65 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
       padding: const EdgeInsets.all(24),
       child: Column(
         children: [
+          // Manual code entry at TOP for easy access
           Text(
-            'Share this code with others to connect',
-            style: Theme.of(context).textTheme.bodyLarge,
+            'Enter a pairing code',
+            style: Theme.of(context).textTheme.titleMedium,
           ),
-          const SizedBox(height: 24),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
-                  blurRadius: 10,
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _codeController,
+                  decoration: const InputDecoration(
+                    hintText: 'Enter 6-character code',
+                    border: OutlineInputBorder(),
+                  ),
+                  textCapitalization: TextCapitalization.characters,
+                  textInputAction: TextInputAction.go,
+                  onSubmitted: (_) => _isConnecting ? null : _connectWithCode(),
+                  inputFormatters: [
+                    // Allow both cases - uppercase conversion happens on submit
+                    FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9]')),
+                    LengthLimitingTextInputFormatter(6),
+                    // Convert to uppercase as user types
+                    _UpperCaseTextFormatter(),
+                  ],
                 ),
-              ],
-            ),
-            child: QrImageView(
-              data: qrData,
-              version: QrVersions.auto,
-              size: 200,
-              backgroundColor: Colors.white,
-            ),
+              ),
+              const SizedBox(width: 12),
+              ElevatedButton(
+                onPressed: _isConnecting ? null : _connectWithCode,
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                ),
+                child: _isConnecting
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Connect'),
+              ),
+            ],
           ),
           const SizedBox(height: 24),
+          const Divider(),
+          const SizedBox(height: 24),
+          // Your code section below
+          Text(
+            'Your code',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Share this with others to let them connect to you',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+          const SizedBox(height: 16),
           Container(
             padding: const EdgeInsets.symmetric(
               horizontal: 24,
@@ -367,48 +401,33 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
               ],
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
           Text(
             'Visible as: $displayName',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
           ),
-          const SizedBox(height: 32),
-          const Divider(),
-          const SizedBox(height: 16),
-          Text(
-            'Or enter a code manually',
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _codeController,
-                  decoration: const InputDecoration(
-                    hintText: 'Enter pairing code',
-                  ),
-                  textCapitalization: TextCapitalization.characters,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'[A-Z0-9]')),
-                    LengthLimitingTextInputFormatter(6),
-                  ],
+          const SizedBox(height: 24),
+          // QR code at bottom (optional, less important)
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 10,
                 ),
-              ),
-              const SizedBox(width: 16),
-              ElevatedButton(
-                onPressed: _isConnecting ? null : _connectWithCode,
-                child: _isConnecting
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Connect'),
-              ),
-            ],
+              ],
+            ),
+            child: QrImageView(
+              data: qrData,
+              version: QrVersions.auto,
+              size: 180,
+              backgroundColor: Colors.white,
+            ),
           ),
         ],
       ),
@@ -802,5 +821,19 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
         setState(() => _isConnecting = false);
       }
     }
+  }
+}
+
+/// Converts all text input to uppercase.
+class _UpperCaseTextFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    return TextEditingValue(
+      text: newValue.text.toUpperCase(),
+      selection: newValue.selection,
+    );
   }
 }

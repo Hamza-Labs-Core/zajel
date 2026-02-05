@@ -7,8 +7,12 @@ import 'features/home/home_screen.dart';
 import 'features/settings/blocked_peers_screen.dart';
 import 'features/settings/settings_screen.dart';
 
+/// Root navigator key for showing dialogs from anywhere in the app.
+final rootNavigatorKey = GlobalKey<NavigatorState>();
+
 /// App router configuration.
 final appRouter = GoRouter(
+  navigatorKey: rootNavigatorKey,
   initialLocation: '/',
   routes: [
     GoRoute(
