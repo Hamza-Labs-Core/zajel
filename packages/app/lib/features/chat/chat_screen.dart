@@ -35,8 +35,34 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    _loadBufferedMessages();
     _listenToMessages();
     _setupVoipListener();
+  }
+
+  /// Load messages that arrived while this ChatScreen was not open.
+  void _loadBufferedMessages() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final connectionManager = ref.read(connectionManagerProvider);
+      final buffered = connectionManager.drainBufferedMessages(widget.peerId);
+      if (buffered.isNotEmpty) {
+        final notifier =
+            ref.read(chatMessagesProvider(widget.peerId).notifier);
+        for (final (peerId, message) in buffered) {
+          notifier.addMessage(
+            Message(
+              localId: const Uuid().v4(),
+              peerId: peerId,
+              content: message,
+              timestamp: DateTime.now(),
+              isOutgoing: false,
+              status: MessageStatus.delivered,
+            ),
+          );
+        }
+        _scrollToBottom();
+      }
+    });
   }
 
   void _setupVoipListener() {
@@ -267,6 +293,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           children: [
             IconButton(
               icon: const Icon(Icons.attach_file),
+              tooltip: 'Attach file',
               onPressed: _pickFile,
             ),
             Expanded(
@@ -295,6 +322,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       Icons.send,
                       color: Theme.of(context).colorScheme.primary,
                     ),
+                    tooltip: 'Send message',
                     onPressed: _sendMessage,
                   ),
           ],

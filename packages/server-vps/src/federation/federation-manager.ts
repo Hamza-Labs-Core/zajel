@@ -6,7 +6,7 @@
  */
 
 import { EventEmitter } from 'events';
-import type { WebSocketServer } from 'ws';
+import { WebSocket as WsWebSocket, type WebSocketServer } from 'ws';
 import type {
   ServerIdentity,
   MembershipEntry,
@@ -267,8 +267,7 @@ export class FederationManager extends EventEmitter {
    */
   private async connectToBootstrap(endpoint: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const WebSocket = require('ws');
-      const ws = new WebSocket(endpoint);
+      const ws = new WsWebSocket(endpoint);
 
       const timeout = setTimeout(() => {
         ws.close();
