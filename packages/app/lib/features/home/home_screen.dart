@@ -342,8 +342,9 @@ class _PeerCard extends ConsumerWidget {
     );
 
     if (confirmed == true) {
+      final keyToBlock = peer.publicKey ?? peer.id;
       await ref.read(blockedPeersProvider.notifier).block(
-            peer.id,
+            keyToBlock,
             displayName: peer.displayName,
           );
       if (context.mounted) {

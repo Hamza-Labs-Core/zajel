@@ -149,6 +149,7 @@ class _CallButton extends StatelessWidget {
       children: [
         FloatingActionButton(
           heroTag: 'call_button_$label',
+          tooltip: label,
           backgroundColor: color,
           onPressed: onPressed,
           child: Icon(icon, color: Colors.white),

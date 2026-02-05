@@ -7,11 +7,6 @@ on:
       - 'packages/server-vps/**'
       - '.github/workflows/deploy-vps.yml'
   workflow_dispatch:
-    inputs:
-      server:
-        description: 'Server to deploy to (all, srv1, srv2, srv3)'
-        required: false
-        default: 'all'
 
 env:
   NODE_VERSION: '20'
@@ -52,10 +47,9 @@ jobs:
             packages/server-vps/migrations
           retention-days: 1
 
-  deploy-srv1:
+  deploy:
     needs: build
     runs-on: ubuntu-latest
-    if: inputs.server == 'all' || inputs.server == 'srv1' || inputs.server == ''
     steps:
       - name: Download build artifact
         uses: actions/download-artifact@v4
@@ -66,10 +60,10 @@ jobs:
       - name: Setup server environment
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.VPS_SRV1_HOST }}
+          host: ${{ vars.VPS_SERVERS }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
+          port: ${{ secrets.VPS_PORT || 22 }}
           script: |
             set -e
 
@@ -95,10 +89,10 @@ jobs:
       - name: Prepare deployment
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.VPS_SRV1_HOST }}
+          host: ${{ vars.VPS_SERVERS }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
+          port: ${{ secrets.VPS_PORT || 22 }}
           script: |
             set -e
             cd /opt/zajel/server-vps
@@ -107,13 +101,13 @@ jobs:
               mv dist dist.backup
             fi
 
-      - name: Copy files to server
+      - name: Copy files to servers
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.VPS_SRV1_HOST }}
+          host: ${{ vars.VPS_SERVERS }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
+          port: ${{ secrets.VPS_PORT || 22 }}
           source: "deploy/*"
           target: "/opt/zajel/server-vps"
           strip_components: 1
@@ -121,10 +115,10 @@ jobs:
       - name: Start server
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.VPS_SRV1_HOST }}
+          host: ${{ vars.VPS_SERVERS }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
+          port: ${{ secrets.VPS_PORT || 22 }}
           script: |
             set -e
             cd /opt/zajel/server-vps
@@ -137,131 +131,7 @@ jobs:
             # Create startup script with embedded env vars
             # Get public IP for the endpoint
             PUBLIC_IP=$(curl -sf http://checkip.amazonaws.com || curl -sf http://ifconfig.me || echo "localhost")
-            printf '#!/bin/bash\nexport ZAJEL_PORT=9000\nexport ZAJEL_KEY_PATH=./data/server.key\nexport ZAJEL_DB_PATH=./data/zajel.db\nexport ZAJEL_PUBLIC_ENDPOINT=ws://%s:9000\nexport ZAJEL_REGION=eu-central\nexport ZAJEL_BOOTSTRAP_URL=https://zajel-signaling.mahmoud-s-darwish.workers.dev\ncd /opt/zajel/server-vps\nexec node dist/index.js\n' "$PUBLIC_IP" > start.sh
-            chmod +x start.sh
-            cat start.sh
-
-            # Stop existing if running
-            pm2 delete zajel-server 2>/dev/null || true
-
-            # Start with PM2 using the wrapper script
-            pm2 start start.sh --name zajel-server --interpreter bash --cwd /opt/zajel/server-vps --max-memory-restart 512M --exp-backoff-restart-delay=100
-            pm2 save
-
-            # Check PM2 status
-            pm2 list
-            sleep 3
-
-            # Check port
-            echo "=== Checking port 9000 ==="
-            netstat -tlnp 2>/dev/null | grep 9000 || ss -tlnp | grep 9000 || echo "Port 9000 not listening"
-            echo "=========================="
-
-            # Wait for server to be ready
-            echo "Waiting for server to start..."
-            for i in {1..6}; do
-              if curl -sf http://localhost:9000/health; then
-                echo "Health check passed!"
-                pm2 logs zajel-server --lines 20 --nostream || true
-                exit 0
-              fi
-              echo "Attempt $i failed, waiting 5 seconds..."
-              pm2 logs zajel-server --lines 5 --nostream 2>/dev/null || true
-              sleep 5
-            done
-
-            # If we get here, show logs and fail
-            echo "Health check failed after 30 seconds"
-            pm2 logs zajel-server --lines 100 --nostream
-            pm2 show zajel-server
-            exit 1
-
-  deploy-srv2:
-    needs: build
-    runs-on: ubuntu-latest
-    if: inputs.server == 'all' || inputs.server == 'srv2'
-    steps:
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: server-vps-dist
-          path: deploy
-
-      - name: Setup server environment
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.VPS_SRV2_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
-          script: |
-            set -e
-
-            # Install Node.js 20 if not present
-            if ! command -v node &> /dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
-              echo "Installing Node.js 20..."
-              curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-              sudo apt-get install -y nodejs
-            fi
-            echo "Node.js version: $(node -v)"
-
-            # Install PM2 if not present
-            if ! command -v pm2 &> /dev/null; then
-              echo "Installing PM2..."
-              sudo npm install -g pm2
-            fi
-            echo "PM2 version: $(pm2 -v)"
-
-            # Setup app directory
-            sudo mkdir -p /opt/zajel/server-vps
-            sudo chown -R $USER:$USER /opt/zajel
-
-      - name: Prepare deployment
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.VPS_SRV2_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
-          script: |
-            set -e
-            cd /opt/zajel/server-vps
-            if [ -d "dist" ]; then
-              rm -rf dist.backup
-              mv dist dist.backup
-            fi
-
-      - name: Copy files to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.VPS_SRV2_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
-          source: "deploy/*"
-          target: "/opt/zajel/server-vps"
-          strip_components: 1
-
-      - name: Start server
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.VPS_SRV2_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
-          script: |
-            set -e
-            cd /opt/zajel/server-vps
-
-            # Create data directory
-            mkdir -p data
-
-            npm ci --omit=dev
-
-            # Create startup script with embedded env vars
-            # Get public IP for the endpoint
-            PUBLIC_IP=$(curl -sf http://checkip.amazonaws.com || curl -sf http://ifconfig.me || echo "localhost")
-            printf '#!/bin/bash\nexport ZAJEL_PORT=9000\nexport ZAJEL_KEY_PATH=./data/server.key\nexport ZAJEL_DB_PATH=./data/zajel.db\nexport ZAJEL_PUBLIC_ENDPOINT=ws://%s:9000\nexport ZAJEL_REGION=us-east\nexport ZAJEL_BOOTSTRAP_URL=https://zajel-signaling.mahmoud-s-darwish.workers.dev\ncd /opt/zajel/server-vps\nexec node dist/index.js\n' "$PUBLIC_IP" > start.sh
+            printf '#!/bin/bash\nexport ZAJEL_PORT=9000\nexport ZAJEL_KEY_PATH=./data/server.key\nexport ZAJEL_DB_PATH=./data/zajel.db\nexport ZAJEL_PUBLIC_ENDPOINT=ws://%s:9000\nexport ZAJEL_REGION=auto\nexport ZAJEL_BOOTSTRAP_URL=https://zajel-signaling.mahmoud-s-darwish.workers.dev\ncd /opt/zajel/server-vps\nexec node dist/index.js\n' "$PUBLIC_IP" > start.sh
             chmod +x start.sh
             cat start.sh
 
