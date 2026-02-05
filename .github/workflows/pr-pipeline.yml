@@ -389,6 +389,12 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
+      - name: Install OpenSSL
+        run: |
+          choco install openssl -y --no-progress
+          # Set environment variable for CMake to find OpenSSL
+          echo "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
+
       - name: Enable Windows desktop
         working-directory: packages/app
         run: flutter config --enable-windows-desktop
