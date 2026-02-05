@@ -39,28 +39,28 @@ final cryptoServiceProvider = Provider<CryptoService>((ref) {
 /// Provider for WebRTC service.
 final webrtcServiceProvider = Provider<WebRTCService>((ref) {
   final cryptoService = ref.watch(cryptoServiceProvider);
-  // In E2E test mode, add a TURN server so emulators on isolated virtual
-  // networks can relay media/data through a TURN server.
+  // Support TURN servers via environment variables in any mode.
+  // In E2E test mode, forceRelay=true to avoid wasting time on direct connection attempts.
+  // In normal mode with TURN, still try direct connections first (forceRelay=false).
   List<Map<String, dynamic>>? iceServers;
-  if (Environment.isE2eTest) {
-    const turnUrl = String.fromEnvironment('TURN_URL', defaultValue: '');
-    const turnUser = String.fromEnvironment('TURN_USER', defaultValue: '');
-    const turnPass = String.fromEnvironment('TURN_PASS', defaultValue: '');
-    if (turnUrl.isNotEmpty) {
-      iceServers = [
-        {'urls': 'stun:stun.l.google.com:19302'},
-        {
-          'urls': turnUrl,
-          'username': turnUser,
-          'credential': turnPass,
-        },
-      ];
-    }
+  const turnUrl = String.fromEnvironment('TURN_URL', defaultValue: '');
+  const turnUser = String.fromEnvironment('TURN_USER', defaultValue: '');
+  const turnPass = String.fromEnvironment('TURN_PASS', defaultValue: '');
+  if (turnUrl.isNotEmpty) {
+    iceServers = [
+      {'urls': 'stun:stun.l.google.com:19302'},
+      {
+        'urls': turnUrl,
+        'username': turnUser,
+        'credential': turnPass,
+      },
+    ];
   }
   return WebRTCService(
     cryptoService: cryptoService,
     iceServers: iceServers,
-    forceRelay: iceServers != null,
+    // Only force relay in E2E test mode (faster, avoids direct connection attempts)
+    forceRelay: iceServers != null && Environment.isE2eTest,
   );
 });
 
@@ -441,22 +441,20 @@ final voipServiceProvider = Provider<VoIPService?>((ref) {
 
   final mediaService = ref.watch(mediaServiceProvider);
 
-  // In E2E test mode, use TURN servers for VoIP calls too.
+  // Support TURN servers via environment variables for VoIP calls.
   List<Map<String, dynamic>>? iceServers;
-  if (Environment.isE2eTest) {
-    const turnUrl = String.fromEnvironment('TURN_URL', defaultValue: '');
-    const turnUser = String.fromEnvironment('TURN_USER', defaultValue: '');
-    const turnPass = String.fromEnvironment('TURN_PASS', defaultValue: '');
-    if (turnUrl.isNotEmpty) {
-      iceServers = [
-        {'urls': 'stun:stun.l.google.com:19302'},
-        {
-          'urls': turnUrl,
-          'username': turnUser,
-          'credential': turnPass,
-        },
-      ];
-    }
+  const turnUrl = String.fromEnvironment('TURN_URL', defaultValue: '');
+  const turnUser = String.fromEnvironment('TURN_USER', defaultValue: '');
+  const turnPass = String.fromEnvironment('TURN_PASS', defaultValue: '');
+  if (turnUrl.isNotEmpty) {
+    iceServers = [
+      {'urls': 'stun:stun.l.google.com:19302'},
+      {
+        'urls': turnUrl,
+        'username': turnUser,
+        'credential': turnPass,
+      },
+    ];
   }
 
   final voipService = VoIPService(mediaService, signalingClient, iceServers: iceServers);

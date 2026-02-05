@@ -653,8 +653,18 @@ class ConnectionManager {
           _notifyPeersChanged();
           break;
 
-        case SignalingPairError(error: final _):
-          // Pairing error
+        case SignalingPairError(error: final error):
+          // Pairing error - log and update UI
+          logger.error('ConnectionManager', 'Pair error received: $error');
+          // Find any peers in connecting state and mark them as failed
+          for (final entry in _peers.entries.toList()) {
+            if (entry.value.connectionState == PeerConnectionState.connecting) {
+              logger.warning('ConnectionManager',
+                  'Marking peer ${entry.key} as failed due to pair_error');
+              _peers.remove(entry.key);
+            }
+          }
+          _notifyPeersChanged();
           break;
 
         case SignalingOffer(from: final from, payload: final payload):
