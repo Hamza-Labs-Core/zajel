@@ -28,7 +28,10 @@ class CryptoService {
   final Map<String, String> _peerPublicKeys = {};
 
   CryptoService({FlutterSecureStorage? secureStorage})
-      : _secureStorage = secureStorage ?? const FlutterSecureStorage() {
+      : _secureStorage = secureStorage ??
+            const FlutterSecureStorage(
+              aOptions: AndroidOptions(encryptedSharedPreferences: true),
+            ) {
     _hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: CryptoConstants.hkdfOutputLength);
   }
 
@@ -199,7 +202,7 @@ class CryptoService {
     // Derive session key using HKDF
     final sessionKey = await _hkdf.deriveKey(
       secretKey: SecretKey(sharedSecretBytes),
-      info: utf8.encode('zajel_session_$peerId'),
+      info: utf8.encode('zajel_session'),
       nonce: const [],
     );
 

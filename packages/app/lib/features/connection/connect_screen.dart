@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../../core/logging/logger_service.dart';
 import '../../core/models/linked_device.dart';
 import '../../core/providers/app_providers.dart';
 
@@ -33,8 +34,13 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    _connectToServer();
-    _listenForLinkRequests();
+    // Defer provider modifications to avoid "modify provider during build" error.
+    // initState runs during the widget tree build phase; Riverpod forbids
+    // provider writes at that point.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _connectToServer();
+      _listenForLinkRequests();
+    });
   }
 
   /// Listen for incoming link requests from web clients and show approval dialog.
@@ -181,6 +187,14 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
   }
 
   Future<void> _connectToServer() async {
+    // If already connected to signaling (e.g. from main.dart auto-connect),
+    // skip reconnection to avoid replacing the existing SignalingClient and
+    // generating a new pairing code.
+    final connectionManager = ref.read(connectionManagerProvider);
+    if (connectionManager.externalPairingCode != null) {
+      return;
+    }
+
     // Update UI state to show "Connecting..."
     ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.connecting;
 
@@ -208,8 +222,12 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
       );
 
       ref.read(pairingCodeProvider.notifier).state = code;
+      ref.read(signalingClientProvider.notifier).state = connectionManager.signalingClient;
       ref.read(signalingConnectedProvider.notifier).state = true;
       ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.connected;
+
+      // Re-register meeting points for trusted peer reconnection
+      await connectionManager.reconnectTrustedPeers();
     } catch (e) {
       setState(() => _error = 'Failed to connect to server: $e');
       ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.disconnected;
@@ -749,7 +767,9 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
   Future<void> _connectWithCode() async {
     final code = _codeController.text.trim();
+    logger.info('ConnectScreen', '_connectWithCode called with code: "$code" (length: ${code.length})');
     if (code.isEmpty || code.length != 6) {
+      logger.warning('ConnectScreen', 'Invalid code - empty or wrong length');
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please enter a valid 6-character code')),
       );
@@ -760,8 +780,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
     try {
       final connectionManager = ref.read(connectionManagerProvider);
+      logger.info('ConnectScreen', 'Calling connectToPeer with code: $code');
       await connectionManager.connectToPeer(code);
 
+      logger.info('ConnectScreen', 'connectToPeer succeeded, popping screen');
       if (mounted) {
         context.pop();
         ScaffoldMessenger.of(context).showSnackBar(
@@ -769,6 +791,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
         );
       }
     } catch (e) {
+      logger.error('ConnectScreen', 'connectToPeer failed', e);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to connect: $e')),

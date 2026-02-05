@@ -55,9 +55,15 @@ interface UpdateLoadMessage {
 interface RegisterRendezvousMessage {
   type: 'register_rendezvous';
   peerId: string;
+  // Support both naming conventions for backward compatibility
   dailyPoints?: string[];
+  daily_points?: string[];
   hourlyTokens?: string[];
+  hourly_tokens?: string[];
+  // Support both single dead drop (legacy) and map (new)
   deadDrop?: string;
+  deadDrops?: Record<string, string>;  // point -> encrypted payload
+  dead_drops?: Record<string, string>; // snake_case variant
   relayId: string;
 }
 
@@ -594,19 +600,26 @@ export class ClientHandler extends EventEmitter {
   }
 
   /**
-   * Handle rendezvous point registration with routing awareness
+   * Handle rendezvous point registration with routing awareness.
+   *
+   * Supports both legacy format (single deadDrop) and new format (deadDrops map).
+   * Also supports both camelCase and snake_case field names for compatibility.
    */
   private async handleRegisterRendezvous(
     ws: WebSocket,
     message: RegisterRendezvousMessage
   ): Promise<void> {
-    const {
-      peerId,
-      dailyPoints = [],
-      hourlyTokens = [],
-      deadDrop = '',
-      relayId,
-    } = message;
+    const { peerId, relayId } = message;
+
+    // Support both naming conventions
+    const dailyPoints = message.dailyPoints || message.daily_points || [];
+    const hourlyTokens = message.hourlyTokens || message.hourly_tokens || [];
+
+    // Support both single dead drop (legacy) and map (new format)
+    // Priority: dead_drops > deadDrops > deadDrop (legacy)
+    const deadDropsMap: Record<string, string> =
+      message.dead_drops || message.deadDrops || {};
+    const legacyDeadDrop = message.deadDrop || '';
 
     // Update client's last seen
     const client = this.clients.get(peerId);
@@ -614,12 +627,58 @@ export class ClientHandler extends EventEmitter {
       client.lastSeen = Date.now();
     }
 
-    // Register daily points (with routing)
-    const dailyResult = await this.distributedRendezvous.registerDailyPoints(peerId, {
-      points: dailyPoints,
-      deadDrop,
-      relayId,
-    });
+    // Aggregate dead drops results
+    const allDeadDrops: DeadDropResult[] = [];
+    const allDailyRedirects: Array<{ serverId: string; endpoint: string; items: string[] }> = [];
+
+    // If we have per-point dead drops, register each point with its specific dead drop
+    const hasPerPointDeadDrops = Object.keys(deadDropsMap).length > 0;
+
+    if (hasPerPointDeadDrops) {
+      // Group points by whether they have a dead drop
+      const pointsWithDeadDrop: string[] = [];
+      const pointsWithoutDeadDrop: string[] = [];
+
+      for (const point of dailyPoints) {
+        if (deadDropsMap[point]) {
+          pointsWithDeadDrop.push(point);
+        } else {
+          pointsWithoutDeadDrop.push(point);
+        }
+      }
+
+      // Register points that have dead drops - each with its own dead drop
+      for (const point of pointsWithDeadDrop) {
+        const deadDrop = deadDropsMap[point]!;
+        const result = await this.distributedRendezvous.registerDailyPoints(peerId, {
+          points: [point],
+          deadDrop,
+          relayId,
+        });
+        allDeadDrops.push(...result.local.deadDrops);
+        allDailyRedirects.push(...result.redirects);
+      }
+
+      // Register points without dead drops (if any)
+      if (pointsWithoutDeadDrop.length > 0) {
+        const result = await this.distributedRendezvous.registerDailyPoints(peerId, {
+          points: pointsWithoutDeadDrop,
+          deadDrop: '', // No dead drop for these points
+          relayId,
+        });
+        allDeadDrops.push(...result.local.deadDrops);
+        allDailyRedirects.push(...result.redirects);
+      }
+    } else {
+      // Legacy mode: single dead drop for all points
+      const dailyResult = await this.distributedRendezvous.registerDailyPoints(peerId, {
+        points: dailyPoints,
+        deadDrop: legacyDeadDrop,
+        relayId,
+      });
+      allDeadDrops.push(...dailyResult.local.deadDrops);
+      allDailyRedirects.push(...dailyResult.redirects);
+    }
 
     // Register hourly tokens (with routing)
     const hourlyResult = await this.distributedRendezvous.registerHourlyTokens(peerId, {
@@ -628,7 +687,7 @@ export class ClientHandler extends EventEmitter {
     });
 
     // Check if we need to send redirects
-    const hasRedirects = dailyResult.redirects.length > 0 || hourlyResult.redirects.length > 0;
+    const hasRedirects = allDailyRedirects.length > 0 || hourlyResult.redirects.length > 0;
 
     if (hasRedirects) {
       // Send partial result with redirect information
@@ -636,16 +695,16 @@ export class ClientHandler extends EventEmitter {
         type: 'rendezvous_partial',
         local: {
           liveMatches: hourlyResult.local.liveMatches,
-          deadDrops: dailyResult.local.deadDrops,
+          deadDrops: allDeadDrops,
         },
-        redirects: this.mergeRedirects(dailyResult.redirects, hourlyResult.redirects),
+        redirects: this.mergeRedirects(allDailyRedirects, hourlyResult.redirects),
       });
     } else {
       // All points handled locally - send regular result
       this.send(ws, {
         type: 'rendezvous_result',
         liveMatches: hourlyResult.local.liveMatches,
-        deadDrops: dailyResult.local.deadDrops,
+        deadDrops: allDeadDrops,
       });
     }
   }
@@ -1526,10 +1585,15 @@ export class ClientHandler extends EventEmitter {
    * Notify a specific client
    */
   notifyClient(peerId: string, message: object): boolean {
+    // Check relay clients first
     const client = this.clients.get(peerId);
-    if (!client) return false;
+    if (client) return this.send(client.ws, message);
 
-    return this.send(client.ws, message);
+    // Fall back to signaling clients (pairing code registrations)
+    const signalingWs = this.pairingCodeToWs.get(peerId);
+    if (signalingWs) return this.send(signalingWs, message);
+
+    return false;
   }
 
   /**
