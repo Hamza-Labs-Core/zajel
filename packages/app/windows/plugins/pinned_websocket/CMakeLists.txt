@@ -2,21 +2,33 @@
 cmake_minimum_required(VERSION 3.14)
 project(pinned_websocket_plugin LANGUAGES CXX)
 
-# Find OpenSSL - try multiple methods (all optional, graceful fallback)
-# 1. vcpkg (if available)
-# 2. System-installed OpenSSL via OPENSSL_ROOT_DIR
-# 3. Build without SSL if not found
-find_package(OpenSSL QUIET)
+# Find OpenSSL - required for TLS certificate pinning
+# Try multiple methods to locate OpenSSL on Windows:
+# 1. Explicit paths via environment variables (CI builds)
+# 2. OPENSSL_ROOT_DIR environment variable
+# 3. System/vcpkg installed OpenSSL
 
-if(NOT OpenSSL_FOUND AND DEFINED ENV{OPENSSL_ROOT_DIR})
-  # Try with explicit root dir (e.g., chocolatey install location)
-  set(OPENSSL_ROOT_DIR $ENV{OPENSSL_ROOT_DIR})
+# Check for explicit library paths first (set by CI)
+if(DEFINED ENV{OPENSSL_SSL_LIBRARY} AND DEFINED ENV{OPENSSL_CRYPTO_LIBRARY} AND DEFINED ENV{OPENSSL_INCLUDE_DIR})
+  set(OPENSSL_SSL_LIBRARY $ENV{OPENSSL_SSL_LIBRARY})
+  set(OPENSSL_CRYPTO_LIBRARY $ENV{OPENSSL_CRYPTO_LIBRARY})
+  set(OPENSSL_INCLUDE_DIR $ENV{OPENSSL_INCLUDE_DIR})
+  set(OpenSSL_FOUND TRUE)
+  message(STATUS "Using OpenSSL from explicit environment variables")
+  message(STATUS "  SSL Library: ${OPENSSL_SSL_LIBRARY}")
+  message(STATUS "  Crypto Library: ${OPENSSL_CRYPTO_LIBRARY}")
+  message(STATUS "  Include Dir: ${OPENSSL_INCLUDE_DIR}")
+else()
+  # Try standard CMake find
+  if(DEFINED ENV{OPENSSL_ROOT_DIR})
+    set(OPENSSL_ROOT_DIR $ENV{OPENSSL_ROOT_DIR})
+  endif()
   find_package(OpenSSL QUIET)
 endif()
 
 if(NOT OpenSSL_FOUND)
   message(STATUS "OpenSSL not found - pinned_websocket_plugin will be built without SSL support")
-  message(STATUS "To enable SSL, install OpenSSL via vcpkg or set OPENSSL_ROOT_DIR environment variable")
+  message(STATUS "To enable SSL, install OpenSSL and set OPENSSL_ROOT_DIR or explicit library paths")
 endif()
 
 # Plugin library
@@ -36,17 +48,31 @@ target_link_libraries(pinned_websocket_plugin PRIVATE
 )
 
 if(OpenSSL_FOUND)
-  target_link_libraries(pinned_websocket_plugin PRIVATE
-    OpenSSL::SSL
-    OpenSSL::Crypto
-  )
+  # Link OpenSSL - use targets if available (from find_package), otherwise use explicit paths
+  if(TARGET OpenSSL::SSL AND TARGET OpenSSL::Crypto)
+    target_link_libraries(pinned_websocket_plugin PRIVATE
+      OpenSSL::SSL
+      OpenSSL::Crypto
+    )
+  else()
+    # Using explicit library paths
+    target_include_directories(pinned_websocket_plugin PRIVATE ${OPENSSL_INCLUDE_DIR})
+    target_link_libraries(pinned_websocket_plugin PRIVATE
+      ${OPENSSL_SSL_LIBRARY}
+      ${OPENSSL_CRYPTO_LIBRARY}
+    )
+  endif()
   target_compile_definitions(pinned_websocket_plugin PRIVATE HAVE_OPENSSL=1)
 
   # Find and propagate OpenSSL DLLs for bundling with the application.
   # The .lib import libraries are found by find_package, but the runtime
   # .dll files must be shipped alongside the executable.
   get_filename_component(_openssl_lib_dir "${OPENSSL_SSL_LIBRARY}" DIRECTORY)
+  # Navigate up from lib/VC/x64/MD/ or lib/ to find the root
   get_filename_component(_openssl_root "${_openssl_lib_dir}" DIRECTORY)
+  get_filename_component(_openssl_root "${_openssl_root}" DIRECTORY)
+  get_filename_component(_openssl_root "${_openssl_root}" DIRECTORY)
+  get_filename_component(_openssl_root "${_openssl_root}" DIRECTORY)
 
   # OpenSSL 3.x DLLs: libssl-3-x64.dll / libcrypto-3-x64.dll
   # OpenSSL 1.1.x DLLs: libssl-1_1-x64.dll / libcrypto-1_1-x64.dll
@@ -55,6 +81,10 @@ if(OpenSSL_FOUND)
     "${_openssl_lib_dir}"
     "${_openssl_root}"
   )
+  # Also check OPENSSL_ROOT_DIR from environment if set
+  if(DEFINED ENV{OPENSSL_ROOT_DIR})
+    list(APPEND _openssl_dll_search_dirs "$ENV{OPENSSL_ROOT_DIR}/bin")
+  endif()
 
   set(OPENSSL_RUNTIME_DLLS "")
   foreach(_dll_name libssl-3-x64.dll libcrypto-3-x64.dll

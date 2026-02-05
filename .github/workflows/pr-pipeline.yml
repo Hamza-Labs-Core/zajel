@@ -389,12 +389,19 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
-      - name: Install OpenSSL via vcpkg
+      - name: Install OpenSSL
         run: |
-          # vcpkg is pre-installed on GitHub Actions Windows runners
-          vcpkg install openssl:x64-windows
-          # Set CMAKE_TOOLCHAIN_FILE so CMake can find vcpkg packages
-          echo "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" >> $env:GITHUB_ENV
+          # Install OpenSSL with development files (full version, not light)
+          choco install openssl --version=3.3.2 -y --no-progress
+          # Help CMake find OpenSSL by setting all required paths explicitly
+          $opensslRoot = "C:\Program Files\OpenSSL-Win64"
+          echo "OPENSSL_ROOT_DIR=$opensslRoot" >> $env:GITHUB_ENV
+          echo "OPENSSL_INCLUDE_DIR=$opensslRoot\include" >> $env:GITHUB_ENV
+          echo "OPENSSL_CRYPTO_LIBRARY=$opensslRoot\lib\VC\x64\MD\libcrypto.lib" >> $env:GITHUB_ENV
+          echo "OPENSSL_SSL_LIBRARY=$opensslRoot\lib\VC\x64\MD\libssl.lib" >> $env:GITHUB_ENV
+          # Verify the files exist
+          dir "$opensslRoot\lib\VC\x64\MD\"
+          dir "$opensslRoot\include\openssl\" | Select-Object -First 5
 
       - name: Enable Windows desktop
         working-directory: packages/app
