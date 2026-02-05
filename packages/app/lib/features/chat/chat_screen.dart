@@ -262,14 +262,44 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   Future<void> _openFile(String filePath) async {
     try {
-      final file = XFile(filePath);
-      await Share.shareXFiles([file]);
+      if (_isDesktop) {
+        // Use platform-specific commands to open file with default app
+        await _openFileOnDesktop(filePath);
+      } else {
+        // On mobile, use share sheet
+        final file = XFile(filePath);
+        await Share.shareXFiles([file]);
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Could not open file: $e')),
         );
       }
+    }
+  }
+
+  /// Opens a file using the system's default application on desktop platforms.
+  Future<void> _openFileOnDesktop(String filePath) async {
+    final file = File(filePath);
+    if (!await file.exists()) {
+      throw Exception('File not found: $filePath');
+    }
+
+    ProcessResult result;
+    if (Platform.isLinux) {
+      result = await Process.run('xdg-open', [filePath]);
+    } else if (Platform.isMacOS) {
+      result = await Process.run('open', [filePath]);
+    } else if (Platform.isWindows) {
+      // On Windows, use 'start' command via cmd
+      result = await Process.run('cmd', ['/c', 'start', '', filePath]);
+    } else {
+      throw Exception('Unsupported platform');
+    }
+
+    if (result.exitCode != 0) {
+      throw Exception('Failed to open file: ${result.stderr}');
     }
   }
 

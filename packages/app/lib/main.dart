@@ -8,8 +8,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app_router.dart';
 import 'core/config/environment.dart';
 import 'core/logging/logger_service.dart';
+import 'core/media/media_service.dart';
 import 'core/models/models.dart';
+import 'core/network/voip_service.dart';
 import 'core/providers/app_providers.dart';
+import 'features/call/call_screen.dart';
+import 'features/call/incoming_call_dialog.dart';
 import 'shared/theme/app_theme.dart';
 
 const bool _isE2eTest = bool.fromEnvironment('E2E_TEST');
@@ -52,6 +56,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
   StreamSubscription? _fileChunkSubscription;
   StreamSubscription? _fileCompleteSubscription;
   StreamSubscription<(String, String)>? _pairRequestSubscription;
+  StreamSubscription<(String, String, String)>? _linkRequestSubscription;
+  StreamSubscription<CallState>? _voipCallStateSubscription;
   bool _disposed = false;
 
   @override
@@ -94,11 +100,21 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
       final connectionManager = ref.read(connectionManagerProvider);
       await connectionManager.initialize();
 
+      logger.info('ZajelApp', 'Initializing device link service...');
+      final deviceLinkService = ref.read(deviceLinkServiceProvider);
+      await deviceLinkService.initialize();
+
       // Set up file transfer listeners
       _setupFileTransferListeners();
 
       // Set up pair request listener for incoming connection requests
       _setupPairRequestListener();
+
+      // Set up link request listener for incoming web client link requests
+      _setupLinkRequestListener();
+
+      // Set up VoIP call listener for incoming calls from any screen
+      _setupVoipCallListener();
 
       // Auto-connect to signaling server
       await _connectToSignaling(connectionManager);
@@ -322,6 +338,232 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
     }
   }
 
+  void _setupLinkRequestListener() {
+    final connectionManager = ref.read(connectionManagerProvider);
+
+    _linkRequestSubscription = connectionManager.linkRequests.listen((event) {
+      final (linkCode, publicKey, deviceName) = event;
+      logger.info('ZajelApp', 'Showing link request dialog for $linkCode from $deviceName');
+      _showLinkRequestDialog(linkCode, publicKey, deviceName);
+    });
+  }
+
+  Future<void> _showLinkRequestDialog(
+    String linkCode,
+    String publicKey,
+    String deviceName,
+  ) async {
+    final context = rootNavigatorKey.currentContext;
+    if (context == null) {
+      logger.warning('ZajelApp', 'No context available to show link request dialog');
+      return;
+    }
+
+    // Generate fingerprint for verification (first 32 chars, grouped by 4)
+    final truncated = publicKey.length > 32 ? publicKey.substring(0, 32) : publicKey;
+    final fingerprint = truncated.replaceAllMapped(
+      RegExp(r'.{4}'),
+      (match) => '${match.group(0)} ',
+    ).trim();
+
+    final approved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.computer, color: Colors.blue),
+            SizedBox(width: 8),
+            Text('Link Request'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('$deviceName wants to link with this device.'),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Link Code',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                  Text(
+                    linkCode,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 2,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Key Fingerprint',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                  Text(
+                    fingerprint,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.shade200),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.warning_amber, color: Colors.orange, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Only approve if you initiated this link request.',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Reject'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Approve'),
+          ),
+        ],
+      ),
+    );
+
+    // Respond to the link request
+    final connectionManager = ref.read(connectionManagerProvider);
+    connectionManager.respondToLinkRequest(
+      linkCode,
+      accept: approved == true,
+      deviceId: approved == true ? 'link_$linkCode' : null,
+    );
+
+    if (approved == true) {
+      logger.info('ZajelApp', 'Link request from $deviceName approved');
+    } else {
+      logger.info('ZajelApp', 'Link request from $deviceName rejected');
+    }
+  }
+
+  void _setupVoipCallListener() {
+    // Listen for VoIP service changes (becomes available after signaling connects)
+    // We use ref.listen to reactively subscribe when voipService becomes available
+    ref.listenManual(voipServiceProvider, (previous, next) {
+      // Cancel previous subscription if voipService changed
+      _voipCallStateSubscription?.cancel();
+      _voipCallStateSubscription = null;
+
+      if (next != null) {
+        _voipCallStateSubscription = next.onStateChange.listen((state) {
+          if (state == CallState.incoming) {
+            logger.info('ZajelApp', 'Incoming call detected, showing dialog');
+            _showIncomingCallDialog();
+          }
+        });
+      }
+    });
+  }
+
+  void _showIncomingCallDialog() {
+    final context = rootNavigatorKey.currentContext;
+    if (context == null) {
+      logger.warning('ZajelApp', 'No context available to show incoming call dialog');
+      return;
+    }
+
+    final voipService = ref.read(voipServiceProvider);
+    final mediaService = ref.read(mediaServiceProvider);
+
+    if (voipService == null || voipService.currentCall == null) {
+      logger.warning('ZajelApp', 'VoIP service or current call is null');
+      return;
+    }
+
+    final call = voipService.currentCall!;
+
+    // Try to get caller name from peers list
+    final peersAsync = ref.read(peersProvider);
+    String callerName = call.peerId;
+    peersAsync.whenData((peers) {
+      final peer = peers.where((p) => p.id == call.peerId).firstOrNull;
+      if (peer != null) {
+        callerName = peer.displayName;
+      }
+    });
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => IncomingCallDialog(
+        callerName: callerName,
+        callId: call.callId,
+        withVideo: call.withVideo,
+        onAccept: () {
+          Navigator.of(context).pop();
+          voipService.acceptCall(call.callId, false);
+          _navigateToCallScreen(voipService, mediaService, callerName);
+        },
+        onAcceptWithVideo: () {
+          Navigator.of(context).pop();
+          voipService.acceptCall(call.callId, true);
+          _navigateToCallScreen(voipService, mediaService, callerName);
+        },
+        onReject: () {
+          Navigator.of(context).pop();
+          voipService.rejectCall(call.callId);
+        },
+      ),
+    );
+  }
+
+  void _navigateToCallScreen(
+    VoIPService voipService,
+    MediaService mediaService,
+    String peerName,
+  ) {
+    final context = rootNavigatorKey.currentContext;
+    if (context == null) {
+      logger.warning('ZajelApp', 'No context available to navigate to call screen');
+      return;
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => CallScreen(
+          voipService: voipService,
+          mediaService: mediaService,
+          peerName: peerName,
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -330,6 +572,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
     _fileChunkSubscription?.cancel();
     _fileCompleteSubscription?.cancel();
     _pairRequestSubscription?.cancel();
+    _linkRequestSubscription?.cancel();
+    _voipCallStateSubscription?.cancel();
 
     // Dispose native resources if not already done
     if (!_disposed) {
