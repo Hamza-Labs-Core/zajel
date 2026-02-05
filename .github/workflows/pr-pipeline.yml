@@ -526,18 +526,28 @@ jobs:
 
       - name: Generate changelog
         id: changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # Get the base branch (usually main)
-          BASE_BRANCH="${{ github.base_ref || 'main' }}"
+          # Use PR description as changelog (summarized changes, not commit list)
+          PR_NUMBER="${{ github.event.pull_request.number }}"
 
-          # Generate changelog from commits in this PR
           echo "## What's Changed" > CHANGELOG.md
           echo "" >> CHANGELOG.md
 
-          # Get commits between base and head
-          git log origin/${BASE_BRANCH}..HEAD --pretty=format:"- %s (%h)" >> CHANGELOG.md || echo "- Initial pre-release" >> CHANGELOG.md
+          if [ -n "$PR_NUMBER" ]; then
+            # Get PR body (which should contain a summary of changes)
+            PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body // empty' 2>/dev/null || echo "")
+            if [ -n "$PR_BODY" ]; then
+              # Extract just the Summary section if it exists, otherwise use full body
+              echo "$PR_BODY" | sed -n '/^## Summary/,/^## /p' | head -n -1 >> CHANGELOG.md 2>/dev/null || echo "$PR_BODY" >> CHANGELOG.md
+            else
+              echo "Pre-release build for PR #$PR_NUMBER" >> CHANGELOG.md
+            fi
+          else
+            echo "Manual pre-release build" >> CHANGELOG.md
+          fi
 
-          echo "" >> CHANGELOG.md
           echo "" >> CHANGELOG.md
           echo "---" >> CHANGELOG.md
           echo "" >> CHANGELOG.md
@@ -545,7 +555,7 @@ jobs:
           echo "- **Version:** ${{ env.VERSION }}" >> CHANGELOG.md
           echo "- **PR:** #${{ github.event.pull_request.number }}" >> CHANGELOG.md
           echo "- **Branch:** ${{ github.head_ref }}" >> CHANGELOG.md
-          echo "- **Commit:** ${{ github.sha }}" >> CHANGELOG.md
+          echo "- **Commit:** \`${{ github.sha }}\`" >> CHANGELOG.md
           echo "" >> CHANGELOG.md
           echo "### Downloads" >> CHANGELOG.md
           echo "| Platform | File |" >> CHANGELOG.md
