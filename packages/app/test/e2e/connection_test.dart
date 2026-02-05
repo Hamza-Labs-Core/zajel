@@ -51,6 +51,8 @@ void main() {
         cryptoService: mockCryptoService,
         webrtcService: mockWebRTCService,
         deviceLinkService: mockDeviceLinkService,
+        trustedPeersStorage: MockTrustedPeersStorage(),
+        meetingPointService: MockMeetingPointService(),
       );
     });
 
