@@ -3,6 +3,7 @@
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
+#include <flutter/plugin_registrar_windows.h>
 #include "pinned_websocket_plugin.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
@@ -28,8 +29,10 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
 
   // Register custom pinned WebSocket plugin
-  pinned_websocket::PinnedWebSocketPluginRegisterWithRegistrar(
-      flutter_controller_->engine()->GetRegistrarForPlugin("PinnedWebSocketPlugin"));
+  auto registrar_ref = flutter_controller_->engine()->GetRegistrarForPlugin("PinnedWebSocketPlugin");
+  auto* registrar = flutter::PluginRegistrarManager::GetInstance()
+      ->GetRegistrar<flutter::PluginRegistrarWindows>(registrar_ref);
+  pinned_websocket::PinnedWebSocketPluginRegisterWithRegistrar(registrar);
 
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
