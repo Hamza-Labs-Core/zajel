@@ -168,46 +168,37 @@ class AppHelper:
             pass
 
     def wait_for_app_ready(self, timeout: int = APP_LAUNCH_TIMEOUT):
-        """Wait for the app to be fully loaded.
+        """Wait for the app to be fully loaded and showing the home screen.
 
         Detection strategy:
         1. Dismiss any ANR dialogs (System UI not responding)
-        2. Wait for Flutter's focusable FrameLayout from the app package
-           (Flutter creates a focusable container with pane-title once the
-           first frame is rendered)
-        3. Then look for actual Flutter content (android.view.View children)
+        2. Wait for the actual home screen content — the "Zajel" title or
+           "Connect" FAB — not just any android.view.View (which also
+           matches the loading spinner shown during initialization).
         """
         import time as _time
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.common.by import By
 
-        # Brief wait for app to start rendering
+        # Brief wait for app process to start
         _time.sleep(3)
 
         # Dismiss any ANR dialog that might be blocking
         self._dismiss_system_dialog()
 
-        # Dump page source for debugging
-        print("=== INITIAL PAGE SOURCE (after 3s) ===")
-        try:
-            source = self.driver.page_source
-            print(source[:20000] if source else "EMPTY PAGE SOURCE")
-        except Exception as e:
-            print(f"Failed to get page source: {e}")
-        print("=== END INITIAL PAGE SOURCE ===")
-
-        # Wait for Flutter's app content to appear:
-        # - Flutter renders into a focusable FrameLayout from the app package
-        # - Once the semantics tree is built, android.view.View children appear
-        # We look for a View from the app package (Flutter semantics node)
-        xpath = (
+        # Wait for the actual home screen to render.
+        # The home screen has the "Zajel" AppBar title and a "Connect" FAB.
+        # The loading screen only shows a CircularProgressIndicator which
+        # does NOT have these text elements.
+        home_screen_xpath = (
             "//*[@package='com.zajel.zajel' and "
-            "@class='android.view.View']"
+            "(contains(@text, 'Zajel') or contains(@content-desc, 'Zajel') or "
+            "contains(@text, 'Connect') or contains(@content-desc, 'Connect'))]"
         )
         try:
             WebDriverWait(self.driver, timeout).until(
-                EC.presence_of_element_located((By.XPATH, xpath))
+                EC.presence_of_element_located((By.XPATH, home_screen_xpath))
             )
         except Exception:
             # Try dismissing dialog again and retry once
@@ -215,7 +206,7 @@ class AppHelper:
             _time.sleep(3)
             try:
                 WebDriverWait(self.driver, timeout).until(
-                    EC.presence_of_element_located((By.XPATH, xpath))
+                    EC.presence_of_element_located((By.XPATH, home_screen_xpath))
                 )
             except Exception:
                 print("=== PAGE SOURCE (app not ready) ===")

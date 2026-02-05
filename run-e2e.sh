@@ -63,4 +63,4 @@ sleep 10
 cd $PROJ/e2e-tests
 export APK_PATH=$APK
 export APPIUM_SERVER_COUNT=2
-pytest tests/test_pairing.py tests/test_messaging.py tests/test_reconnection.py -v -s --timeout=300
+pytest tests/ -v -s --timeout=600
