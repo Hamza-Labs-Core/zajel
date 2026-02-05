@@ -391,16 +391,43 @@ jobs:
 
       - name: Install OpenSSL
         run: |
-          # Install OpenSSL with development files (full version, not light)
-          choco install openssl --version=3.3.2 -y --no-progress
-          # Help CMake find OpenSSL by setting all required paths explicitly
+          # Install OpenSSL with development files (no pinned version - use latest available)
+          choco install openssl -y --no-progress
+
+          # Find the installed OpenSSL directory
           $opensslRoot = "C:\Program Files\OpenSSL-Win64"
+          if (-not (Test-Path $opensslRoot)) {
+            $opensslRoot = "C:\Program Files\OpenSSL"
+          }
+
+          # Find the lib directory - structure varies by version
+          $libDir = $null
+          $searchPaths = @(
+            "$opensslRoot\lib\VC\x64\MD",
+            "$opensslRoot\lib\VC\x64",
+            "$opensslRoot\lib"
+          )
+          foreach ($path in $searchPaths) {
+            if (Test-Path "$path\libssl.lib") {
+              $libDir = $path
+              break
+            }
+          }
+
+          if ($libDir -eq $null) {
+            Write-Host "ERROR: Could not find OpenSSL libraries"
+            dir "$opensslRoot" -Recurse | Where-Object { $_.Name -like "*.lib" }
+            exit 1
+          }
+
+          Write-Host "Found OpenSSL libs in: $libDir"
           echo "OPENSSL_ROOT_DIR=$opensslRoot" >> $env:GITHUB_ENV
           echo "OPENSSL_INCLUDE_DIR=$opensslRoot\include" >> $env:GITHUB_ENV
-          echo "OPENSSL_CRYPTO_LIBRARY=$opensslRoot\lib\VC\x64\MD\libcrypto.lib" >> $env:GITHUB_ENV
-          echo "OPENSSL_SSL_LIBRARY=$opensslRoot\lib\VC\x64\MD\libssl.lib" >> $env:GITHUB_ENV
+          echo "OPENSSL_CRYPTO_LIBRARY=$libDir\libcrypto.lib" >> $env:GITHUB_ENV
+          echo "OPENSSL_SSL_LIBRARY=$libDir\libssl.lib" >> $env:GITHUB_ENV
+
           # Verify the files exist
-          dir "$opensslRoot\lib\VC\x64\MD\"
+          dir "$libDir\*.lib"
           dir "$opensslRoot\include\openssl\" | Select-Object -First 5
 
       - name: Enable Windows desktop
