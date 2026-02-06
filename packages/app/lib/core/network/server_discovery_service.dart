@@ -5,6 +5,8 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import '../logging/logger_service.dart';
+
 /// Represents a discovered VPS server from the bootstrap service.
 class DiscoveredServer {
   final String serverId;
@@ -121,7 +123,7 @@ class ServerDiscoveryService {
       // Graceful degradation: Return cached servers on discovery error.
       // Network errors, timeouts, or server unavailability shouldn't block the app.
       // Cached servers may be stale but still usable for connection attempts.
-      debugPrint('[ServerDiscovery] Discovery failed, using cache: $e');
+      logger.error('ServerDiscovery', 'Discovery failed (url: $bootstrapUrl/servers), using cache', e);
       return _cachedServers;
     }
   }

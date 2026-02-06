@@ -982,13 +982,11 @@ jobs:
         working-directory: packages/app
         run: |
           flutter pub get
-          # Build with same config as local run-e2e.sh:
-          # - E2E_TEST=true enables ensureSemantics() for UiAutomator2 visibility
-          # - No SIGNALING_URL: app uses default bootstrap discovery to find servers
-          # - No hardcoded server URL avoids hanging on unreachable QA endpoints
           flutter build apk --release \
             --dart-define=ENV=qa \
-            --dart-define=E2E_TEST=true
+            --dart-define=E2E_TEST=true \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
+            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
 
       - name: Free up disk space
         run: |
