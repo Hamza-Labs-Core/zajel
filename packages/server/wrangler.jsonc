@@ -48,6 +48,14 @@
   "env": {
     "qa": {
       "name": "zajel-signaling-qa",
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "SERVER_REGISTRY",
+            "class_name": "ServerRegistryDO"
+          }
+        ]
+      },
       "routes": [
         { "pattern": "signal.zajel.qa.hamzalabs.dev", "custom_domain": true }
       ]

@@ -42,6 +42,14 @@
   "env": {
     "qa": {
       "name": "zajel-admin-qa",
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "ADMIN_USERS",
+            "class_name": "AdminUsersDO"
+          }
+        ]
+      },
       "routes": [
         { "pattern": "admin.zajel.qa.hamzalabs.dev", "custom_domain": true }
       ]
