@@ -33,10 +33,18 @@
     "local_protocol": "http"
   },
 
+  // Custom domain for production
+  "routes": [
+    { "pattern": "admin.zajel.hamzalabs.dev", "custom_domain": true }
+  ],
+
   // QA Environment for PR testing
   "env": {
     "qa": {
-      "name": "zajel-admin-qa"
+      "name": "zajel-admin-qa",
+      "routes": [
+        { "pattern": "admin.zajel.qa.hamzalabs.dev", "custom_domain": true }
+      ]
     }
   }
 }

@@ -131,7 +131,7 @@ jobs:
             # Create startup script with embedded env vars
             # Get public IP for the endpoint
             PUBLIC_IP=$(curl -sf http://checkip.amazonaws.com || curl -sf http://ifconfig.me || echo "localhost")
-            printf '#!/bin/bash\nexport ZAJEL_PORT=9000\nexport ZAJEL_KEY_PATH=./data/server.key\nexport ZAJEL_DB_PATH=./data/zajel.db\nexport ZAJEL_PUBLIC_ENDPOINT=ws://%s:9000\nexport ZAJEL_REGION=auto\nexport ZAJEL_BOOTSTRAP_URL=https://zajel-signaling.mahmoud-s-darwish.workers.dev\ncd /opt/zajel/server-vps\nexec node dist/index.js\n' "$PUBLIC_IP" > start.sh
+            printf '#!/bin/bash\nexport ZAJEL_PORT=9000\nexport ZAJEL_KEY_PATH=./data/server.key\nexport ZAJEL_DB_PATH=./data/zajel.db\nexport ZAJEL_PUBLIC_ENDPOINT=ws://%s:9000\nexport ZAJEL_REGION=auto\nexport ZAJEL_BOOTSTRAP_URL=https://signal.zajel.hamzalabs.dev\ncd /opt/zajel/server-vps\nexec node dist/index.js\n' "$PUBLIC_IP" > start.sh
             chmod +x start.sh
             cat start.sh
 
