@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+
+import '../crypto/bootstrap_verifier.dart';
+import '../logging/logger_service.dart';
 
 /// Represents a discovered VPS server from the bootstrap service.
 class DiscoveredServer {
@@ -55,6 +57,9 @@ class ServerDiscoveryService {
   /// HTTP client for making requests.
   final http.Client _client;
 
+  /// Optional verifier for bootstrap response signatures.
+  final BootstrapVerifier? _verifier;
+
   /// Cached list of discovered servers.
   List<DiscoveredServer> _cachedServers = [];
 
@@ -73,7 +78,9 @@ class ServerDiscoveryService {
   ServerDiscoveryService({
     required this.bootstrapUrl,
     http.Client? client,
-  }) : _client = client ?? http.Client();
+    BootstrapVerifier? bootstrapVerifier,
+  })  : _client = client ?? http.Client(),
+        _verifier = bootstrapVerifier;
 
   /// Stream of server list updates.
   Stream<List<DiscoveredServer>> get servers => _serversController.stream;
@@ -105,6 +112,18 @@ class ServerDiscoveryService {
         throw Exception('Bootstrap server returned ${response.statusCode}');
       }
 
+      // Verify bootstrap response signature if verifier is configured
+      if (_verifier != null) {
+        final signature = response.headers['x-bootstrap-signature'];
+        if (signature == null || signature.isEmpty) {
+          throw Exception('Bootstrap response missing signature');
+        }
+        final valid = await _verifier.verify(response.body, signature);
+        if (!valid) {
+          throw Exception('Bootstrap response signature verification failed');
+        }
+      }
+
       final json = jsonDecode(response.body) as Map<String, dynamic>;
       final serverList = json['servers'] as List<dynamic>? ?? [];
 
@@ -121,7 +140,7 @@ class ServerDiscoveryService {
       // Graceful degradation: Return cached servers on discovery error.
       // Network errors, timeouts, or server unavailability shouldn't block the app.
       // Cached servers may be stale but still usable for connection attempts.
-      debugPrint('[ServerDiscovery] Discovery failed, using cache: $e');
+      logger.error('ServerDiscovery', 'Discovery failed (url: $bootstrapUrl/servers), using cache', e);
       return _cachedServers;
     }
   }

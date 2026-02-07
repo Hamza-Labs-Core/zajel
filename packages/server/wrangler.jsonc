@@ -1,0 +1,56 @@
+{
+  // Zajel Bootstrap Server - Cloudflare Worker Configuration
+  // Purpose: VPS server discovery service ONLY
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "zajel-signaling",
+  "main": "src/index.js",
+  "compatibility_date": "2024-01-01",
+
+  // Durable Object for server registry
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SERVER_REGISTRY",
+        "class_name": "ServerRegistryDO"
+      }
+    ]
+  },
+
+  // Migrations for Durable Objects
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["SignalingRoom"]
+    },
+    {
+      "tag": "v2",
+      "new_classes": ["RelayRegistryDO"]
+    },
+    {
+      "tag": "v3",
+      "new_classes": ["ServerRegistryDO"],
+      "deleted_classes": ["SignalingRoom", "RelayRegistryDO"]
+    }
+  ],
+
+  // Custom domain for production
+  "routes": [
+    { "pattern": "signal.zajel.hamzalabs.dev", "custom_domain": true }
+  ],
+
+  // Development settings
+  "dev": {
+    "port": 8080,
+    "local_protocol": "http"
+  },
+
+  // QA Environment for PR testing
+  "env": {
+    "qa": {
+      "name": "zajel-signaling-qa",
+      "routes": [
+        { "pattern": "signal.zajel.qa.hamzalabs.dev", "custom_domain": true }
+      ]
+    }
+  }
+}

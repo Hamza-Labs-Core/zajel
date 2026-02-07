@@ -5,10 +5,13 @@ import 'dart:typed_data';
 
 import 'package:uuid/uuid.dart';
 
+import '../config/environment.dart';
 import '../crypto/crypto_service.dart';
 import '../logging/logger_service.dart';
 import '../models/models.dart';
+import '../storage/trusted_peers_storage.dart';
 import 'device_link_service.dart';
+import 'meeting_point_service.dart';
 import 'signaling_client.dart';
 import 'webrtc_service.dart';
 
@@ -97,6 +100,8 @@ class ConnectionManager {
   final CryptoService _cryptoService;
   final WebRTCService _webrtcService;
   final DeviceLinkService _deviceLinkService;
+  final TrustedPeersStorage _trustedPeersStorage;
+  final MeetingPointService _meetingPointService;
 
   /// Current signaling state - uses sealed class for type-safe null handling.
   SignalingState _signalingState = SignalingDisconnected();
@@ -105,6 +110,10 @@ class ConnectionManager {
   final _peersController = StreamController<List<Peer>>.broadcast();
   final _messagesController =
       StreamController<(String peerId, String message)>.broadcast();
+
+  /// Buffer of received messages per peer, stored as ciphertext so messages
+  /// remain encrypted in memory until the ChatScreen opens and decrypts them.
+  final Map<String, List<(String peerId, String ciphertext)>> _messageBuffer = {};
   final _fileChunksController =
       StreamController<(String peerId, String fileId, Uint8List chunk, int index, int total)>.broadcast();
   final _fileStartController =
@@ -121,6 +130,9 @@ class ConnectionManager {
   /// to being overwritten by each new connection.
   StreamSubscription? _signalingEventsSubscription;
 
+  /// Subscription to rendezvous events (meeting point matches).
+  StreamSubscription? _rendezvousSubscription;
+
 
   /// Callback to check if a public key is blocked.
   bool Function(String publicKey)? _isPublicKeyBlocked;
@@ -129,10 +141,14 @@ class ConnectionManager {
     required CryptoService cryptoService,
     required WebRTCService webrtcService,
     required DeviceLinkService deviceLinkService,
+    required TrustedPeersStorage trustedPeersStorage,
+    required MeetingPointService meetingPointService,
     bool Function(String publicKey)? isPublicKeyBlocked,
   })  : _cryptoService = cryptoService,
         _webrtcService = webrtcService,
         _deviceLinkService = deviceLinkService,
+        _trustedPeersStorage = trustedPeersStorage,
+        _meetingPointService = meetingPointService,
         _isPublicKeyBlocked = isPublicKeyBlocked {
     _setupCallbacks();
   }
@@ -147,6 +163,13 @@ class ConnectionManager {
 
   /// Stream of incoming messages (peerId, plaintext).
   Stream<(String, String)> get messages => _messagesController.stream;
+
+  /// Drain buffered messages for a peer (returns and clears the buffer).
+  /// Call this when opening a chat to retrieve messages that arrived while
+  /// the ChatScreen was closed.
+  List<(String, String)> drainBufferedMessages(String peerId) {
+    return _messageBuffer.remove(peerId) ?? [];
+  }
 
   /// Stream of incoming file chunks.
   Stream<(String, String, Uint8List, int, int)> get fileChunks =>
@@ -166,6 +189,12 @@ class ConnectionManager {
   /// Our external pairing code (for sharing).
   String? get externalPairingCode => switch (_signalingState) {
     SignalingConnected(pairingCode: final code) => code,
+    SignalingDisconnected() => null,
+  };
+
+  /// The current signaling client, if connected.
+  SignalingClient? get signalingClient => switch (_signalingState) {
+    SignalingConnected(client: final c) => c,
     SignalingDisconnected() => null,
   };
 
@@ -208,6 +237,8 @@ class ConnectionManager {
     _signalingSubscription = null;
     await _signalingEventsSubscription?.cancel();
     _signalingEventsSubscription = null;
+    await _rendezvousSubscription?.cancel();
+    _rendezvousSubscription = null;
 
     // Use local variables to avoid null assertions - Pattern 5 from research
     final code = pairingCode ?? _generatePairingCode();
@@ -237,6 +268,9 @@ class ConnectionManager {
       }
     });
 
+    // Subscribe to rendezvous events for trusted peer reconnection
+    _rendezvousSubscription = client.rendezvousEvents.listen(_handleRendezvousEvent);
+
     await client.connect();
 
     return code;
@@ -245,6 +279,8 @@ class ConnectionManager {
   /// Disconnect from the signaling server.
   Future<void> disconnect() async {
     // Cancel signaling events subscription first to prevent stale callbacks
+    await _rendezvousSubscription?.cancel();
+    _rendezvousSubscription = null;
     await _signalingEventsSubscription?.cancel();
     _signalingEventsSubscription = null;
     await _signalingSubscription?.cancel();
@@ -262,15 +298,20 @@ class ConnectionManager {
   /// Request to connect to a peer using their pairing code.
   /// This sends a pair request that the peer must approve.
   Future<void> connectToPeer(String pairingCode) async {
+    logger.info('ConnectionManager', 'connectToPeer called with code: $pairingCode');
+
     // Normalize and validate pairing code format
     final normalizedCode = pairingCode.toUpperCase().trim();
     if (!_isValidPairingCode(normalizedCode)) {
+      logger.error('ConnectionManager', 'Invalid pairing code format: $normalizedCode');
       throw ConnectionException('Invalid pairing code format');
     }
 
     // Pattern 2: Guard with early return using local variable capture
     final state = _signalingState;
+    logger.debug('ConnectionManager', 'Signaling state: ${state.runtimeType}, isConnected: ${state is SignalingConnected ? state.client.isConnected : "N/A"}');
     if (state is! SignalingConnected || !state.client.isConnected) {
+      logger.error('ConnectionManager', 'Not connected to signaling server - cannot pair');
       throw ConnectionException('Not connected to signaling server');
     }
 
@@ -287,6 +328,7 @@ class ConnectionManager {
 
     // Request pairing (peer must approve before WebRTC starts)
     // Using captured state.client - guaranteed non-null by pattern match
+    logger.info('ConnectionManager', 'Sending pair_request for code: $normalizedCode');
     state.client.requestPairing(normalizedCode);
   }
 
@@ -419,6 +461,8 @@ class ConnectionManager {
   /// Dispose resources.
   Future<void> dispose() async {
     // Cancel signaling events subscription
+    await _rendezvousSubscription?.cancel();
+    _rendezvousSubscription = null;
     await _signalingEventsSubscription?.cancel();
     _signalingEventsSubscription = null;
     await _signalingSubscription?.cancel();
@@ -451,6 +495,9 @@ class ConnectionManager {
         _handleLinkedDeviceMessage(peerId, message);
         return;
       }
+
+      // Buffer the message so it's not lost if ChatScreen isn't open
+      _messageBuffer.putIfAbsent(peerId, () => []).add((peerId, message));
 
       // Normal peer message - emit to UI
       _messagesController.add((peerId, message));
@@ -487,6 +534,20 @@ class ConnectionManager {
       }
 
       _updatePeerState(peerId, state);
+
+      // Persist peer as trusted after successful connection (handshake complete)
+      if (state == PeerConnectionState.connected) {
+        final peer = _peers[peerId];
+        if (peer != null && peer.publicKey != null) {
+          _trustedPeersStorage.savePeer(TrustedPeer.fromPeer(peer)).then((_) {
+            logger.info('ConnectionManager',
+                'Saved trusted peer: $peerId');
+          }).catchError((e) {
+            logger.error('ConnectionManager',
+                'Failed to save trusted peer: $peerId', e);
+          });
+        }
+      }
 
       // Notify linked devices of peer connection state changes
       for (final device in _deviceLinkService.currentLinkedDevices) {
@@ -539,9 +600,11 @@ class ConnectionManager {
   }
 
   void _handleSignalingMessage(SignalingMessage message) async {
+    logger.debug('ConnectionManager', 'Received signaling message: ${message.runtimeType}');
     try {
       switch (message) {
         case SignalingPairIncoming(fromCode: final fromCode, fromPublicKey: final fromPublicKey):
+          logger.info('ConnectionManager', 'Pair request from $fromCode');
           // Check if this public key is blocked
           if (_isPublicKeyBlocked != null && _isPublicKeyBlocked!(fromPublicKey)) {
             // Auto-reject blocked users silently
@@ -549,6 +612,12 @@ class ConnectionManager {
             if (state is SignalingConnected) {
               state.client.respondToPairing(fromCode, accept: false);
             }
+            break;
+          }
+          // In E2E test mode, auto-accept all pair requests
+          if (Environment.isE2eTest) {
+            logger.info('ConnectionManager', 'E2E mode: auto-accepting pair request from $fromCode');
+            respondToPairRequest(fromCode, accept: true);
             break;
           }
           // Someone wants to pair with us - emit event for UI to show approval dialog
@@ -584,8 +653,18 @@ class ConnectionManager {
           _notifyPeersChanged();
           break;
 
-        case SignalingPairError(error: final _):
-          // Pairing error
+        case SignalingPairError(error: final error):
+          // Pairing error - log and update UI
+          logger.error('ConnectionManager', 'Pair error received: $error');
+          // Find any peers in connecting state and mark them as failed
+          for (final entry in _peers.entries.toList()) {
+            if (entry.value.connectionState == PeerConnectionState.connecting) {
+              logger.warning('ConnectionManager',
+                  'Marking peer ${entry.key} as failed due to pair_error');
+              _peers.remove(entry.key);
+            }
+          }
+          _notifyPeersChanged();
           break;
 
         case SignalingOffer(from: final from, payload: final payload):
@@ -697,6 +776,143 @@ class ConnectionManager {
 
   String _generatePairingCode() {
     return _generateSecurePairingCode();
+  }
+
+  // ==========================================================================
+  // Trusted Peer Reconnection via Meeting Points
+  // ==========================================================================
+
+  /// Register meeting points for all trusted peers on the signaling server.
+  ///
+  /// After connecting to signaling, this derives daily meeting points from
+  /// our public key + each trusted peer's public key, then registers them.
+  /// If the other peer is also online and registered the same points, the
+  /// server will return a live match with their pairing code, enabling
+  /// automatic reconnection via the standard pairing flow.
+  Future<void> reconnectTrustedPeers() async {
+    final state = _signalingState;
+    if (state is! SignalingConnected || !state.client.isConnected) return;
+
+    final myPublicKey = await _cryptoService.getPublicKeyBytes();
+    final allDailyPoints = <String>{};
+    final allHourlyTokens = <String>{};
+
+    logger.debug('ConnectionManager', 'My public key: ${base64Encode(myPublicKey)}');
+
+    final peers = await _trustedPeersStorage.getAllPeers();
+    for (final peer in peers) {
+      if (peer.isBlocked) continue;
+      final theirPublicKey = await _trustedPeersStorage.getPublicKeyBytes(peer.id);
+      if (theirPublicKey == null) continue;
+
+      logger.debug('ConnectionManager',
+          'Trusted peer ${peer.id}: storedPubKey=${peer.publicKey}, '
+          'decodedBytes=${base64Encode(theirPublicKey)}');
+
+      // Daily points from public keys (for dead drops / async discovery)
+      final dailyPoints = _meetingPointService.deriveDailyPoints(
+        myPublicKey,
+        theirPublicKey,
+      );
+      logger.debug('ConnectionManager',
+          'Daily points for peer ${peer.id}: $dailyPoints');
+      allDailyPoints.addAll(dailyPoints);
+
+      // Hourly tokens from session keys (for live matching with push notification)
+      final sessionKeyBytes = await _cryptoService.getSessionKeyBytes(peer.id);
+      if (sessionKeyBytes != null) {
+        final hourlyTokens = _meetingPointService.deriveHourlyTokens(sessionKeyBytes);
+        allHourlyTokens.addAll(hourlyTokens);
+      }
+    }
+
+    if (allDailyPoints.isEmpty && allHourlyTokens.isEmpty) {
+      logger.debug('ConnectionManager', 'No trusted peers to reconnect with');
+      return;
+    }
+
+    // Also register daily points as hourly tokens for live matching.
+    // The server only sends push notifications for hourly token matches,
+    // so we need daily points in both arrays to enable real-time discovery.
+    final combinedHourlyTokens = <String>{...allHourlyTokens, ...allDailyPoints};
+
+    logger.info('ConnectionManager',
+        'Registering ${allDailyPoints.length} daily points + '
+        '${combinedHourlyTokens.length} hourly tokens '
+        '(${allHourlyTokens.length} from sessions) for ${peers.length} trusted peers');
+
+    final rendezvousMsg = {
+      'type': 'register_rendezvous',
+      'peerId': state.pairingCode,
+      'daily_points': allDailyPoints.toList(),
+      'hourly_tokens': combinedHourlyTokens.toList(),
+      'dead_drops': <String, String>{},
+    };
+
+    await state.client.send(rendezvousMsg);
+
+    // Re-register after a delay to handle the race condition where both
+    // peers restart simultaneously and neither finds the other's tokens
+    // on the first registration (server deletes tokens on disconnect).
+    Future.delayed(const Duration(seconds: 5), () {
+      final currentState = _signalingState;
+      if (currentState is SignalingConnected && currentState.client.isConnected) {
+        logger.debug('ConnectionManager', 'Re-registering rendezvous after delay');
+        currentState.client.send(rendezvousMsg);
+      }
+    });
+  }
+
+  /// Handle a rendezvous event (meeting point match from the server).
+  void _handleRendezvousEvent(RendezvousEvent event) {
+    logger.info('ConnectionManager', 'Rendezvous event received: ${event.runtimeType}');
+    switch (event) {
+      case RendezvousResult(:final liveMatches, deadDrops: _):
+        logger.info('ConnectionManager', 'Rendezvous result: ${liveMatches.length} live matches');
+        for (final match in liveMatches) {
+          _handleLiveMatch(match.peerId);
+        }
+      case RendezvousPartial(:final liveMatches, deadDrops: _, redirects: _):
+        logger.info('ConnectionManager', 'Rendezvous partial: ${liveMatches.length} live matches');
+        for (final match in liveMatches) {
+          _handleLiveMatch(match.peerId);
+        }
+      case RendezvousMatch(:final peerId, relayId: _, meetingPoint: _):
+        logger.info('ConnectionManager', 'Rendezvous match: peerId=$peerId');
+        _handleLiveMatch(peerId);
+    }
+  }
+
+  /// Handle a live match: initiate pairing with the matched peer.
+  ///
+  /// Uses deterministic initiator selection (lexicographic comparison of
+  /// pairing codes) to prevent both sides from simultaneously initiating,
+  /// which would create duplicate WebRTC connections.
+  void _handleLiveMatch(String matchedPeerId) {
+    if (matchedPeerId.isEmpty) return;
+
+    // Skip if already connected or connecting to this peer
+    final existingPeer = _peers[matchedPeerId];
+    if (existingPeer != null &&
+        (existingPeer.connectionState == PeerConnectionState.connected ||
+         existingPeer.connectionState == PeerConnectionState.connecting ||
+         existingPeer.connectionState == PeerConnectionState.handshaking)) {
+      return;
+    }
+
+    final state = _signalingState;
+    if (state is! SignalingConnected) return;
+
+    // Deterministic initiator: only the peer with the smaller code initiates
+    if (state.pairingCode.compareTo(matchedPeerId) > 0) {
+      logger.debug('ConnectionManager',
+          'Live match with $matchedPeerId - waiting for them to initiate');
+      return;
+    }
+
+    logger.info('ConnectionManager',
+        'Live match with $matchedPeerId - initiating reconnection');
+    connectToPeer(matchedPeerId);
   }
 }
 

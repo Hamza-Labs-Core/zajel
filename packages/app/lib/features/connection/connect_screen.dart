@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../../core/logging/logger_service.dart';
 import '../../core/models/linked_device.dart';
 import '../../core/providers/app_providers.dart';
 
@@ -33,8 +34,13 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    _connectToServer();
-    _listenForLinkRequests();
+    // Defer provider modifications to avoid "modify provider during build" error.
+    // initState runs during the widget tree build phase; Riverpod forbids
+    // provider writes at that point.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _connectToServer();
+      _listenForLinkRequests();
+    });
   }
 
   /// Listen for incoming link requests from web clients and show approval dialog.
@@ -181,6 +187,14 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
   }
 
   Future<void> _connectToServer() async {
+    // If already connected to signaling (e.g. from main.dart auto-connect),
+    // skip reconnection to avoid replacing the existing SignalingClient and
+    // generating a new pairing code.
+    final connectionManager = ref.read(connectionManagerProvider);
+    if (connectionManager.externalPairingCode != null) {
+      return;
+    }
+
     // Update UI state to show "Connecting..."
     ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.connecting;
 
@@ -208,8 +222,12 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
       );
 
       ref.read(pairingCodeProvider.notifier).state = code;
+      ref.read(signalingClientProvider.notifier).state = connectionManager.signalingClient;
       ref.read(signalingConnectedProvider.notifier).state = true;
       ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.connected;
+
+      // Re-register meeting points for trusted peer reconnection
+      await connectionManager.reconnectTrustedPeers();
     } catch (e) {
       setState(() => _error = 'Failed to connect to server: $e');
       ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.disconnected;
@@ -292,31 +310,65 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
       padding: const EdgeInsets.all(24),
       child: Column(
         children: [
+          // Manual code entry at TOP for easy access
           Text(
-            'Share this code with others to connect',
-            style: Theme.of(context).textTheme.bodyLarge,
+            'Enter a pairing code',
+            style: Theme.of(context).textTheme.titleMedium,
           ),
-          const SizedBox(height: 24),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
-                  blurRadius: 10,
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _codeController,
+                  decoration: const InputDecoration(
+                    hintText: 'Enter 6-character code',
+                    border: OutlineInputBorder(),
+                  ),
+                  textCapitalization: TextCapitalization.characters,
+                  textInputAction: TextInputAction.go,
+                  onSubmitted: (_) => _isConnecting ? null : _connectWithCode(),
+                  inputFormatters: [
+                    // Allow both cases - uppercase conversion happens on submit
+                    FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9]')),
+                    LengthLimitingTextInputFormatter(6),
+                    // Convert to uppercase as user types
+                    _UpperCaseTextFormatter(),
+                  ],
                 ),
-              ],
-            ),
-            child: QrImageView(
-              data: qrData,
-              version: QrVersions.auto,
-              size: 200,
-              backgroundColor: Colors.white,
-            ),
+              ),
+              const SizedBox(width: 12),
+              ElevatedButton(
+                onPressed: _isConnecting ? null : _connectWithCode,
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                ),
+                child: _isConnecting
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Connect'),
+              ),
+            ],
           ),
           const SizedBox(height: 24),
+          const Divider(),
+          const SizedBox(height: 24),
+          // Your code section below
+          Text(
+            'Your code',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Share this with others to let them connect to you',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+          const SizedBox(height: 16),
           Container(
             padding: const EdgeInsets.symmetric(
               horizontal: 24,
@@ -349,48 +401,33 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
               ],
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
           Text(
             'Visible as: $displayName',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
           ),
-          const SizedBox(height: 32),
-          const Divider(),
-          const SizedBox(height: 16),
-          Text(
-            'Or enter a code manually',
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _codeController,
-                  decoration: const InputDecoration(
-                    hintText: 'Enter pairing code',
-                  ),
-                  textCapitalization: TextCapitalization.characters,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'[A-Z0-9]')),
-                    LengthLimitingTextInputFormatter(6),
-                  ],
+          const SizedBox(height: 24),
+          // QR code at bottom (optional, less important)
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 10,
                 ),
-              ),
-              const SizedBox(width: 16),
-              ElevatedButton(
-                onPressed: _isConnecting ? null : _connectWithCode,
-                child: _isConnecting
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Connect'),
-              ),
-            ],
+              ],
+            ),
+            child: QrImageView(
+              data: qrData,
+              version: QrVersions.auto,
+              size: 180,
+              backgroundColor: Colors.white,
+            ),
           ),
         ],
       ),
@@ -749,7 +786,9 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
   Future<void> _connectWithCode() async {
     final code = _codeController.text.trim();
+    logger.info('ConnectScreen', '_connectWithCode called with code: "$code" (length: ${code.length})');
     if (code.isEmpty || code.length != 6) {
+      logger.warning('ConnectScreen', 'Invalid code - empty or wrong length');
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please enter a valid 6-character code')),
       );
@@ -760,8 +799,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
     try {
       final connectionManager = ref.read(connectionManagerProvider);
+      logger.info('ConnectScreen', 'Calling connectToPeer with code: $code');
       await connectionManager.connectToPeer(code);
 
+      logger.info('ConnectScreen', 'connectToPeer succeeded, popping screen');
       if (mounted) {
         context.pop();
         ScaffoldMessenger.of(context).showSnackBar(
@@ -769,6 +810,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
         );
       }
     } catch (e) {
+      logger.error('ConnectScreen', 'connectToPeer failed', e);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to connect: $e')),
@@ -779,5 +821,19 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
         setState(() => _isConnecting = false);
       }
     }
+  }
+}
+
+/// Converts all text input to uppercase.
+class _UpperCaseTextFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    return TextEditingValue(
+      text: newValue.text.toUpperCase(),
+      selection: newValue.selection,
+    );
   }
 }

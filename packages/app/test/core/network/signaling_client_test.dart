@@ -621,10 +621,11 @@ void main() {
         final json = message.toJson();
 
         expect(json['type'], equals('call_offer'));
-        expect(json['callId'], equals('call-123'));
-        expect(json['targetId'], equals('PEER01'));
-        expect(json['sdp'], equals('v=0\r\no=- 123...'));
-        expect(json['withVideo'], isTrue);
+        expect(json['target'], equals('PEER01'));
+        final payload = json['payload'] as Map<String, dynamic>;
+        expect(payload['callId'], equals('call-123'));
+        expect(payload['sdp'], equals('v=0\r\no=- 123...'));
+        expect(payload['withVideo'], isTrue);
       });
 
       test('fromJson parses correctly with from field', () {
@@ -671,9 +672,10 @@ void main() {
         final json = message.toJson();
 
         expect(json['type'], equals('call_answer'));
-        expect(json['callId'], equals('call-123'));
-        expect(json['targetId'], equals('PEER01'));
-        expect(json['sdp'], equals('v=0\r\no=- answer...'));
+        expect(json['target'], equals('PEER01'));
+        final payload = json['payload'] as Map<String, dynamic>;
+        expect(payload['callId'], equals('call-123'));
+        expect(payload['sdp'], equals('v=0\r\no=- answer...'));
       });
 
       test('fromJson parses correctly', () {
@@ -703,9 +705,10 @@ void main() {
         final json = message.toJson();
 
         expect(json['type'], equals('call_reject'));
-        expect(json['callId'], equals('call-123'));
-        expect(json['targetId'], equals('PEER01'));
-        expect(json['reason'], equals('busy'));
+        expect(json['target'], equals('PEER01'));
+        final payload = json['payload'] as Map<String, dynamic>;
+        expect(payload['callId'], equals('call-123'));
+        expect(payload['reason'], equals('busy'));
       });
 
       test('toJson produces correct format without reason', () {
@@ -717,8 +720,9 @@ void main() {
         final json = message.toJson();
 
         expect(json['type'], equals('call_reject'));
-        expect(json['callId'], equals('call-123'));
-        expect(json.containsKey('reason'), isFalse);
+        final payload = json['payload'] as Map<String, dynamic>;
+        expect(payload['callId'], equals('call-123'));
+        expect(payload.containsKey('reason'), isFalse);
       });
 
       test('fromJson parses correctly with reason', () {
@@ -760,8 +764,9 @@ void main() {
         final json = message.toJson();
 
         expect(json['type'], equals('call_hangup'));
-        expect(json['callId'], equals('call-123'));
-        expect(json['targetId'], equals('PEER01'));
+        expect(json['target'], equals('PEER01'));
+        final payload = json['payload'] as Map<String, dynamic>;
+        expect(payload['callId'], equals('call-123'));
       });
 
       test('fromJson parses correctly', () {
@@ -789,9 +794,10 @@ void main() {
         final json = message.toJson();
 
         expect(json['type'], equals('call_ice'));
-        expect(json['callId'], equals('call-123'));
-        expect(json['targetId'], equals('PEER01'));
-        expect(json['candidate'], contains('candidate:'));
+        expect(json['target'], equals('PEER01'));
+        final payload = json['payload'] as Map<String, dynamic>;
+        expect(payload['callId'], equals('call-123'));
+        expect(payload['candidate'], contains('candidate:'));
       });
 
       test('fromJson parses correctly', () {
@@ -1032,10 +1038,11 @@ void main() {
       final decoded = jsonDecode(json) as Map<String, dynamic>;
 
       expect(decoded['type'], equals('call_offer'));
-      expect(decoded['callId'], equals('call-001'));
-      expect(decoded['targetId'], equals('PEER01'));
-      expect(decoded['sdp'], equals('v=0\r\no=- 123...'));
-      expect(decoded['withVideo'], isTrue);
+      expect(decoded['target'], equals('PEER01'));
+      final payload = decoded['payload'] as Map<String, dynamic>;
+      expect(payload['callId'], equals('call-001'));
+      expect(payload['sdp'], equals('v=0\r\no=- 123...'));
+      expect(payload['withVideo'], isTrue);
     });
 
     test('call_answer message format', () {
@@ -1049,8 +1056,10 @@ void main() {
       final decoded = jsonDecode(json) as Map<String, dynamic>;
 
       expect(decoded['type'], equals('call_answer'));
-      expect(decoded['callId'], equals('call-002'));
-      expect(decoded['sdp'], isNotEmpty);
+      expect(decoded['target'], equals('PEER02'));
+      final payload = decoded['payload'] as Map<String, dynamic>;
+      expect(payload['callId'], equals('call-002'));
+      expect(payload['sdp'], isNotEmpty);
     });
 
     test('call_reject message format with reason', () {
@@ -1064,7 +1073,8 @@ void main() {
       final decoded = jsonDecode(json) as Map<String, dynamic>;
 
       expect(decoded['type'], equals('call_reject'));
-      expect(decoded['reason'], equals('declined'));
+      final payload = decoded['payload'] as Map<String, dynamic>;
+      expect(payload['reason'], equals('declined'));
     });
 
     test('call_reject message format without reason', () {
@@ -1077,7 +1087,8 @@ void main() {
       final decoded = jsonDecode(json) as Map<String, dynamic>;
 
       expect(decoded['type'], equals('call_reject'));
-      expect(decoded.containsKey('reason'), isFalse);
+      final payload = decoded['payload'] as Map<String, dynamic>;
+      expect(payload.containsKey('reason'), isFalse);
     });
 
     test('call_hangup message format', () {
@@ -1090,8 +1101,9 @@ void main() {
       final decoded = jsonDecode(json) as Map<String, dynamic>;
 
       expect(decoded['type'], equals('call_hangup'));
-      expect(decoded['callId'], equals('call-005'));
-      expect(decoded['targetId'], equals('PEER05'));
+      expect(decoded['target'], equals('PEER05'));
+      final payload = decoded['payload'] as Map<String, dynamic>;
+      expect(payload['callId'], equals('call-005'));
     });
 
     test('call_ice message format', () {
@@ -1105,8 +1117,10 @@ void main() {
       final decoded = jsonDecode(json) as Map<String, dynamic>;
 
       expect(decoded['type'], equals('call_ice'));
-      expect(decoded['callId'], equals('call-006'));
-      expect(decoded['candidate'], contains('candidate:'));
+      expect(decoded['target'], equals('PEER06'));
+      final payload = decoded['payload'] as Map<String, dynamic>;
+      expect(payload['callId'], equals('call-006'));
+      expect(payload['candidate'], contains('candidate:'));
     });
   });
 }

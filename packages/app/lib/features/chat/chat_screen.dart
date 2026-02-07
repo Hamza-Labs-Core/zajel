@@ -29,14 +29,45 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
+  final _messageFocusNode = FocusNode();
   bool _isSending = false;
   StreamSubscription<CallState>? _voipStateSubscription;
+
+  /// Check if running on desktop platform
+  bool get _isDesktop =>
+      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
   @override
   void initState() {
     super.initState();
+    _loadBufferedMessages();
     _listenToMessages();
     _setupVoipListener();
+  }
+
+  /// Load messages that arrived while this ChatScreen was not open.
+  void _loadBufferedMessages() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final connectionManager = ref.read(connectionManagerProvider);
+      final buffered = connectionManager.drainBufferedMessages(widget.peerId);
+      if (buffered.isNotEmpty) {
+        final notifier =
+            ref.read(chatMessagesProvider(widget.peerId).notifier);
+        for (final (peerId, message) in buffered) {
+          notifier.addMessage(
+            Message(
+              localId: const Uuid().v4(),
+              peerId: peerId,
+              content: message,
+              timestamp: DateTime.now(),
+              isOutgoing: false,
+              status: MessageStatus.delivered,
+            ),
+          );
+        }
+        _scrollToBottom();
+      }
+    });
   }
 
   void _setupVoipListener() {
@@ -79,7 +110,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _voipStateSubscription?.cancel();
     _messageController.dispose();
     _scrollController.dispose();
+    _messageFocusNode.dispose();
     super.dispose();
+  }
+
+  /// Handle key events for desktop: Enter sends, Shift+Enter creates newline
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (!_isDesktop) return KeyEventResult.ignored;
+
+    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.enter) {
+      final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+      if (!isShiftPressed && !_isSending) {
+        _sendMessage();
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
   }
 
   @override
@@ -216,14 +262,44 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   Future<void> _openFile(String filePath) async {
     try {
-      final file = XFile(filePath);
-      await Share.shareXFiles([file]);
+      if (_isDesktop) {
+        // Use platform-specific commands to open file with default app
+        await _openFileOnDesktop(filePath);
+      } else {
+        // On mobile, use share sheet
+        final file = XFile(filePath);
+        await Share.shareXFiles([file]);
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Could not open file: $e')),
         );
       }
+    }
+  }
+
+  /// Opens a file using the system's default application on desktop platforms.
+  Future<void> _openFileOnDesktop(String filePath) async {
+    final file = File(filePath);
+    if (!await file.exists()) {
+      throw Exception('File not found: $filePath');
+    }
+
+    ProcessResult result;
+    if (Platform.isLinux) {
+      result = await Process.run('xdg-open', [filePath]);
+    } else if (Platform.isMacOS) {
+      result = await Process.run('open', [filePath]);
+    } else if (Platform.isWindows) {
+      // On Windows, use 'start' command via cmd
+      result = await Process.run('cmd', ['/c', 'start', '', filePath]);
+    } else {
+      throw Exception('Unsupported platform');
+    }
+
+    if (result.exitCode != 0) {
+      throw Exception('Failed to open file: ${result.stderr}');
     }
   }
 
@@ -267,18 +343,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           children: [
             IconButton(
               icon: const Icon(Icons.attach_file),
+              tooltip: 'Attach file',
               onPressed: _pickFile,
             ),
             Expanded(
               child: TextField(
                 controller: _messageController,
+                focusNode: _messageFocusNode..onKeyEvent = _handleKeyEvent,
                 decoration: const InputDecoration(
                   hintText: 'Type a message...',
                   border: InputBorder.none,
                 ),
                 textCapitalization: TextCapitalization.sentences,
                 maxLines: null,
-                onSubmitted: (_) => _sendMessage(),
+                // On mobile, onSubmitted handles send; on desktop, key handler does
+                onSubmitted: _isDesktop ? null : (_) => _sendMessage(),
               ),
             ),
             _isSending
@@ -295,6 +374,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       Icons.send,
                       color: Theme.of(context).colorScheme.primary,
                     ),
+                    tooltip: 'Send message',
                     onPressed: _sendMessage,
                   ),
           ],
