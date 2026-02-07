@@ -659,7 +659,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: packages/server
-          command: deploy --env qa
+          command: deploy -c wrangler.jsonc --env qa
 
       - name: Verify deployment
         run: |
