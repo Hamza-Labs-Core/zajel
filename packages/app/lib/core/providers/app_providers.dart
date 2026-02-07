@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/environment.dart';
+import '../crypto/bootstrap_verifier.dart';
 import '../crypto/crypto_service.dart';
 import '../logging/logger_service.dart';
 import '../models/models.dart';
@@ -343,7 +344,7 @@ final signalingDisplayStateProvider = StateProvider<SignalingDisplayState>((ref)
 
 /// Default bootstrap server URL (CF Workers).
 /// Can be overridden at build time with --dart-define=BOOTSTRAP_URL=<url>
-const defaultBootstrapUrl = 'https://zajel-signaling.mahmoud-s-darwish.workers.dev';
+const defaultBootstrapUrl = 'https://signal.zajel.hamzalabs.dev';
 
 /// Effective bootstrap URL (compile-time override or default).
 String get _effectiveBootstrapUrl =>
@@ -355,10 +356,23 @@ final bootstrapServerUrlProvider = StateProvider<String>((ref) {
   return prefs.getString('bootstrapServerUrl') ?? _effectiveBootstrapUrl;
 });
 
+/// Provider for bootstrap response verifier.
+///
+/// Verifies Ed25519 signatures on GET /servers responses from the bootstrap server.
+/// Disabled in E2E test mode (test servers don't have signing keys).
+final bootstrapVerifierProvider = Provider<BootstrapVerifier?>((ref) {
+  if (Environment.isE2eTest) return null;
+  return BootstrapVerifier();
+});
+
 /// Provider for server discovery service.
 final serverDiscoveryServiceProvider = Provider<ServerDiscoveryService>((ref) {
   final bootstrapUrl = ref.watch(bootstrapServerUrlProvider);
-  final service = ServerDiscoveryService(bootstrapUrl: bootstrapUrl);
+  final verifier = ref.watch(bootstrapVerifierProvider);
+  final service = ServerDiscoveryService(
+    bootstrapUrl: bootstrapUrl,
+    bootstrapVerifier: verifier,
+  );
   ref.onDispose(() => service.dispose());
   return service;
 });

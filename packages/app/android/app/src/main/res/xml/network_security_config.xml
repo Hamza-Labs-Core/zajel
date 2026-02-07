@@ -16,22 +16,6 @@
         </trust-anchors>
     </base-config>
 
-    <!-- Cloudflare Workers (*.workers.dev) - Default bootstrap server -->
-    <domain-config cleartextTrafficPermitted="false">
-        <domain includeSubdomains="true">workers.dev</domain>
-        <pin-set expiration="2027-01-01">
-            <!-- Cloudflare Inc ECC CA-3 (current) -->
-            <pin digest="SHA-256">Ao+fWMFrBdoKXPJPJllbL5ZLHQ5Q8zU+5mNCILUGNMM=</pin>
-            <!-- Baltimore CyberTrust Root (backup) -->
-            <pin digest="SHA-256">Y9mvm0exBk1JoQ57f9Vm28jKo5lFm/woKcVxrYxu80o=</pin>
-            <!-- DigiCert Global Root G2 (backup) -->
-            <pin digest="SHA-256">i7WTqTvh0OioIruIfFR4kMPnBqrS2rdiVPl/s2uC/CY=</pin>
-        </pin-set>
-        <trust-anchors>
-            <certificates src="system" />
-        </trust-anchors>
-    </domain-config>
-
     <!-- Zajel VPS servers (*.zajel.app) - Production servers -->
     <domain-config cleartextTrafficPermitted="false">
         <domain includeSubdomains="true">zajel.app</domain>
