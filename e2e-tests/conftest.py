@@ -269,19 +269,29 @@ class AppHelper:
                 raise
 
     def _find(self, text, timeout=10, partial=True):
-        """Find an element by text, checking both @text and @content-desc.
+        """Find an element by text, checking @text, @content-desc, and @tooltip-text.
 
-        Flutter renders its own widgets and may expose text content via either
-        attribute depending on the widget type and semantics configuration.
+        Flutter renders its own widgets and may expose text content via any
+        of these attributes depending on the widget type and semantics
+        configuration. In release builds on Android 12+ (API 31), IconButton
+        tooltips appear as @tooltip-text rather than @content-desc.
         """
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.common.by import By
 
         if partial:
-            xpath = f"//*[contains(@text, '{text}') or contains(@content-desc, '{text}')]"
+            xpath = (
+                f"//*[contains(@text, '{text}') or "
+                f"contains(@content-desc, '{text}') or "
+                f"contains(@tooltip-text, '{text}')]"
+            )
         else:
-            xpath = f"//*[@text='{text}' or @content-desc='{text}']"
+            xpath = (
+                f"//*[@text='{text}' or "
+                f"@content-desc='{text}' or "
+                f"@tooltip-text='{text}']"
+            )
 
         try:
             return WebDriverWait(self.driver, timeout).until(
@@ -299,21 +309,39 @@ class AppHelper:
             raise
 
     def navigate_to_connect(self):
-        """Navigate to the Connect screen by tapping the FAB or QR icon."""
-        from selenium.common.exceptions import TimeoutException
+        """Navigate to the Connect screen by tapping the FAB or QR icon.
 
-        # Try the FAB "Connect" button first
+        The home screen has multiple elements containing "Connect":
+        - "Connected Peers" section header (not clickable)
+        - "Connect via QR code" button
+        - "Connect" FAB button
+        - "Connect to peer" app bar icon (tooltip-text only)
+
+        We target the clickable FAB or app bar icon specifically.
+        """
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+
         try:
-            btn = self._find("Connect", timeout=5)
-            # Avoid clicking "Connected" or "Connected Peers"
-            if btn.text and "Connected" in btn.text:
-                raise TimeoutException("Found 'Connected' not 'Connect'")
+            # Target the "Connect to peer" app bar button (tooltip-text) or
+            # the exact "Connect" FAB (content-desc), both clickable
+            btn = WebDriverWait(self.driver, 5).until(
+                EC.element_to_be_clickable((
+                    By.XPATH,
+                    "//*[("
+                    "@tooltip-text='Connect to peer' or "
+                    "@content-desc='Connect to peer' or "
+                    "((@content-desc='Connect' or @text='Connect') "
+                    "and not(contains(@content-desc, 'Connected')) "
+                    "and not(contains(@content-desc, 'QR')))"
+                    ") and @clickable='true']"
+                ))
+            )
             btn.click()
-        except TimeoutException:
-            # Fallback: QR scanner icon via tooltip
-            self.driver.find_element(
-                "xpath", "//*[contains(@content-desc, 'Connect to peer')]"
-            ).click()
+        except Exception:
+            # Last resort: click "Connect via QR code"
+            self._find("Connect via QR code", timeout=5).click()
 
         # Wait for Connect screen to load
         self._find("My Code")
