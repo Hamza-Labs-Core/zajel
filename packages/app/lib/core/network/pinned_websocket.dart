@@ -19,13 +19,6 @@ import '../logging/logger_service.dart';
 ///   base64
 /// ```
 class CertificatePins {
-  /// Cloudflare Workers (*.workers.dev) pins
-  static const List<String> cloudflare = [
-    'Ao+fWMFrBdoKXPJPJllbL5ZLHQ5Q8zU+5mNCILUGNMM=', // Cloudflare Inc ECC CA-3
-    'Y9mvm0exBk1JoQ57f9Vm28jKo5lFm/woKcVxrYxu80o=', // Baltimore CyberTrust Root
-    'i7WTqTvh0OioIruIfFR4kMPnBqrS2rdiVPl/s2uC/CY=', // DigiCert Global Root G2
-  ];
-
   /// Zajel VPS servers (*.zajel.app) pins
   static const List<String> zajelApp = [
     'C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=', // ISRG Root X1
@@ -37,9 +30,7 @@ class CertificatePins {
     final uri = Uri.parse(url);
     final host = uri.host.toLowerCase();
 
-    if (host.endsWith('.workers.dev')) {
-      return cloudflare;
-    } else if (host.endsWith('.zajel.app')) {
+    if (host.endsWith('.zajel.app')) {
       return zajelApp;
     }
 

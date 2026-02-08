@@ -11,19 +11,27 @@ void main() {
     late MockCryptoService mockCryptoService;
     late MockWebRTCService mockWebRTCService;
     late MockDeviceLinkService mockDeviceLinkService;
+    late MockTrustedPeersStorage mockTrustedPeersStorage;
 
     setUp(() {
       mockCryptoService = MockCryptoService();
       mockWebRTCService = MockWebRTCService();
       mockDeviceLinkService = MockDeviceLinkService();
+      mockTrustedPeersStorage = MockTrustedPeersStorage();
 
       // Default stubs for dispose
       when(() => mockWebRTCService.dispose()).thenAnswer((_) async {});
+
+      // Default stub for getAllPeers (used by _loadTrustedPeersAsOffline)
+      when(() => mockTrustedPeersStorage.getAllPeers())
+          .thenAnswer((_) async => []);
 
       connectionManager = ConnectionManager(
         cryptoService: mockCryptoService,
         webrtcService: mockWebRTCService,
         deviceLinkService: mockDeviceLinkService,
+        trustedPeersStorage: mockTrustedPeersStorage,
+        meetingPointService: MockMeetingPointService(),
       );
     });
 

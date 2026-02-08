@@ -15,6 +15,7 @@ import '../../core/network/voip_service.dart';
 import '../../core/providers/app_providers.dart';
 import '../call/call_screen.dart';
 import '../call/incoming_call_dialog.dart';
+import 'widgets/filtered_emoji_picker.dart';
 
 /// Chat screen for messaging with a peer.
 class ChatScreen extends ConsumerStatefulWidget {
@@ -29,14 +30,47 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
+  final _messageFocusNode = FocusNode();
   bool _isSending = false;
+  bool _isIncomingCallDialogOpen = false;
+  bool _showEmojiPicker = false;
   StreamSubscription<CallState>? _voipStateSubscription;
+
+  /// Check if running on desktop platform
+  bool get _isDesktop =>
+      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
   @override
   void initState() {
     super.initState();
+    _loadBufferedMessages();
     _listenToMessages();
     _setupVoipListener();
+  }
+
+  /// Load messages that arrived while this ChatScreen was not open.
+  void _loadBufferedMessages() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final connectionManager = ref.read(connectionManagerProvider);
+      final buffered = connectionManager.drainBufferedMessages(widget.peerId);
+      if (buffered.isNotEmpty) {
+        final notifier =
+            ref.read(chatMessagesProvider(widget.peerId).notifier);
+        for (final (peerId, message) in buffered) {
+          notifier.addMessage(
+            Message(
+              localId: const Uuid().v4(),
+              peerId: peerId,
+              content: message,
+              timestamp: DateTime.now(),
+              isOutgoing: false,
+              status: MessageStatus.delivered,
+            ),
+          );
+        }
+        _scrollToBottom();
+      }
+    });
   }
 
   void _setupVoipListener() {
@@ -47,6 +81,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         _voipStateSubscription = voipService.onStateChange.listen((state) {
           if (state == CallState.incoming && mounted) {
             _showIncomingCallDialog();
+          } else if (_isIncomingCallDialogOpen &&
+              (state == CallState.ended || state == CallState.connecting || state == CallState.idle) &&
+              mounted) {
+            _dismissIncomingCallDialog();
           }
         });
       }
@@ -79,13 +117,30 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _voipStateSubscription?.cancel();
     _messageController.dispose();
     _scrollController.dispose();
+    _messageFocusNode.dispose();
     super.dispose();
+  }
+
+  /// Handle key events for desktop: Enter sends, Shift+Enter creates newline
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (!_isDesktop) return KeyEventResult.ignored;
+
+    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.enter) {
+      final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+      if (!isShiftPressed && !_isSending) {
+        _sendMessage();
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
   }
 
   @override
   Widget build(BuildContext context) {
     final peer = ref.watch(selectedPeerProvider);
     final messages = ref.watch(chatMessagesProvider(widget.peerId));
+    final aliases = ref.watch(peerAliasesProvider);
+    final peerName = (peer != null ? aliases[peer.id] : null) ?? peer?.displayName ?? 'Unknown';
 
     return Scaffold(
       appBar: AppBar(
@@ -96,8 +151,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               backgroundColor:
                   Theme.of(context).colorScheme.primaryContainer,
               child: Text(
-                peer?.displayName.isNotEmpty == true
-                    ? peer!.displayName[0].toUpperCase()
+                peerName.isNotEmpty
+                    ? peerName[0].toUpperCase()
                     : '?',
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.onPrimaryContainer,
@@ -111,7 +166,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    peer?.displayName ?? 'Unknown',
+                    peerName,
                     style: const TextStyle(fontSize: 16),
                   ),
                   Text(
@@ -139,20 +194,93 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             tooltip: 'Video call',
             onPressed: () => _startCall(withVideo: true),
           ),
-          IconButton(
-            icon: const Icon(Icons.info_outline),
-            onPressed: () => _showPeerInfo(context, peer),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) {
+              switch (value) {
+                case 'rename':
+                  _showRenameDialog(peer);
+                case 'delete':
+                  _showDeleteDialog(peer);
+                case 'info':
+                  _showPeerInfo(context, peer);
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'rename',
+                child: Row(
+                  children: [
+                    Icon(Icons.edit),
+                    SizedBox(width: 8),
+                    Text('Rename'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'delete',
+                child: Row(
+                  children: [
+                    Icon(Icons.delete_outline, color: Colors.red),
+                    SizedBox(width: 8),
+                    Text('Delete conversation'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'info',
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline),
+                    SizedBox(width: 8),
+                    Text('Info'),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
       body: Column(
         children: [
+          if (peer?.connectionState != PeerConnectionState.connected)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              color: Colors.orange.shade50,
+              child: Row(
+                children: [
+                  Icon(Icons.cloud_off, size: 18, color: Colors.orange.shade700),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Peer is offline. Messages will be sent when they reconnect.',
+                      style: TextStyle(fontSize: 13, color: Colors.orange.shade800),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           Expanded(
             child: messages.isEmpty
                 ? _buildEmptyState()
                 : _buildMessageList(messages),
           ),
           _buildInputBar(),
+          if (_showEmojiPicker)
+            FilteredEmojiPicker(
+              textEditingController: _messageController,
+              onEmojiSelected: (category, emoji) {
+                // Emoji is auto-inserted by the textEditingController binding
+              },
+              onBackspacePressed: () {
+                _messageController
+                  ..text = _messageController.text.characters.skipLast(1).string
+                  ..selection = TextSelection.fromPosition(
+                    TextPosition(offset: _messageController.text.length),
+                  );
+              },
+            ),
         ],
       ),
     );
@@ -216,14 +344,44 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   Future<void> _openFile(String filePath) async {
     try {
-      final file = XFile(filePath);
-      await Share.shareXFiles([file]);
+      if (_isDesktop) {
+        // Use platform-specific commands to open file with default app
+        await _openFileOnDesktop(filePath);
+      } else {
+        // On mobile, use share sheet
+        final file = XFile(filePath);
+        await Share.shareXFiles([file]);
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Could not open file: $e')),
         );
       }
+    }
+  }
+
+  /// Opens a file using the system's default application on desktop platforms.
+  Future<void> _openFileOnDesktop(String filePath) async {
+    final file = File(filePath);
+    if (!await file.exists()) {
+      throw Exception('File not found: $filePath');
+    }
+
+    ProcessResult result;
+    if (Platform.isLinux) {
+      result = await Process.run('xdg-open', [filePath]);
+    } else if (Platform.isMacOS) {
+      result = await Process.run('open', [filePath]);
+    } else if (Platform.isWindows) {
+      // On Windows, use 'start' command via cmd
+      result = await Process.run('cmd', ['/c', 'start', '', filePath]);
+    } else {
+      throw Exception('Unsupported platform');
+    }
+
+    if (result.exitCode != 0) {
+      throw Exception('Failed to open file: ${result.stderr}');
     }
   }
 
@@ -266,19 +424,42 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         child: Row(
           children: [
             IconButton(
+              icon: Icon(
+                _showEmojiPicker ? Icons.keyboard : Icons.emoji_emotions_outlined,
+              ),
+              tooltip: _showEmojiPicker ? 'Keyboard' : 'Emoji',
+              onPressed: () {
+                if (_showEmojiPicker) {
+                  setState(() => _showEmojiPicker = false);
+                  _messageFocusNode.requestFocus();
+                } else {
+                  _messageFocusNode.unfocus();
+                  setState(() => _showEmojiPicker = true);
+                }
+              },
+            ),
+            IconButton(
               icon: const Icon(Icons.attach_file),
+              tooltip: 'Attach file',
               onPressed: _pickFile,
             ),
             Expanded(
               child: TextField(
                 controller: _messageController,
+                focusNode: _messageFocusNode..onKeyEvent = _handleKeyEvent,
                 decoration: const InputDecoration(
                   hintText: 'Type a message...',
                   border: InputBorder.none,
                 ),
                 textCapitalization: TextCapitalization.sentences,
                 maxLines: null,
-                onSubmitted: (_) => _sendMessage(),
+                onTap: () {
+                  if (_showEmojiPicker) {
+                    setState(() => _showEmojiPicker = false);
+                  }
+                },
+                // On mobile, onSubmitted handles send; on desktop, key handler does
+                onSubmitted: _isDesktop ? null : (_) => _sendMessage(),
               ),
             ),
             _isSending
@@ -295,6 +476,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       Icons.send,
                       color: Theme.of(context).colorScheme.primary,
                     ),
+                    tooltip: 'Send message',
                     onPressed: _sendMessage,
                   ),
           ],
@@ -321,6 +503,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     ref.read(chatMessagesProvider(widget.peerId).notifier).addMessage(message);
     _messageController.clear();
     _scrollToBottom();
+
+    // Check if peer is connected
+    final peer = ref.read(selectedPeerProvider);
+    if (peer?.connectionState != PeerConnectionState.connected) {
+      // Queue as pending — will be sent on reconnect
+      ref
+          .read(chatMessagesProvider(widget.peerId).notifier)
+          .updateMessageStatus(message.localId, MessageStatus.pending);
+      setState(() => _isSending = false);
+      return;
+    }
 
     try {
       final connectionManager = ref.read(connectionManagerProvider);
@@ -415,7 +608,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       await voipService.startCall(widget.peerId, withVideo);
 
       if (mounted) {
-        _navigateToCallScreen(voipService, mediaService);
+        _navigateToCallScreen(voipService, mediaService, withVideo: withVideo);
       }
     } catch (e) {
       if (mounted) {
@@ -424,6 +617,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         );
       }
     }
+  }
+
+  void _dismissIncomingCallDialog() {
+    if (!_isIncomingCallDialogOpen) return;
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+    _isIncomingCallDialogOpen = false;
   }
 
   /// Show the incoming call dialog.
@@ -437,6 +638,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final call = voipService.currentCall!;
     final callerName = peer?.displayName ?? 'Unknown';
 
+    _isIncomingCallDialogOpen = true;
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -445,16 +648,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         callId: call.callId,
         withVideo: call.withVideo,
         onAccept: () {
+          _isIncomingCallDialogOpen = false;
           Navigator.of(context).pop();
           voipService.acceptCall(call.callId, false);
-          _navigateToCallScreen(voipService, mediaService);
+          _navigateToCallScreen(voipService, mediaService, withVideo: false);
         },
         onAcceptWithVideo: () {
+          _isIncomingCallDialogOpen = false;
           Navigator.of(context).pop();
           voipService.acceptCall(call.callId, true);
-          _navigateToCallScreen(voipService, mediaService);
+          _navigateToCallScreen(voipService, mediaService, withVideo: true);
         },
         onReject: () {
+          _isIncomingCallDialogOpen = false;
           Navigator.of(context).pop();
           voipService.rejectCall(call.callId);
         },
@@ -463,7 +669,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   /// Navigate to the call screen.
-  void _navigateToCallScreen(VoIPService voipService, MediaService mediaService) {
+  void _navigateToCallScreen(VoIPService voipService, MediaService mediaService, {bool withVideo = false}) {
     final peer = ref.read(selectedPeerProvider);
     final peerName = peer?.displayName ?? 'Unknown';
 
@@ -473,9 +679,95 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           voipService: voipService,
           mediaService: mediaService,
           peerName: peerName,
+          initialVideoOn: withVideo,
         ),
       ),
     );
+  }
+
+  Future<void> _showRenameDialog(Peer? peer) async {
+    if (peer == null) return;
+    final aliases = ref.read(peerAliasesProvider);
+    final currentName = aliases[peer.id] ?? peer.displayName;
+    final controller = TextEditingController(text: currentName);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rename Peer'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Name',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (value) => Navigator.pop(ctx, value.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (newName != null && newName.isNotEmpty && newName != currentName) {
+      final trustedPeers = ref.read(trustedPeersStorageProvider);
+      await trustedPeers.updateAlias(peer.id, newName);
+      final updatedAliases = {...ref.read(peerAliasesProvider)};
+      updatedAliases[peer.id] = newName;
+      ref.read(peerAliasesProvider.notifier).state = updatedAliases;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Renamed to $newName')),
+        );
+      }
+    }
+  }
+
+  Future<void> _showDeleteDialog(Peer? peer) async {
+    if (peer == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Conversation?'),
+        content: Text(
+          'Delete conversation with ${peer.displayName}? This will remove all messages and the connection.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      final trustedPeers = ref.read(trustedPeersStorageProvider);
+      await trustedPeers.removePeer(peer.id);
+      ref.read(chatMessagesProvider(peer.id).notifier).clearMessages();
+      final connectionManager = ref.read(connectionManagerProvider);
+      try {
+        await connectionManager.disconnectPeer(peer.id);
+      } catch (_) {}
+      if (mounted) {
+        Navigator.of(context).pop(); // Go back to home
+      }
+    }
   }
 
   String _getConnectionStatus(Peer? peer) {

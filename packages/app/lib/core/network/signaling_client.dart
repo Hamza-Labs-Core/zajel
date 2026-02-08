@@ -110,6 +110,9 @@ class SignalingClient {
   final _callHangupController = StreamController<CallHangupMessage>.broadcast();
   final _callIceController = StreamController<CallIceMessage>.broadcast();
 
+  // Rendezvous stream controller
+  final _rendezvousController = StreamController<RendezvousEvent>.broadcast();
+
   final _logger = LoggerService.instance;
 
   bool _isConnected = false;
@@ -155,6 +158,9 @@ class SignalingClient {
   /// Stream of incoming call ICE candidate messages.
   Stream<CallIceMessage> get onCallIce => _callIceController.stream;
 
+  /// Stream of rendezvous events (matches, dead drops, partial results).
+  Stream<RendezvousEvent> get rendezvousEvents => _rendezvousController.stream;
+
   /// Whether currently connected to the signaling server.
   bool get isConnected => _isConnected;
 
@@ -180,10 +186,20 @@ class SignalingClient {
     try {
       _connectionStateController.add(SignalingConnectionState.connecting);
 
-      if (_usePinnedWebSocket) {
+      // Only use pinned WebSocket for secure (wss://) connections.
+      // Plain ws:// has no TLS, so there's nothing to pin. OkHttp also
+      // blocks cleartext traffic by default on Android 9+.
+      final isSecure = serverUrl.startsWith('wss://');
+      if (_usePinnedWebSocket && isSecure) {
         _logger.debug('SignalingClient', 'Using pinned WebSocket connection');
         await _connectWithPinning();
       } else {
+        if (_usePinnedWebSocket && !isSecure) {
+          _logger.warning(
+            'SignalingClient',
+            'Skipping certificate pinning for non-TLS URL: $serverUrl',
+          );
+        }
         _logger.debug('SignalingClient', 'Using standard WebSocket connection');
         await _connectStandard();
       }
@@ -349,11 +365,15 @@ class SignalingClient {
   }
 
   /// Request to pair with another peer (requires their approval).
-  void requestPairing(String targetPairingCode) {
-    _send({
+  void requestPairing(String targetPairingCode, {String? proposedName}) {
+    final msg = <String, dynamic>{
       'type': 'pair_request',
       'targetCode': targetPairingCode,
-    });
+    };
+    if (proposedName != null) {
+      msg['proposedName'] = proposedName;
+    }
+    _send(msg);
   }
 
   /// Respond to a pairing request (accept or reject).
@@ -462,20 +482,38 @@ class SignalingClient {
     await _callRejectController.close();
     await _callHangupController.close();
     await _callIceController.close();
+    // Close rendezvous stream controller
+    await _rendezvousController.close();
   }
 
   // Private methods
 
   void _send(Map<String, dynamic> message) {
-    if (!_isConnected) return;
+    if (!_isConnected) {
+      _logger.warning(
+        'SignalingClient',
+        'Attempted to send while not connected: ${message['type']}',
+      );
+      return;
+    }
 
     final encodedMessage = jsonEncode(message);
+    _logger.debug('SignalingClient', 'Sending message: ${message['type']} -> $encodedMessage');
 
     // Use pinned WebSocket if available, otherwise use standard
     if (_pinnedSocket != null) {
-      _pinnedSocket!.send(encodedMessage);
+      _pinnedSocket!.send(encodedMessage).catchError((error) {
+        _logger.error(
+          'SignalingClient',
+          'Send failed via pinned WebSocket: $error',
+          error,
+        );
+        _handleError(error);
+      });
     } else if (_channel != null) {
       _channel!.sink.add(encodedMessage);
+    } else {
+      _logger.error('SignalingClient', 'No socket available to send message: ${message['type']}');
     }
   }
 
@@ -522,6 +560,7 @@ class SignalingClient {
           _messageController.add(SignalingMessage.pairIncoming(
             fromCode: json['fromCode'] as String,
             fromPublicKey: json['fromPublicKey'] as String,
+            proposedName: json['proposedName'] as String?,
           ));
           break;
 
@@ -610,6 +649,22 @@ class SignalingClient {
           _callIceController.add(CallIceMessage.fromJson(json));
           break;
 
+        // Rendezvous messages
+        case 'rendezvous_result':
+          _logger.info('SignalingClient', 'Received rendezvous_result: liveMatches=${json['liveMatches']?.length ?? 0}, deadDrops=${json['deadDrops']?.length ?? 0}');
+          _handleRendezvousResult(json);
+          break;
+
+        case 'rendezvous_partial':
+          _logger.info('SignalingClient', 'Received rendezvous_partial');
+          _handleRendezvousPartial(json);
+          break;
+
+        case 'rendezvous_match':
+          _logger.info('SignalingClient', 'Received rendezvous_match: ${json['match']}');
+          _handleRendezvousMatch(json);
+          break;
+
         case 'pong':
         case 'registered':
           // Heartbeat and registration confirmation, ignore
@@ -662,6 +717,83 @@ class SignalingClient {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
   }
+
+  // ==========================================================================
+  // Rendezvous Message Handlers
+  // ==========================================================================
+
+  /// Handle rendezvous_result message (all points handled locally).
+  void _handleRendezvousResult(Map<String, dynamic> json) {
+    final liveMatches = _parseLiveMatches(json['liveMatches']);
+    final deadDrops = _parseDeadDrops(json['deadDrops']);
+
+    _rendezvousController.add(RendezvousResult(
+      liveMatches: liveMatches,
+      deadDrops: deadDrops,
+    ));
+  }
+
+  /// Handle rendezvous_partial message (some points need redirect).
+  void _handleRendezvousPartial(Map<String, dynamic> json) {
+    final local = json['local'] as Map<String, dynamic>? ?? {};
+    final liveMatches = _parseLiveMatches(local['liveMatches']);
+    final deadDrops = _parseDeadDrops(local['deadDrops']);
+
+    final redirects = <RendezvousRedirect>[];
+    final redirectList = json['redirects'] as List<dynamic>? ?? [];
+    for (final r in redirectList) {
+      final redirect = r as Map<String, dynamic>;
+      redirects.add(RendezvousRedirect(
+        serverId: redirect['serverId'] as String? ?? '',
+        endpoint: redirect['endpoint'] as String? ?? '',
+        dailyPoints: List<String>.from(redirect['dailyPoints'] ?? []),
+        hourlyTokens: List<String>.from(redirect['hourlyTokens'] ?? []),
+      ));
+    }
+
+    _rendezvousController.add(RendezvousPartial(
+      liveMatches: liveMatches,
+      deadDrops: deadDrops,
+      redirects: redirects,
+    ));
+  }
+
+  /// Handle rendezvous_match message (live peer found).
+  void _handleRendezvousMatch(Map<String, dynamic> json) {
+    final match = json['match'] as Map<String, dynamic>? ?? {};
+    _rendezvousController.add(RendezvousMatch(
+      peerId: match['peerId'] as String? ?? '',
+      relayId: match['relayId'] as String?,
+      meetingPoint: match['meetingPoint'] as String?,
+    ));
+  }
+
+  /// Parse live matches from JSON.
+  List<LiveMatch> _parseLiveMatches(dynamic data) {
+    if (data == null) return [];
+    final list = data as List<dynamic>;
+    return list.map((m) {
+      final match = m as Map<String, dynamic>;
+      return LiveMatch(
+        peerId: match['peerId'] as String? ?? '',
+        relayId: match['relayId'] as String?,
+      );
+    }).toList();
+  }
+
+  /// Parse dead drops from JSON.
+  List<DeadDrop> _parseDeadDrops(dynamic data) {
+    if (data == null) return [];
+    final list = data as List<dynamic>;
+    return list.map((d) {
+      final drop = d as Map<String, dynamic>;
+      return DeadDrop(
+        peerId: drop['peerId'] as String? ?? '',
+        encryptedData: drop['deadDrop'] as String? ?? '',
+        relayId: drop['relayId'] as String?,
+      );
+    }).toList();
+  }
 }
 
 /// Represents a message received from the signaling server.
@@ -692,6 +824,7 @@ sealed class SignalingMessage {
   factory SignalingMessage.pairIncoming({
     required String fromCode,
     required String fromPublicKey,
+    String? proposedName,
   }) = SignalingPairIncoming;
 
   factory SignalingMessage.pairMatched({
@@ -772,10 +905,12 @@ class SignalingError extends SignalingMessage {
 class SignalingPairIncoming extends SignalingMessage {
   final String fromCode;
   final String fromPublicKey;
+  final String? proposedName;
 
   const SignalingPairIncoming({
     required this.fromCode,
     required this.fromPublicKey,
+    this.proposedName,
   });
 }
 
@@ -877,19 +1012,23 @@ class CallOfferMessage {
 
   Map<String, dynamic> toJson() => {
         'type': 'call_offer',
-        'callId': callId,
-        'targetId': targetId,
-        'sdp': sdp,
-        'withVideo': withVideo,
+        'target': targetId,
+        'payload': {
+          'callId': callId,
+          'sdp': sdp,
+          'withVideo': withVideo,
+        },
       };
 
-  factory CallOfferMessage.fromJson(Map<String, dynamic> json) =>
-      CallOfferMessage(
-        callId: json['callId'] as String,
-        targetId: json['from'] as String? ?? json['targetId'] as String,
-        sdp: json['sdp'] as String,
-        withVideo: json['withVideo'] as bool,
-      );
+  factory CallOfferMessage.fromJson(Map<String, dynamic> json) {
+    final payload = json['payload'] as Map<String, dynamic>? ?? json;
+    return CallOfferMessage(
+      callId: payload['callId'] as String,
+      targetId: json['from'] as String? ?? json['target'] as String? ?? payload['targetId'] as String,
+      sdp: payload['sdp'] as String,
+      withVideo: payload['withVideo'] as bool,
+    );
+  }
 }
 
 /// Message for answering a call.
@@ -906,17 +1045,21 @@ class CallAnswerMessage {
 
   Map<String, dynamic> toJson() => {
         'type': 'call_answer',
-        'callId': callId,
-        'targetId': targetId,
-        'sdp': sdp,
+        'target': targetId,
+        'payload': {
+          'callId': callId,
+          'sdp': sdp,
+        },
       };
 
-  factory CallAnswerMessage.fromJson(Map<String, dynamic> json) =>
-      CallAnswerMessage(
-        callId: json['callId'] as String,
-        targetId: json['from'] as String? ?? json['targetId'] as String,
-        sdp: json['sdp'] as String,
-      );
+  factory CallAnswerMessage.fromJson(Map<String, dynamic> json) {
+    final payload = json['payload'] as Map<String, dynamic>? ?? json;
+    return CallAnswerMessage(
+      callId: payload['callId'] as String,
+      targetId: json['from'] as String? ?? json['target'] as String? ?? payload['targetId'] as String,
+      sdp: payload['sdp'] as String,
+    );
+  }
 }
 
 /// Message for rejecting a call.
@@ -933,17 +1076,21 @@ class CallRejectMessage {
 
   Map<String, dynamic> toJson() => {
         'type': 'call_reject',
-        'callId': callId,
-        'targetId': targetId,
-        if (reason != null) 'reason': reason,
+        'target': targetId,
+        'payload': {
+          'callId': callId,
+          if (reason != null) 'reason': reason,
+        },
       };
 
-  factory CallRejectMessage.fromJson(Map<String, dynamic> json) =>
-      CallRejectMessage(
-        callId: json['callId'] as String,
-        targetId: json['from'] as String? ?? json['targetId'] as String,
-        reason: json['reason'] as String?,
-      );
+  factory CallRejectMessage.fromJson(Map<String, dynamic> json) {
+    final payload = json['payload'] as Map<String, dynamic>? ?? json;
+    return CallRejectMessage(
+      callId: payload['callId'] as String,
+      targetId: json['from'] as String? ?? json['target'] as String? ?? payload['targetId'] as String,
+      reason: payload['reason'] as String?,
+    );
+  }
 }
 
 /// Message for ending a call.
@@ -958,15 +1105,19 @@ class CallHangupMessage {
 
   Map<String, dynamic> toJson() => {
         'type': 'call_hangup',
-        'callId': callId,
-        'targetId': targetId,
+        'target': targetId,
+        'payload': {
+          'callId': callId,
+        },
       };
 
-  factory CallHangupMessage.fromJson(Map<String, dynamic> json) =>
-      CallHangupMessage(
-        callId: json['callId'] as String,
-        targetId: json['from'] as String? ?? json['targetId'] as String,
-      );
+  factory CallHangupMessage.fromJson(Map<String, dynamic> json) {
+    final payload = json['payload'] as Map<String, dynamic>? ?? json;
+    return CallHangupMessage(
+      callId: payload['callId'] as String,
+      targetId: json['from'] as String? ?? json['target'] as String? ?? payload['targetId'] as String,
+    );
+  }
 }
 
 /// Message for exchanging ICE candidates during call setup.
@@ -983,14 +1134,104 @@ class CallIceMessage {
 
   Map<String, dynamic> toJson() => {
         'type': 'call_ice',
-        'callId': callId,
-        'targetId': targetId,
-        'candidate': candidate,
+        'target': targetId,
+        'payload': {
+          'callId': callId,
+          'candidate': candidate,
+        },
       };
 
-  factory CallIceMessage.fromJson(Map<String, dynamic> json) => CallIceMessage(
-        callId: json['callId'] as String,
-        targetId: json['from'] as String? ?? json['targetId'] as String,
-        candidate: json['candidate'] as String,
-      );
+  factory CallIceMessage.fromJson(Map<String, dynamic> json) {
+    final payload = json['payload'] as Map<String, dynamic>? ?? json;
+    return CallIceMessage(
+      callId: payload['callId'] as String,
+      targetId: json['from'] as String? ?? json['target'] as String? ?? payload['targetId'] as String,
+      candidate: payload['candidate'] as String,
+    );
+  }
+}
+
+// =============================================================================
+// Rendezvous Event Types
+// =============================================================================
+
+/// Sealed class for rendezvous events from the signaling server.
+sealed class RendezvousEvent {
+  const RendezvousEvent();
+}
+
+/// Full rendezvous result when all points are handled locally.
+class RendezvousResult extends RendezvousEvent {
+  final List<LiveMatch> liveMatches;
+  final List<DeadDrop> deadDrops;
+
+  const RendezvousResult({
+    required this.liveMatches,
+    required this.deadDrops,
+  });
+}
+
+/// Partial rendezvous result with redirects to other servers.
+class RendezvousPartial extends RendezvousEvent {
+  final List<LiveMatch> liveMatches;
+  final List<DeadDrop> deadDrops;
+  final List<RendezvousRedirect> redirects;
+
+  const RendezvousPartial({
+    required this.liveMatches,
+    required this.deadDrops,
+    required this.redirects,
+  });
+}
+
+/// Live match notification (peer found at meeting point).
+class RendezvousMatch extends RendezvousEvent {
+  final String peerId;
+  final String? relayId;
+  final String? meetingPoint;
+
+  const RendezvousMatch({
+    required this.peerId,
+    this.relayId,
+    this.meetingPoint,
+  });
+}
+
+/// Redirect information for federated servers.
+class RendezvousRedirect {
+  final String serverId;
+  final String endpoint;
+  final List<String> dailyPoints;
+  final List<String> hourlyTokens;
+
+  const RendezvousRedirect({
+    required this.serverId,
+    required this.endpoint,
+    required this.dailyPoints,
+    required this.hourlyTokens,
+  });
+}
+
+/// Live match info from rendezvous.
+class LiveMatch {
+  final String peerId;
+  final String? relayId;
+
+  const LiveMatch({
+    required this.peerId,
+    this.relayId,
+  });
+}
+
+/// Dead drop info from rendezvous.
+class DeadDrop {
+  final String peerId;
+  final String encryptedData;
+  final String? relayId;
+
+  const DeadDrop({
+    required this.peerId,
+    required this.encryptedData,
+    this.relayId,
+  });
 }
