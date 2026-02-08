@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/models/models.dart';
 import '../../core/providers/app_providers.dart';
+import '../../shared/widgets/relative_time.dart';
 
 /// Home screen showing discovered peers and connection options.
 class HomeScreen extends ConsumerWidget {
@@ -17,6 +18,11 @@ class HomeScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Zajel'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.contacts),
+            onPressed: () => context.push('/contacts'),
+            tooltip: 'Contacts',
+          ),
           IconButton(
             icon: const Icon(Icons.qr_code_scanner),
             onPressed: () => context.push('/connect'),
@@ -195,13 +201,46 @@ class HomeScreen extends ConsumerWidget {
       );
     }
 
-    return ListView.builder(
+    // Split into online and offline groups
+    final onlinePeers = peers.where((p) =>
+        p.connectionState == PeerConnectionState.connected ||
+        p.connectionState == PeerConnectionState.connecting ||
+        p.connectionState == PeerConnectionState.handshaking).toList();
+    final offlinePeers = peers.where((p) =>
+        p.connectionState == PeerConnectionState.disconnected ||
+        p.connectionState == PeerConnectionState.failed ||
+        p.connectionState == PeerConnectionState.discovering).toList();
+
+    return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      itemCount: peers.length,
-      itemBuilder: (context, index) {
-        final peer = peers[index];
-        return _PeerCard(peer: peer);
-      },
+      children: [
+        if (onlinePeers.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text(
+              'Online (${onlinePeers.length})',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: Colors.green,
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+          ),
+          for (final peer in onlinePeers) _PeerCard(peer: peer),
+        ],
+        if (offlinePeers.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text(
+              'Offline (${offlinePeers.length})',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: Colors.grey,
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+          ),
+          for (final peer in offlinePeers) _PeerCard(peer: peer),
+        ],
+      ],
     );
   }
 }
@@ -306,12 +345,10 @@ class _PeerCard extends ConsumerWidget {
             ),
           ],
         ),
-        onTap: isConnected
-            ? () {
-                ref.read(selectedPeerProvider.notifier).state = peer;
-                context.push('/chat/${peer.id}');
-              }
-            : null,
+        onTap: () {
+          ref.read(selectedPeerProvider.notifier).state = peer;
+          context.push('/chat/${peer.id}');
+        },
       ),
     );
   }
@@ -380,7 +417,7 @@ class _PeerCard extends ConsumerWidget {
       case PeerConnectionState.failed:
         return 'Connection failed';
       default:
-        return 'Tap to connect';
+        return 'Last seen ${formatRelativeTime(peer.lastSeen)}';
     }
   }
 

@@ -11,6 +11,7 @@ import 'core/logging/logger_service.dart';
 import 'core/media/media_service.dart';
 import 'core/models/models.dart';
 import 'core/network/voip_service.dart';
+import 'core/notifications/call_foreground_service.dart';
 import 'core/providers/app_providers.dart';
 import 'features/call/call_screen.dart';
 import 'features/call/incoming_call_dialog.dart';
@@ -55,10 +56,12 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
   StreamSubscription? _fileStartSubscription;
   StreamSubscription? _fileChunkSubscription;
   StreamSubscription? _fileCompleteSubscription;
-  StreamSubscription<(String, String)>? _pairRequestSubscription;
+  StreamSubscription<(String, String, String?)>? _pairRequestSubscription;
   StreamSubscription<(String, String, String)>? _linkRequestSubscription;
   StreamSubscription<CallState>? _voipCallStateSubscription;
   bool _disposed = false;
+  bool _isIncomingCallDialogOpen = false;
+  final _callForegroundService = CallForegroundService();
 
   @override
   void initState() {
@@ -112,6 +115,14 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
 
       // Set up link request listener for incoming web client link requests
       _setupLinkRequestListener();
+
+      // Initialize notification service
+      final notificationService = ref.read(notificationServiceProvider);
+      await notificationService.initialize();
+      await notificationService.requestPermission();
+
+      // Set up notification listeners for messages and files
+      _setupNotificationListeners();
 
       // Set up VoIP call listener for incoming calls from any screen
       _setupVoipCallListener();
@@ -237,13 +248,13 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
     final connectionManager = ref.read(connectionManagerProvider);
 
     _pairRequestSubscription = connectionManager.pairRequests.listen((event) {
-      final (fromCode, fromPublicKey) = event;
+      final (fromCode, fromPublicKey, proposedName) = event;
       logger.info('ZajelApp', 'Showing pair request dialog for $fromCode');
-      _showPairRequestDialog(fromCode, fromPublicKey);
+      _showPairRequestDialog(fromCode, fromPublicKey, proposedName: proposedName);
     });
   }
 
-  Future<void> _showPairRequestDialog(String fromCode, String fromPublicKey) async {
+  Future<void> _showPairRequestDialog(String fromCode, String fromPublicKey, {String? proposedName}) async {
     final context = rootNavigatorKey.currentContext;
     if (context == null) {
       logger.warning('ZajelApp', 'No context available to show pair request dialog');
@@ -265,7 +276,10 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Device with code $fromCode wants to connect.'),
+            if (proposedName != null)
+              Text('$proposedName (code: $fromCode) wants to connect.')
+            else
+              Text('Device with code $fromCode wants to connect.'),
             const SizedBox(height: 16),
             Container(
               padding: const EdgeInsets.all(12),
@@ -471,6 +485,54 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
     }
   }
 
+  void _setupNotificationListeners() {
+    final connectionManager = ref.read(connectionManagerProvider);
+    final notificationService = ref.read(notificationServiceProvider);
+
+    // Notify on incoming messages (only when not on the chat screen for that peer)
+    connectionManager.messages.listen((event) {
+      final (peerId, message) = event;
+      final settings = ref.read(notificationSettingsProvider);
+
+      // Try to get peer name
+      String peerName = peerId;
+      final peersAsync = ref.read(peersProvider);
+      peersAsync.whenData((peers) {
+        final peer = peers.where((p) => p.id == peerId).firstOrNull;
+        if (peer != null) peerName = peer.displayName;
+      });
+
+      notificationService.showMessageNotification(
+        peerId: peerId,
+        peerName: peerName,
+        content: message,
+        settings: settings,
+      );
+    });
+
+    // Notify on file received
+    connectionManager.fileCompletes.listen((event) {
+      final (peerId, fileId) = event;
+      final settings = ref.read(notificationSettingsProvider);
+      final fileReceiveService = ref.read(fileReceiveServiceProvider);
+      final transfer = fileReceiveService.getTransfer(fileId);
+
+      String peerName = peerId;
+      final peersAsync = ref.read(peersProvider);
+      peersAsync.whenData((peers) {
+        final peer = peers.where((p) => p.id == peerId).firstOrNull;
+        if (peer != null) peerName = peer.displayName;
+      });
+
+      notificationService.showFileNotification(
+        peerId: peerId,
+        peerName: peerName,
+        fileName: transfer?.fileName ?? 'File',
+        settings: settings,
+      );
+    });
+  }
+
   void _setupVoipCallListener() {
     // Listen for VoIP service changes (becomes available after signaling connects)
     // We use ref.listen to reactively subscribe when voipService becomes available
@@ -484,10 +546,35 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
           if (state == CallState.incoming) {
             logger.info('ZajelApp', 'Incoming call detected, showing dialog');
             _showIncomingCallDialog();
+          } else if (_isIncomingCallDialogOpen &&
+              (state == CallState.ended || state == CallState.connecting || state == CallState.idle)) {
+            _dismissIncomingCallDialog();
+          }
+
+          // Manage call foreground service
+          if (state == CallState.connected) {
+            final call = next.currentCall;
+            if (call != null) {
+              _callForegroundService.start(
+                peerName: call.peerId,
+                withVideo: call.withVideo,
+              );
+            }
+          } else if (state == CallState.ended || state == CallState.idle) {
+            _callForegroundService.stop();
           }
         });
       }
     });
+  }
+
+  void _dismissIncomingCallDialog() {
+    if (!_isIncomingCallDialogOpen) return;
+    final context = rootNavigatorKey.currentContext;
+    if (context != null) {
+      Navigator.of(context).pop();
+    }
+    _isIncomingCallDialogOpen = false;
   }
 
   void _showIncomingCallDialog() {
@@ -517,6 +604,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
       }
     });
 
+    _isIncomingCallDialogOpen = true;
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -525,16 +614,19 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
         callId: call.callId,
         withVideo: call.withVideo,
         onAccept: () {
+          _isIncomingCallDialogOpen = false;
           Navigator.of(context).pop();
           voipService.acceptCall(call.callId, false);
-          _navigateToCallScreen(voipService, mediaService, callerName);
+          _navigateToCallScreen(voipService, mediaService, callerName, withVideo: false);
         },
         onAcceptWithVideo: () {
+          _isIncomingCallDialogOpen = false;
           Navigator.of(context).pop();
           voipService.acceptCall(call.callId, true);
-          _navigateToCallScreen(voipService, mediaService, callerName);
+          _navigateToCallScreen(voipService, mediaService, callerName, withVideo: true);
         },
         onReject: () {
+          _isIncomingCallDialogOpen = false;
           Navigator.of(context).pop();
           voipService.rejectCall(call.callId);
         },
@@ -545,8 +637,9 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
   void _navigateToCallScreen(
     VoIPService voipService,
     MediaService mediaService,
-    String peerName,
-  ) {
+    String peerName, {
+    bool withVideo = false,
+  }) {
     final context = rootNavigatorKey.currentContext;
     if (context == null) {
       logger.warning('ZajelApp', 'No context available to navigate to call screen');
@@ -559,6 +652,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
           voipService: voipService,
           mediaService: mediaService,
           peerName: peerName,
+          initialVideoOn: withVideo,
         ),
       ),
     );

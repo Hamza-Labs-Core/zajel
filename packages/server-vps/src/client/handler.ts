@@ -92,6 +92,7 @@ interface SignalingRegisterMessage {
 interface PairRequestMessage {
   type: 'pair_request';
   targetCode: string;
+  proposedName?: string;
 }
 
 interface PairResponseMessage {
@@ -840,7 +841,7 @@ export class ClientHandler extends EventEmitter {
    * Handle pair request (mutual approval flow)
    */
   private handlePairRequest(ws: WebSocket, message: PairRequestMessage): void {
-    const { targetCode } = message;
+    const { targetCode, proposedName } = message;
     const requesterCode = this.wsToPairingCode.get(ws);
 
     if (!requesterCode) {
@@ -928,6 +929,7 @@ export class ClientHandler extends EventEmitter {
       fromCode: requesterCode,
       fromPublicKey: requesterPublicKey,
       expiresIn: this.pairRequestTimeout, // Include timeout for client-side countdown
+      ...(proposedName ? { proposedName } : {}),
     });
 
     logger.pairingEvent('request', { requester: requesterCode, target: targetCode });

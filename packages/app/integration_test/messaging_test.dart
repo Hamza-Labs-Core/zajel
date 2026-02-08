@@ -140,8 +140,8 @@ void main() {
       }
 
       // Set up listeners for pairing requests
-      final pairRequestCompleterA = Completer<(String, String)>();
-      final pairRequestCompleterB = Completer<(String, String)>();
+      final pairRequestCompleterA = Completer<(String, String, String?)>();
+      final pairRequestCompleterB = Completer<(String, String, String?)>();
 
       connectionManagerA.pairRequests.listen((request) {
         if (!pairRequestCompleterA.isCompleted) {

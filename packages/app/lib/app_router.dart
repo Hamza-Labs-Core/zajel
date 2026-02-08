@@ -3,8 +3,12 @@ import 'package:go_router/go_router.dart';
 
 import 'features/chat/chat_screen.dart';
 import 'features/connection/connect_screen.dart';
+import 'features/contacts/contact_detail_screen.dart';
+import 'features/contacts/contacts_screen.dart';
 import 'features/home/home_screen.dart';
 import 'features/settings/blocked_peers_screen.dart';
+import 'features/settings/media_settings_screen.dart';
+import 'features/settings/notification_settings_screen.dart';
 import 'features/settings/settings_screen.dart';
 
 /// Root navigator key for showing dialogs from anywhere in the app.
@@ -37,6 +41,25 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/settings/blocked',
       builder: (context, state) => const BlockedPeersScreen(),
+    ),
+    GoRoute(
+      path: '/settings/notifications',
+      builder: (context, state) => const NotificationSettingsScreen(),
+    ),
+    GoRoute(
+      path: '/settings/media',
+      builder: (context, state) => const MediaSettingsScreen(),
+    ),
+    GoRoute(
+      path: '/contacts',
+      builder: (context, state) => const ContactsScreen(),
+    ),
+    GoRoute(
+      path: '/contacts/:peerId',
+      builder: (context, state) {
+        final peerId = state.pathParameters['peerId']!;
+        return ContactDetailScreen(peerId: peerId);
+      },
     ),
   ],
   errorBuilder: (context, state) => Scaffold(

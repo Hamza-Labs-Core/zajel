@@ -201,14 +201,34 @@ class ConnectionManager {
   /// Initialize the connection manager.
   Future<void> initialize() async {
     await _cryptoService.initialize();
+    await _loadTrustedPeersAsOffline();
+  }
+
+  /// Load all trusted peers into the peers map as offline/disconnected.
+  Future<void> _loadTrustedPeersAsOffline() async {
+    final trustedPeers = await _trustedPeersStorage.getAllPeers();
+    for (final trusted in trustedPeers) {
+      if (trusted.isBlocked) continue;
+      // Don't overwrite if already present (e.g. already connected)
+      if (_peers.containsKey(trusted.id)) continue;
+      _peers[trusted.id] = Peer(
+        id: trusted.id,
+        displayName: trusted.alias ?? trusted.displayName,
+        publicKey: trusted.publicKey,
+        connectionState: PeerConnectionState.disconnected,
+        lastSeen: trusted.lastSeen ?? trusted.trustedAt,
+        isLocal: false,
+      );
+    }
+    _notifyPeersChanged();
   }
 
   /// Stream of incoming pair requests for UI to show approval dialog.
   final _pairRequestController =
-      StreamController<(String code, String publicKey)>.broadcast();
+      StreamController<(String code, String publicKey, String? proposedName)>.broadcast();
 
   /// Stream of incoming pair requests.
-  Stream<(String, String)> get pairRequests => _pairRequestController.stream;
+  Stream<(String, String, String?)> get pairRequests => _pairRequestController.stream;
 
   /// Stream of incoming link requests from web clients.
   final _linkRequestController =
@@ -297,7 +317,7 @@ class ConnectionManager {
 
   /// Request to connect to a peer using their pairing code.
   /// This sends a pair request that the peer must approve.
-  Future<void> connectToPeer(String pairingCode) async {
+  Future<void> connectToPeer(String pairingCode, {String? proposedName}) async {
     logger.info('ConnectionManager', 'connectToPeer called with code: $pairingCode');
 
     // Normalize and validate pairing code format
@@ -329,7 +349,7 @@ class ConnectionManager {
     // Request pairing (peer must approve before WebRTC starts)
     // Using captured state.client - guaranteed non-null by pattern match
     logger.info('ConnectionManager', 'Sending pair_request for code: $normalizedCode');
-    state.client.requestPairing(normalizedCode);
+    state.client.requestPairing(normalizedCode, proposedName: proposedName);
   }
 
   /// Respond to an incoming pair request.
@@ -603,7 +623,7 @@ class ConnectionManager {
     logger.debug('ConnectionManager', 'Received signaling message: ${message.runtimeType}');
     try {
       switch (message) {
-        case SignalingPairIncoming(fromCode: final fromCode, fromPublicKey: final fromPublicKey):
+        case SignalingPairIncoming(fromCode: final fromCode, fromPublicKey: final fromPublicKey, proposedName: final proposedName):
           logger.info('ConnectionManager', 'Pair request from $fromCode');
           // Check if this public key is blocked
           if (_isPublicKeyBlocked != null && _isPublicKeyBlocked!(fromPublicKey)) {
@@ -621,7 +641,7 @@ class ConnectionManager {
             break;
           }
           // Someone wants to pair with us - emit event for UI to show approval dialog
-          _pairRequestController.add((fromCode, fromPublicKey));
+          _pairRequestController.add((fromCode, fromPublicKey, proposedName));
           break;
 
         case SignalingPairMatched(peerCode: final peerCode, peerPublicKey: final peerPublicKey, isInitiator: final isInitiator):

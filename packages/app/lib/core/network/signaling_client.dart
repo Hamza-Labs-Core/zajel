@@ -365,11 +365,15 @@ class SignalingClient {
   }
 
   /// Request to pair with another peer (requires their approval).
-  void requestPairing(String targetPairingCode) {
-    _send({
+  void requestPairing(String targetPairingCode, {String? proposedName}) {
+    final msg = <String, dynamic>{
       'type': 'pair_request',
       'targetCode': targetPairingCode,
-    });
+    };
+    if (proposedName != null) {
+      msg['proposedName'] = proposedName;
+    }
+    _send(msg);
   }
 
   /// Respond to a pairing request (accept or reject).
@@ -556,6 +560,7 @@ class SignalingClient {
           _messageController.add(SignalingMessage.pairIncoming(
             fromCode: json['fromCode'] as String,
             fromPublicKey: json['fromPublicKey'] as String,
+            proposedName: json['proposedName'] as String?,
           ));
           break;
 
@@ -819,6 +824,7 @@ sealed class SignalingMessage {
   factory SignalingMessage.pairIncoming({
     required String fromCode,
     required String fromPublicKey,
+    String? proposedName,
   }) = SignalingPairIncoming;
 
   factory SignalingMessage.pairMatched({
@@ -899,10 +905,12 @@ class SignalingError extends SignalingMessage {
 class SignalingPairIncoming extends SignalingMessage {
   final String fromCode;
   final String fromPublicKey;
+  final String? proposedName;
 
   const SignalingPairIncoming({
     required this.fromCode,
     required this.fromPublicKey,
+    this.proposedName,
   });
 }
 

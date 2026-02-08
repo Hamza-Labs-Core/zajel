@@ -16,6 +16,7 @@ import '../network/signaling_client.dart'
     show SignalingClient, RendezvousResult, RendezvousPartial, RendezvousMatch;
 import '../network/webrtc_service.dart';
 import '../media/media_service.dart';
+import '../notifications/notification_service.dart';
 import '../network/voip_service.dart';
 import '../storage/file_receive_service.dart';
 import '../storage/trusted_peers_storage.dart';
@@ -30,6 +31,13 @@ final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
 final displayNameProvider = StateProvider<String>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
   return prefs.getString('displayName') ?? 'Anonymous';
+});
+
+/// Provider for notification settings with SharedPreferences persistence.
+final notificationSettingsProvider =
+    StateNotifierProvider<NotificationSettingsNotifier, NotificationSettings>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return NotificationSettingsNotifier(prefs);
 });
 
 /// Provider for crypto service.
@@ -191,16 +199,33 @@ final peersProvider = StreamProvider<List<Peer>>((ref) {
 });
 
 /// Provider for visible peers (excluding blocked by public key).
+/// Sorted: connected first, then offline by lastSeen descending.
 final visiblePeersProvider = Provider<AsyncValue<List<Peer>>>((ref) {
   final peersAsync = ref.watch(peersProvider);
   final blockedPublicKeys = ref.watch(blockedPeersProvider);
 
   return peersAsync.whenData((peers) {
-    return peers.where((peer) {
-      // Filter by public key if available, otherwise allow (for backwards compatibility)
+    final visible = peers.where((peer) {
       if (peer.publicKey == null) return true;
       return !blockedPublicKeys.contains(peer.publicKey);
     }).toList();
+
+    // Sort: connected/connecting first, then offline by lastSeen descending
+    visible.sort((a, b) {
+      final aOnline = a.connectionState == PeerConnectionState.connected ||
+          a.connectionState == PeerConnectionState.connecting ||
+          a.connectionState == PeerConnectionState.handshaking;
+      final bOnline = b.connectionState == PeerConnectionState.connected ||
+          b.connectionState == PeerConnectionState.connecting ||
+          b.connectionState == PeerConnectionState.handshaking;
+
+      if (aOnline && !bOnline) return -1;
+      if (!aOnline && bOnline) return 1;
+      // Within same group, sort by lastSeen descending
+      return b.lastSeen.compareTo(a.lastSeen);
+    });
+
+    return visible;
   });
 });
 
@@ -293,6 +318,12 @@ class BlockedPeersNotifier extends StateNotifier<Set<String>> {
       await _prefs.setStringList('blockedPeerDetails', details);
     }
 
+    // Store blockedAt timestamp
+    final timestamps = _prefs.getStringList('blockedTimestamps') ?? [];
+    timestamps.removeWhere((e) => e.startsWith('$publicKey::'));
+    timestamps.add('$publicKey::${DateTime.now().toIso8601String()}');
+    await _prefs.setStringList('blockedTimestamps', timestamps);
+
     // Sync to TrustedPeersStorage so reconnection logic respects the block
     await _syncBlockToTrustedPeers(publicKey, blocked: true);
   }
@@ -313,6 +344,35 @@ class BlockedPeersNotifier extends StateNotifier<Set<String>> {
 
   /// Check if a public key is blocked.
   bool isBlocked(String publicKey) => state.contains(publicKey);
+
+  /// Get when a peer was blocked.
+  DateTime? getBlockedAt(String publicKey) {
+    final timestamps = _prefs.getStringList('blockedTimestamps') ?? [];
+    for (final entry in timestamps) {
+      final parts = entry.split('::');
+      if (parts.length == 2 && parts[0] == publicKey) {
+        return DateTime.tryParse(parts[1]);
+      }
+    }
+    return null;
+  }
+
+  /// Unblock and permanently remove a peer from trusted storage.
+  Future<void> removePermanently(String publicKey) async {
+    await unblock(publicKey);
+    // Find and remove from trusted peers storage
+    final peers = await _trustedPeersStorage.getAllPeers();
+    for (final peer in peers) {
+      if (peer.publicKey == publicKey) {
+        await _trustedPeersStorage.removePeer(peer.id);
+        break;
+      }
+    }
+    // Remove blockedAt timestamp
+    final timestamps = _prefs.getStringList('blockedTimestamps') ?? [];
+    timestamps.removeWhere((e) => e.startsWith('$publicKey::'));
+    await _prefs.setStringList('blockedTimestamps', timestamps);
+  }
 
   /// Update TrustedPeer.isBlocked to keep both storage layers in sync.
   Future<void> _syncBlockToTrustedPeers(
@@ -441,9 +501,16 @@ final loggerServiceProvider = Provider<LoggerService>((ref) {
   return LoggerService.instance;
 });
 
+/// Provider for notification service.
+final notificationServiceProvider = Provider<NotificationService>((ref) {
+  return NotificationService();
+});
+
 /// Provider for media service.
 final mediaServiceProvider = Provider<MediaService>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
   final service = MediaService();
+  service.initPreferences(prefs);
   ref.onDispose(() => service.dispose());
   return service;
 });
@@ -475,3 +542,68 @@ final voipServiceProvider = Provider<VoIPService?>((ref) {
   ref.onDispose(() => voipService.dispose());
   return voipService;
 });
+
+/// Notifier for managing notification settings with persistence.
+class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
+  final SharedPreferences _prefs;
+  static const _key = 'notificationSettings';
+
+  NotificationSettingsNotifier(this._prefs) : super(_load(_prefs));
+
+  static NotificationSettings _load(SharedPreferences prefs) {
+    final data = prefs.getString(_key);
+    if (data == null) return const NotificationSettings();
+    return NotificationSettings.deserialize(data);
+  }
+
+  Future<void> _save() async {
+    await _prefs.setString(_key, state.serialize());
+  }
+
+  Future<void> setGlobalDnd(bool enabled, {DateTime? until}) async {
+    state = state.copyWith(globalDnd: enabled, dndUntil: until, clearDndUntil: until == null && !enabled);
+    await _save();
+  }
+
+  Future<void> setSoundEnabled(bool enabled) async {
+    state = state.copyWith(soundEnabled: enabled);
+    await _save();
+  }
+
+  Future<void> setPreviewEnabled(bool enabled) async {
+    state = state.copyWith(previewEnabled: enabled);
+    await _save();
+  }
+
+  Future<void> setMessageNotifications(bool enabled) async {
+    state = state.copyWith(messageNotifications: enabled);
+    await _save();
+  }
+
+  Future<void> setCallNotifications(bool enabled) async {
+    state = state.copyWith(callNotifications: enabled);
+    await _save();
+  }
+
+  Future<void> setPeerStatusNotifications(bool enabled) async {
+    state = state.copyWith(peerStatusNotifications: enabled);
+    await _save();
+  }
+
+  Future<void> setFileReceivedNotifications(bool enabled) async {
+    state = state.copyWith(fileReceivedNotifications: enabled);
+    await _save();
+  }
+
+  Future<void> mutePeer(String peerId) async {
+    state = state.copyWith(mutedPeerIds: {...state.mutedPeerIds, peerId});
+    await _save();
+  }
+
+  Future<void> unmutePeer(String peerId) async {
+    state = state.copyWith(mutedPeerIds: {...state.mutedPeerIds}..remove(peerId));
+    await _save();
+  }
+
+  bool isPeerMuted(String peerId) => state.mutedPeerIds.contains(peerId);
+}

@@ -641,6 +641,171 @@ class AppHelper:
         import time as _time
         _time.sleep(1)
 
+    # ── Notification settings helpers ───────────────────────────────
+
+    def navigate_to_notification_settings(self):
+        """Navigate to Settings > Notifications."""
+        self.navigate_to_settings()
+        self.tap_settings_option("Notifications")
+
+    def toggle_dnd(self):
+        """Toggle the Do Not Disturb switch in notification settings."""
+        self._find("Do Not Disturb", timeout=10).click()
+
+    def toggle_sound(self):
+        """Toggle the Sound switch in notification settings."""
+        self._find("Sound", timeout=10).click()
+
+    def mute_peer(self, peer_name: str):
+        """Mute a peer from the notification settings muted peers list."""
+        self._find(peer_name, timeout=10).click()
+
+    # ── Media settings helpers ───────────────────────────────────────
+
+    def navigate_to_media_settings(self):
+        """Navigate to Settings > Audio & Video."""
+        self.navigate_to_settings()
+        self.tap_settings_option("Audio & Video")
+
+    # ── Emoji helpers ────────────────────────────────────────────────
+
+    def open_emoji_picker(self):
+        """Tap the emoji button in the chat input bar."""
+        self._find("Emoji", timeout=10).click()
+        import time as _time
+        _time.sleep(1)
+
+    def close_emoji_picker(self):
+        """Tap the keyboard button to close the emoji picker."""
+        self._find("Keyboard", timeout=10).click()
+        import time as _time
+        _time.sleep(1)
+
+    # ── Contact helpers ──────────────────────────────────────────────
+
+    def navigate_to_contacts(self):
+        """Tap the contacts button from home screen."""
+        self._find("Contacts", timeout=10).click()
+        import time as _time
+        _time.sleep(1)
+
+    def set_peer_alias(self, alias: str):
+        """In contact detail, set a custom alias."""
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+
+        self._find("Edit alias", timeout=10).click()
+        import time as _time
+        _time.sleep(1)
+
+        input_field = WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, "//android.widget.EditText"))
+        )
+        input_field.clear()
+        self.driver.execute_script('mobile: type', {'text': alias})
+
+        self._find("Save", timeout=5, partial=False).click()
+        _time.sleep(1)
+
+    def search_contacts(self, query: str):
+        """Type in the contacts search bar."""
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+
+        search_field = WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, "//android.widget.EditText"))
+        )
+        search_field.click()
+        self.driver.execute_script('mobile: type', {'text': query})
+
+    def open_contact_detail(self, name: str):
+        """Tap a contact in the contacts list to open detail."""
+        self._find(name, timeout=10).click()
+        import time as _time
+        _time.sleep(1)
+
+    # ── Offline peer helpers ─────────────────────────────────────────
+
+    def is_peer_offline(self, peer_name: str = None) -> bool:
+        """Check if a peer shows as 'Offline' on the home screen."""
+        from selenium.common.exceptions import NoSuchElementException
+        try:
+            if peer_name:
+                self.driver.find_element(
+                    "xpath",
+                    f"//*[contains(@content-desc, '{peer_name}') and "
+                    f"contains(@content-desc, 'Last seen')]"
+                )
+            else:
+                self.driver.find_element(
+                    "xpath",
+                    "//*[contains(@content-desc, 'Last seen')]"
+                )
+            return True
+        except (NoSuchElementException, Exception):
+            return False
+
+    def get_last_seen(self, peer_name: str = None) -> str:
+        """Get the 'Last seen' text for an offline peer."""
+        try:
+            if peer_name:
+                el = self.driver.find_element(
+                    "xpath",
+                    f"//*[contains(@content-desc, '{peer_name}') and "
+                    f"contains(@content-desc, 'Last seen')]"
+                )
+            else:
+                el = self.driver.find_element(
+                    "xpath",
+                    "//*[contains(@content-desc, 'Last seen')]"
+                )
+            text = el.get_attribute("content-desc") or el.text or ""
+            # Extract "Last seen X ago" from the merged content-desc
+            for line in text.split('\n'):
+                if 'Last seen' in line:
+                    return line.strip()
+            return text
+        except Exception:
+            return ""
+
+    # ── Blocked list helpers ─────────────────────────────────────────
+
+    def navigate_to_blocked_list(self):
+        """Navigate to Settings > Blocked Users."""
+        self.navigate_to_settings()
+        self.tap_settings_option("Blocked Users")
+
+    def remove_peer_permanently(self, peer_name: str):
+        """Remove a peer permanently from blocked list via popup menu."""
+        # Find and tap the menu on the blocked peer
+        self._find(peer_name, timeout=10)
+        # Tap the popup menu for this peer
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+        import time as _time
+
+        # Find the popup trigger near the peer entry
+        menu = WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located((
+                By.XPATH,
+                "//*[contains(@content-desc, 'Show menu') or "
+                "contains(@content-desc, 'More options') or "
+                "contains(@content-desc, 'Popup')]"
+            ))
+        )
+        menu.click()
+        _time.sleep(1)
+
+        self._find("Remove Permanently", timeout=10).click()
+        _time.sleep(1)
+
+        # Confirm the dialog
+        self._find("Remove", timeout=10, partial=False).click()
+        _time.sleep(1)
+
     # ── File transfer helpers ────────────────────────────────────────
 
     def tap_attach_file(self):
