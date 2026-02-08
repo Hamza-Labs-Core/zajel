@@ -393,7 +393,9 @@ class AppHelper:
             "(string-length(@content-desc) = 6 and translate(@content-desc, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') = @content-desc)"
             "]"
         )
-        el = WebDriverWait(self.driver, 30).until(
+        # 60s timeout: on CI cold starts, signaling connection (DNS +
+        # bootstrap discovery + WebSocket handshake) can take 30-50s.
+        el = WebDriverWait(self.driver, 60).until(
             EC.presence_of_element_located((By.XPATH, xpath))
         )
         return (el.text or el.get_attribute("content-desc") or "").strip()
