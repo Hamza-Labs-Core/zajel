@@ -18,6 +18,7 @@ from config import P2P_CONNECTION_TIMEOUT
 class TestConnectionStates:
     """Test suite for connection state transitions and edge cases."""
 
+    @pytest.mark.single_device
     def test_online_after_launch(self, alice, app_helper):
         """Fresh launch → navigate to connect → 'Online' status on home screen."""
         helper = app_helper(alice)

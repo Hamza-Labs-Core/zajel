@@ -22,6 +22,7 @@ from config import CONNECTION_TIMEOUT, P2P_CONNECTION_TIMEOUT
 class TestPairing:
     """Test suite for device pairing."""
 
+    @pytest.mark.single_device
     def test_app_launches_successfully(self, alice, app_helper):
         """Test that the app launches and shows the home screen."""
         helper = app_helper(alice)
@@ -30,6 +31,7 @@ class TestPairing:
         # App should be running and showing home screen
         assert alice.current_activity is not None
 
+    @pytest.mark.single_device
     def test_can_get_pairing_code(self, alice, app_helper):
         """Test navigating to Connect screen and getting a pairing code."""
         helper = app_helper(alice)
@@ -101,6 +103,7 @@ class TestPairing:
         assert alice_code != bob_code
 
     @pytest.mark.slow
+    @pytest.mark.single_device
     def test_invalid_pairing_code_handled(self, alice, app_helper):
         """Test that entering an invalid pairing code shows error."""
         helper = app_helper(alice)

@@ -7,6 +7,7 @@ from config import APP_LAUNCH_TIMEOUT
 
 
 @pytest.mark.notifications
+@pytest.mark.single_device
 class TestNotifications:
     """Tests for notification settings screen and DND controls."""
 

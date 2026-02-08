@@ -7,6 +7,7 @@ from config import APP_LAUNCH_TIMEOUT
 
 
 @pytest.mark.media_settings
+@pytest.mark.single_device
 class TestMediaSettings:
     """Tests for audio and video device settings screen."""
 

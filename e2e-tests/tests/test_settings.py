@@ -16,6 +16,7 @@ from config import P2P_CONNECTION_TIMEOUT
 class TestSettings:
     """Test suite for settings screen functionality."""
 
+    @pytest.mark.single_device
     def test_navigate_to_settings(self, alice, app_helper):
         """Tap Settings → screen loads with recognizable content."""
         helper = app_helper(alice)
@@ -31,6 +32,7 @@ class TestSettings:
             loaded = False
         assert loaded, "Settings screen should show Profile section"
 
+    @pytest.mark.single_device
     def test_change_display_name(self, alice, app_helper):
         """Change display name to 'E2EUser' → verify it appears on settings screen."""
         helper = app_helper(alice)
@@ -47,6 +49,7 @@ class TestSettings:
             found = False
         assert found, "New display name 'E2EUser' should appear on settings screen"
 
+    @pytest.mark.single_device
     def test_display_name_persists(self, alice, app_helper):
         """Set name → restart app → name still shown."""
         helper = app_helper(alice)
@@ -75,6 +78,7 @@ class TestSettings:
             persisted = False
         assert persisted, "Display name should persist after app restart"
 
+    @pytest.mark.single_device
     def test_connection_status_shown(self, alice, app_helper):
         """Settings shows connection status ('Connected' or 'Connecting...')."""
         helper = app_helper(alice)
@@ -112,6 +116,7 @@ class TestSettings:
         assert found_status, \
             "Settings should show connection status section"
 
+    @pytest.mark.single_device
     def test_view_logs(self, alice, app_helper):
         """Tap 'View Logs' → log viewer sheet appears → close it."""
         helper = app_helper(alice)
