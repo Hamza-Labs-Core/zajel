@@ -8,16 +8,6 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('CertificatePins', () {
-    test('has correct Cloudflare pins configured', () {
-      expect(CertificatePins.cloudflare, isNotEmpty);
-      expect(CertificatePins.cloudflare.length, equals(3));
-      // All pins should be base64-encoded SHA-256 hashes (43-44 chars + =)
-      for (final pin in CertificatePins.cloudflare) {
-        expect(pin.length, greaterThanOrEqualTo(43));
-        expect(pin, endsWith('='));
-      }
-    });
-
     test('has correct Zajel app pins configured', () {
       expect(CertificatePins.zajelApp, isNotEmpty);
       expect(CertificatePins.zajelApp.length, equals(2));
@@ -29,14 +19,14 @@ void main() {
     });
 
     group('getPinsForUrl', () {
-      test('returns Cloudflare pins for workers.dev domains', () {
+      test('returns empty for workers.dev domains (no longer pinned)', () {
         final pins = CertificatePins.getPinsForUrl('wss://my-worker.workers.dev/ws');
-        expect(pins, equals(CertificatePins.cloudflare));
+        expect(pins, isEmpty);
       });
 
-      test('returns Cloudflare pins for subdomains of workers.dev', () {
-        final pins = CertificatePins.getPinsForUrl('wss://api.my-worker.workers.dev/ws');
-        expect(pins, equals(CertificatePins.cloudflare));
+      test('returns empty for hamzalabs.dev domains (no longer pinned)', () {
+        final pins = CertificatePins.getPinsForUrl('wss://signal.zajel.hamzalabs.dev/ws');
+        expect(pins, isEmpty);
       });
 
       test('returns Zajel pins for zajel.app domains', () {
@@ -60,17 +50,8 @@ void main() {
       });
 
       test('handles case-insensitive domain matching', () {
-        final pins1 = CertificatePins.getPinsForUrl('wss://MY-WORKER.WORKERS.DEV/ws');
-        expect(pins1, equals(CertificatePins.cloudflare));
-
-        final pins2 = CertificatePins.getPinsForUrl('wss://Signaling.Zajel.App/ws');
-        expect(pins2, equals(CertificatePins.zajelApp));
-      });
-
-      test('handles http URLs correctly', () {
-        // Even though these shouldn't be used, the function should handle them
-        final pins = CertificatePins.getPinsForUrl('http://my-worker.workers.dev');
-        expect(pins, equals(CertificatePins.cloudflare));
+        final pins = CertificatePins.getPinsForUrl('wss://Signaling.Zajel.App/ws');
+        expect(pins, equals(CertificatePins.zajelApp));
       });
     });
   });
@@ -170,8 +151,8 @@ void main() {
       });
 
       test('auto-detects pins for known domains', () {
-        final socket = PinnedWebSocket(url: 'wss://my-worker.workers.dev/ws');
-        expect(socket.pins, equals(CertificatePins.cloudflare));
+        final socket = PinnedWebSocket(url: 'wss://signaling.zajel.app/ws');
+        expect(socket.pins, equals(CertificatePins.zajelApp));
       });
 
       test('uses provided pins when specified', () {
@@ -230,15 +211,15 @@ void main() {
 
       test('calls native connect with correct parameters', () async {
         final socket = PinnedWebSocket(
-          url: 'wss://test.workers.dev/ws',
+          url: 'wss://signaling.zajel.app/ws',
           connectionTimeout: const Duration(seconds: 45),
         );
         await socket.connect();
 
         expect(methodCalls, hasLength(1));
         expect(methodCalls[0].method, equals('connect'));
-        expect(methodCalls[0].arguments['url'], equals('wss://test.workers.dev/ws'));
-        expect(methodCalls[0].arguments['pins'], equals(CertificatePins.cloudflare));
+        expect(methodCalls[0].arguments['url'], equals('wss://signaling.zajel.app/ws'));
+        expect(methodCalls[0].arguments['pins'], equals(CertificatePins.zajelApp));
         expect(methodCalls[0].arguments['timeoutMs'], equals(45000));
         await socket.dispose();
       });

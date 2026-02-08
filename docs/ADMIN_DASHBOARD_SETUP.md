@@ -29,13 +29,13 @@ wrangler secret put ZAJEL_ADMIN_JWT_SECRET
 wrangler deploy
 ```
 
-Note the deployed URL (e.g., `https://zajel-admin.mahmoud-s-darwish.workers.dev`)
+Note the deployed URL (e.g., `https://admin.zajel.hamzalabs.dev`)
 
 ## Step 3: Initialize First Admin User
 
 ```bash
 # Replace with your deployed URL
-curl -X POST https://zajel-admin.mahmoud-s-darwish.workers.dev/admin/api/auth/init \
+curl -X POST https://admin.zajel.hamzalabs.dev/admin/api/auth/init \
   -H "Content-Type: application/json" \
   -d '{"username": "admin", "password": "your-secure-password-min-12-chars"}'
 ```
@@ -47,7 +47,7 @@ Add to your VPS environment (choose one method):
 ### Option A: Environment file (.env)
 ```bash
 ZAJEL_ADMIN_JWT_SECRET=<same-secret-from-step-1>
-ZAJEL_CF_ADMIN_URL=https://zajel-admin.mahmoud-s-darwish.workers.dev
+ZAJEL_CF_ADMIN_URL=https://admin.zajel.hamzalabs.dev
 ```
 
 ### Option B: Systemd service
@@ -55,7 +55,7 @@ ZAJEL_CF_ADMIN_URL=https://zajel-admin.mahmoud-s-darwish.workers.dev
 # /etc/systemd/system/zajel.service
 [Service]
 Environment="ZAJEL_ADMIN_JWT_SECRET=<secret>"
-Environment="ZAJEL_CF_ADMIN_URL=https://zajel-admin.mahmoud-s-darwish.workers.dev"
+Environment="ZAJEL_CF_ADMIN_URL=https://admin.zajel.hamzalabs.dev"
 ```
 
 ### Option C: GitHub Secrets (for CI/CD)
@@ -74,7 +74,7 @@ sudo systemctl restart zajel
 
 ## Step 6: Verify Setup
 
-1. Open CF Dashboard: `https://zajel-admin.mahmoud-s-darwish.workers.dev/admin/`
+1. Open CF Dashboard: `https://admin.zajel.hamzalabs.dev/admin/`
 2. Login with credentials from Step 3
 3. Click on a server card to open its VPS dashboard
 4. Verify real-time metrics are updating

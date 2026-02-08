@@ -28,8 +28,10 @@ import 'package:zajel/core/models/models.dart';
 import 'package:zajel/core/network/connection_manager.dart';
 import 'package:zajel/core/network/device_link_service.dart';
 import 'package:zajel/core/network/server_discovery_service.dart';
+import 'package:zajel/core/network/meeting_point_service.dart';
 import 'package:zajel/core/network/webrtc_service.dart';
 import 'package:zajel/core/providers/app_providers.dart';
+import 'package:zajel/core/storage/trusted_peers_storage_impl.dart';
 import 'package:zajel/features/chat/chat_screen.dart';
 
 import 'test_config.dart';
@@ -114,11 +116,15 @@ void main() {
       cryptoService: cryptoA,
       webrtcService: webrtcA,
       deviceLinkService: deviceLinkA,
+      trustedPeersStorage: SecureTrustedPeersStorage(),
+      meetingPointService: MeetingPointService(),
     );
     connectionManagerB = ConnectionManager(
       cryptoService: cryptoB,
       webrtcService: webrtcB,
       deviceLinkService: deviceLinkB,
+      trustedPeersStorage: SecureTrustedPeersStorage(),
+      meetingPointService: MeetingPointService(),
     );
 
     // Connect to discovered server with exponential backoff retry

@@ -123,6 +123,18 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
   }
 
   @override
+  Future<void> updateAlias(String peerId, String? alias) async {
+    await _ensureInitialized();
+    final peer = _cache[peerId];
+    if (peer != null) {
+      _cache[peerId] = alias != null
+          ? peer.copyWith(alias: alias)
+          : peer.copyWith(clearAlias: true);
+      await _persist();
+    }
+  }
+
+  @override
   Future<void> clear() async {
     _cache = {};
     await _storage.delete(key: _peersKey);

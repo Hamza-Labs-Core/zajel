@@ -1,7 +1,9 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../logging/logger_service.dart';
+import '../models/media_device.dart';
 
 /// Represents the current state of media tracks.
 class MediaState {
@@ -126,6 +128,47 @@ class MediaService {
   bool _audioMuted = false;
   bool _videoMuted = false;
 
+  // Selected device IDs (null = system default)
+  String? _selectedAudioInputId;
+  String? _selectedAudioOutputId;
+  String? _selectedVideoInputId;
+
+  // Audio processing settings
+  bool _noiseSuppression = true;
+  bool _echoCancellation = true;
+  bool _autoGainControl = true;
+
+  SharedPreferences? _prefs;
+
+  /// Initialize media preferences from SharedPreferences.
+  void initPreferences(SharedPreferences prefs) {
+    _prefs = prefs;
+    _selectedAudioInputId = prefs.getString('media_audioInputId');
+    _selectedAudioOutputId = prefs.getString('media_audioOutputId');
+    _selectedVideoInputId = prefs.getString('media_videoInputId');
+    _noiseSuppression = prefs.getBool('media_noiseSuppression') ?? true;
+    _echoCancellation = prefs.getBool('media_echoCancellation') ?? true;
+    _autoGainControl = prefs.getBool('media_autoGainControl') ?? true;
+  }
+
+  /// Get the currently selected audio input device ID.
+  String? get selectedAudioInputId => _selectedAudioInputId;
+
+  /// Get the currently selected audio output device ID.
+  String? get selectedAudioOutputId => _selectedAudioOutputId;
+
+  /// Get the currently selected video input device ID.
+  String? get selectedVideoInputId => _selectedVideoInputId;
+
+  /// Whether noise suppression is enabled.
+  bool get noiseSuppression => _noiseSuppression;
+
+  /// Whether echo cancellation is enabled.
+  bool get echoCancellation => _echoCancellation;
+
+  /// Whether automatic gain control is enabled.
+  bool get autoGainControl => _autoGainControl;
+
   /// The current local media stream.
   ///
   /// Returns null if no media has been requested yet.
@@ -150,20 +193,29 @@ class MediaService {
       await stopAllTracks();
     }
 
+    final audioConstraints = <String, dynamic>{
+      'echoCancellation': _echoCancellation,
+      'noiseSuppression': _noiseSuppression,
+      'autoGainControl': _autoGainControl,
+    };
+    if (_selectedAudioInputId != null) {
+      audioConstraints['deviceId'] = {'exact': _selectedAudioInputId};
+    }
+
+    final videoConstraints = video
+        ? <String, dynamic>{
+            'width': {'ideal': 1280},
+            'height': {'ideal': 720},
+            'facingMode': 'user',
+            'frameRate': {'ideal': 30},
+            if (_selectedVideoInputId != null)
+              'deviceId': {'exact': _selectedVideoInputId},
+          }
+        : false;
+
     final constraints = <String, dynamic>{
-      'audio': {
-        'echoCancellation': true,
-        'noiseSuppression': true,
-        'autoGainControl': true,
-      },
-      'video': video
-          ? {
-              'width': {'ideal': 1280},
-              'height': {'ideal': 720},
-              'facingMode': 'user',
-              'frameRate': {'ideal': 30},
-            }
-          : false,
+      'audio': audioConstraints,
+      'video': videoConstraints,
     };
 
     try {
@@ -378,6 +430,105 @@ class MediaService {
 
     // Generic media error
     throw MediaException(e.message ?? 'Unknown media error');
+  }
+
+  // ── Device enumeration ──────────────────────────────────────
+
+  /// Enumerate all available media devices.
+  Future<List<MediaDevice>> enumerateDevices() async {
+    try {
+      final devices = await navigator.mediaDevices.enumerateDevices();
+      return devices
+          .map((d) => MediaDevice(
+                deviceId: d.deviceId,
+                label: d.label.isNotEmpty ? d.label : _defaultLabel(d.kind ?? ''),
+                kind: d.kind ?? '',
+              ))
+          .toList();
+    } catch (e) {
+      logger.error(_tag, 'Error enumerating devices', e);
+      return [];
+    }
+  }
+
+  /// Get available audio input devices (microphones).
+  Future<List<MediaDevice>> getAudioInputs() async {
+    final devices = await enumerateDevices();
+    return devices.where((d) => d.isAudioInput).toList();
+  }
+
+  /// Get available audio output devices (speakers).
+  Future<List<MediaDevice>> getAudioOutputs() async {
+    final devices = await enumerateDevices();
+    return devices.where((d) => d.isAudioOutput).toList();
+  }
+
+  /// Get available video input devices (cameras).
+  Future<List<MediaDevice>> getVideoInputs() async {
+    final devices = await enumerateDevices();
+    return devices.where((d) => d.isVideoInput).toList();
+  }
+
+  // ── Device selection ──────────────────────────────────────
+
+  /// Select an audio input device by ID. Pass null for system default.
+  Future<void> selectAudioInput(String? deviceId) async {
+    _selectedAudioInputId = deviceId;
+    await _prefs?.setString('media_audioInputId', deviceId ?? '');
+    if (deviceId == null) await _prefs?.remove('media_audioInputId');
+    logger.info(_tag, 'Audio input selected: $deviceId');
+  }
+
+  /// Select an audio output device by ID. Pass null for system default.
+  Future<void> selectAudioOutput(String? deviceId) async {
+    _selectedAudioOutputId = deviceId;
+    await _prefs?.setString('media_audioOutputId', deviceId ?? '');
+    if (deviceId == null) await _prefs?.remove('media_audioOutputId');
+    logger.info(_tag, 'Audio output selected: $deviceId');
+  }
+
+  /// Select a video input device by ID. Pass null for system default.
+  Future<void> selectVideoInput(String? deviceId) async {
+    _selectedVideoInputId = deviceId;
+    await _prefs?.setString('media_videoInputId', deviceId ?? '');
+    if (deviceId == null) await _prefs?.remove('media_videoInputId');
+    logger.info(_tag, 'Video input selected: $deviceId');
+  }
+
+  // ── Audio processing settings ─────────────────────────────
+
+  /// Enable or disable noise suppression.
+  Future<void> setNoiseSuppression(bool enabled) async {
+    _noiseSuppression = enabled;
+    await _prefs?.setBool('media_noiseSuppression', enabled);
+    logger.info(_tag, 'Noise suppression: $enabled');
+  }
+
+  /// Enable or disable echo cancellation.
+  Future<void> setEchoCancellation(bool enabled) async {
+    _echoCancellation = enabled;
+    await _prefs?.setBool('media_echoCancellation', enabled);
+    logger.info(_tag, 'Echo cancellation: $enabled');
+  }
+
+  /// Enable or disable automatic gain control.
+  Future<void> setAutoGainControl(bool enabled) async {
+    _autoGainControl = enabled;
+    await _prefs?.setBool('media_autoGainControl', enabled);
+    logger.info(_tag, 'Auto gain control: $enabled');
+  }
+
+  String _defaultLabel(String kind) {
+    switch (kind) {
+      case 'audioinput':
+        return 'Microphone';
+      case 'audiooutput':
+        return 'Speaker';
+      case 'videoinput':
+        return 'Camera';
+      default:
+        return 'Unknown Device';
+    }
   }
 
   /// Dispose the service and release all resources.
