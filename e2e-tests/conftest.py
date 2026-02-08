@@ -7,6 +7,7 @@ Provides fixtures for:
 - All available devices
 """
 
+import os
 import subprocess
 import pytest
 from appium import webdriver
@@ -14,7 +15,42 @@ from appium.options.android import UiAutomator2Options
 
 from config import get_server_url, APK_PATH, SERVER_COUNT, APP_LAUNCH_TIMEOUT, ADB_PATH
 
+ARTIFACTS_DIR = os.environ.get("E2E_ARTIFACTS_DIR", "/tmp/e2e-artifacts")
+
 PACKAGE_NAME = "com.zajel.zajel"
+
+# Store active drivers for failure diagnostics
+_active_drivers: dict[str, webdriver.Remote] = {}
+
+
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Capture screenshot and page source on test failure."""
+    outcome = yield
+    report = outcome.get_result()
+    if report.when == "call" and report.failed:
+        os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+        safe_name = item.nodeid.replace("/", "_").replace("::", "__")
+        for name, driver in _active_drivers.items():
+            try:
+                screenshot_path = os.path.join(
+                    ARTIFACTS_DIR, f"fail_{safe_name}_{name}.png"
+                )
+                driver.save_screenshot(screenshot_path)
+                print(f"Screenshot saved: {screenshot_path}")
+            except Exception as e:
+                print(f"Failed to save screenshot for {name}: {e}")
+            try:
+                source_path = os.path.join(
+                    ARTIFACTS_DIR, f"fail_{safe_name}_{name}_source.xml"
+                )
+                source = driver.page_source
+                if source:
+                    with open(source_path, "w") as f:
+                        f.write(source)
+                    print(f"Page source saved: {source_path}")
+            except Exception as e:
+                print(f"Failed to save page source for {name}: {e}")
 
 
 def create_driver(server_index: int, device_name: str = "emulator") -> webdriver.Remote:
@@ -44,6 +80,7 @@ def create_driver(server_index: int, device_name: str = "emulator") -> webdriver
         "android.permission.RECORD_AUDIO",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.POST_NOTIFICATIONS",
     ]:
         try:
             subprocess.run(
@@ -95,7 +132,9 @@ def create_driver(server_index: int, device_name: str = "emulator") -> webdriver
 def alice():
     """First device (Alice) - always available."""
     driver = create_driver(0, "alice")
+    _active_drivers["alice"] = driver
     yield driver
+    _active_drivers.pop("alice", None)
     driver.quit()
 
 
@@ -105,7 +144,9 @@ def bob():
     if SERVER_COUNT < 2:
         pytest.skip("Need at least 2 Appium servers for this test")
     driver = create_driver(1, "bob")
+    _active_drivers["bob"] = driver
     yield driver
+    _active_drivers.pop("bob", None)
     driver.quit()
 
 
@@ -115,7 +156,9 @@ def charlie():
     if SERVER_COUNT < 3:
         pytest.skip("Need at least 3 Appium servers for this test")
     driver = create_driver(2, "charlie")
+    _active_drivers["charlie"] = driver
     yield driver
+    _active_drivers.pop("charlie", None)
     driver.quit()
 
 
@@ -184,6 +227,13 @@ class AppHelper:
         # Brief wait for app process to start
         _time.sleep(3)
 
+        # Log current app state for CI debugging
+        try:
+            activity = self.driver.current_activity
+            print(f"[wait_for_app_ready] current_activity={activity}")
+        except Exception as e:
+            print(f"[wait_for_app_ready] failed to get activity: {e}")
+
         # Dismiss any ANR dialog that might be blocking
         self._dismiss_system_dialog()
 
@@ -228,15 +278,25 @@ class AppHelper:
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.common.by import By
 
-        fn = "contains" if partial else ""
         if partial:
             xpath = f"//*[contains(@text, '{text}') or contains(@content-desc, '{text}')]"
         else:
             xpath = f"//*[@text='{text}' or @content-desc='{text}']"
 
-        return WebDriverWait(self.driver, timeout).until(
-            EC.presence_of_element_located((By.XPATH, xpath))
-        )
+        try:
+            return WebDriverWait(self.driver, timeout).until(
+                EC.presence_of_element_located((By.XPATH, xpath))
+            )
+        except Exception:
+            print(f"=== _find FAILED: text='{text}' partial={partial} timeout={timeout} ===")
+            try:
+                source = self.driver.page_source
+                # Truncate to avoid flooding logs
+                print(source[:15000] if source else "EMPTY PAGE SOURCE")
+            except Exception as e:
+                print(f"Failed to get page source: {e}")
+            print("=== END PAGE SOURCE ===")
+            raise
 
     def navigate_to_connect(self):
         """Navigate to the Connect screen by tapping the FAB or QR icon."""

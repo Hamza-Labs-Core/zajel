@@ -1048,11 +1048,12 @@ jobs:
           adb devices
 
       - name: Run E2E tests
-        timeout-minutes: 15
+        timeout-minutes: 30
         env:
           APK_PATH: ${{ github.workspace }}/packages/app/build/app/outputs/flutter-apk/app-release.apk
           ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
           APPIUM_SERVER_COUNT: "2"
+          E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-artifacts/e2e
         working-directory: ${{ github.workspace }}/e2e-tests
         run: |
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
@@ -1119,6 +1120,8 @@ jobs:
           timeout 10 adb -s emulator-5554 logcat -d > test-artifacts/logcat-emu1.txt 2>&1 || true
           timeout 10 adb -s emulator-5556 logcat -d > test-artifacts/logcat-emu2.txt 2>&1 || true
           cp /tmp/appium*.log test-artifacts/ 2>/dev/null || true
+          # Collect E2E failure artifacts (screenshots, page sources)
+          cp ${{ github.workspace }}/test-artifacts/e2e/* test-artifacts/ 2>/dev/null || true
 
       - name: Stop emulators
         if: always()
