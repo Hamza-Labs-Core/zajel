@@ -127,16 +127,25 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
       // Set up VoIP call listener for incoming calls from any screen
       _setupVoipCallListener();
 
-      // Auto-connect to signaling server
-      await _connectToSignaling(connectionManager);
-
-      logger.info('ZajelApp', 'Initialization complete');
+      logger.info('ZajelApp', 'Core initialization complete');
     } catch (e, stack) {
       logger.error('ZajelApp', 'Initialization failed', e, stack);
     }
 
+    // Show the home screen immediately — signaling connects in the background.
+    // This prevents the app from being stuck on the loading screen if the
+    // signaling server is unreachable (WebSocket TCP timeout is ~75 seconds).
     if (mounted) {
       setState(() => _initialized = true);
+    }
+
+    // Auto-connect to signaling server (non-blocking)
+    try {
+      final connectionManager = ref.read(connectionManagerProvider);
+      await _connectToSignaling(connectionManager);
+      logger.info('ZajelApp', 'Signaling connection complete');
+    } catch (e, stack) {
+      logger.error('ZajelApp', 'Signaling connection failed', e, stack);
     }
   }
 

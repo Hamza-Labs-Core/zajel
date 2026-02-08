@@ -1089,7 +1089,18 @@ jobs:
           curl -sf http://localhost:4723/status && echo "Appium 1 (emulator-5554) is ready"
           curl -sf http://localhost:4724/status && echo "Appium 2 (emulator-5556) is ready"
 
+          # Run smoke test first (quick gate: does the app even launch?)
+          echo "=== Running smoke test ==="
+          pytest tests/test_pairing.py::TestPairing::test_app_launches_successfully -v -s --timeout=120
+          SMOKE_RESULT=$?
+          if [ $SMOKE_RESULT -ne 0 ]; then
+            echo "Smoke test failed — app does not launch. Skipping remaining tests."
+            kill $APPIUM1_PID $APPIUM2_PID 2>/dev/null || true
+            exit 1
+          fi
+
           # Run all E2E test suites
+          echo "=== Running full E2E test suite ==="
           pytest tests/ -v -s --timeout=600
           TEST_RESULT=$?
 
@@ -1097,6 +1108,17 @@ jobs:
           kill $APPIUM1_PID $APPIUM2_PID 2>/dev/null || true
 
           exit $TEST_RESULT
+
+      - name: Collect logs on failure
+        if: failure()
+        timeout-minutes: 2
+        run: |
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          mkdir -p test-artifacts
+          # Collect logcat BEFORE stopping emulators (otherwise we get "waiting for device")
+          timeout 10 adb -s emulator-5554 logcat -d > test-artifacts/logcat-emu1.txt 2>&1 || true
+          timeout 10 adb -s emulator-5556 logcat -d > test-artifacts/logcat-emu2.txt 2>&1 || true
+          cp /tmp/appium*.log test-artifacts/ 2>/dev/null || true
 
       - name: Stop emulators
         if: always()
@@ -1107,16 +1129,6 @@ jobs:
           adb -s emulator-5556 emu kill 2>/dev/null || true
           kill $EMULATOR1_PID $EMULATOR2_PID 2>/dev/null || true
           pkill -9 qemu-system-x86_64 2>/dev/null || true
-
-      - name: Collect logs on failure
-        if: failure()
-        timeout-minutes: 2
-        run: |
-          export PATH="$ANDROID_HOME/platform-tools:$PATH"
-          mkdir -p test-artifacts
-          timeout 10 adb -s emulator-5554 logcat -d > test-artifacts/logcat-emu1.txt 2>&1 || true
-          timeout 10 adb -s emulator-5556 logcat -d > test-artifacts/logcat-emu2.txt 2>&1 || true
-          cp /tmp/appium*.log test-artifacts/ 2>/dev/null || true
 
       - name: Upload test artifacts
         if: failure()
