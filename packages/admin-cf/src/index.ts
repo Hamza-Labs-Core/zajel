@@ -684,6 +684,7 @@ function serveDashboard(): Response {
 
       if (!state.user) {
         app.innerHTML = renderLogin();
+        attachEventListeners();
         return;
       }
 

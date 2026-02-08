@@ -143,13 +143,17 @@ class MediaService {
   /// Initialize media preferences from SharedPreferences.
   void initPreferences(SharedPreferences prefs) {
     _prefs = prefs;
-    _selectedAudioInputId = prefs.getString('media_audioInputId');
-    _selectedAudioOutputId = prefs.getString('media_audioOutputId');
-    _selectedVideoInputId = prefs.getString('media_videoInputId');
+    // Use _nonEmpty to avoid empty-string device IDs creating invalid constraints
+    _selectedAudioInputId = _nonEmpty(prefs.getString('media_audioInputId'));
+    _selectedAudioOutputId = _nonEmpty(prefs.getString('media_audioOutputId'));
+    _selectedVideoInputId = _nonEmpty(prefs.getString('media_videoInputId'));
     _noiseSuppression = prefs.getBool('media_noiseSuppression') ?? true;
     _echoCancellation = prefs.getBool('media_echoCancellation') ?? true;
     _autoGainControl = prefs.getBool('media_autoGainControl') ?? true;
   }
+
+  static String? _nonEmpty(String? value) =>
+      (value != null && value.isNotEmpty) ? value : null;
 
   /// Get the currently selected audio input device ID.
   String? get selectedAudioInputId => _selectedAudioInputId;
@@ -474,24 +478,33 @@ class MediaService {
   /// Select an audio input device by ID. Pass null for system default.
   Future<void> selectAudioInput(String? deviceId) async {
     _selectedAudioInputId = deviceId;
-    await _prefs?.setString('media_audioInputId', deviceId ?? '');
-    if (deviceId == null) await _prefs?.remove('media_audioInputId');
+    if (deviceId != null && deviceId.isNotEmpty) {
+      await _prefs?.setString('media_audioInputId', deviceId);
+    } else {
+      await _prefs?.remove('media_audioInputId');
+    }
     logger.info(_tag, 'Audio input selected: $deviceId');
   }
 
   /// Select an audio output device by ID. Pass null for system default.
   Future<void> selectAudioOutput(String? deviceId) async {
     _selectedAudioOutputId = deviceId;
-    await _prefs?.setString('media_audioOutputId', deviceId ?? '');
-    if (deviceId == null) await _prefs?.remove('media_audioOutputId');
+    if (deviceId != null && deviceId.isNotEmpty) {
+      await _prefs?.setString('media_audioOutputId', deviceId);
+    } else {
+      await _prefs?.remove('media_audioOutputId');
+    }
     logger.info(_tag, 'Audio output selected: $deviceId');
   }
 
   /// Select a video input device by ID. Pass null for system default.
   Future<void> selectVideoInput(String? deviceId) async {
     _selectedVideoInputId = deviceId;
-    await _prefs?.setString('media_videoInputId', deviceId ?? '');
-    if (deviceId == null) await _prefs?.remove('media_videoInputId');
+    if (deviceId != null && deviceId.isNotEmpty) {
+      await _prefs?.setString('media_videoInputId', deviceId);
+    } else {
+      await _prefs?.remove('media_videoInputId');
+    }
     logger.info(_tag, 'Video input selected: $deviceId');
   }
 

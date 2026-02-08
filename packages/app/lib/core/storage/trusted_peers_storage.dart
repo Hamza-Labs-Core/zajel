@@ -50,6 +50,9 @@ abstract class TrustedPeersStorage {
   /// Update a peer's alias.
   Future<void> updateAlias(String peerId, String? alias);
 
+  /// Check if a peer is trusted by their public key.
+  Future<bool> isTrustedByPublicKey(String publicKey);
+
   /// Clear all trusted peers.
   Future<void> clear();
 }

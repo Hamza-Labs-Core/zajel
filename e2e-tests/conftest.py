@@ -5,22 +5,35 @@ Provides fixtures for:
 - Single device (alice, bob)
 - Device pairs for P2P testing
 - All available devices
+- Headless client (HeadlessBob) for cross-platform testing
 """
 
+from __future__ import annotations
+
+import asyncio
 import os
 import subprocess
+import threading
 import pytest
-from appium import webdriver
-from appium.options.android import UiAutomator2Options
 
-from config import get_server_url, APK_PATH, SERVER_COUNT, APP_LAUNCH_TIMEOUT, ADB_PATH
+from config import SIGNALING_URL
+
+try:
+    from appium import webdriver
+    from appium.options.android import UiAutomator2Options
+    from config import get_server_url, APK_PATH, SERVER_COUNT, APP_LAUNCH_TIMEOUT, ADB_PATH
+    HAS_APPIUM = True
+except ImportError:
+    HAS_APPIUM = False
+    SERVER_COUNT = 0
+    APP_LAUNCH_TIMEOUT = 60
 
 ARTIFACTS_DIR = os.environ.get("E2E_ARTIFACTS_DIR", "/tmp/e2e-artifacts")
 
 PACKAGE_NAME = "com.zajel.zajel"
 
 # Store active drivers for failure diagnostics
-_active_drivers: dict[str, webdriver.Remote] = {}
+_active_drivers: dict = {}
 
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
@@ -51,6 +64,12 @@ def pytest_runtest_makereport(item, call):
                     print(f"Page source saved: {source_path}")
             except Exception as e:
                 print(f"Failed to save page source for {name}: {e}")
+
+
+def _require_appium():
+    """Skip test if Appium is not installed."""
+    if not HAS_APPIUM:
+        pytest.skip("Appium not installed — skipping emulator tests")
 
 
 def create_driver(server_index: int, device_name: str = "emulator") -> webdriver.Remote:
@@ -131,6 +150,7 @@ def create_driver(server_index: int, device_name: str = "emulator") -> webdriver
 @pytest.fixture(scope="function")
 def alice():
     """First device (Alice) - always available."""
+    _require_appium()
     driver = create_driver(0, "alice")
     _active_drivers["alice"] = driver
     yield driver
@@ -141,6 +161,7 @@ def alice():
 @pytest.fixture(scope="function")
 def bob():
     """Second device (Bob) - requires at least 2 servers."""
+    _require_appium()
     if SERVER_COUNT < 2:
         pytest.skip("Need at least 2 Appium servers for this test")
     driver = create_driver(1, "bob")
@@ -153,6 +174,7 @@ def bob():
 @pytest.fixture(scope="function")
 def charlie():
     """Third device (Charlie) - requires at least 3 servers."""
+    _require_appium()
     if SERVER_COUNT < 3:
         pytest.skip("Need at least 3 Appium servers for this test")
     driver = create_driver(2, "charlie")
@@ -171,6 +193,7 @@ def device_pair(alice, bob):
 @pytest.fixture(scope="function")
 def all_devices():
     """All available devices."""
+    _require_appium()
     drivers = []
     for i in range(SERVER_COUNT):
         driver = create_driver(i, f"device-{i}")
@@ -979,8 +1002,96 @@ class AppHelper:
 @pytest.fixture
 def app_helper(request):
     """Factory fixture for creating AppHelper instances."""
+    _require_appium()
 
     def _create_helper(driver):
         return AppHelper(driver)
 
     return _create_helper
+
+
+# ── Headless Client Fixtures ─────────────────────────────────────
+
+class HeadlessBob:
+    """Synchronous wrapper around ZajelHeadlessClient for pytest.
+
+    Runs the async event loop in a background thread so that synchronous
+    test code can call connect(), send_text(), etc. directly.
+    """
+
+    def __init__(self, signaling_url: str, **kwargs):
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._thread.start()
+
+        from zajel.client import ZajelHeadlessClient
+        self._client = ZajelHeadlessClient(signaling_url=signaling_url, **kwargs)
+        self.pairing_code = None
+        self.connected_peer = None
+
+    def _run_loop(self):
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def _run(self, coro, timeout=120):
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return future.result(timeout=timeout)
+
+    def connect(self) -> str:
+        self.pairing_code = self._run(self._client.connect())
+        return self.pairing_code
+
+    def pair_with(self, code: str):
+        self.connected_peer = self._run(self._client.pair_with(code))
+        return self.connected_peer
+
+    def wait_for_pair(self, timeout=60):
+        self.connected_peer = self._run(
+            self._client.wait_for_pair(timeout=timeout), timeout=timeout + 10
+        )
+        return self.connected_peer
+
+    def send_text(self, peer_id: str, text: str):
+        self._run(self._client.send_text(peer_id, text))
+
+    def receive_message(self, timeout=30):
+        return self._run(
+            self._client.receive_message(timeout=timeout), timeout=timeout + 10
+        )
+
+    def send_file(self, peer_id: str, file_path: str):
+        return self._run(self._client.send_file(peer_id, file_path))
+
+    def receive_file(self, timeout=60):
+        return self._run(
+            self._client.receive_file(timeout=timeout), timeout=timeout + 10
+        )
+
+    def disconnect(self):
+        try:
+            self._run(self._client.disconnect(), timeout=10)
+        except Exception:
+            pass
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(timeout=5)
+
+
+@pytest.fixture(scope="function")
+def headless_bob():
+    """Headless client acting as Bob for cross-platform tests.
+
+    Connects to the signaling server, auto-accepts pair requests.
+    Tests use headless_bob.pairing_code to pair Alice (Flutter app) with Bob.
+    """
+    if not SIGNALING_URL:
+        pytest.skip("SIGNALING_URL not set — headless tests require a signaling server")
+
+    bob = HeadlessBob(
+        signaling_url=SIGNALING_URL,
+        name="HeadlessBob",
+        auto_accept_pairs=True,
+        log_level="DEBUG",
+    )
+    bob.connect()
+    yield bob
+    bob.disconnect()

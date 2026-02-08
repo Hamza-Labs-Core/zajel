@@ -976,7 +976,9 @@ jobs:
           cache-dependency-path: e2e-tests/requirements.txt
 
       - name: Install E2E dependencies
-        run: pip install -r e2e-tests/requirements.txt
+        run: |
+          pip install -r e2e-tests/requirements.txt
+          pip install -e packages/headless-client
 
       - name: Build E2E APK
         working-directory: packages/app
@@ -1054,6 +1056,7 @@ jobs:
           ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
           APPIUM_SERVER_COUNT: "2"
           E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-artifacts/e2e
+          SIGNALING_URL: ${{ vars.VPS_QA_WS_URL || '' }}
         working-directory: ${{ github.workspace }}/e2e-tests
         run: |
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
@@ -1104,10 +1107,25 @@ jobs:
           # These test UI navigation, settings, toggles — no P2P pairing needed.
           # Deselect the smoke test since it already ran above.
           echo "=== Running single-device tests (mandatory) ==="
-          pytest -m single_device -v -s --timeout=120 --deselect tests/test_pairing.py::TestPairing::test_app_launches_successfully
+          pytest -m "single_device and not headless" -v -s --timeout=120 --deselect tests/test_pairing.py::TestPairing::test_app_launches_successfully
           SINGLE_RESULT=$?
 
-          # ── Phase C: Multi-device pairing probe (informational) ──
+          # ── Phase C: Headless-paired tests (app + headless client) ──
+          # The headless client connects to the same signaling server as the app,
+          # replacing the second emulator. No TURN relay needed since the headless
+          # client speaks WebRTC natively.
+          HEADLESS_RESULT=0
+          if [ -n "$SIGNALING_URL" ]; then
+            echo "=== Running headless-paired tests ==="
+            pytest -m "headless and single_device" -v -s --timeout=300 || HEADLESS_RESULT=$?
+            if [ $HEADLESS_RESULT -ne 0 ]; then
+              echo "Note: Headless-paired tests failed (non-blocking for now)."
+            fi
+          else
+            echo "=== Skipping headless tests (SIGNALING_URL not set) ==="
+          fi
+
+          # ── Phase D: Multi-device pairing probe (informational) ──
           # P2P between emulators on CI requires TURN relay which isn't
           # configured yet. Run one pairing test as a connectivity probe
           # but don't fail the pipeline on it.

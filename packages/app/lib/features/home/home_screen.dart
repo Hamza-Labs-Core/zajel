@@ -289,7 +289,7 @@ class _PeerCard extends ConsumerWidget {
             ),
           ],
         ),
-        title: Text(peer.displayName),
+        title: Text(_displayName(ref)),
         subtitle: Text(
           _getStatusText(),
           style: TextStyle(
@@ -326,11 +326,36 @@ class _PeerCard extends ConsumerWidget {
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert),
               onSelected: (value) {
-                if (value == 'block') {
-                  _showBlockDialog(context, ref);
+                switch (value) {
+                  case 'rename':
+                    _showRenameDialog(context, ref);
+                  case 'delete':
+                    _showDeleteDialog(context, ref);
+                  case 'block':
+                    _showBlockDialog(context, ref);
                 }
               },
               itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'rename',
+                  child: Row(
+                    children: [
+                      Icon(Icons.edit),
+                      SizedBox(width: 8),
+                      Text('Rename'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'delete',
+                  child: Row(
+                    children: [
+                      Icon(Icons.delete_outline, color: Colors.red),
+                      SizedBox(width: 8),
+                      Text('Delete'),
+                    ],
+                  ),
+                ),
                 const PopupMenuItem(
                   value: 'block',
                   child: Row(
@@ -351,6 +376,97 @@ class _PeerCard extends ConsumerWidget {
         },
       ),
     );
+  }
+
+  String _displayName(WidgetRef ref) {
+    final aliases = ref.watch(peerAliasesProvider);
+    return aliases[peer.id] ?? peer.displayName;
+  }
+
+  Future<void> _showRenameDialog(BuildContext context, WidgetRef ref) async {
+    final controller = TextEditingController(text: _displayName(ref));
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename Peer'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Name',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (value) => Navigator.pop(context, value.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (newName != null && newName.isNotEmpty && newName != _displayName(ref)) {
+      final trustedPeers = ref.read(trustedPeersStorageProvider);
+      await trustedPeers.updateAlias(peer.id, newName);
+      // Update in-memory alias map for immediate UI refresh
+      final aliases = {...ref.read(peerAliasesProvider)};
+      aliases[peer.id] = newName;
+      ref.read(peerAliasesProvider.notifier).state = aliases;
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Renamed to $newName')),
+        );
+      }
+    }
+  }
+
+  Future<void> _showDeleteDialog(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Connection?'),
+        content: Text(
+          'Delete ${peer.displayName}? This will remove the conversation and connection.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      final trustedPeers = ref.read(trustedPeersStorageProvider);
+      await trustedPeers.removePeer(peer.id);
+      ref.read(chatMessagesProvider(peer.id).notifier).clearMessages();
+      final connectionManager = ref.read(connectionManagerProvider);
+      try {
+        await connectionManager.disconnectPeer(peer.id);
+      } catch (_) {
+        // Best-effort disconnect
+      }
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${peer.displayName} deleted')),
+        );
+      }
+    }
   }
 
   Future<void> _showBlockDialog(BuildContext context, WidgetRef ref) async {

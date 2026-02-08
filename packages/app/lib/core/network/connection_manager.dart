@@ -634,6 +634,13 @@ class ConnectionManager {
             }
             break;
           }
+          // Auto-accept reconnection from trusted (previously paired) peers
+          final isTrusted = await _trustedPeersStorage.isTrustedByPublicKey(fromPublicKey);
+          if (isTrusted) {
+            logger.info('ConnectionManager', 'Auto-accepting trusted peer $fromCode');
+            respondToPairRequest(fromCode, accept: true);
+            break;
+          }
           // In E2E test mode, auto-accept all pair requests
           if (Environment.isE2eTest) {
             logger.info('ConnectionManager', 'E2E mode: auto-accepting pair request from $fromCode');

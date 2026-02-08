@@ -256,28 +256,34 @@ class _MediaSettingsScreenState extends ConsumerState<MediaSettingsScreen> {
                   title: 'Background Blur',
                   icon: Icons.blur_on,
                   children: [
-                    ListTile(
-                      leading: Icon(Icons.blur_on,
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onSurfaceVariant),
+                    SwitchListTile(
                       title: const Text('Background Blur'),
-                      subtitle: const Text('Coming soon'),
-                      trailing: Chip(
-                        label: Text(
-                          'PLANNED',
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSecondaryContainer,
-                          ),
-                        ),
-                        backgroundColor: Theme.of(context)
-                            .colorScheme
-                            .secondaryContainer,
+                      subtitle: Text(
+                        ref.read(backgroundBlurProvider).isModelAvailable
+                            ? 'Blur your background during video calls'
+                            : 'Requires ML model (not yet installed)',
                       ),
+                      value: ref.read(backgroundBlurProvider).enabled,
+                      onChanged: (val) async {
+                        await ref.read(backgroundBlurProvider).setEnabled(val);
+                        setState(() {});
+                      },
                     ),
+                    if (ref.read(backgroundBlurProvider).enabled)
+                      ListTile(
+                        title: const Text('Blur Strength'),
+                        subtitle: Slider(
+                          value: ref.read(backgroundBlurProvider).strength,
+                          min: 0.0,
+                          max: 1.0,
+                          divisions: 10,
+                          label: '${(ref.read(backgroundBlurProvider).strength * 100).round()}%',
+                          onChanged: (val) async {
+                            await ref.read(backgroundBlurProvider).setStrength(val);
+                            setState(() {});
+                          },
+                        ),
+                      ),
                   ],
                 ),
                 const SizedBox(height: 16),

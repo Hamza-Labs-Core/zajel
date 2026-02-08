@@ -15,10 +15,12 @@ import '../network/server_discovery_service.dart';
 import '../network/signaling_client.dart'
     show SignalingClient, RendezvousResult, RendezvousPartial, RendezvousMatch;
 import '../network/webrtc_service.dart';
+import '../media/background_blur_processor.dart';
 import '../media/media_service.dart';
 import '../notifications/notification_service.dart';
 import '../network/voip_service.dart';
 import '../storage/file_receive_service.dart';
+import '../storage/message_storage.dart';
 import '../storage/trusted_peers_storage.dart';
 import '../storage/trusted_peers_storage_impl.dart';
 
@@ -235,19 +237,43 @@ final messagesStreamProvider = StreamProvider<(String, String)>((ref) {
   return connectionManager.messages;
 });
 
+/// Provider for message storage (SQLite).
+final messageStorageProvider = Provider<MessageStorage>((ref) {
+  final storage = MessageStorage();
+  ref.onDispose(() => storage.close());
+  return storage;
+});
+
 /// Provider for managing chat messages per peer.
 final chatMessagesProvider =
     StateNotifierProvider.family<ChatMessagesNotifier, List<Message>, String>(
-  (ref, peerId) => ChatMessagesNotifier(peerId),
+  (ref, peerId) {
+    final storage = ref.watch(messageStorageProvider);
+    return ChatMessagesNotifier(peerId, storage);
+  },
 );
 
 class ChatMessagesNotifier extends StateNotifier<List<Message>> {
   final String peerId;
+  final MessageStorage _storage;
+  bool _loaded = false;
 
-  ChatMessagesNotifier(this.peerId) : super([]);
+  ChatMessagesNotifier(this.peerId, this._storage) : super([]) {
+    _loadMessages();
+  }
+
+  Future<void> _loadMessages() async {
+    if (_loaded) return;
+    final messages = await _storage.getMessages(peerId);
+    if (mounted) {
+      state = messages;
+      _loaded = true;
+    }
+  }
 
   void addMessage(Message message) {
     state = [...state, message];
+    _storage.saveMessage(message);
   }
 
   void updateMessageStatus(String localId, MessageStatus status) {
@@ -257,12 +283,18 @@ class ChatMessagesNotifier extends StateNotifier<List<Message>> {
       }
       return m;
     }).toList();
+    _storage.updateMessageStatus(localId, status);
   }
 
   void clearMessages() {
     state = [];
+    _storage.deleteMessages(peerId);
   }
 }
+
+/// Provider for peer aliases (peerId -> alias).
+/// Loaded from TrustedPeersStorage and updated in-memory when user renames.
+final peerAliasesProvider = StateProvider<Map<String, String>>((ref) => {});
 
 /// Provider for the currently selected peer.
 final selectedPeerProvider = StateProvider<Peer?>((ref) => null);
@@ -504,6 +536,15 @@ final loggerServiceProvider = Provider<LoggerService>((ref) {
 /// Provider for notification service.
 final notificationServiceProvider = Provider<NotificationService>((ref) {
   return NotificationService();
+});
+
+/// Provider for background blur processor.
+final backgroundBlurProvider = Provider<BackgroundBlurProcessor>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  final processor = BackgroundBlurProcessor();
+  processor.initPreferences(prefs);
+  ref.onDispose(() => processor.dispose());
+  return processor;
 });
 
 /// Provider for media service.

@@ -139,6 +139,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Widget build(BuildContext context) {
     final peer = ref.watch(selectedPeerProvider);
     final messages = ref.watch(chatMessagesProvider(widget.peerId));
+    final aliases = ref.watch(peerAliasesProvider);
+    final peerName = (peer != null ? aliases[peer.id] : null) ?? peer?.displayName ?? 'Unknown';
 
     return Scaffold(
       appBar: AppBar(
@@ -149,8 +151,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               backgroundColor:
                   Theme.of(context).colorScheme.primaryContainer,
               child: Text(
-                peer?.displayName.isNotEmpty == true
-                    ? peer!.displayName[0].toUpperCase()
+                peerName.isNotEmpty
+                    ? peerName[0].toUpperCase()
                     : '?',
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.onPrimaryContainer,
@@ -164,7 +166,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    peer?.displayName ?? 'Unknown',
+                    peerName,
                     style: const TextStyle(fontSize: 16),
                   ),
                   Text(
@@ -192,9 +194,50 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             tooltip: 'Video call',
             onPressed: () => _startCall(withVideo: true),
           ),
-          IconButton(
-            icon: const Icon(Icons.info_outline),
-            onPressed: () => _showPeerInfo(context, peer),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) {
+              switch (value) {
+                case 'rename':
+                  _showRenameDialog(peer);
+                case 'delete':
+                  _showDeleteDialog(peer);
+                case 'info':
+                  _showPeerInfo(context, peer);
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'rename',
+                child: Row(
+                  children: [
+                    Icon(Icons.edit),
+                    SizedBox(width: 8),
+                    Text('Rename'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'delete',
+                child: Row(
+                  children: [
+                    Icon(Icons.delete_outline, color: Colors.red),
+                    SizedBox(width: 8),
+                    Text('Delete conversation'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'info',
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline),
+                    SizedBox(width: 8),
+                    Text('Info'),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -640,6 +683,91 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _showRenameDialog(Peer? peer) async {
+    if (peer == null) return;
+    final aliases = ref.read(peerAliasesProvider);
+    final currentName = aliases[peer.id] ?? peer.displayName;
+    final controller = TextEditingController(text: currentName);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rename Peer'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Name',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (value) => Navigator.pop(ctx, value.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (newName != null && newName.isNotEmpty && newName != currentName) {
+      final trustedPeers = ref.read(trustedPeersStorageProvider);
+      await trustedPeers.updateAlias(peer.id, newName);
+      final updatedAliases = {...ref.read(peerAliasesProvider)};
+      updatedAliases[peer.id] = newName;
+      ref.read(peerAliasesProvider.notifier).state = updatedAliases;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Renamed to $newName')),
+        );
+      }
+    }
+  }
+
+  Future<void> _showDeleteDialog(Peer? peer) async {
+    if (peer == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Conversation?'),
+        content: Text(
+          'Delete conversation with ${peer.displayName}? This will remove all messages and the connection.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      final trustedPeers = ref.read(trustedPeersStorageProvider);
+      await trustedPeers.removePeer(peer.id);
+      ref.read(chatMessagesProvider(peer.id).notifier).clearMessages();
+      final connectionManager = ref.read(connectionManagerProvider);
+      try {
+        await connectionManager.disconnectPeer(peer.id);
+      } catch (_) {}
+      if (mounted) {
+        Navigator.of(context).pop(); // Go back to home
+      }
+    }
   }
 
   String _getConnectionStatus(Peer? peer) {

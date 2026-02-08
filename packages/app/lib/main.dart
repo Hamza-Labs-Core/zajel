@@ -99,6 +99,21 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
       final cryptoService = ref.read(cryptoServiceProvider);
       await cryptoService.initialize();
 
+      logger.info('ZajelApp', 'Initializing message storage...');
+      final messageStorage = ref.read(messageStorageProvider);
+      await messageStorage.initialize();
+
+      // Load peer aliases from TrustedPeersStorage
+      final trustedPeers = ref.read(trustedPeersStorageProvider);
+      final allPeers = await trustedPeers.getAllPeers();
+      final aliases = <String, String>{};
+      for (final tp in allPeers) {
+        if (tp.alias != null) {
+          aliases[tp.id] = tp.alias!;
+        }
+      }
+      ref.read(peerAliasesProvider.notifier).state = aliases;
+
       logger.info('ZajelApp', 'Initializing connection manager...');
       final connectionManager = ref.read(connectionManagerProvider);
       await connectionManager.initialize();
@@ -121,8 +136,9 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
       await notificationService.initialize();
       await notificationService.requestPermission();
 
-      // Set up notification listeners for messages and files
+      // Set up notification listeners for messages, files, and peer status
       _setupNotificationListeners();
+      _setupPeerStatusNotifications();
 
       // Set up VoIP call listener for incoming calls from any screen
       _setupVoipCallListener();
@@ -542,6 +558,36 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
     });
   }
 
+  void _setupPeerStatusNotifications() {
+    final notificationService = ref.read(notificationServiceProvider);
+    final knownStates = <String, PeerConnectionState>{};
+
+    ref.listenManual(peersProvider, (previous, next) {
+      next.whenData((peers) {
+        for (final peer in peers) {
+          final prev = knownStates[peer.id];
+          final curr = peer.connectionState;
+          knownStates[peer.id] = curr;
+
+          // Only notify on transitions, not on initial load
+          if (prev == null) continue;
+
+          final wasOnline = prev == PeerConnectionState.connected;
+          final isOnline = curr == PeerConnectionState.connected;
+
+          if (wasOnline != isOnline) {
+            final settings = ref.read(notificationSettingsProvider);
+            notificationService.showPeerStatusNotification(
+              peerName: peer.displayName,
+              connected: isOnline,
+              settings: settings,
+            );
+          }
+        }
+      });
+    });
+  }
+
   void _setupVoipCallListener() {
     // Listen for VoIP service changes (becomes available after signaling connects)
     // We use ref.listen to reactively subscribe when voipService becomes available
@@ -555,6 +601,24 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
           if (state == CallState.incoming) {
             logger.info('ZajelApp', 'Incoming call detected, showing dialog');
             _showIncomingCallDialog();
+            // Show call notification
+            final call = next.currentCall;
+            if (call != null) {
+              final settings = ref.read(notificationSettingsProvider);
+              String callerName = call.peerId;
+              final peersAsync = ref.read(peersProvider);
+              peersAsync.whenData((peers) {
+                final peer = peers.where((p) => p.id == call.peerId).firstOrNull;
+                if (peer != null) callerName = peer.displayName;
+              });
+              final notificationService = ref.read(notificationServiceProvider);
+              notificationService.showCallNotification(
+                peerId: call.peerId,
+                peerName: callerName,
+                withVideo: call.withVideo,
+                settings: settings,
+              );
+            }
           } else if (_isIncomingCallDialogOpen &&
               (state == CallState.ended || state == CallState.connecting || state == CallState.idle)) {
             _dismissIncomingCallDialog();

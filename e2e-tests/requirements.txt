@@ -3,3 +3,4 @@ pytest>=7.0.0
 pytest-timeout>=2.0.0
 pytest-xdist>=3.0.0
 selenium>=4.0.0
+# zajel-headless-client: installed separately via pip install -e packages/headless-client
