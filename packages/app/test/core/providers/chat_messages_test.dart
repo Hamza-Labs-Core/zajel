@@ -116,8 +116,8 @@ void main() {
         ];
 
         when(() => mockStorage.getMessages(peerId,
-            limit: any(named: 'limit'),
-            offset: any(named: 'offset'))).thenAnswer((_) async => storedMessages);
+                limit: any(named: 'limit'), offset: any(named: 'offset')))
+            .thenAnswer((_) async => storedMessages);
 
         await notifier.reload();
 

@@ -183,7 +183,8 @@ void main() {
         expect(settings.isDndActive, isFalse);
       });
 
-      test('isDndActive is true when globalDnd is true and dndUntil is null', () {
+      test('isDndActive is true when globalDnd is true and dndUntil is null',
+          () {
         final settings = NotificationSettings(globalDnd: true);
         expect(settings.isDndActive, isTrue);
       });

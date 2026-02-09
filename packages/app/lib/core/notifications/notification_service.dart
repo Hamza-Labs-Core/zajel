@@ -53,8 +53,8 @@ class NotificationService {
         },
       );
       _initialized = true;
-      logger.info(
-          _tag, 'Notification service initialized (${Platform.operatingSystem})');
+      logger.info(_tag,
+          'Notification service initialized (${Platform.operatingSystem})');
     } catch (e) {
       logger.error(_tag, 'Failed to initialize notifications', e);
     }

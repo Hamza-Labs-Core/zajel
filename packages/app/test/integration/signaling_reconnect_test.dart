@@ -116,8 +116,7 @@ void main() {
     test('connected -> disconnected transition triggers reconnect-worthy state',
         () async {
       final reconnectTriggerStates = <SignalingConnectionState>[];
-      final subscription =
-          mockSignalingClient.connectionState.listen((state) {
+      final subscription = mockSignalingClient.connectionState.listen((state) {
         if (state == SignalingConnectionState.disconnected ||
             state == SignalingConnectionState.failed) {
           reconnectTriggerStates.add(state);
@@ -138,8 +137,7 @@ void main() {
     test('connected -> failed transition triggers reconnect-worthy state',
         () async {
       final reconnectTriggerStates = <SignalingConnectionState>[];
-      final subscription =
-          mockSignalingClient.connectionState.listen((state) {
+      final subscription = mockSignalingClient.connectionState.listen((state) {
         if (state == SignalingConnectionState.disconnected ||
             state == SignalingConnectionState.failed) {
           reconnectTriggerStates.add(state);
@@ -159,8 +157,7 @@ void main() {
 
     test('connecting and connected states do not trigger reconnect', () async {
       final reconnectTriggerStates = <SignalingConnectionState>[];
-      final subscription =
-          mockSignalingClient.connectionState.listen((state) {
+      final subscription = mockSignalingClient.connectionState.listen((state) {
         if (state == SignalingConnectionState.disconnected ||
             state == SignalingConnectionState.failed) {
           reconnectTriggerStates.add(state);
@@ -178,8 +175,7 @@ void main() {
 
     test('multiple disconnects emit multiple reconnect triggers', () async {
       final reconnectTriggerStates = <SignalingConnectionState>[];
-      final subscription =
-          mockSignalingClient.connectionState.listen((state) {
+      final subscription = mockSignalingClient.connectionState.listen((state) {
         if (state == SignalingConnectionState.disconnected ||
             state == SignalingConnectionState.failed) {
           reconnectTriggerStates.add(state);

@@ -151,8 +151,7 @@ class _ConversationSidebar extends ConsumerWidget {
     );
   }
 
-  Widget _buildPeerList(
-      BuildContext context, WidgetRef ref, List<Peer> peers) {
+  Widget _buildPeerList(BuildContext context, WidgetRef ref, List<Peer> peers) {
     if (peers.isEmpty) {
       return Center(
         child: Padding(
@@ -303,7 +302,8 @@ class _ConversationTile extends ConsumerWidget {
 
     return ListTile(
       selected: isSelected,
-      selectedTileColor: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.3),
+      selectedTileColor:
+          Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.3),
       leading: Stack(
         children: [
           CircleAvatar(

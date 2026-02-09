@@ -206,12 +206,12 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
 
           try {
             await _connectToSignaling(connectionManager);
-            logger.info('ZajelApp', 'Signaling reconnected on attempt $attempt');
+            logger.info(
+                'ZajelApp', 'Signaling reconnected on attempt $attempt');
             _isReconnecting = false;
             return;
           } catch (e) {
-            logger.warning(
-                'ZajelApp', 'Reconnect attempt $attempt failed: $e');
+            logger.warning('ZajelApp', 'Reconnect attempt $attempt failed: $e');
           }
 
           delay = Duration(

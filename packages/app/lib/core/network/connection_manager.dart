@@ -172,7 +172,6 @@ class ConnectionManager {
   /// Stream of incoming messages (peerId, plaintext).
   Stream<(String, String)> get messages => _messagesController.stream;
 
-
   /// Stream of incoming file chunks.
   Stream<(String, String, Uint8List, int, int)> get fileChunks =>
       _fileChunksController.stream;
