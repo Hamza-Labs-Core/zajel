@@ -1,0 +1,183 @@
+name: Deploy VPS Server (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Deployment environment (production, qa)'
+        required: true
+        type: string
+        default: 'production'
+      version:
+        description: 'Version tag to deploy'
+        required: false
+        type: string
+        default: ''
+      port:
+        description: 'Port for the server (9000=prod, 9001=qa)'
+        required: false
+        type: number
+        default: 9000
+      skip_lock:
+        description: 'Skip deployment lock check'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      VPS_USER:
+        required: true
+      VPS_SSH_KEY:
+        required: true
+      VPS_PORT:
+        required: false
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      artifact-name: ${{ steps.build.outputs.artifact-name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: packages/server-vps/package-lock.json
+
+      - name: Install dependencies
+        working-directory: packages/server-vps
+        run: npm ci
+
+      - name: Run tests
+        working-directory: packages/server-vps
+        run: npm test -- --run
+
+      - name: Build
+        working-directory: packages/server-vps
+        run: npm run build
+
+      - name: Create artifact
+        id: build
+        run: |
+          ARTIFACT_NAME="server-vps-${{ inputs.environment }}-${{ github.run_id }}"
+          echo "artifact-name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.artifact-name }}
+          path: |
+            packages/server-vps/dist
+            packages/server-vps/package.json
+            packages/server-vps/package-lock.json
+            packages/server-vps/migrations
+          retention-days: 1
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.deploy.outcome }}
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact-name }}
+          path: deploy
+
+      - name: Acquire lock
+        if: ${{ !inputs.skip_lock }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ vars.VPS_SERVERS }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            # Wait for E2E tests to complete
+            for i in {1..30}; do
+              if [ ! -f "/tmp/zajel-e2e.lock" ]; then
+                break
+              fi
+              echo "Waiting for E2E tests... ($i/30)"
+              sleep 10
+            done
+
+            echo "DEPLOY-${{ github.run_id }}" > /tmp/zajel-deploy.lock
+
+      - name: Deploy
+        id: deploy
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ vars.VPS_SERVERS }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          source: "deploy/*"
+          target: "/opt/zajel/server-vps-${{ inputs.environment }}"
+          strip_components: 1
+
+      - name: Start server
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          PORT: ${{ inputs.port }}
+          ENV: ${{ inputs.environment }}
+          VERSION: ${{ inputs.version || github.sha }}
+        with:
+          host: ${{ vars.VPS_SERVERS }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          envs: PORT,ENV,VERSION
+          script: |
+            set -e
+            cd /opt/zajel/server-vps-$ENV
+
+            npm ci --omit=dev
+            mkdir -p data-$ENV
+
+            PUBLIC_IP=$(curl -sf http://checkip.amazonaws.com || curl -sf http://ifconfig.me || echo "localhost")
+
+            cat > start-$ENV.sh << EOF
+            #!/bin/bash
+            export ZAJEL_PORT=$PORT
+            export ZAJEL_KEY_PATH=./data-$ENV/server.key
+            export ZAJEL_DB_PATH=./data-$ENV/zajel.db
+            export ZAJEL_PUBLIC_ENDPOINT=ws://${PUBLIC_IP}:$PORT
+            export ZAJEL_REGION=auto
+            export NODE_ENV=$ENV
+            export APP_VERSION=$VERSION
+            cd /opt/zajel/server-vps-$ENV
+            exec node dist/index.js
+            EOF
+            chmod +x start-$ENV.sh
+
+            pm2 delete zajel-server-$ENV 2>/dev/null || true
+            pm2 start start-$ENV.sh --name zajel-server-$ENV --interpreter bash
+            pm2 save
+
+            # Health check
+            sleep 5
+            for i in {1..6}; do
+              if curl -sf http://localhost:$PORT/health | grep -q "healthy"; then
+                echo "Server healthy"
+                exit 0
+              fi
+              sleep 5
+            done
+            exit 1
+
+      - name: Release lock
+        if: always()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ vars.VPS_SERVERS }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: rm -f /tmp/zajel-deploy.lock

@@ -176,8 +176,7 @@ void main() {
     group('periodic load reporting', () {
       test('should report load periodically', () {
         fakeAsync((async) {
-          client.startPeriodicLoadReporting(
-              interval: Duration(seconds: 30));
+          client.startPeriodicLoadReporting(interval: Duration(seconds: 30));
 
           // Advance time by 2 minutes
           async.elapse(Duration(minutes: 2));
@@ -190,11 +189,11 @@ void main() {
         });
       });
 
-      test('should stop periodic reporting when stopPeriodicLoadReporting is called',
+      test(
+          'should stop periodic reporting when stopPeriodicLoadReporting is called',
           () {
         fakeAsync((async) {
-          client.startPeriodicLoadReporting(
-              interval: Duration(seconds: 30));
+          client.startPeriodicLoadReporting(interval: Duration(seconds: 30));
 
           // Advance 1 minute
           async.elapse(Duration(minutes: 1));
@@ -212,15 +211,13 @@ void main() {
 
       test('should restart periodic reporting with new interval', () {
         fakeAsync((async) {
-          client.startPeriodicLoadReporting(
-              interval: Duration(seconds: 30));
+          client.startPeriodicLoadReporting(interval: Duration(seconds: 30));
 
           async.elapse(Duration(seconds: 60));
           expect(sentSignalingMessages.length, equals(2));
 
           // Restart with shorter interval
-          client.startPeriodicLoadReporting(
-              interval: Duration(seconds: 10));
+          client.startPeriodicLoadReporting(interval: Duration(seconds: 10));
           sentSignalingMessages.clear();
 
           async.elapse(Duration(seconds: 60));

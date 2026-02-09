@@ -1,0 +1,24 @@
+{
+  // Zajel Website - Cloudflare Workers Static Assets
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "zajel-website",
+  "compatibility_date": "2024-12-30",
+  "assets": {
+    "directory": "./build/client"
+  },
+
+  // Custom domain for production
+  "routes": [
+    { "pattern": "zajel.hamzalabs.dev", "custom_domain": true }
+  ],
+
+  // QA Environment for PR testing
+  "env": {
+    "qa": {
+      "name": "zajel-website-qa",
+      "routes": [
+        { "pattern": "zajel.qa.hamzalabs.dev", "custom_domain": true }
+      ]
+    }
+  }
+}

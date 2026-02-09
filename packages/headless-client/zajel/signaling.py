@@ -1,0 +1,423 @@
+"""WebSocket signaling client for the Zajel protocol.
+
+Handles:
+- Connection registration (pairing code + public key)
+- Pairing flow (request, accept/reject, match)
+- WebRTC signaling relay (offer, answer, ICE candidates)
+- Call signaling (offer, answer, reject, hangup, ICE)
+- Rendezvous registration for trusted peer reconnection
+- Heartbeat keepalive
+"""
+
+import asyncio
+import json
+import logging
+import random
+import string
+from dataclasses import dataclass, field
+from typing import Any, Callable, Coroutine, Optional
+
+import websockets
+from websockets.asyncio.client import ClientConnection
+
+logger = logging.getLogger("zajel.signaling")
+
+# Pairing code character set (same as Dart app)
+PAIRING_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+PAIRING_CODE_LENGTH = 6
+HEARTBEAT_INTERVAL = 30  # seconds
+
+
+def generate_pairing_code() -> str:
+    """Generate a random 6-character pairing code."""
+    return "".join(random.choices(PAIRING_CODE_CHARS, k=PAIRING_CODE_LENGTH))
+
+
+@dataclass
+class PairRequest:
+    """Incoming pair request from another peer."""
+
+    from_code: str
+    from_public_key: str
+    proposed_name: Optional[str] = None
+
+
+@dataclass
+class PairMatch:
+    """Successful pair match."""
+
+    peer_code: str
+    peer_public_key: str
+    is_initiator: bool
+
+
+@dataclass
+class WebRTCSignal:
+    """WebRTC signaling message (offer, answer, or ICE candidate)."""
+
+    signal_type: str  # "offer", "answer", "ice_candidate"
+    from_code: str
+    payload: dict
+
+
+@dataclass
+class CallSignal:
+    """Call signaling message."""
+
+    signal_type: str  # "call_offer", "call_answer", "call_reject", "call_hangup", "call_ice"
+    from_code: str
+    payload: dict
+
+
+@dataclass
+class RendezvousMatch:
+    """A rendezvous match for trusted peer reconnection."""
+
+    peer_id: str
+    relay_id: Optional[str] = None
+    meeting_point: Optional[str] = None
+
+
+EventHandler = Callable[..., Coroutine[Any, Any, None]]
+
+
+class SignalingClient:
+    """WebSocket-based signaling client for the Zajel protocol."""
+
+    def __init__(self, url: str, pairing_code: Optional[str] = None):
+        self.url = url
+        self.pairing_code = pairing_code or generate_pairing_code()
+        self._ws: Optional[ClientConnection] = None
+        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._receive_task: Optional[asyncio.Task] = None
+        self._connected = asyncio.Event()
+        self._registered = asyncio.Event()
+
+        # Event queues
+        self._pair_requests: asyncio.Queue[PairRequest] = asyncio.Queue()
+        self._pair_matches: asyncio.Queue[PairMatch] = asyncio.Queue()
+        self._pair_rejections: asyncio.Queue[str] = asyncio.Queue()
+        self._webrtc_signals: asyncio.Queue[WebRTCSignal] = asyncio.Queue()
+        self._call_signals: asyncio.Queue[CallSignal] = asyncio.Queue()
+        self._rendezvous_matches: asyncio.Queue[RendezvousMatch] = asyncio.Queue()
+        self._errors: asyncio.Queue[str] = asyncio.Queue()
+
+        # Callbacks
+        self._on_pair_request: Optional[EventHandler] = None
+        self._on_pair_match: Optional[EventHandler] = None
+        self._on_webrtc_signal: Optional[EventHandler] = None
+        self._on_call_signal: Optional[EventHandler] = None
+        self._on_disconnect: Optional[EventHandler] = None
+
+    @property
+    def is_connected(self) -> bool:
+        return self._ws is not None and self._connected.is_set()
+
+    async def connect(self, public_key_b64: str) -> str:
+        """Connect to the signaling server and register.
+
+        Args:
+            public_key_b64: Our X25519 public key (base64).
+
+        Returns:
+            Our pairing code.
+        """
+        logger.info("Connecting to %s with code %s", self.url, self.pairing_code)
+        self._ws = await websockets.connect(self.url)
+        self._connected.set()
+
+        # Start message receiver
+        self._receive_task = asyncio.create_task(self._receive_loop())
+
+        # Register
+        await self._send({
+            "type": "register",
+            "pairingCode": self.pairing_code,
+            "publicKey": public_key_b64,
+        })
+
+        # Start heartbeat
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
+        logger.info("Connected and registered as %s", self.pairing_code)
+        return self.pairing_code
+
+    async def disconnect(self) -> None:
+        """Disconnect from the signaling server."""
+        logger.info("Disconnecting from signaling server")
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            self._heartbeat_task = None
+        if self._receive_task:
+            self._receive_task.cancel()
+            self._receive_task = None
+        if self._ws:
+            await self._ws.close()
+            self._ws = None
+        self._connected.clear()
+
+    # ── Pairing ──────────────────────────────────────────────
+
+    async def pair_with(self, target_code: str, proposed_name: Optional[str] = None) -> None:
+        """Send a pair request to another peer."""
+        msg: dict[str, Any] = {
+            "type": "pair_request",
+            "targetCode": target_code,
+        }
+        if proposed_name:
+            msg["proposedName"] = proposed_name
+        await self._send(msg)
+        logger.info("Sent pair request to %s", target_code)
+
+    async def respond_to_pair(self, target_code: str, accept: bool) -> None:
+        """Accept or reject an incoming pair request."""
+        await self._send({
+            "type": "pair_response",
+            "targetCode": target_code,
+            "accepted": accept,
+        })
+        logger.info("Responded to pair from %s: %s", target_code, "accept" if accept else "reject")
+
+    async def wait_for_pair_request(self, timeout: float = 60) -> PairRequest:
+        """Wait for an incoming pair request."""
+        return await asyncio.wait_for(self._pair_requests.get(), timeout=timeout)
+
+    async def wait_for_pair_match(self, timeout: float = 60) -> PairMatch:
+        """Wait for a pair match (after both sides accept)."""
+        return await asyncio.wait_for(self._pair_matches.get(), timeout=timeout)
+
+    # ── WebRTC Signaling ─────────────────────────────────────
+
+    async def send_offer(self, target: str, sdp: str) -> None:
+        """Send a WebRTC offer."""
+        await self._send({
+            "type": "offer",
+            "target": target,
+            "payload": {"type": "offer", "sdp": sdp},
+        })
+
+    async def send_answer(self, target: str, sdp: str) -> None:
+        """Send a WebRTC answer."""
+        await self._send({
+            "type": "answer",
+            "target": target,
+            "payload": {"type": "answer", "sdp": sdp},
+        })
+
+    async def send_ice_candidate(self, target: str, candidate: dict) -> None:
+        """Send an ICE candidate."""
+        await self._send({
+            "type": "ice_candidate",
+            "target": target,
+            "payload": candidate,
+        })
+
+    async def wait_for_webrtc_signal(self, timeout: float = 30) -> WebRTCSignal:
+        """Wait for a WebRTC signal (offer, answer, or ICE)."""
+        return await asyncio.wait_for(self._webrtc_signals.get(), timeout=timeout)
+
+    # ── Call Signaling ───────────────────────────────────────
+
+    async def send_call_offer(
+        self, call_id: str, target: str, sdp: str, with_video: bool
+    ) -> None:
+        """Send a call offer."""
+        await self._send({
+            "type": "call_offer",
+            "target": target,
+            "payload": {
+                "callId": call_id,
+                "sdp": sdp,
+                "withVideo": with_video,
+            },
+        })
+
+    async def send_call_answer(self, call_id: str, target: str, sdp: str) -> None:
+        """Send a call answer."""
+        await self._send({
+            "type": "call_answer",
+            "target": target,
+            "payload": {"callId": call_id, "sdp": sdp},
+        })
+
+    async def send_call_reject(
+        self, call_id: str, target: str, reason: str = "declined"
+    ) -> None:
+        """Send a call rejection."""
+        await self._send({
+            "type": "call_reject",
+            "target": target,
+            "payload": {"callId": call_id, "reason": reason},
+        })
+
+    async def send_call_hangup(self, call_id: str, target: str) -> None:
+        """Send a call hangup."""
+        await self._send({
+            "type": "call_hangup",
+            "target": target,
+            "payload": {"callId": call_id},
+        })
+
+    async def send_call_ice(self, call_id: str, target: str, candidate: str) -> None:
+        """Send a call ICE candidate."""
+        await self._send({
+            "type": "call_ice",
+            "target": target,
+            "payload": {"callId": call_id, "candidate": candidate},
+        })
+
+    async def wait_for_call_signal(self, timeout: float = 30) -> CallSignal:
+        """Wait for a call signal."""
+        return await asyncio.wait_for(self._call_signals.get(), timeout=timeout)
+
+    # ── Rendezvous ───────────────────────────────────────────
+
+    async def register_rendezvous(
+        self,
+        peer_id: str,
+        daily_points: list[str],
+        hourly_tokens: list[str],
+        dead_drops: Optional[dict] = None,
+    ) -> None:
+        """Register meeting points for trusted peer reconnection."""
+        await self._send({
+            "type": "register_rendezvous",
+            "peerId": peer_id,
+            "daily_points": daily_points,
+            "hourly_tokens": hourly_tokens,
+            "dead_drops": dead_drops or {},
+        })
+
+    async def wait_for_rendezvous_match(self, timeout: float = 60) -> RendezvousMatch:
+        """Wait for a rendezvous match."""
+        return await asyncio.wait_for(self._rendezvous_matches.get(), timeout=timeout)
+
+    # ── Internal ─────────────────────────────────────────────
+
+    async def _send(self, msg: dict) -> None:
+        if self._ws is None:
+            raise RuntimeError("Not connected")
+        data = json.dumps(msg)
+        logger.debug("TX: %s", data[:200])
+        await self._ws.send(data)
+
+    async def _heartbeat_loop(self) -> None:
+        try:
+            while self._connected.is_set():
+                await asyncio.sleep(HEARTBEAT_INTERVAL)
+                if self._ws:
+                    await self._send({"type": "ping"})
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("Heartbeat error: %s", e)
+
+    async def _receive_loop(self) -> None:
+        try:
+            async for raw in self._ws:
+                try:
+                    msg = json.loads(raw)
+                    await self._handle_message(msg)
+                except json.JSONDecodeError:
+                    logger.warning("Non-JSON message: %s", raw[:100])
+        except websockets.ConnectionClosed:
+            logger.info("WebSocket connection closed")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("Receive loop error: %s", e)
+        finally:
+            self._connected.clear()
+            if self._on_disconnect:
+                await self._on_disconnect()
+
+    async def _handle_message(self, msg: dict) -> None:
+        msg_type = msg.get("type", "")
+        logger.debug("RX: %s", msg_type)
+
+        match msg_type:
+            case "registered":
+                self._registered.set()
+
+            case "pong":
+                pass  # Heartbeat response
+
+            case "pair_incoming":
+                req = PairRequest(
+                    from_code=msg["fromCode"],
+                    from_public_key=msg["fromPublicKey"],
+                    proposed_name=msg.get("proposedName"),
+                )
+                await self._pair_requests.put(req)
+                if self._on_pair_request:
+                    await self._on_pair_request(req)
+
+            case "pair_matched":
+                match = PairMatch(
+                    peer_code=msg["peerCode"],
+                    peer_public_key=msg["peerPublicKey"],
+                    is_initiator=msg["isInitiator"],
+                )
+                await self._pair_matches.put(match)
+                if self._on_pair_match:
+                    await self._on_pair_match(match)
+
+            case "pair_rejected":
+                await self._pair_rejections.put(msg["peerCode"])
+
+            case "pair_timeout":
+                logger.warning("Pair timeout for %s", msg.get("peerCode"))
+
+            case "pair_error":
+                logger.error("Pair error: %s", msg.get("error"))
+                await self._errors.put(msg.get("error", "unknown"))
+
+            case "offer" | "answer" | "ice_candidate":
+                signal = WebRTCSignal(
+                    signal_type=msg_type,
+                    from_code=msg["from"],
+                    payload=msg["payload"],
+                )
+                await self._webrtc_signals.put(signal)
+                if self._on_webrtc_signal:
+                    await self._on_webrtc_signal(signal)
+
+            case "call_offer" | "call_answer" | "call_reject" | "call_hangup" | "call_ice":
+                signal = CallSignal(
+                    signal_type=msg_type,
+                    from_code=msg["from"],
+                    payload=msg["payload"],
+                )
+                await self._call_signals.put(signal)
+                if self._on_call_signal:
+                    await self._on_call_signal(signal)
+
+            case "rendezvous_result":
+                for m in msg.get("liveMatches", []):
+                    await self._rendezvous_matches.put(
+                        RendezvousMatch(peer_id=m["peerId"], relay_id=m.get("relayId"))
+                    )
+
+            case "rendezvous_partial":
+                local = msg.get("local", {})
+                for m in local.get("liveMatches", []):
+                    await self._rendezvous_matches.put(
+                        RendezvousMatch(peer_id=m["peerId"], relay_id=m.get("relayId"))
+                    )
+
+            case "rendezvous_match":
+                m = msg.get("match", msg)
+                await self._rendezvous_matches.put(
+                    RendezvousMatch(
+                        peer_id=m["peerId"],
+                        relay_id=m.get("relayId"),
+                        meeting_point=m.get("meetingPoint"),
+                    )
+                )
+
+            case "error":
+                logger.error("Server error: %s", msg.get("message"))
+                await self._errors.put(msg.get("message", "unknown"))
+
+            case _:
+                logger.debug("Unhandled message type: %s", msg_type)

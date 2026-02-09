@@ -9,12 +9,13 @@ import '../logging/logger_service.dart';
 import '../models/peer.dart';
 
 import '../constants.dart';
+
 /// Callback types for WebRTC events.
 typedef OnMessageCallback = void Function(String peerId, String message);
 typedef OnFileChunkCallback = void Function(
     String peerId, String fileId, Uint8List chunk, int chunkIndex, int total);
-typedef OnFileStartCallback = void Function(
-    String peerId, String fileId, String fileName, int totalSize, int totalChunks);
+typedef OnFileStartCallback = void Function(String peerId, String fileId,
+    String fileName, int totalSize, int totalChunks);
 typedef OnFileCompleteCallback = void Function(String peerId, String fileId);
 typedef OnConnectionStateCallback = void Function(
     String peerId, PeerConnectionState state);
@@ -43,16 +44,21 @@ class SignalingEvent {
 /// 3. Perform cryptographic handshake over data channel
 /// 4. Exchange encrypted messages
 class WebRTCService {
-  static const String _messageChannelLabel = WebRTCConstants.messageChannelLabel;
+  static const String _messageChannelLabel =
+      WebRTCConstants.messageChannelLabel;
   static const String _fileChannelLabel = WebRTCConstants.fileChannelLabel;
 
   final CryptoService _cryptoService;
 
   // ICE servers for NAT traversal
   final List<Map<String, dynamic>> _iceServers;
+  final bool _forceRelay;
 
   // Active connections
   final Map<String, _PeerConnection> _connections = {};
+
+  // Queued ICE candidates that arrived before the connection was ready
+  final Map<String, List<Map<String, dynamic>>> _pendingCandidates = {};
 
   // Stream-based signaling events to avoid race conditions
   // when multiple connections are attempted simultaneously.
@@ -76,7 +82,9 @@ class WebRTCService {
   WebRTCService({
     required CryptoService cryptoService,
     List<Map<String, dynamic>>? iceServers,
+    bool forceRelay = false,
   })  : _cryptoService = cryptoService,
+        _forceRelay = forceRelay,
         _iceServers = iceServers ??
             [
               // Google's public STUN servers
@@ -93,13 +101,13 @@ class WebRTCService {
 
     // Create and set local description with timeout to prevent hanging
     final offer = await connection.pc.createOffer().timeout(
-      WebRTCConstants.operationTimeout,
-      onTimeout: () => throw WebRTCException('createOffer timeout'),
-    );
+          WebRTCConstants.operationTimeout,
+          onTimeout: () => throw WebRTCException('createOffer timeout'),
+        );
     await connection.pc.setLocalDescription(offer).timeout(
-      WebRTCConstants.operationTimeout,
-      onTimeout: () => throw WebRTCException('setLocalDescription timeout'),
-    );
+          WebRTCConstants.operationTimeout,
+          onTimeout: () => throw WebRTCException('setLocalDescription timeout'),
+        );
 
     return {
       'type': 'offer',
@@ -115,22 +123,28 @@ class WebRTCService {
     final connection = await _createConnection(peerId);
 
     // Set remote description with timeout to prevent hanging
-    await connection.pc.setRemoteDescription(
-      RTCSessionDescription(offer['sdp'] as String, 'offer'),
-    ).timeout(
-      WebRTCConstants.operationTimeout,
-      onTimeout: () => throw WebRTCException('setRemoteDescription timeout'),
-    );
+    await connection.pc
+        .setRemoteDescription(
+          RTCSessionDescription(offer['sdp'] as String, 'offer'),
+        )
+        .timeout(
+          WebRTCConstants.operationTimeout,
+          onTimeout: () =>
+              throw WebRTCException('setRemoteDescription timeout'),
+        );
+
+    // Flush any ICE candidates that arrived while we were setting up
+    await _flushPendingCandidates(peerId, connection);
 
     // Create and set local description with timeout to prevent hanging
     final answer = await connection.pc.createAnswer().timeout(
-      WebRTCConstants.operationTimeout,
-      onTimeout: () => throw WebRTCException('createAnswer timeout'),
-    );
+          WebRTCConstants.operationTimeout,
+          onTimeout: () => throw WebRTCException('createAnswer timeout'),
+        );
     await connection.pc.setLocalDescription(answer).timeout(
-      WebRTCConstants.operationTimeout,
-      onTimeout: () => throw WebRTCException('setLocalDescription timeout'),
-    );
+          WebRTCConstants.operationTimeout,
+          onTimeout: () => throw WebRTCException('setLocalDescription timeout'),
+        );
 
     return {
       'type': 'answer',
@@ -149,12 +163,15 @@ class WebRTCService {
     }
 
     // Set remote description with timeout to prevent hanging
-    await connection.pc.setRemoteDescription(
-      RTCSessionDescription(answer['sdp'] as String, 'answer'),
-    ).timeout(
-      WebRTCConstants.operationTimeout,
-      onTimeout: () => throw WebRTCException('setRemoteDescription timeout'),
-    );
+    await connection.pc
+        .setRemoteDescription(
+          RTCSessionDescription(answer['sdp'] as String, 'answer'),
+        )
+        .timeout(
+          WebRTCConstants.operationTimeout,
+          onTimeout: () =>
+              throw WebRTCException('setRemoteDescription timeout'),
+        );
   }
 
   /// Add an ICE candidate from signaling.
@@ -164,21 +181,51 @@ class WebRTCService {
   ) async {
     final connection = _connections[peerId];
     if (connection == null) {
-      // Queue candidate for later if connection doesn't exist yet
+      // Queue candidate — connection is still being set up (handleOffer in progress)
+      logger.debug('WebRTCService',
+          'Queuing ICE candidate for $peerId (connection not ready)');
+      _pendingCandidates.putIfAbsent(peerId, () => []).add(candidate);
       return;
     }
 
     // Add ICE candidate with timeout to prevent hanging
-    await connection.pc.addCandidate(
-      RTCIceCandidate(
-        candidate['candidate'] as String?,
-        candidate['sdpMid'] as String?,
-        candidate['sdpMLineIndex'] as int?,
-      ),
-    ).timeout(
-      WebRTCConstants.operationTimeout,
-      onTimeout: () => throw WebRTCException('addIceCandidate timeout'),
-    );
+    await connection.pc
+        .addCandidate(
+          RTCIceCandidate(
+            candidate['candidate'] as String?,
+            candidate['sdpMid'] as String?,
+            candidate['sdpMLineIndex'] as int?,
+          ),
+        )
+        .timeout(
+          WebRTCConstants.operationTimeout,
+          onTimeout: () => throw WebRTCException('addIceCandidate timeout'),
+        );
+  }
+
+  /// Flush queued ICE candidates that arrived before the connection was ready.
+  Future<void> _flushPendingCandidates(
+      String peerId, _PeerConnection connection) async {
+    final pending = _pendingCandidates.remove(peerId);
+    if (pending == null || pending.isEmpty) return;
+
+    logger.debug('WebRTCService',
+        'Flushing ${pending.length} queued ICE candidates for $peerId');
+    for (final candidate in pending) {
+      await connection.pc
+          .addCandidate(
+            RTCIceCandidate(
+              candidate['candidate'] as String?,
+              candidate['sdpMid'] as String?,
+              candidate['sdpMLineIndex'] as int?,
+            ),
+          )
+          .timeout(
+            WebRTCConstants.operationTimeout,
+            onTimeout: () =>
+                throw WebRTCException('addIceCandidate (flush) timeout'),
+          );
+    }
   }
 
   /// Send an encrypted message to a peer.
@@ -270,6 +317,7 @@ class WebRTCService {
 
   /// Close connection to a peer.
   Future<void> closeConnection(String peerId) async {
+    _pendingCandidates.remove(peerId);
     final connection = _connections.remove(peerId);
     if (connection != null) {
       await connection.messageChannel?.close();
@@ -301,6 +349,9 @@ class WebRTCService {
     final config = {
       'iceServers': _iceServers,
       'sdpSemantics': 'unified-plan',
+      // In E2E mode with TURN, force relay to avoid wasting time on
+      // unreachable host/srflx candidates between emulators.
+      if (_forceRelay) 'iceTransportPolicy': 'relay',
     };
 
     final pc = await createPeerConnection(config);
@@ -327,7 +378,8 @@ class WebRTCService {
         };
 
         // Emit to stream (preferred approach - no race conditions)
-        _signalingController.add(SignalingEvent(peerId: peerId, message: message));
+        _signalingController
+            .add(SignalingEvent(peerId: peerId, message: message));
 
         // Also call deprecated callback for backward compatibility
         // ignore: deprecated_member_use_from_same_package
@@ -335,8 +387,20 @@ class WebRTCService {
       }
     };
 
+    // ICE connection state handler
+    connection.pc.onIceConnectionState = (state) {
+      logger.debug('WebRTCService', 'ICE connection state for $peerId: $state');
+    };
+
+    // ICE gathering state handler
+    connection.pc.onIceGatheringState = (state) {
+      logger.debug('WebRTCService', 'ICE gathering state for $peerId: $state');
+    };
+
     // Connection state handler
     connection.pc.onConnectionState = (state) {
+      logger.debug(
+          'WebRTCService', 'Peer connection state for $peerId: $state');
       switch (state) {
         case RTCPeerConnectionState.RTCPeerConnectionStateConnecting:
           _updateConnectionState(connection, PeerConnectionState.connecting);
@@ -447,7 +511,8 @@ class WebRTCService {
       // Intentionally silenced for connection resilience.
       // Decryption failures may occur during handshake transitions or
       // when receiving malformed data. Logging for debugging only.
-      logger.debug('WebRTCService', 'Message decryption failed for $peerId: $e');
+      logger.debug(
+          'WebRTCService', 'Message decryption failed for $peerId: $e');
     }
   }
 
@@ -498,6 +563,8 @@ class WebRTCService {
     _PeerConnection connection,
     PeerConnectionState state,
   ) {
+    logger.info('WebRTCService',
+        'Connection state for ${connection.peerId}: ${state.name}');
     connection.state = state;
     onConnectionStateChange?.call(connection.peerId, state);
   }

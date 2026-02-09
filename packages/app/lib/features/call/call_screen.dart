@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../../core/media/media_service.dart';
+import '../../core/models/media_device.dart';
 import '../../core/network/voip_service.dart';
 
 /// Full-screen call interface for VoIP calls.
@@ -23,11 +24,15 @@ class CallScreen extends StatefulWidget {
   /// Display name of the remote peer.
   final String peerName;
 
+  /// Whether video should be enabled initially.
+  final bool initialVideoOn;
+
   const CallScreen({
     super.key,
     required this.voipService,
     required this.mediaService,
     required this.peerName,
+    this.initialVideoOn = false,
   });
 
   @override
@@ -39,7 +44,7 @@ class _CallScreenState extends State<CallScreen> {
   final _remoteRenderer = RTCVideoRenderer();
 
   bool _isMuted = false;
-  bool _isVideoOn = true;
+  late bool _isVideoOn = widget.initialVideoOn;
   Duration _duration = Duration.zero;
   Timer? _durationTimer;
   bool _renderersInitialized = false;
@@ -287,6 +292,13 @@ class _CallScreenState extends State<CallScreen> {
           onPressed: () => widget.voipService.switchCamera(),
         ),
 
+        // Settings
+        _ControlButton(
+          icon: Icons.settings,
+          label: 'Devices',
+          onPressed: () => _showDeviceSettings(),
+        ),
+
         // Hangup
         _ControlButton(
           icon: Icons.call_end,
@@ -295,6 +307,16 @@ class _CallScreenState extends State<CallScreen> {
           onPressed: () => widget.voipService.hangup(),
         ),
       ],
+    );
+  }
+
+  Future<void> _showDeviceSettings() async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => _InCallDeviceSheet(
+        mediaService: widget.mediaService,
+      ),
     );
   }
 
@@ -338,7 +360,9 @@ class _ControlButton extends StatelessWidget {
       children: [
         FloatingActionButton(
           heroTag: 'control_$label',
-          backgroundColor: color ?? (isActive ? Colors.white24 : Colors.white10),
+          tooltip: label,
+          backgroundColor:
+              color ?? (isActive ? Colors.white24 : Colors.white10),
           onPressed: onPressed,
           child: Icon(icon, color: Colors.white),
         ),
@@ -348,6 +372,201 @@ class _ControlButton extends StatelessWidget {
           style: const TextStyle(color: Colors.white70, fontSize: 12),
         ),
       ],
+    );
+  }
+}
+
+/// Bottom sheet for switching devices during an active call.
+class _InCallDeviceSheet extends StatefulWidget {
+  final MediaService mediaService;
+
+  const _InCallDeviceSheet({required this.mediaService});
+
+  @override
+  State<_InCallDeviceSheet> createState() => _InCallDeviceSheetState();
+}
+
+class _InCallDeviceSheetState extends State<_InCallDeviceSheet> {
+  List<MediaDevice> _audioInputs = [];
+  List<MediaDevice> _audioOutputs = [];
+  List<MediaDevice> _videoInputs = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDevices();
+  }
+
+  Future<void> _loadDevices() async {
+    final results = await Future.wait([
+      widget.mediaService.getAudioInputs(),
+      widget.mediaService.getAudioOutputs(),
+      widget.mediaService.getVideoInputs(),
+    ]);
+    if (mounted) {
+      setState(() {
+        _audioInputs = results[0];
+        _audioOutputs = results[1];
+        _videoInputs = results[2];
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.5,
+      minChildSize: 0.3,
+      maxChildSize: 0.8,
+      expand: false,
+      builder: (context, scrollController) => Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                const Icon(Icons.settings),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Text(
+                    'Device Settings',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          if (_loading)
+            const Expanded(child: Center(child: CircularProgressIndicator()))
+          else
+            Expanded(
+              child: ListView(
+                controller: scrollController,
+                padding: const EdgeInsets.all(16),
+                children: [
+                  if (_audioInputs.isNotEmpty) ...[
+                    _sectionHeader('Microphone'),
+                    _deviceDropdown(
+                      _audioInputs,
+                      widget.mediaService.selectedAudioInputId,
+                      (id) async {
+                        await widget.mediaService.selectAudioInput(id);
+                        setState(() {});
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  if (_audioOutputs.isNotEmpty) ...[
+                    _sectionHeader('Speaker'),
+                    _deviceDropdown(
+                      _audioOutputs,
+                      widget.mediaService.selectedAudioOutputId,
+                      (id) async {
+                        await widget.mediaService.selectAudioOutput(id);
+                        setState(() {});
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  if (_videoInputs.isNotEmpty) ...[
+                    _sectionHeader('Camera'),
+                    _deviceDropdown(
+                      _videoInputs,
+                      widget.mediaService.selectedVideoInputId,
+                      (id) async {
+                        await widget.mediaService.selectVideoInput(id);
+                        setState(() {});
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  _sectionHeader('Audio Processing'),
+                  SwitchListTile(
+                    title: const Text('Noise Suppression'),
+                    value: widget.mediaService.noiseSuppression,
+                    onChanged: (val) async {
+                      await widget.mediaService.setNoiseSuppression(val);
+                      setState(() {});
+                    },
+                  ),
+                  SwitchListTile(
+                    title: const Text('Echo Cancellation'),
+                    value: widget.mediaService.echoCancellation,
+                    onChanged: (val) async {
+                      await widget.mediaService.setEchoCancellation(val);
+                      setState(() {});
+                    },
+                  ),
+                  SwitchListTile(
+                    title: const Text('Auto Gain'),
+                    value: widget.mediaService.autoGainControl,
+                    onChanged: (val) async {
+                      await widget.mediaService.setAutoGainControl(val);
+                      setState(() {});
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Note: Device and processing changes take effect on the next call.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(
+        title,
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          color: Theme.of(context).colorScheme.primary,
+        ),
+      ),
+    );
+  }
+
+  Widget _deviceDropdown(
+    List<MediaDevice> devices,
+    String? selectedId,
+    Future<void> Function(String?) onChanged,
+  ) {
+    final validId =
+        devices.any((d) => d.deviceId == selectedId) ? selectedId : null;
+
+    return DropdownButtonFormField<String?>(
+      value: validId,
+      decoration: const InputDecoration(
+        border: OutlineInputBorder(),
+        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      ),
+      isExpanded: true,
+      items: [
+        const DropdownMenuItem(
+          value: null,
+          child: Text('System Default'),
+        ),
+        ...devices.map((d) => DropdownMenuItem(
+              value: d.deviceId,
+              child: Text(d.label, overflow: TextOverflow.ellipsis),
+            )),
+      ],
+      onChanged: (val) => onChanged(val),
     );
   }
 }

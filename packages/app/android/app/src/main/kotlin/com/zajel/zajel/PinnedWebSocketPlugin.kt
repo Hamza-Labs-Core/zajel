@@ -2,6 +2,7 @@ package com.zajel.zajel
 
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -30,7 +31,9 @@ class PinnedWebSocketPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     private var eventSink: EventChannel.EventSink? = null
 
     private val connections = ConcurrentHashMap<String, WebSocket>()
+    private val clients = ConcurrentHashMap<String, OkHttpClient>()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val TAG = "PinnedWebSocketPlugin"
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         methodChannel = MethodChannel(binding.binaryMessenger, "zajel/pinned_websocket")
@@ -47,6 +50,7 @@ class PinnedWebSocketPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         // Close all connections
         connections.values.forEach { it.close(1000, "Plugin detached") }
         connections.clear()
+        clients.clear()
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -77,22 +81,41 @@ class PinnedWebSocketPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
 
         val connectionId = UUID.randomUUID().toString()
+        Log.d(TAG, "[$connectionId] Connecting to $url (pins=${pins.size}, timeout=${timeoutMs}ms)")
 
         try {
             val client = buildOkHttpClient(pins, timeoutMs.toLong())
+            // Store the client to prevent GC from collecting it
+            // (OkHttp dispatcher threads could be killed if client is GC'd)
+            clients[connectionId] = client
+
             val request = Request.Builder()
                 .url(url)
                 .build()
 
+            var hasReturned = false
+
             val webSocket = client.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    sendEvent(mapOf(
-                        "type" to "connected",
-                        "connectionId" to connectionId
-                    ))
+                    Log.d(TAG, "[$connectionId] onOpen: ${response.code} ${response.message}")
+                    // Return success to Dart on the main thread once actually connected
+                    mainHandler.post {
+                        if (!hasReturned) {
+                            hasReturned = true
+                            result.success(mapOf(
+                                "success" to true,
+                                "connectionId" to connectionId
+                            ))
+                        }
+                        sendEventDirect(mapOf(
+                            "type" to "connected",
+                            "connectionId" to connectionId
+                        ))
+                    }
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
+                    Log.d(TAG, "[$connectionId] onMessage: ${text.take(200)}")
                     sendEvent(mapOf(
                         "type" to "message",
                         "connectionId" to connectionId,
@@ -101,43 +124,71 @@ class PinnedWebSocketPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    Log.d(TAG, "[$connectionId] onClosing: code=$code reason=$reason")
                     webSocket.close(code, reason)
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    connections.remove(connectionId)
-                    sendEvent(mapOf(
-                        "type" to "disconnected",
-                        "connectionId" to connectionId,
-                        "code" to code,
-                        "reason" to reason
-                    ))
+                    Log.d(TAG, "[$connectionId] onClosed: code=$code reason=$reason")
+                    // Remove on main thread to avoid race with handleSend
+                    mainHandler.post {
+                        connections.remove(connectionId)
+                        clients.remove(connectionId)
+                        sendEventDirect(mapOf(
+                            "type" to "disconnected",
+                            "connectionId" to connectionId,
+                            "code" to code,
+                            "reason" to reason
+                        ))
+                    }
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    connections.remove(connectionId)
+                    Log.e(TAG, "[$connectionId] onFailure: ${t.javaClass.simpleName}: ${t.message}", t)
+                    // Remove on main thread to avoid race with handleSend
+                    mainHandler.post {
+                        connections.remove(connectionId)
+                        clients.remove(connectionId)
 
-                    val errorType = when {
-                        t is SSLPeerUnverifiedException -> "pinning_failed"
-                        t is SSLHandshakeException -> "pinning_failed"
-                        else -> "error"
+                        val errorType = when {
+                            t is SSLPeerUnverifiedException -> "pinning_failed"
+                            t is SSLHandshakeException -> "pinning_failed"
+                            else -> "error"
+                        }
+
+                        // If connect() hasn't returned yet, return the error there
+                        if (!hasReturned) {
+                            hasReturned = true
+                            result.error("CONNECTION_FAILED", t.message, null)
+                        } else {
+                            sendEventDirect(mapOf(
+                                "type" to errorType,
+                                "connectionId" to connectionId,
+                                "error" to (t.message ?: "Connection failed")
+                            ))
+                        }
                     }
-
-                    sendEvent(mapOf(
-                        "type" to errorType,
-                        "connectionId" to connectionId,
-                        "error" to (t.message ?: "Connection failed")
-                    ))
                 }
             })
 
             connections[connectionId] = webSocket
+            Log.d(TAG, "[$connectionId] WebSocket created, waiting for onOpen...")
 
-            result.success(mapOf(
-                "success" to true,
-                "connectionId" to connectionId
-            ))
+            // Don't return result here — we wait for onOpen or onFailure callback.
+            // Set a timeout in case neither fires.
+            mainHandler.postDelayed({
+                if (!hasReturned) {
+                    hasReturned = true
+                    Log.e(TAG, "[$connectionId] Connection timed out waiting for onOpen")
+                    connections.remove(connectionId)
+                    clients.remove(connectionId)
+                    webSocket.cancel()
+                    result.error("CONNECTION_TIMEOUT", "Connection timed out", null)
+                }
+            }, timeoutMs.toLong())
         } catch (e: Exception) {
+            Log.e(TAG, "[$connectionId] Exception during connect: ${e.message}", e)
+            clients.remove(connectionId)
             result.error("CONNECTION_FAILED", e.message, null)
         }
     }
@@ -153,14 +204,17 @@ class PinnedWebSocketPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
         val webSocket = connections[connectionId]
         if (webSocket == null) {
+            Log.e(TAG, "[$connectionId] handleSend: connection not found (active connections: ${connections.keys})")
             result.error("NOT_CONNECTED", "Connection not found", null)
             return
         }
 
         val sent = webSocket.send(message)
         if (sent) {
+            Log.d(TAG, "[$connectionId] handleSend: enqueued ${message.take(100)}")
             result.success(true)
         } else {
+            Log.e(TAG, "[$connectionId] handleSend: WebSocket.send() returned false")
             result.error("SEND_FAILED", "Failed to send message", null)
         }
     }
@@ -173,7 +227,9 @@ class PinnedWebSocketPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             return
         }
 
+        Log.d(TAG, "[$connectionId] handleClose: closing connection")
         val webSocket = connections.remove(connectionId)
+        clients.remove(connectionId)
         webSocket?.close(1000, "Client closed")
         result.success(true)
     }
@@ -201,6 +257,11 @@ class PinnedWebSocketPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         mainHandler.post {
             eventSink?.success(event)
         }
+    }
+
+    /** Send event when already on the main thread (avoids extra post). */
+    private fun sendEventDirect(event: Map<String, Any?>) {
+        eventSink?.success(event)
     }
 
     /**

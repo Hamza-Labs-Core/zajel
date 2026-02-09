@@ -19,8 +19,10 @@ class MeetingPointService {
   ///
   /// Returns 3 points: yesterday, today, tomorrow (UTC).
   /// Both peers compute the same points regardless of who calls first.
-  List<String> deriveDailyPoints(Uint8List myPublicKey, Uint8List theirPublicKey) {
-    return deriveDailyPointsForDate(myPublicKey, theirPublicKey, DateTime.now().toUtc());
+  List<String> deriveDailyPoints(
+      Uint8List myPublicKey, Uint8List theirPublicKey) {
+    return deriveDailyPointsForDate(
+        myPublicKey, theirPublicKey, DateTime.now().toUtc());
   }
 
   /// Derive daily meeting points for a specific date (for testing).
@@ -61,8 +63,10 @@ class MeetingPointService {
   }
 
   /// Derive hourly tokens for a specific time (for testing).
-  List<String> deriveHourlyTokensForTime(Uint8List sharedSecret, DateTime time) {
-    final currentHour = DateTime.utc(time.year, time.month, time.day, time.hour);
+  List<String> deriveHourlyTokensForTime(
+      Uint8List sharedSecret, DateTime time) {
+    final currentHour =
+        DateTime.utc(time.year, time.month, time.day, time.hour);
     final tokens = <String>[];
 
     for (var hourOffset = -1; hourOffset <= 1; hourOffset++) {
@@ -71,7 +75,8 @@ class MeetingPointService {
       final hourStr = targetHour.toIso8601String().substring(0, 13);
 
       // HMAC with shared secret
-      final hash = _hmacSha256(sharedSecret, utf8.encode('zajel:hourly:$hourStr'));
+      final hash =
+          _hmacSha256(sharedSecret, utf8.encode('zajel:hourly:$hourStr'));
 
       tokens.add('hr_${_hashToToken(hash)}');
     }
@@ -103,7 +108,8 @@ class MeetingPointService {
   }) {
     return MeetingPoints(
       dailyPoints: deriveDailyPoints(myPublicKey, theirPublicKey),
-      hourlyTokens: sharedSecret != null ? deriveHourlyTokens(sharedSecret) : [],
+      hourlyTokens:
+          sharedSecret != null ? deriveHourlyTokens(sharedSecret) : [],
     );
   }
 
