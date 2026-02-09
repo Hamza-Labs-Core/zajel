@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/models/models.dart';
 import '../../core/providers/app_providers.dart';
+import '../../shared/widgets/relative_time.dart';
 
 /// Home screen showing discovered peers and connection options.
 class HomeScreen extends ConsumerWidget {
@@ -17,6 +18,11 @@ class HomeScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Zajel'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.contacts),
+            onPressed: () => context.push('/contacts'),
+            tooltip: 'Contacts',
+          ),
           IconButton(
             icon: const Icon(Icons.qr_code_scanner),
             onPressed: () => context.push('/connect'),
@@ -72,9 +78,21 @@ class HomeScreen extends ConsumerWidget {
 
     // Determine status indicator based on signaling connection state
     final (statusColor, statusBgColor, statusText) = switch (signalingState) {
-      SignalingDisplayState.connected => (Colors.green, Colors.green.shade100, 'Online'),
-      SignalingDisplayState.connecting => (Colors.orange, Colors.orange.shade100, 'Connecting...'),
-      SignalingDisplayState.disconnected => (Colors.red, Colors.red.shade100, 'Offline'),
+      SignalingDisplayState.connected => (
+          Colors.green,
+          Colors.green.shade100,
+          'Online'
+        ),
+      SignalingDisplayState.connecting => (
+          Colors.orange,
+          Colors.orange.shade100,
+          'Connecting...'
+        ),
+      SignalingDisplayState.disconnected => (
+          Colors.red,
+          Colors.red.shade100,
+          'Offline'
+        ),
     };
 
     return Container(
@@ -113,8 +131,7 @@ class HomeScreen extends ConsumerWidget {
                 ),
               ),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: statusBgColor,
                   borderRadius: BorderRadius.circular(12),
@@ -156,8 +173,7 @@ class HomeScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildPeerList(
-      BuildContext context, WidgetRef ref, List<Peer> peers) {
+  Widget _buildPeerList(BuildContext context, WidgetRef ref, List<Peer> peers) {
     if (peers.isEmpty) {
       return Center(
         child: Padding(
@@ -195,13 +211,50 @@ class HomeScreen extends ConsumerWidget {
       );
     }
 
-    return ListView.builder(
+    // Split into online and offline groups
+    final onlinePeers = peers
+        .where((p) =>
+            p.connectionState == PeerConnectionState.connected ||
+            p.connectionState == PeerConnectionState.connecting ||
+            p.connectionState == PeerConnectionState.handshaking)
+        .toList();
+    final offlinePeers = peers
+        .where((p) =>
+            p.connectionState == PeerConnectionState.disconnected ||
+            p.connectionState == PeerConnectionState.failed ||
+            p.connectionState == PeerConnectionState.discovering)
+        .toList();
+
+    return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      itemCount: peers.length,
-      itemBuilder: (context, index) {
-        final peer = peers[index];
-        return _PeerCard(peer: peer);
-      },
+      children: [
+        if (onlinePeers.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text(
+              'Online (${onlinePeers.length})',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: Colors.green,
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+          ),
+          for (final peer in onlinePeers) _PeerCard(peer: peer),
+        ],
+        if (offlinePeers.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text(
+              'Offline (${offlinePeers.length})',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: Colors.grey,
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+          ),
+          for (final peer in offlinePeers) _PeerCard(peer: peer),
+        ],
+      ],
     );
   }
 }
@@ -213,11 +266,10 @@ class _PeerCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isConnected =
-        peer.connectionState == PeerConnectionState.connected;
+    final isConnected = peer.connectionState == PeerConnectionState.connected;
     final isConnecting =
         peer.connectionState == PeerConnectionState.connecting ||
-        peer.connectionState == PeerConnectionState.handshaking;
+            peer.connectionState == PeerConnectionState.handshaking;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
@@ -250,7 +302,7 @@ class _PeerCard extends ConsumerWidget {
             ),
           ],
         ),
-        title: Text(peer.displayName),
+        title: Text(_displayName(ref)),
         subtitle: Text(
           _getStatusText(),
           style: TextStyle(
@@ -287,11 +339,36 @@ class _PeerCard extends ConsumerWidget {
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert),
               onSelected: (value) {
-                if (value == 'block') {
-                  _showBlockDialog(context, ref);
+                switch (value) {
+                  case 'rename':
+                    _showRenameDialog(context, ref);
+                  case 'delete':
+                    _showDeleteDialog(context, ref);
+                  case 'block':
+                    _showBlockDialog(context, ref);
                 }
               },
               itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'rename',
+                  child: Row(
+                    children: [
+                      Icon(Icons.edit),
+                      SizedBox(width: 8),
+                      Text('Rename'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'delete',
+                  child: Row(
+                    children: [
+                      Icon(Icons.delete_outline, color: Colors.red),
+                      SizedBox(width: 8),
+                      Text('Delete'),
+                    ],
+                  ),
+                ),
                 const PopupMenuItem(
                   value: 'block',
                   child: Row(
@@ -306,14 +383,103 @@ class _PeerCard extends ConsumerWidget {
             ),
           ],
         ),
-        onTap: isConnected
-            ? () {
-                ref.read(selectedPeerProvider.notifier).state = peer;
-                context.push('/chat/${peer.id}');
-              }
-            : null,
+        onTap: () {
+          ref.read(selectedPeerProvider.notifier).state = peer;
+          context.push('/chat/${peer.id}');
+        },
       ),
     );
+  }
+
+  String _displayName(WidgetRef ref) {
+    final aliases = ref.watch(peerAliasesProvider);
+    return aliases[peer.id] ?? peer.displayName;
+  }
+
+  Future<void> _showRenameDialog(BuildContext context, WidgetRef ref) async {
+    final controller = TextEditingController(text: _displayName(ref));
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename Peer'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Name',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (value) => Navigator.pop(context, value.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (newName != null && newName.isNotEmpty && newName != _displayName(ref)) {
+      final trustedPeers = ref.read(trustedPeersStorageProvider);
+      await trustedPeers.updateAlias(peer.id, newName);
+      // Update in-memory alias map for immediate UI refresh
+      final aliases = {...ref.read(peerAliasesProvider)};
+      aliases[peer.id] = newName;
+      ref.read(peerAliasesProvider.notifier).state = aliases;
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Renamed to $newName')),
+        );
+      }
+    }
+  }
+
+  Future<void> _showDeleteDialog(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Connection?'),
+        content: Text(
+          'Delete ${peer.displayName}? This will remove the conversation and connection.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      final trustedPeers = ref.read(trustedPeersStorageProvider);
+      await trustedPeers.removePeer(peer.id);
+      ref.read(chatMessagesProvider(peer.id).notifier).clearMessages();
+      final connectionManager = ref.read(connectionManagerProvider);
+      try {
+        await connectionManager.disconnectPeer(peer.id);
+      } catch (_) {
+        // Best-effort disconnect
+      }
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${peer.displayName} deleted')),
+        );
+      }
+    }
   }
 
   Future<void> _showBlockDialog(BuildContext context, WidgetRef ref) async {
@@ -342,8 +508,9 @@ class _PeerCard extends ConsumerWidget {
     );
 
     if (confirmed == true) {
+      final keyToBlock = peer.publicKey ?? peer.id;
       await ref.read(blockedPeersProvider.notifier).block(
-            peer.id,
+            keyToBlock,
             displayName: peer.displayName,
           );
       if (context.mounted) {
@@ -379,7 +546,7 @@ class _PeerCard extends ConsumerWidget {
       case PeerConnectionState.failed:
         return 'Connection failed';
       default:
-        return 'Tap to connect';
+        return 'Last seen ${formatRelativeTime(peer.lastSeen)}';
     }
   }
 

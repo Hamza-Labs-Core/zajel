@@ -27,7 +27,7 @@ This document outlines end-to-end test scenarios covering the complete flow from
 - **Expected:** `{"status":"ok","service":"zajel-bootstrap",...}`
 - **Test:**
   ```bash
-  curl https://zajel-signaling.mahmoud-s-darwish.workers.dev/health
+  curl https://signal.zajel.hamzalabs.dev/health
   ```
 
 #### 1.2 Server Registration

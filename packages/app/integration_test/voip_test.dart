@@ -19,9 +19,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:zajel/core/crypto/crypto_service.dart';
 import 'package:zajel/core/network/connection_manager.dart';
 import 'package:zajel/core/network/device_link_service.dart';
+import 'package:zajel/core/network/meeting_point_service.dart';
 import 'package:zajel/core/network/signaling_client.dart';
 import 'package:zajel/core/network/voip_service.dart';
 import 'package:zajel/core/network/webrtc_service.dart';
+import 'package:zajel/core/storage/trusted_peers_storage_impl.dart';
 
 import 'helpers/mock_media.dart';
 import 'test_config.dart';
@@ -81,11 +83,15 @@ void main() {
         cryptoService: cryptoA,
         webrtcService: webrtcA,
         deviceLinkService: deviceLinkA,
+        trustedPeersStorage: SecureTrustedPeersStorage(),
+        meetingPointService: MeetingPointService(),
       );
       connectionManagerB = ConnectionManager(
         cryptoService: cryptoB,
         webrtcService: webrtcB,
         deviceLinkService: deviceLinkB,
+        trustedPeersStorage: SecureTrustedPeersStorage(),
+        meetingPointService: MeetingPointService(),
       );
 
       // Create mock media services
@@ -264,7 +270,9 @@ void main() {
 
       // Wait for connected state (depends on WebRTC ICE)
       final connected = await TestUtils.waitFor(
-        () => voipA.state == CallState.connected && voipB.state == CallState.connected,
+        () =>
+            voipA.state == CallState.connected &&
+            voipB.state == CallState.connected,
         timeout: const Duration(seconds: 30),
       );
 
@@ -355,7 +363,8 @@ void main() {
         timeout: const Duration(seconds: 5),
       );
 
-      expect(bEnded, isTrue, reason: 'Device B should receive hangup notification');
+      expect(bEnded, isTrue,
+          reason: 'Device B should receive hangup notification');
     });
 
     test('mute toggle changes track enabled state', () async {

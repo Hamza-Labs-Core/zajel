@@ -42,6 +42,19 @@ export default {
     try {
       let response: Response;
 
+      // Health check endpoint (no auth required)
+      if (path === '/health') {
+        return jsonResponse({
+          success: true,
+          data: {
+            status: 'healthy',
+            service: 'zajel-admin-cf',
+            version: env.APP_VERSION || 'unknown',
+            timestamp: new Date().toISOString(),
+          }
+        }, 200, corsHeaders);
+      }
+
       // Check if ZAJEL_ADMIN_JWT_SECRET is configured
       if (!env.ZAJEL_ADMIN_JWT_SECRET && path.startsWith('/admin/api/')) {
         return jsonResponse(
@@ -671,6 +684,7 @@ function serveDashboard(): Response {
 
       if (!state.user) {
         app.innerHTML = renderLogin();
+        attachEventListeners();
         return;
       }
 
