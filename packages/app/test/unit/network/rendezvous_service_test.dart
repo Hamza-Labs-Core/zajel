@@ -83,7 +83,8 @@ void main() {
         expect(registration.deadDrop, isNotNull);
         expect(registration.deadDrop, equals('encrypted_dead_drop'));
 
-        verify(() => mockMeetingPoint.deriveDailyPoints(any(), any())).called(1);
+        verify(() => mockMeetingPoint.deriveDailyPoints(any(), any()))
+            .called(1);
         verify(() => mockMeetingPoint.deriveHourlyTokens(any())).called(1);
         verify(() => mockCrypto.encryptForPeer('peer1', any())).called(1);
       });
@@ -123,7 +124,8 @@ void main() {
         // Assert
         expect(registration.dailyPoints, hasLength(3));
         expect(registration.hourlyTokens, isEmpty);
-        verify(() => mockMeetingPoint.deriveDailyPoints(any(), any())).called(1);
+        verify(() => mockMeetingPoint.deriveDailyPoints(any(), any()))
+            .called(1);
         verifyNever(() => mockMeetingPoint.deriveHourlyTokens(any()));
       });
 
@@ -308,8 +310,7 @@ void main() {
               .thenAnswer((_) async => deadDropPayload);
 
           // Act
-          final info =
-              await service.decryptDeadDrop('encrypted_drop', 'peer1');
+          final info = await service.decryptDeadDrop('encrypted_drop', 'peer1');
 
           // Assert
           expect(info.publicKey, 'their_pubkey');
@@ -683,7 +684,8 @@ void main() {
             .thenAnswer((_) async => null);
 
         // Act
-        final peerId = await service.identifyPeerFromMeetingPoint('matching_point');
+        final peerId =
+            await service.identifyPeerFromMeetingPoint('matching_point');
 
         // Assert
         expect(peerId, 'peer1');
@@ -703,7 +705,8 @@ void main() {
             .thenAnswer((_) async => null);
 
         // Act
-        final peerId = await service.identifyPeerFromMeetingPoint('unknown_point');
+        final peerId =
+            await service.identifyPeerFromMeetingPoint('unknown_point');
 
         // Assert
         expect(peerId, isNull);
@@ -725,7 +728,8 @@ void main() {
             .thenReturn(['hourly_match', 'hr_2', 'hr_3']);
 
         // Act
-        final peerId = await service.identifyPeerFromMeetingPoint('hourly_match');
+        final peerId =
+            await service.identifyPeerFromMeetingPoint('hourly_match');
 
         // Assert
         expect(peerId, 'peer1');

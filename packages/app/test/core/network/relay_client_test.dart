@@ -212,8 +212,7 @@ void main() {
             .thenAnswer((_) async => {'type': 'offer', 'sdp': 'mock_sdp'});
         when(() => mockWebRTC.sendMessage(any(), any()))
             .thenAnswer((_) async {});
-        when(() => mockWebRTC.closeConnection(any()))
-            .thenAnswer((_) async {});
+        when(() => mockWebRTC.closeConnection(any())).thenAnswer((_) async {});
 
         await client.connectToRelays([relay]);
         expect(client.getConnectedRelayIds(), contains('relay1'));
@@ -232,8 +231,7 @@ void main() {
             .thenAnswer((_) async => {'type': 'offer', 'sdp': 'mock_sdp'});
         when(() => mockWebRTC.sendMessage(any(), any()))
             .thenAnswer((_) async {});
-        when(() => mockWebRTC.closeConnection(any()))
-            .thenAnswer((_) async {});
+        when(() => mockWebRTC.closeConnection(any())).thenAnswer((_) async {});
 
         await client.connectToRelays([relay]);
         client.onRelayStateChange.listen(events.add);
@@ -256,8 +254,7 @@ void main() {
             .thenAnswer((_) async => {'type': 'offer', 'sdp': 'mock_sdp'});
         when(() => mockWebRTC.sendMessage(any(), any()))
             .thenAnswer((_) async {});
-        when(() => mockWebRTC.closeConnection(any()))
-            .thenAnswer((_) async {});
+        when(() => mockWebRTC.closeConnection(any())).thenAnswer((_) async {});
 
         await client.connectToRelays([relay]);
         client.registerSourceId('relay1', 'source_abc');

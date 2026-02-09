@@ -42,7 +42,7 @@ export function loadConfig(): ServerConfig {
 
     bootstrap: {
       // CF Workers bootstrap server URL
-      serverUrl: envString('ZAJEL_BOOTSTRAP_URL', 'https://zajel-signaling.mahmoud-s-darwish.workers.dev'),
+      serverUrl: envString('ZAJEL_BOOTSTRAP_URL', 'https://signal.zajel.hamzalabs.dev'),
       // Heartbeat interval (how often to ping CF)
       heartbeatInterval: envNumber('ZAJEL_BOOTSTRAP_HEARTBEAT', 60000), // 1 minute
       // Legacy: direct peer nodes (optional, for manual configuration)
