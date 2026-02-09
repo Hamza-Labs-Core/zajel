@@ -1295,24 +1295,46 @@ jobs:
           # spawns gcr-prompter (a GUI unlock dialog) which blocks the GTK main
           # loop and makes AT-SPI queries timeout ("application may be hanging").
           #
-          # XDG_RUNTIME_DIR must exist for gnome-keyring-daemon to create its
-          # control socket. On GitHub Actions runners this dir doesn't exist.
-          sudo mkdir -p /run/user/$(id -u)
-          sudo chown $(id -u):$(id -g) /run/user/$(id -u)
+          # XDG_RUNTIME_DIR and its keyring subdirectory must exist for
+          # gnome-keyring-daemon to create its control socket.
+          sudo mkdir -p /run/user/$(id -u)/keyring
+          sudo chown -R $(id -u):$(id -g) /run/user/$(id -u)
           export XDG_RUNTIME_DIR=/run/user/$(id -u)
           echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> $GITHUB_ENV
 
-          # Create the keyrings directory
+          # Create the keyrings data directory
           mkdir -p ~/.local/share/keyrings
 
           # gnome-keyring-daemon 46.x: --start and --unlock are INCOMPATIBLE.
-          # Must start first, then unlock separately.
-          eval $(gnome-keyring-daemon --start --components=secrets) || true
-          echo "After --start: GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL"
+          # Start the daemon first, then unlock with empty password.
+          # --foreground is not what we want (it blocks), but --replace ensures
+          # we replace any broken instance. Redirect stderr to see errors.
+          KEYRING_OUTPUT=$(gnome-keyring-daemon --start --components=secrets 2>&1) || true
+          echo "gnome-keyring-daemon --start output: $KEYRING_OUTPUT"
+          eval $(echo "$KEYRING_OUTPUT" | grep -E '^(GNOME_KEYRING|SSH_AUTH)') || true
+          echo "Parsed: GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL"
+
+          # If --start didn't set GNOME_KEYRING_CONTROL, try --replace
+          if [ -z "$GNOME_KEYRING_CONTROL" ]; then
+            echo "Trying --replace..."
+            pkill -f gnome-keyring-daemon 2>/dev/null || true
+            sleep 1
+            KEYRING_OUTPUT=$(gnome-keyring-daemon --replace --components=secrets 2>&1 &
+              sleep 2
+              cat /proc/$!/environ 2>/dev/null | tr '\0' '\n' | grep GNOME_KEYRING || true
+            ) || true
+            echo "--replace output: $KEYRING_OUTPUT"
+            eval $(echo "$KEYRING_OUTPUT" | grep -E '^GNOME_KEYRING') || true
+          fi
 
           # Unlock the login keyring with empty password
           if [ -n "$GNOME_KEYRING_CONTROL" ]; then
-            printf '' | gnome-keyring-daemon --unlock || echo "Unlock failed (may be OK on fresh keyring)"
+            printf '' | gnome-keyring-daemon --unlock 2>&1 || echo "Unlock returned non-zero (may be OK)"
+          else
+            echo "WARNING: GNOME_KEYRING_CONTROL still empty — keyring not initialized"
+            echo "Checking if keyring daemon is running..."
+            pgrep -a gnome-keyring || echo "No gnome-keyring-daemon found"
+            ls -la /run/user/$(id -u)/keyring/ 2>/dev/null || echo "No keyring dir contents"
           fi
           echo "GNOME_KEYRING_CONTROL=${GNOME_KEYRING_CONTROL:-}" >> $GITHUB_ENV
           echo "GNOME_KEYRING_PID=${GNOME_KEYRING_PID:-}" >> $GITHUB_ENV
