@@ -1,6 +1,10 @@
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../models/message.dart';
 
@@ -18,6 +22,12 @@ class MessageStorage {
   /// Open the database, creating it if necessary.
   Future<void> initialize() async {
     if (_db != null) return;
+
+    // sqflite requires FFI initialization on desktop platforms
+    if (!kIsWeb && (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
+      sqfliteFfiInit();
+      databaseFactory = databaseFactoryFfi;
+    }
 
     final dir = await getApplicationDocumentsDirectory();
     final path = join(dir.path, _dbName);

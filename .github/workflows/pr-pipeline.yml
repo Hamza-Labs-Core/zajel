@@ -1117,15 +1117,25 @@ jobs:
           HEADLESS_RESULT=0
           if [ -n "$SIGNALING_URL" ]; then
             echo "=== Running headless-paired tests ==="
-            pytest -m "headless and single_device" -v -s --timeout=300 || HEADLESS_RESULT=$?
-            if [ $HEADLESS_RESULT -ne 0 ]; then
-              echo "Note: Headless-paired tests failed (non-blocking for now)."
-            fi
+            pytest -m "headless and single_device" -v -s --timeout=300
+            HEADLESS_RESULT=$?
           else
             echo "=== Skipping headless tests (SIGNALING_URL not set) ==="
           fi
 
-          # ── Phase D: Multi-device pairing probe (informational) ──
+          # ── Phase D: Protocol tests (headless-to-headless, no emulator) ──
+          # Two headless clients connect to the signaling server and validate
+          # the protocol layer: pairing, encryption, message delivery, file transfer.
+          PROTOCOL_RESULT=0
+          if [ -n "$SIGNALING_URL" ]; then
+            echo "=== Running protocol tests (headless-to-headless) ==="
+            pytest -m "protocol" -v -s --timeout=300
+            PROTOCOL_RESULT=$?
+          else
+            echo "=== Skipping protocol tests (SIGNALING_URL not set) ==="
+          fi
+
+          # ── Phase E: Multi-device pairing probe (informational) ──
           # P2P between emulators on CI requires TURN relay which isn't
           # configured yet. Run one pairing test as a connectivity probe
           # but don't fail the pipeline on it.
@@ -1136,9 +1146,21 @@ jobs:
           # Cleanup Appium
           kill $APPIUM1_PID $APPIUM2_PID 2>/dev/null || true
 
-          # Only fail if single-device tests failed
+          # Fail if any mandatory phase failed
+          FAILED=0
           if [ $SINGLE_RESULT -ne 0 ]; then
-            echo "Single-device tests failed!"
+            echo "FAILED: Single-device tests"
+            FAILED=1
+          fi
+          if [ $HEADLESS_RESULT -ne 0 ]; then
+            echo "FAILED: Headless-paired tests"
+            FAILED=1
+          fi
+          if [ $PROTOCOL_RESULT -ne 0 ]; then
+            echo "FAILED: Protocol tests"
+            FAILED=1
+          fi
+          if [ $FAILED -ne 0 ]; then
             exit 1
           fi
           echo "All mandatory E2E tests passed."
