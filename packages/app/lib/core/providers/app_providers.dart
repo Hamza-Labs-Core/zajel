@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../config/environment.dart';
+import '../crypto/bootstrap_verifier.dart';
 import '../crypto/crypto_service.dart';
 import '../logging/logger_service.dart';
 import '../models/models.dart';
@@ -10,11 +12,15 @@ import '../network/meeting_point_service.dart';
 import '../network/peer_reconnection_service.dart';
 import '../network/relay_client.dart';
 import '../network/server_discovery_service.dart';
-import '../network/signaling_client.dart';
+import '../network/signaling_client.dart'
+    show SignalingClient, RendezvousResult, RendezvousPartial, RendezvousMatch;
 import '../network/webrtc_service.dart';
+import '../media/background_blur_processor.dart';
 import '../media/media_service.dart';
+import '../notifications/notification_service.dart';
 import '../network/voip_service.dart';
 import '../storage/file_receive_service.dart';
+import '../storage/message_storage.dart';
 import '../storage/trusted_peers_storage.dart';
 import '../storage/trusted_peers_storage_impl.dart';
 
@@ -29,6 +35,13 @@ final displayNameProvider = StateProvider<String>((ref) {
   return prefs.getString('displayName') ?? 'Anonymous';
 });
 
+/// Provider for notification settings with SharedPreferences persistence.
+final notificationSettingsProvider =
+    StateNotifierProvider<NotificationSettingsNotifier, NotificationSettings>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return NotificationSettingsNotifier(prefs);
+});
+
 /// Provider for crypto service.
 final cryptoServiceProvider = Provider<CryptoService>((ref) {
   return CryptoService();
@@ -37,7 +50,29 @@ final cryptoServiceProvider = Provider<CryptoService>((ref) {
 /// Provider for WebRTC service.
 final webrtcServiceProvider = Provider<WebRTCService>((ref) {
   final cryptoService = ref.watch(cryptoServiceProvider);
-  return WebRTCService(cryptoService: cryptoService);
+  // Support TURN servers via environment variables in any mode.
+  // In E2E test mode, forceRelay=true to avoid wasting time on direct connection attempts.
+  // In normal mode with TURN, still try direct connections first (forceRelay=false).
+  List<Map<String, dynamic>>? iceServers;
+  const turnUrl = String.fromEnvironment('TURN_URL', defaultValue: '');
+  const turnUser = String.fromEnvironment('TURN_USER', defaultValue: '');
+  const turnPass = String.fromEnvironment('TURN_PASS', defaultValue: '');
+  if (turnUrl.isNotEmpty) {
+    iceServers = [
+      {'urls': 'stun:stun.l.google.com:19302'},
+      {
+        'urls': turnUrl,
+        'username': turnUser,
+        'credential': turnPass,
+      },
+    ];
+  }
+  return WebRTCService(
+    cryptoService: cryptoService,
+    iceServers: iceServers,
+    // Only force relay in E2E test mode (faster, avoids direct connection attempts)
+    forceRelay: iceServers != null && Environment.isE2eTest,
+  );
 });
 
 /// Provider for trusted peers storage.
@@ -68,18 +103,51 @@ final relayClientProvider = Provider<RelayClient?>((ref) {
 /// Provider for peer reconnection service (created lazily when relay is available).
 final peerReconnectionServiceProvider = Provider<PeerReconnectionService?>((ref) {
   final relayClient = ref.watch(relayClientProvider);
+  final signalingClient = ref.watch(signalingClientProvider);
   if (relayClient == null) return null;
 
   final cryptoService = ref.watch(cryptoServiceProvider);
   final trustedPeers = ref.watch(trustedPeersStorageProvider);
   final meetingPointService = ref.watch(meetingPointServiceProvider);
 
-  return PeerReconnectionService(
+  final service = PeerReconnectionService(
     cryptoService: cryptoService,
     trustedPeers: trustedPeers,
     meetingPointService: meetingPointService,
     relayClient: relayClient,
   );
+
+  // Wire up signaling rendezvous events if signaling is connected
+  if (signalingClient != null) {
+    signalingClient.rendezvousEvents.listen((event) {
+      switch (event) {
+        case RendezvousResult(:final liveMatches, :final deadDrops):
+          // Process live matches
+          for (final match in liveMatches) {
+            service.processLiveMatchFromRendezvous(match.peerId, match.relayId);
+          }
+          // Process dead drops
+          for (final drop in deadDrops) {
+            service.processDeadDropFromRendezvous(drop.peerId, drop.encryptedData, drop.relayId);
+          }
+        case RendezvousPartial(:final liveMatches, :final deadDrops, redirects: _):
+          // Process local results
+          for (final match in liveMatches) {
+            service.processLiveMatchFromRendezvous(match.peerId, match.relayId);
+          }
+          for (final drop in deadDrops) {
+            service.processDeadDropFromRendezvous(drop.peerId, drop.encryptedData, drop.relayId);
+          }
+          // Redirects are handled by the signaling layer - no action needed here
+          // Future: implement federated server connection for redirects
+        case RendezvousMatch(:final peerId, :final relayId, meetingPoint: _):
+          service.processLiveMatchFromRendezvous(peerId, relayId);
+      }
+    });
+  }
+
+  ref.onDispose(() => service.dispose());
+  return service;
 });
 
 /// Provider for device link service (for linking web clients).
@@ -101,12 +169,16 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
   final cryptoService = ref.watch(cryptoServiceProvider);
   final webrtcService = ref.watch(webrtcServiceProvider);
   final deviceLinkService = ref.watch(deviceLinkServiceProvider);
+  final trustedPeersStorage = ref.watch(trustedPeersStorageProvider);
+  final meetingPointService = ref.watch(meetingPointServiceProvider);
   final blockedNotifier = ref.watch(blockedPeersProvider.notifier);
 
   return ConnectionManager(
     cryptoService: cryptoService,
     webrtcService: webrtcService,
     deviceLinkService: deviceLinkService,
+    trustedPeersStorage: trustedPeersStorage,
+    meetingPointService: meetingPointService,
     isPublicKeyBlocked: blockedNotifier.isBlocked,
   );
 });
@@ -129,16 +201,33 @@ final peersProvider = StreamProvider<List<Peer>>((ref) {
 });
 
 /// Provider for visible peers (excluding blocked by public key).
+/// Sorted: connected first, then offline by lastSeen descending.
 final visiblePeersProvider = Provider<AsyncValue<List<Peer>>>((ref) {
   final peersAsync = ref.watch(peersProvider);
   final blockedPublicKeys = ref.watch(blockedPeersProvider);
 
   return peersAsync.whenData((peers) {
-    return peers.where((peer) {
-      // Filter by public key if available, otherwise allow (for backwards compatibility)
+    final visible = peers.where((peer) {
       if (peer.publicKey == null) return true;
       return !blockedPublicKeys.contains(peer.publicKey);
     }).toList();
+
+    // Sort: connected/connecting first, then offline by lastSeen descending
+    visible.sort((a, b) {
+      final aOnline = a.connectionState == PeerConnectionState.connected ||
+          a.connectionState == PeerConnectionState.connecting ||
+          a.connectionState == PeerConnectionState.handshaking;
+      final bOnline = b.connectionState == PeerConnectionState.connected ||
+          b.connectionState == PeerConnectionState.connecting ||
+          b.connectionState == PeerConnectionState.handshaking;
+
+      if (aOnline && !bOnline) return -1;
+      if (!aOnline && bOnline) return 1;
+      // Within same group, sort by lastSeen descending
+      return b.lastSeen.compareTo(a.lastSeen);
+    });
+
+    return visible;
   });
 });
 
@@ -148,19 +237,43 @@ final messagesStreamProvider = StreamProvider<(String, String)>((ref) {
   return connectionManager.messages;
 });
 
+/// Provider for message storage (SQLite).
+final messageStorageProvider = Provider<MessageStorage>((ref) {
+  final storage = MessageStorage();
+  ref.onDispose(() => storage.close());
+  return storage;
+});
+
 /// Provider for managing chat messages per peer.
 final chatMessagesProvider =
     StateNotifierProvider.family<ChatMessagesNotifier, List<Message>, String>(
-  (ref, peerId) => ChatMessagesNotifier(peerId),
+  (ref, peerId) {
+    final storage = ref.watch(messageStorageProvider);
+    return ChatMessagesNotifier(peerId, storage);
+  },
 );
 
 class ChatMessagesNotifier extends StateNotifier<List<Message>> {
   final String peerId;
+  final MessageStorage _storage;
+  bool _loaded = false;
 
-  ChatMessagesNotifier(this.peerId) : super([]);
+  ChatMessagesNotifier(this.peerId, this._storage) : super([]) {
+    _loadMessages();
+  }
+
+  Future<void> _loadMessages() async {
+    if (_loaded) return;
+    final messages = await _storage.getMessages(peerId);
+    if (mounted) {
+      state = messages;
+      _loaded = true;
+    }
+  }
 
   void addMessage(Message message) {
     state = [...state, message];
+    _storage.saveMessage(message);
   }
 
   void updateMessageStatus(String localId, MessageStatus status) {
@@ -170,12 +283,18 @@ class ChatMessagesNotifier extends StateNotifier<List<Message>> {
       }
       return m;
     }).toList();
+    _storage.updateMessageStatus(localId, status);
   }
 
   void clearMessages() {
     state = [];
+    _storage.deleteMessages(peerId);
   }
 }
+
+/// Provider for peer aliases (peerId -> alias).
+/// Loaded from TrustedPeersStorage and updated in-memory when user renames.
+final peerAliasesProvider = StateProvider<Map<String, String>>((ref) => {});
 
 /// Provider for the currently selected peer.
 final selectedPeerProvider = StateProvider<Peer?>((ref) => null);
@@ -185,7 +304,8 @@ final selectedPeerProvider = StateProvider<Peer?>((ref) => null);
 final blockedPeersProvider =
     StateNotifierProvider<BlockedPeersNotifier, Set<String>>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
-  return BlockedPeersNotifier(prefs);
+  final trustedPeersStorage = ref.watch(trustedPeersStorageProvider);
+  return BlockedPeersNotifier(prefs, trustedPeersStorage);
 });
 
 /// Provider for blocked peer details (publicKey -> name mapping).
@@ -206,8 +326,10 @@ final blockedPeerDetailsProvider = StateProvider<Map<String, String>>((ref) {
 /// Stores public keys (not pairing codes) to prevent bypass via code regeneration.
 class BlockedPeersNotifier extends StateNotifier<Set<String>> {
   final SharedPreferences _prefs;
+  final TrustedPeersStorage _trustedPeersStorage;
 
-  BlockedPeersNotifier(this._prefs) : super(_load(_prefs));
+  BlockedPeersNotifier(this._prefs, this._trustedPeersStorage)
+      : super(_load(_prefs));
 
   static Set<String> _load(SharedPreferences prefs) {
     final blocked = prefs.getStringList('blockedPublicKeys') ?? [];
@@ -227,6 +349,15 @@ class BlockedPeersNotifier extends StateNotifier<Set<String>> {
       details.add('$publicKey::$displayName');
       await _prefs.setStringList('blockedPeerDetails', details);
     }
+
+    // Store blockedAt timestamp
+    final timestamps = _prefs.getStringList('blockedTimestamps') ?? [];
+    timestamps.removeWhere((e) => e.startsWith('$publicKey::'));
+    timestamps.add('$publicKey::${DateTime.now().toIso8601String()}');
+    await _prefs.setStringList('blockedTimestamps', timestamps);
+
+    // Sync to TrustedPeersStorage so reconnection logic respects the block
+    await _syncBlockToTrustedPeers(publicKey, blocked: true);
   }
 
   /// Unblock a user by their public key.
@@ -238,10 +369,55 @@ class BlockedPeersNotifier extends StateNotifier<Set<String>> {
     final details = _prefs.getStringList('blockedPeerDetails') ?? [];
     details.removeWhere((entry) => entry.startsWith('$publicKey::'));
     await _prefs.setStringList('blockedPeerDetails', details);
+
+    // Sync to TrustedPeersStorage
+    await _syncBlockToTrustedPeers(publicKey, blocked: false);
   }
 
   /// Check if a public key is blocked.
   bool isBlocked(String publicKey) => state.contains(publicKey);
+
+  /// Get when a peer was blocked.
+  DateTime? getBlockedAt(String publicKey) {
+    final timestamps = _prefs.getStringList('blockedTimestamps') ?? [];
+    for (final entry in timestamps) {
+      final parts = entry.split('::');
+      if (parts.length == 2 && parts[0] == publicKey) {
+        return DateTime.tryParse(parts[1]);
+      }
+    }
+    return null;
+  }
+
+  /// Unblock and permanently remove a peer from trusted storage.
+  Future<void> removePermanently(String publicKey) async {
+    await unblock(publicKey);
+    // Find and remove from trusted peers storage
+    final peers = await _trustedPeersStorage.getAllPeers();
+    for (final peer in peers) {
+      if (peer.publicKey == publicKey) {
+        await _trustedPeersStorage.removePeer(peer.id);
+        break;
+      }
+    }
+    // Remove blockedAt timestamp
+    final timestamps = _prefs.getStringList('blockedTimestamps') ?? [];
+    timestamps.removeWhere((e) => e.startsWith('$publicKey::'));
+    await _prefs.setStringList('blockedTimestamps', timestamps);
+  }
+
+  /// Update TrustedPeer.isBlocked to keep both storage layers in sync.
+  Future<void> _syncBlockToTrustedPeers(
+      String publicKey, {required bool blocked}) async {
+    final peers = await _trustedPeersStorage.getAllPeers();
+    for (final peer in peers) {
+      if (peer.publicKey == publicKey) {
+        await _trustedPeersStorage.savePeer(
+            peer.copyWith(isBlocked: blocked));
+        break;
+      }
+    }
+  }
 }
 
 /// Provider for signaling connection status.
@@ -259,18 +435,36 @@ final signalingDisplayStateProvider = StateProvider<SignalingDisplayState>((ref)
 });
 
 /// Default bootstrap server URL (CF Workers).
-const defaultBootstrapUrl = 'https://zajel-signaling.mahmoud-s-darwish.workers.dev';
+/// Can be overridden at build time with --dart-define=BOOTSTRAP_URL=<url>
+const defaultBootstrapUrl = 'https://signal.zajel.hamzalabs.dev';
+
+/// Effective bootstrap URL (compile-time override or default).
+String get _effectiveBootstrapUrl =>
+    Environment.hasCustomBootstrapUrl ? Environment.bootstrapUrl : defaultBootstrapUrl;
 
 /// Provider for the bootstrap server URL.
 final bootstrapServerUrlProvider = StateProvider<String>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
-  return prefs.getString('bootstrapServerUrl') ?? defaultBootstrapUrl;
+  return prefs.getString('bootstrapServerUrl') ?? _effectiveBootstrapUrl;
+});
+
+/// Provider for bootstrap response verifier.
+///
+/// Verifies Ed25519 signatures on GET /servers responses from the bootstrap server.
+/// Disabled in E2E test mode (test servers don't have signing keys).
+final bootstrapVerifierProvider = Provider<BootstrapVerifier?>((ref) {
+  if (Environment.isE2eTest) return null;
+  return BootstrapVerifier();
 });
 
 /// Provider for server discovery service.
 final serverDiscoveryServiceProvider = Provider<ServerDiscoveryService>((ref) {
   final bootstrapUrl = ref.watch(bootstrapServerUrlProvider);
-  final service = ServerDiscoveryService(bootstrapUrl: bootstrapUrl);
+  final verifier = ref.watch(bootstrapVerifierProvider);
+  final service = ServerDiscoveryService(
+    bootstrapUrl: bootstrapUrl,
+    bootstrapVerifier: verifier,
+  );
   ref.onDispose(() => service.dispose());
   return service;
 });
@@ -285,7 +479,13 @@ final discoveredServersProvider = FutureProvider<List<DiscoveredServer>>((ref) a
 final selectedServerProvider = StateProvider<DiscoveredServer?>((ref) => null);
 
 /// Provider for the signaling server URL (from selected VPS server).
+/// Can be overridden at build time with --dart-define=SIGNALING_URL=<url>
 final signalingServerUrlProvider = Provider<String?>((ref) {
+  // If a direct signaling URL is provided via --dart-define, use it
+  if (Environment.hasDirectSignalingUrl) {
+    return Environment.signalingUrl;
+  }
+
   final selectedServer = ref.watch(selectedServerProvider);
   if (selectedServer == null) return null;
 
@@ -333,9 +533,25 @@ final loggerServiceProvider = Provider<LoggerService>((ref) {
   return LoggerService.instance;
 });
 
+/// Provider for notification service.
+final notificationServiceProvider = Provider<NotificationService>((ref) {
+  return NotificationService();
+});
+
+/// Provider for background blur processor.
+final backgroundBlurProvider = Provider<BackgroundBlurProcessor>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  final processor = BackgroundBlurProcessor();
+  processor.initPreferences(prefs);
+  ref.onDispose(() => processor.dispose());
+  return processor;
+});
+
 /// Provider for media service.
 final mediaServiceProvider = Provider<MediaService>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
   final service = MediaService();
+  service.initPreferences(prefs);
   ref.onDispose(() => service.dispose());
   return service;
 });
@@ -346,7 +562,89 @@ final voipServiceProvider = Provider<VoIPService?>((ref) {
   if (signalingClient == null) return null;
 
   final mediaService = ref.watch(mediaServiceProvider);
-  final voipService = VoIPService(mediaService, signalingClient);
+
+  // Support TURN servers via environment variables for VoIP calls.
+  List<Map<String, dynamic>>? iceServers;
+  const turnUrl = String.fromEnvironment('TURN_URL', defaultValue: '');
+  const turnUser = String.fromEnvironment('TURN_USER', defaultValue: '');
+  const turnPass = String.fromEnvironment('TURN_PASS', defaultValue: '');
+  if (turnUrl.isNotEmpty) {
+    iceServers = [
+      {'urls': 'stun:stun.l.google.com:19302'},
+      {
+        'urls': turnUrl,
+        'username': turnUser,
+        'credential': turnPass,
+      },
+    ];
+  }
+
+  final voipService = VoIPService(mediaService, signalingClient, iceServers: iceServers);
   ref.onDispose(() => voipService.dispose());
   return voipService;
 });
+
+/// Notifier for managing notification settings with persistence.
+class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
+  final SharedPreferences _prefs;
+  static const _key = 'notificationSettings';
+
+  NotificationSettingsNotifier(this._prefs) : super(_load(_prefs));
+
+  static NotificationSettings _load(SharedPreferences prefs) {
+    final data = prefs.getString(_key);
+    if (data == null) return const NotificationSettings();
+    return NotificationSettings.deserialize(data);
+  }
+
+  Future<void> _save() async {
+    await _prefs.setString(_key, state.serialize());
+  }
+
+  Future<void> setGlobalDnd(bool enabled, {DateTime? until}) async {
+    state = state.copyWith(globalDnd: enabled, dndUntil: until, clearDndUntil: until == null && !enabled);
+    await _save();
+  }
+
+  Future<void> setSoundEnabled(bool enabled) async {
+    state = state.copyWith(soundEnabled: enabled);
+    await _save();
+  }
+
+  Future<void> setPreviewEnabled(bool enabled) async {
+    state = state.copyWith(previewEnabled: enabled);
+    await _save();
+  }
+
+  Future<void> setMessageNotifications(bool enabled) async {
+    state = state.copyWith(messageNotifications: enabled);
+    await _save();
+  }
+
+  Future<void> setCallNotifications(bool enabled) async {
+    state = state.copyWith(callNotifications: enabled);
+    await _save();
+  }
+
+  Future<void> setPeerStatusNotifications(bool enabled) async {
+    state = state.copyWith(peerStatusNotifications: enabled);
+    await _save();
+  }
+
+  Future<void> setFileReceivedNotifications(bool enabled) async {
+    state = state.copyWith(fileReceivedNotifications: enabled);
+    await _save();
+  }
+
+  Future<void> mutePeer(String peerId) async {
+    state = state.copyWith(mutedPeerIds: {...state.mutedPeerIds, peerId});
+    await _save();
+  }
+
+  Future<void> unmutePeer(String peerId) async {
+    state = state.copyWith(mutedPeerIds: {...state.mutedPeerIds}..remove(peerId));
+    await _save();
+  }
+
+  bool isPeerMuted(String peerId) => state.mutedPeerIds.contains(peerId);
+}

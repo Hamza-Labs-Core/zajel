@@ -47,6 +47,12 @@ abstract class TrustedPeersStorage {
   /// Update a peer's display name.
   Future<void> updateDisplayName(String peerId, String displayName);
 
+  /// Update a peer's alias.
+  Future<void> updateAlias(String peerId, String? alias);
+
+  /// Check if a peer is trusted by their public key.
+  Future<bool> isTrustedByPublicKey(String publicKey);
+
   /// Clear all trusted peers.
   Future<void> clear();
 }
@@ -74,8 +80,14 @@ class TrustedPeer {
   /// Optional notes about this peer.
   final String? notes;
 
+  /// User-assigned alias for this peer.
+  final String? alias;
+
   /// Whether this peer is currently blocked.
   final bool isBlocked;
+
+  /// When this peer was blocked (null if not blocked).
+  final DateTime? blockedAt;
 
   const TrustedPeer({
     required this.id,
@@ -84,7 +96,9 @@ class TrustedPeer {
     required this.trustedAt,
     this.lastSeen,
     this.notes,
+    this.alias,
     this.isBlocked = false,
+    this.blockedAt,
   });
 
   TrustedPeer copyWith({
@@ -94,7 +108,11 @@ class TrustedPeer {
     DateTime? trustedAt,
     DateTime? lastSeen,
     String? notes,
+    String? alias,
+    bool clearAlias = false,
     bool? isBlocked,
+    DateTime? blockedAt,
+    bool clearBlockedAt = false,
   }) {
     return TrustedPeer(
       id: id ?? this.id,
@@ -103,7 +121,9 @@ class TrustedPeer {
       trustedAt: trustedAt ?? this.trustedAt,
       lastSeen: lastSeen ?? this.lastSeen,
       notes: notes ?? this.notes,
+      alias: clearAlias ? null : (alias ?? this.alias),
       isBlocked: isBlocked ?? this.isBlocked,
+      blockedAt: clearBlockedAt ? null : (blockedAt ?? this.blockedAt),
     );
   }
 
@@ -118,7 +138,11 @@ class TrustedPeer {
           ? DateTime.parse(json['lastSeen'] as String)
           : null,
       notes: json['notes'] as String?,
+      alias: json['alias'] as String?,
       isBlocked: json['isBlocked'] as bool? ?? false,
+      blockedAt: json['blockedAt'] != null
+          ? DateTime.parse(json['blockedAt'] as String)
+          : null,
     );
   }
 
@@ -130,7 +154,9 @@ class TrustedPeer {
         'trustedAt': trustedAt.toIso8601String(),
         'lastSeen': lastSeen?.toIso8601String(),
         'notes': notes,
+        'alias': alias,
         'isBlocked': isBlocked,
+        'blockedAt': blockedAt?.toIso8601String(),
       };
 
   /// Create from a connected Peer.

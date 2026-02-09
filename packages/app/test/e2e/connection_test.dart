@@ -25,6 +25,7 @@ void main() {
     late MockCryptoService mockCryptoService;
     late MockWebRTCService mockWebRTCService;
     late MockDeviceLinkService mockDeviceLinkService;
+    late MockTrustedPeersStorage mockTrustedPeersStorage;
     late MockHttpClient mockHttpClient;
     late ConnectionManager connectionManager;
     late ServerDiscoveryService discoveryService;
@@ -35,12 +36,15 @@ void main() {
       mockCryptoService = MockCryptoService();
       mockWebRTCService = MockWebRTCService();
       mockDeviceLinkService = MockDeviceLinkService();
+      mockTrustedPeersStorage = MockTrustedPeersStorage();
       mockHttpClient = MockHttpClient();
 
       // Default stubs
       when(() => mockWebRTCService.dispose()).thenAnswer((_) async {});
       when(() => mockWebRTCService.signalingEvents)
           .thenAnswer((_) => const Stream.empty());
+      when(() => mockTrustedPeersStorage.getAllPeers())
+          .thenAnswer((_) async => []);
 
       discoveryService = ServerDiscoveryService(
         bootstrapUrl: testBootstrapUrl,
@@ -51,6 +55,8 @@ void main() {
         cryptoService: mockCryptoService,
         webrtcService: mockWebRTCService,
         deviceLinkService: mockDeviceLinkService,
+        trustedPeersStorage: mockTrustedPeersStorage,
+        meetingPointService: MockMeetingPointService(),
       );
     });
 

@@ -58,6 +58,34 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const SizedBox(height: 24),
           _buildSection(
             context,
+            title: 'Notifications',
+            children: [
+              ListTile(
+                leading: const Icon(Icons.notifications),
+                title: const Text('Notifications'),
+                subtitle: const Text('DND, sounds, and per-peer mute'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push('/settings/notifications'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          _buildSection(
+            context,
+            title: 'Audio & Video',
+            children: [
+              ListTile(
+                leading: const Icon(Icons.videocam),
+                title: const Text('Audio & Video'),
+                subtitle: const Text('Microphone, speaker, camera settings'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push('/settings/media'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          _buildSection(
+            context,
             title: 'Privacy & Security',
             children: [
               ListTile(
