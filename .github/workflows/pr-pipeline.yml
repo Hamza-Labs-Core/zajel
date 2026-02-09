@@ -1248,6 +1248,7 @@ jobs:
             pulseaudio \
             libasound2-plugins \
             libegl1 \
+            libgles2 \
             libgl1-mesa-dri \
             libgtk-3-0 \
             python3-gi \
