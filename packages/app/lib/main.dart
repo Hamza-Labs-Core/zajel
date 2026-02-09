@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -24,14 +26,28 @@ const bool _isE2eTest = bool.fromEnvironment('E2E_TEST');
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Force semantics tree so UiAutomator2 can see Flutter widgets in E2E tests
+  // Force semantics tree so UiAutomator2/AT-SPI/UIA can see widgets in E2E tests
   if (_isE2eTest) {
     SemanticsBinding.instance.ensureSemantics();
   }
 
   // Initialize logger first
   await logger.initialize();
-  logger.info('Main', 'App starting...');
+  logger.info('Main', 'App starting on ${Platform.operatingSystem}...');
+
+  // Windows-specific: catch and log platform initialization errors that
+  // could cause a black screen (ANGLE/DirectX context failures)
+  if (Platform.isWindows) {
+    FlutterError.onError = (details) {
+      logger.error('FlutterError', details.exceptionAsString(),
+          details.exception, details.stack);
+      FlutterError.presentError(details);
+    };
+    PlatformDispatcher.instance.onError = (error, stack) {
+      logger.error('PlatformError', 'Unhandled platform error', error, stack);
+      return true;
+    };
+  }
 
   // Initialize shared preferences
   final prefs = await SharedPreferences.getInstance();

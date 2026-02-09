@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../app_router.dart';
 import '../../core/media/media_service.dart';
 import '../../core/models/models.dart';
 import '../../core/network/voip_service.dart';
@@ -43,6 +44,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   /// Check if running on desktop platform
   bool get _isDesktop =>
       Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+
+  /// Get the correct context for showing dialogs.
+  /// When embedded in a ShellRoute (split-view), the local context belongs to
+  /// the shell navigator. On GTK/Linux this can cause transparent/stuck dialogs
+  /// because the barrier hit-test area doesn't cover the dialog content.
+  /// Using the root navigator context ensures proper overlay stacking.
+  BuildContext get _dialogContext =>
+      widget.embedded ? (rootNavigatorKey.currentContext ?? context) : context;
 
   @override
   void initState() {
@@ -695,8 +704,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     _isIncomingCallDialogOpen = true;
 
     showDialog(
-      context: context,
+      context: _dialogContext,
       barrierDismissible: false,
+      barrierColor: Colors.black54,
       builder: (_) => IncomingCallDialog(
         callerName: callerName,
         callId: call.callId,
@@ -746,7 +756,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final currentName = aliases[peer.id] ?? peer.displayName;
     final controller = TextEditingController(text: currentName);
     final newName = await showDialog<String>(
-      context: context,
+      context: _dialogContext,
+      barrierColor: Colors.black54,
       builder: (ctx) => AlertDialog(
         title: const Text('Rename Peer'),
         content: TextField(
@@ -788,7 +799,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   Future<void> _showDeleteDialog(Peer? peer) async {
     if (peer == null) return;
     final confirmed = await showDialog<bool>(
-      context: context,
+      context: _dialogContext,
+      barrierColor: Colors.black54,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete Conversation?'),
         content: Text(
@@ -850,7 +862,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     if (peer == null) return;
 
     showModalBottomSheet(
-      context: context,
+      context: _dialogContext,
       isScrollControlled: true,
       builder: (context) => DraggableScrollableSheet(
         initialChildSize: 0.6,

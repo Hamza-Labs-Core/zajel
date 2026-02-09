@@ -1,57 +1,29 @@
 """
-Pytest fixtures for Linux desktop E2E tests.
+Pytest fixtures for Windows desktop E2E tests.
 
-Uses AT-SPI via dogtail for Flutter app automation.
-Launches two app instances with isolated data directories for P2P testing.
+Uses pywinauto (UIA backend) for Flutter app automation.
 HeadlessBob fixture provides a headless peer for cross-platform pairing tests.
 """
 
 import asyncio
-import os
-import shutil
 import threading
 
 import pytest
 
-from linux_helper import LinuxAppHelper
-from config import APP_PATH, DATA_DIR_1, DATA_DIR_2, SIGNALING_URL
+from windows_helper import WindowsAppHelper
+from config import APP_PATH, SIGNALING_URL
 
 
 @pytest.fixture(scope="function")
 def alice():
-    """First app instance (Alice)."""
-    # Clean data directory for fresh state
-    if os.path.exists(DATA_DIR_1):
-        shutil.rmtree(DATA_DIR_1)
-
-    helper = LinuxAppHelper(APP_PATH, DATA_DIR_1, "alice")
+    """Flutter Windows app instance (Alice)."""
+    helper = WindowsAppHelper(APP_PATH)
     helper.launch()
     helper.wait_for_app_ready()
 
     yield helper
 
     helper.stop()
-
-
-@pytest.fixture(scope="function")
-def bob():
-    """Second app instance (Bob)."""
-    if os.path.exists(DATA_DIR_2):
-        shutil.rmtree(DATA_DIR_2)
-
-    helper = LinuxAppHelper(APP_PATH, DATA_DIR_2, "bob")
-    helper.launch()
-    helper.wait_for_app_ready()
-
-    yield helper
-
-    helper.stop()
-
-
-@pytest.fixture(scope="function")
-def device_pair(alice, bob):
-    """Two app instances ready for P2P testing."""
-    return {"alice": alice, "bob": bob}
 
 
 # ── Headless Client Fixtures ─────────────────────────────────────
@@ -126,7 +98,7 @@ def headless_bob():
     """Headless client acting as Bob for cross-platform tests.
 
     Connects to the signaling server, auto-accepts pair requests.
-    Tests use headless_bob.pairing_code to pair Alice (Linux app) with Bob.
+    Tests use headless_bob.pairing_code to pair Alice (Windows app) with Bob.
     """
     if not SIGNALING_URL:
         pytest.skip("SIGNALING_URL not set — headless tests require a signaling server")

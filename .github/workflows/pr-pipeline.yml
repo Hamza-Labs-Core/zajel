@@ -114,9 +114,26 @@ jobs:
           npm ci
           npm test -- --run
 
+  headless-client-tests:
+    name: Headless Client Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install headless client
+        run: pip install -e packages/headless-client[dev]
+
+      - name: Run tests
+        run: pytest packages/headless-client/tests/ -v --timeout=30
+
   phase-1-tests:
     name: "✓ Phase 1: Tests"
-    needs: [unit-tests, server-tests]
+    needs: [unit-tests, server-tests, headless-client-tests]
     runs-on: ubuntu-latest
     steps:
       - run: echo "All tests passed"
@@ -300,7 +317,8 @@ jobs:
             --dart-define=ENV=qa \
             --dart-define=VERSION=${{ env.VERSION }} \
             --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
-            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
+            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }} \
+            --dart-define=E2E_TEST=true
 
           cd build/linux/x64/release/bundle
           tar -czvf zajel-${{ env.VERSION }}-linux-x64.tar.gz *
@@ -445,7 +463,8 @@ jobs:
             --dart-define=ENV=qa `
             --dart-define=VERSION=${{ env.VERSION }} `
             --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} `
-            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
+            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }} `
+            --dart-define=E2E_TEST=true
 
           Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath zajel-${{ env.VERSION }}-windows.zip
 
@@ -1196,20 +1215,195 @@ jobs:
           path: test-artifacts/
           retention-days: 3
 
+  # ============================================
+  # PHASE 5b: Linux E2E Tests (Xvfb + AT-SPI + headless client)
+  # ============================================
+  e2e-linux:
+    name: E2E Tests (Linux)
+    needs: [build-linux]
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DISPLAY: ':99'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux build
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-build
+          path: ./linux-artifact
+
+      - name: Extract Linux app
+        run: |
+          mkdir -p linux-app
+          tar -xzf linux-artifact/zajel-*-linux-x64.tar.gz -C linux-app
+          chmod +x linux-app/zajel
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            xvfb \
+            dbus-x11 \
+            at-spi2-core \
+            pulseaudio \
+            libgtk-3-0 \
+            python3-gi \
+            gir1.2-atspi-2.0 \
+            python3-dogtail \
+            libsecret-1-0 \
+            libjsoncpp25
+
+      - name: Start virtual display and audio
+        run: |
+          # Start Xvfb virtual display
+          Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 2
+
+          # Start PulseAudio with null sink (no real audio device)
+          pulseaudio --start --load="module-null-sink" --exit-idle-time=-1 || true
+
+          # Start D-Bus session bus
+          eval $(dbus-launch --sh-syntax)
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> $GITHUB_ENV
+
+          # Start AT-SPI accessibility bus
+          /usr/lib/at-spi2-core/at-spi-bus-launcher &
+          sleep 1
+          /usr/lib/at-spi2-core/at-spi2-registryd &
+          sleep 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install E2E dependencies
+        run: |
+          pip install pytest pytest-timeout dogtail
+          pip install -e packages/headless-client
+
+      - name: Run Linux E2E tests
+        timeout-minutes: 20
+        env:
+          ZAJEL_APP_PATH: ${{ github.workspace }}/linux-app/zajel
+          SIGNALING_URL: ${{ vars.VPS_QA_WS_URL || '' }}
+        working-directory: ${{ github.workspace }}/e2e-tests-linux
+        run: |
+          # Phase A: Smoke tests (does the app launch on Xvfb?)
+          echo "=== Running smoke tests ==="
+          pytest tests/test_pairing.py -v -s --timeout=120 -k "smoke or test_app" || true
+
+          # Phase B: Single-device tests (no headless needed)
+          echo "=== Running single-device tests ==="
+          pytest -m "not headless" -v -s --timeout=120
+          SINGLE_RESULT=$?
+
+          # Phase C: Headless-paired tests
+          HEADLESS_RESULT=0
+          if [ -n "$SIGNALING_URL" ]; then
+            echo "=== Running headless-paired tests ==="
+            pytest -m "headless" -v -s --timeout=300
+            HEADLESS_RESULT=$?
+          else
+            echo "=== Skipping headless tests (SIGNALING_URL not set) ==="
+          fi
+
+          # Fail if mandatory tests failed
+          if [ $SINGLE_RESULT -ne 0 ]; then
+            echo "FAILED: Single-device tests"
+            exit 1
+          fi
+          if [ $HEADLESS_RESULT -ne 0 ]; then
+            echo "FAILED: Headless-paired tests"
+            exit 1
+          fi
+          echo "All Linux E2E tests passed."
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-linux-test-artifacts
+          path: e2e-tests-linux/test-artifacts/
+          retention-days: 3
+
+  # ============================================
+  # PHASE 5c: Windows E2E Tests (pywinauto + headless client)
+  # ============================================
+  e2e-windows:
+    name: E2E Tests (Windows)
+    needs: [build-windows]
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Windows build
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+          path: ./windows-artifact
+
+      - name: Extract Windows app
+        run: |
+          Expand-Archive -Path windows-artifact\zajel-*-windows.zip -DestinationPath windows-app
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install E2E dependencies
+        run: |
+          pip install -r e2e-tests-windows\requirements.txt
+          pip install -e packages\headless-client
+
+      - name: Run Windows E2E tests
+        timeout-minutes: 20
+        env:
+          ZAJEL_APP_PATH: ${{ github.workspace }}\windows-app\zajel.exe
+          SIGNALING_URL: ${{ vars.VPS_QA_WS_URL || '' }}
+          FLUTTER_ENGINE_SWITCH_ENABLE_SOFTWARE_RENDERING: 'true'
+        working-directory: ${{ github.workspace }}\e2e-tests-windows
+        run: |
+          # Phase A: Smoke test
+          Write-Host "=== Running smoke tests ==="
+          pytest tests\test_smoke.py -v -s --timeout=120
+
+          # Phase B: Headless-paired tests
+          if ($env:SIGNALING_URL) {
+            Write-Host "=== Running headless-paired tests ==="
+            pytest tests\test_headless_pairing.py tests\test_headless_messaging.py -v -s --timeout=300
+          } else {
+            Write-Host "=== Skipping headless tests (SIGNALING_URL not set) ==="
+          }
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-windows-test-artifacts
+          path: e2e-tests-windows/test-artifacts/
+          retention-days: 3
+
   phase-5-e2e:
     name: "✓ Phase 5: E2E Tests"
-    needs: [e2e-tests]
+    needs: [e2e-tests, e2e-linux, e2e-windows]
     if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
     runs-on: ubuntu-latest
     steps:
-      - run: echo "E2E tests passed"
+      - run: echo "All E2E tests passed (Android, Linux, Windows)"
 
   # ============================================
   # Cleanup Pre-release Tag on Failure
   # ============================================
   cleanup:
     name: Cleanup on Failure
-    needs: [tag-prerelease, e2e-tests]
+    needs: [tag-prerelease, e2e-tests, e2e-linux, e2e-windows]
     if: failure()
     runs-on: ubuntu-latest
     permissions:
