@@ -65,8 +65,13 @@ class LinuxAppHelper:
         env["XDG_CONFIG_HOME"] = os.path.join(self.data_dir, "config")
         env["XDG_CACHE_HOME"] = os.path.join(self.data_dir, "cache")
 
+        # Build command — use software rendering on CI (no GPU)
+        cmd = [self.app_path]
+        if os.environ.get("CI"):
+            cmd.append("--enable-software-rendering")
+
         self.process = subprocess.Popen(
-            [self.app_path],
+            cmd,
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -76,13 +81,34 @@ class LinuxAppHelper:
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
+                # Check if process crashed
+                if self.process.poll() is not None:
+                    stderr = self.process.stderr.read().decode(errors="replace")
+                    raise RuntimeError(
+                        f"App exited with code {self.process.returncode}. "
+                        f"stderr:\n{stderr[-2000:]}"
+                    )
                 self.app = root.application("zajel")
                 return
+            except RuntimeError:
+                raise
             except Exception:
                 time.sleep(1)
 
+        # Timeout — capture stderr for diagnostics
+        stderr = ""
+        if self.process.poll() is not None:
+            stderr = self.process.stderr.read().decode(errors="replace")[-2000:]
+        else:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=3)
+                stderr = self.process.stderr.read().decode(errors="replace")[-2000:]
+            except Exception:
+                self.process.kill()
         raise TimeoutError(
-            f"App did not appear in AT-SPI tree within {timeout}s"
+            f"App did not appear in AT-SPI tree within {timeout}s. "
+            f"stderr:\n{stderr}"
         )
 
     def stop(self):

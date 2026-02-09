@@ -324,11 +324,8 @@ jobs:
           tar -czvf zajel-${{ env.VERSION }}-linux-x64.tar.gz *
           mv zajel-${{ env.VERSION }}-linux-x64.tar.gz ../../../../../
 
-      # NOTE: Linux smoke test skipped - WebRTC crashes on headless CI runners
-      # due to missing audio device (ADM init fails). This is an environmental
-      # limitation, not an app bug. The build success itself validates the binary.
-      # Android E2E tests provide full launch verification on emulators with
-      # proper audio/video stubs.
+      # NOTE: Linux E2E runs in the e2e-linux job with ALSA→PulseAudio routing
+      # and software rendering to handle headless CI (no GPU, no audio device).
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
@@ -1249,6 +1246,7 @@ jobs:
             dbus-x11 \
             at-spi2-core \
             pulseaudio \
+            libasound2-plugins \
             libgtk-3-0 \
             python3-gi \
             gir1.2-atspi-2.0 \
@@ -1263,7 +1261,20 @@ jobs:
           sleep 2
 
           # Start PulseAudio with null sink (no real audio device)
-          pulseaudio --start --load="module-null-sink" --exit-idle-time=-1 || true
+          pulseaudio --start --load="module-null-sink sink_name=NullSink" --exit-idle-time=-1 || true
+          sleep 1
+
+          # Route ALSA through PulseAudio — WebRTC ADM uses ALSA by default
+          # and crashes if no ALSA device exists. This bridges ALSA→PulseAudio.
+          mkdir -p ~/.config/pulse
+          cat > ~/.asoundrc << 'ASOUNDRC'
+          pcm.default pulse
+          ctl.default pulse
+          ASOUNDRC
+
+          # Verify PulseAudio is running and has a sink
+          pactl info || echo "WARNING: PulseAudio not responding"
+          pactl list sinks short || echo "WARNING: No PulseAudio sinks"
 
           # Start D-Bus session bus
           eval $(dbus-launch --sh-syntax)
