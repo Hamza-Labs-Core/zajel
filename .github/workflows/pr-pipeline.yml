@@ -1256,7 +1256,8 @@ jobs:
             python3-dogtail \
             libsecret-1-0 \
             gnome-keyring \
-            libjsoncpp25
+            libjsoncpp25 \
+            xdotool
 
       - name: Start virtual display and audio
         run: |
@@ -1303,6 +1304,55 @@ jobs:
         run: |
           pip3 install --break-system-packages pytest pytest-timeout
           pip3 install --break-system-packages -e packages/headless-client
+
+      - name: Verify display and AT-SPI
+        env:
+          ZAJEL_APP_PATH: ${{ github.workspace }}/linux-app/zajel
+        run: |
+          echo "=== Environment ==="
+          echo "DISPLAY=$DISPLAY"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS"
+          xdpyinfo | head -3 || echo "xdpyinfo failed"
+
+          echo "=== AT-SPI bus check ==="
+          python3 -c "
+          import gi
+          gi.require_version('Atspi', '2.0')
+          from gi.repository import Atspi
+          desktop = Atspi.get_desktop(0)
+          print(f'AT-SPI desktop: {desktop}')
+          print(f'AT-SPI children: {desktop.get_child_count()}')
+          for i in range(desktop.get_child_count()):
+              child = desktop.get_child_at_index(i)
+              print(f'  Child {i}: {child.get_name() if child else \"None\"}')
+          " || echo "AT-SPI check failed"
+
+          echo "=== Launching app briefly ==="
+          LIBGL_ALWAYS_SOFTWARE=1 $ZAJEL_APP_PATH &
+          APP_PID=$!
+          sleep 10
+
+          echo "=== Checking AT-SPI after app launch ==="
+          python3 -c "
+          import gi
+          gi.require_version('Atspi', '2.0')
+          from gi.repository import Atspi
+          desktop = Atspi.get_desktop(0)
+          print(f'AT-SPI children after launch: {desktop.get_child_count()}')
+          for i in range(desktop.get_child_count()):
+              child = desktop.get_child_at_index(i)
+              print(f'  Child {i}: {child.get_name() if child else \"None\"}')
+          " || echo "AT-SPI check after launch failed"
+
+          echo "=== Checking X windows ==="
+          xdotool search --name "." 2>/dev/null | head -5 || echo "No X windows found"
+          xdotool search --name -i zajel 2>/dev/null || echo "No zajel window found"
+
+          echo "=== App process status ==="
+          ps aux | grep zajel | grep -v grep || echo "App not running"
+
+          kill $APP_PID 2>/dev/null || true
+          wait $APP_PID 2>/dev/null || true
 
       - name: Run Linux E2E tests
         timeout-minutes: 20
