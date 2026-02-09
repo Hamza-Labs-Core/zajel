@@ -1275,15 +1275,13 @@ jobs:
           /usr/lib/at-spi2-core/at-spi2-registryd &
           sleep 1
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
+      # NOTE: We use the system Python3 (not setup-python) because dogtail
+      # requires PyGObject (python3-gi) which is installed as a system package
+      # via apt. setup-python installs an isolated Python that can't see these.
       - name: Install E2E dependencies
         run: |
-          pip install pytest pytest-timeout dogtail
-          pip install -e packages/headless-client
+          pip3 install --break-system-packages pytest pytest-timeout
+          pip3 install --break-system-packages -e packages/headless-client
 
       - name: Run Linux E2E tests
         timeout-minutes: 20
@@ -1294,18 +1292,18 @@ jobs:
         run: |
           # Phase A: Smoke tests (does the app launch on Xvfb?)
           echo "=== Running smoke tests ==="
-          pytest tests/test_pairing.py -v -s --timeout=120 -k "smoke or test_app" || true
+          python3 -m pytest tests/test_pairing.py -v -s --timeout=120 -k "smoke or test_app" || true
 
           # Phase B: Single-device tests (no headless needed)
           echo "=== Running single-device tests ==="
-          pytest -m "not headless" -v -s --timeout=120
+          python3 -m pytest -m "not headless" -v -s --timeout=120
           SINGLE_RESULT=$?
 
           # Phase C: Headless-paired tests
           HEADLESS_RESULT=0
           if [ -n "$SIGNALING_URL" ]; then
             echo "=== Running headless-paired tests ==="
-            pytest -m "headless" -v -s --timeout=300
+            python3 -m pytest -m "headless" -v -s --timeout=300
             HEADLESS_RESULT=$?
           else
             echo "=== Skipping headless tests (SIGNALING_URL not set) ==="
@@ -1367,7 +1365,6 @@ jobs:
         env:
           ZAJEL_APP_PATH: ${{ github.workspace }}\windows-app\zajel.exe
           SIGNALING_URL: ${{ vars.VPS_QA_WS_URL || '' }}
-          FLUTTER_ENGINE_SWITCH_ENABLE_SOFTWARE_RENDERING: 'true'
         working-directory: ${{ github.workspace }}\e2e-tests-windows
         run: |
           # Phase A: Smoke test

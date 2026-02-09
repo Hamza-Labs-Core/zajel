@@ -47,14 +47,22 @@ class WindowsAppHelper:
         self.main_window = None
 
     def launch(self, timeout: int = APP_LAUNCH_TIMEOUT):
-        """Launch the app and wait for the main window to appear."""
+        """Launch the app and wait for the main window to appear.
+
+        Passes --enable-software-rendering to avoid ANGLE/DirectX failures
+        on CI runners that lack GPU hardware or have driver issues.
+        """
         self.app = Application(backend="uia").start(
-            self.app_path, timeout=timeout
+            f'"{self.app_path}" --enable-software-rendering',
+            timeout=timeout,
         )
 
         # Wait for the main window to appear
-        # Flutter Windows apps typically use the title set in main.cpp
-        self.main_window = self.app.window(title_re=".*zajel.*", visible_only=True)
+        # Flutter Windows apps use the title set in main.cpp — match
+        # case-insensitively since it could be "zajel" or "Zajel"
+        self.main_window = self.app.window(
+            title_re="(?i).*zajel.*", visible_only=True
+        )
         self.main_window.wait("visible", timeout=timeout)
 
     def stop(self):
