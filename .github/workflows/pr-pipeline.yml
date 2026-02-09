@@ -1247,6 +1247,8 @@ jobs:
             at-spi2-core \
             pulseaudio \
             libasound2-plugins \
+            libegl1 \
+            libgl1-mesa-dri \
             libgtk-3-0 \
             python3-gi \
             gir1.2-atspi-2.0 \
