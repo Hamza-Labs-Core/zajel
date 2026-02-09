@@ -1269,6 +1269,9 @@ jobs:
           eval $(dbus-launch --sh-syntax)
           echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> $GITHUB_ENV
 
+          # Enable AT-SPI accessibility (required by dogtail)
+          gsettings set org.gnome.desktop.interface toolkit-accessibility true
+
           # Start AT-SPI accessibility bus
           /usr/lib/at-spi2-core/at-spi-bus-launcher &
           sleep 1
