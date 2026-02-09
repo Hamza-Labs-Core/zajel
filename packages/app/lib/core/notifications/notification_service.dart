@@ -21,6 +21,13 @@ class NotificationService {
   Future<void> initialize() async {
     if (_initialized) return;
 
+    // Windows is not supported by flutter_local_notifications 18.x
+    if (Platform.isWindows) {
+      logger.warning(_tag,
+          'Notifications not supported on Windows with current plugin version');
+      return;
+    }
+
     const androidSettings =
         AndroidInitializationSettings('@mipmap/ic_launcher');
     const darwinSettings = DarwinInitializationSettings(
@@ -38,15 +45,19 @@ class NotificationService {
       linux: linuxSettings,
     );
 
-    await _plugin.initialize(
-      initSettings,
-      onDidReceiveNotificationResponse: (response) {
-        onNotificationTap?.call(response.payload);
-      },
-    );
-
-    _initialized = true;
-    logger.info(_tag, 'Notification service initialized');
+    try {
+      await _plugin.initialize(
+        initSettings,
+        onDidReceiveNotificationResponse: (response) {
+          onNotificationTap?.call(response.payload);
+        },
+      );
+      _initialized = true;
+      logger.info(
+          _tag, 'Notification service initialized (${Platform.operatingSystem})');
+    } catch (e) {
+      logger.error(_tag, 'Failed to initialize notifications', e);
+    }
   }
 
   Future<bool> requestPermission() async {
@@ -83,23 +94,27 @@ class NotificationService {
 
     final body = settings.previewEnabled ? content : 'New message';
 
-    await _plugin.show(
-      peerId.hashCode,
-      peerName,
-      body,
-      NotificationDetails(
-        android: AndroidNotificationDetails(
-          'messages',
-          'Messages',
-          channelDescription: 'New message notifications',
-          importance: Importance.high,
-          priority: Priority.high,
-          playSound: settings.soundEnabled,
+    try {
+      await _plugin.show(
+        peerId.hashCode,
+        peerName,
+        body,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            'messages',
+            'Messages',
+            channelDescription: 'New message notifications',
+            importance: Importance.high,
+            priority: Priority.high,
+            playSound: settings.soundEnabled,
+          ),
+          linux: const LinuxNotificationDetails(),
         ),
-        linux: const LinuxNotificationDetails(),
-      ),
-      payload: 'chat:$peerId',
-    );
+        payload: 'chat:$peerId',
+      );
+    } catch (e) {
+      logger.error(_tag, 'Failed to show message notification', e);
+    }
   }
 
   /// Show an incoming call notification.
@@ -115,25 +130,29 @@ class NotificationService {
 
     final callType = withVideo ? 'Video' : 'Voice';
 
-    await _plugin.show(
-      peerId.hashCode + 1000,
-      'Incoming $callType Call',
-      peerName,
-      NotificationDetails(
-        android: AndroidNotificationDetails(
-          'calls',
-          'Calls',
-          channelDescription: 'Incoming call notifications',
-          importance: Importance.max,
-          priority: Priority.max,
-          playSound: settings.soundEnabled,
-          fullScreenIntent: true,
-          category: AndroidNotificationCategory.call,
+    try {
+      await _plugin.show(
+        peerId.hashCode + 1000,
+        'Incoming $callType Call',
+        peerName,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            'calls',
+            'Calls',
+            channelDescription: 'Incoming call notifications',
+            importance: Importance.max,
+            priority: Priority.max,
+            playSound: settings.soundEnabled,
+            fullScreenIntent: true,
+            category: AndroidNotificationCategory.call,
+          ),
+          linux: const LinuxNotificationDetails(),
         ),
-        linux: const LinuxNotificationDetails(),
-      ),
-      payload: 'call:$peerId',
-    );
+        payload: 'call:$peerId',
+      );
+    } catch (e) {
+      logger.error(_tag, 'Failed to show call notification', e);
+    }
   }
 
   /// Show peer online/offline notification.
@@ -148,22 +167,26 @@ class NotificationService {
 
     final status = connected ? 'is now online' : 'went offline';
 
-    await _plugin.show(
-      peerName.hashCode + 2000,
-      peerName,
-      status,
-      NotificationDetails(
-        android: AndroidNotificationDetails(
-          'peer_status',
-          'Peer Status',
-          channelDescription: 'Peer online/offline notifications',
-          importance: Importance.low,
-          priority: Priority.low,
-          playSound: false,
+    try {
+      await _plugin.show(
+        peerName.hashCode + 2000,
+        peerName,
+        status,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            'peer_status',
+            'Peer Status',
+            channelDescription: 'Peer online/offline notifications',
+            importance: Importance.low,
+            priority: Priority.low,
+            playSound: false,
+          ),
+          linux: const LinuxNotificationDetails(),
         ),
-        linux: const LinuxNotificationDetails(),
-      ),
-    );
+      );
+    } catch (e) {
+      logger.error(_tag, 'Failed to show peer status notification', e);
+    }
   }
 
   /// Show file received notification.
@@ -177,23 +200,27 @@ class NotificationService {
     if (!settings.shouldNotify(peerId)) return;
     if (!settings.fileReceivedNotifications) return;
 
-    await _plugin.show(
-      peerId.hashCode + 3000,
-      'File from $peerName',
-      fileName,
-      NotificationDetails(
-        android: AndroidNotificationDetails(
-          'files',
-          'Files',
-          channelDescription: 'File transfer notifications',
-          importance: Importance.defaultImportance,
-          priority: Priority.defaultPriority,
-          playSound: settings.soundEnabled,
+    try {
+      await _plugin.show(
+        peerId.hashCode + 3000,
+        'File from $peerName',
+        fileName,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            'files',
+            'Files',
+            channelDescription: 'File transfer notifications',
+            importance: Importance.defaultImportance,
+            priority: Priority.defaultPriority,
+            playSound: settings.soundEnabled,
+          ),
+          linux: const LinuxNotificationDetails(),
         ),
-        linux: const LinuxNotificationDetails(),
-      ),
-      payload: 'file:$peerId',
-    );
+        payload: 'file:$peerId',
+      );
+    } catch (e) {
+      logger.error(_tag, 'Failed to show file notification', e);
+    }
   }
 
   /// Cancel a specific notification.

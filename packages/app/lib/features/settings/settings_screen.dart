@@ -56,6 +56,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ],
           ),
           const SizedBox(height: 24),
+          _buildAppearanceSection(context),
+          const SizedBox(height: 24),
           _buildSection(
             context,
             title: 'Notifications',
@@ -221,6 +223,52 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildAppearanceSection(BuildContext context) {
+    final themeMode = ref.watch(themeModeProvider);
+
+    return _buildSection(
+      context,
+      title: 'Appearance',
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Theme'),
+              const SizedBox(height: 8),
+              SegmentedButton<ThemeMode>(
+                segments: const [
+                  ButtonSegment(
+                    value: ThemeMode.light,
+                    label: Text('Light'),
+                    icon: Icon(Icons.light_mode),
+                  ),
+                  ButtonSegment(
+                    value: ThemeMode.dark,
+                    label: Text('Dark'),
+                    icon: Icon(Icons.dark_mode),
+                  ),
+                  ButtonSegment(
+                    value: ThemeMode.system,
+                    label: Text('System'),
+                    icon: Icon(Icons.settings_brightness),
+                  ),
+                ],
+                selected: {themeMode},
+                onSelectionChanged: (selected) {
+                  ref
+                      .read(themeModeProvider.notifier)
+                      .setThemeMode(selected.first);
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 

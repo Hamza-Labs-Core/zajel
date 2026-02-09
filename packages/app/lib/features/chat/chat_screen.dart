@@ -21,13 +21,17 @@ import 'widgets/filtered_emoji_picker.dart';
 class ChatScreen extends ConsumerStatefulWidget {
   final String peerId;
 
-  const ChatScreen({super.key, required this.peerId});
+  /// When true, renders without its own Scaffold/AppBar (for split-view embedding).
+  final bool embedded;
+
+  const ChatScreen({super.key, required this.peerId, this.embedded = false});
 
   @override
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends ConsumerState<ChatScreen> {
+class _ChatScreenState extends ConsumerState<ChatScreen>
+    with WidgetsBindingObserver {
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
   final _messageFocusNode = FocusNode();
@@ -43,33 +47,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   void initState() {
     super.initState();
-    _loadBufferedMessages();
+    WidgetsBinding.instance.addObserver(this);
     _listenToMessages();
     _setupVoipListener();
   }
 
-  /// Load messages that arrived while this ChatScreen was not open.
-  void _loadBufferedMessages() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final connectionManager = ref.read(connectionManagerProvider);
-      final buffered = connectionManager.drainBufferedMessages(widget.peerId);
-      if (buffered.isNotEmpty) {
-        final notifier = ref.read(chatMessagesProvider(widget.peerId).notifier);
-        for (final (peerId, message) in buffered) {
-          notifier.addMessage(
-            Message(
-              localId: const Uuid().v4(),
-              peerId: peerId,
-              content: message,
-              timestamp: DateTime.now(),
-              isOutgoing: false,
-              status: MessageStatus.delivered,
-            ),
-          );
-        }
-        _scrollToBottom();
-      }
-    });
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _messageFocusNode.requestFocus();
+    }
   }
 
   void _setupVoipListener() {
@@ -93,20 +80,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   void _listenToMessages() {
+    // Messages are persisted by the global listener in main.dart.
+    // Here we just reload from DB when a new message arrives for this peer.
     ref.listenManual(messagesStreamProvider, (previous, next) {
       next.whenData((data) {
-        final (peerId, message) = data;
+        final (peerId, _) = data;
         if (peerId == widget.peerId) {
-          ref.read(chatMessagesProvider(widget.peerId).notifier).addMessage(
-                Message(
-                  localId: const Uuid().v4(),
-                  peerId: peerId,
-                  content: message,
-                  timestamp: DateTime.now(),
-                  isOutgoing: false,
-                  status: MessageStatus.delivered,
-                ),
-              );
+          ref.read(chatMessagesProvider(widget.peerId).notifier).reload();
           _scrollToBottom();
         }
       });
@@ -115,6 +95,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _voipStateSubscription?.cancel();
     _messageController.dispose();
     _scrollController.dispose();
@@ -145,147 +126,215 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         peer?.displayName ??
         'Unknown';
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            CircleAvatar(
-              radius: 18,
-              backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-              child: Text(
-                peerName.isNotEmpty ? peerName[0].toUpperCase() : '?',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onPrimaryContainer,
-                  fontSize: 14,
+    final body = Column(
+      children: [
+        if (peer?.connectionState != PeerConnectionState.connected)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            color: Colors.orange.shade50,
+            child: Row(
+              children: [
+                Icon(Icons.cloud_off, size: 18, color: Colors.orange.shade700),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Peer is offline. Messages will be sent when they reconnect.',
+                    style:
+                        TextStyle(fontSize: 13, color: Colors.orange.shade800),
+                  ),
                 ),
-              ),
+              ],
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    peerName,
-                    style: const TextStyle(fontSize: 16),
-                  ),
-                  Text(
-                    _getConnectionStatus(peer),
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: _getConnectionColor(peer),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+          ),
+        Expanded(
+          child: messages.isEmpty
+              ? _buildEmptyState()
+              : _buildMessageList(messages),
         ),
-        actions: [
-          // Voice call button
-          IconButton(
-            icon: const Icon(Icons.call),
-            tooltip: 'Voice call',
-            onPressed: () => _startCall(withVideo: false),
-          ),
-          // Video call button
-          IconButton(
-            icon: const Icon(Icons.videocam),
-            tooltip: 'Video call',
-            onPressed: () => _startCall(withVideo: true),
-          ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert),
-            onSelected: (value) {
-              switch (value) {
-                case 'rename':
-                  _showRenameDialog(peer);
-                case 'delete':
-                  _showDeleteDialog(peer);
-                case 'info':
-                  _showPeerInfo(context, peer);
-              }
+        _buildInputBar(),
+        if (_showEmojiPicker)
+          FilteredEmojiPicker(
+            textEditingController: _messageController,
+            onEmojiSelected: (category, emoji) {
+              // Emoji is auto-inserted by the textEditingController binding
             },
-            itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 'rename',
-                child: Row(
-                  children: [
-                    Icon(Icons.edit),
-                    SizedBox(width: 8),
-                    Text('Rename'),
-                  ],
-                ),
+            onBackspacePressed: () {
+              _messageController
+                ..text = _messageController.text.characters.skipLast(1).string
+                ..selection = TextSelection.fromPosition(
+                  TextPosition(offset: _messageController.text.length),
+                );
+            },
+          ),
+      ],
+    );
+
+    if (widget.embedded) {
+      // In embedded mode (split-view), render with a header bar but no Scaffold
+      return Column(
+        children: [
+          _buildEmbeddedHeader(context, peer, peerName),
+          Expanded(child: body),
+        ],
+      );
+    }
+
+    return Scaffold(
+      appBar: _buildAppBar(context, peer, peerName),
+      body: body,
+    );
+  }
+
+  PreferredSizeWidget _buildAppBar(
+      BuildContext context, Peer? peer, String peerName) {
+    return AppBar(
+      title: Row(
+        children: [
+          CircleAvatar(
+            radius: 18,
+            backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+            child: Text(
+              peerName.isNotEmpty ? peerName[0].toUpperCase() : '?',
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onPrimaryContainer,
+                fontSize: 14,
               ),
-              const PopupMenuItem(
-                value: 'delete',
-                child: Row(
-                  children: [
-                    Icon(Icons.delete_outline, color: Colors.red),
-                    SizedBox(width: 8),
-                    Text('Delete conversation'),
-                  ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(peerName, style: const TextStyle(fontSize: 16)),
+                Text(
+                  _getConnectionStatus(peer),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _getConnectionColor(peer),
+                  ),
                 ),
-              ),
-              const PopupMenuItem(
-                value: 'info',
-                child: Row(
-                  children: [
-                    Icon(Icons.info_outline),
-                    SizedBox(width: 8),
-                    Text('Info'),
-                  ],
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
-      body: Column(
+      actions: _buildChatActions(peer),
+    );
+  }
+
+  Widget _buildEmbeddedHeader(
+      BuildContext context, Peer? peer, String peerName) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        border: Border(
+          bottom: BorderSide(
+            color: Theme.of(context).dividerColor,
+          ),
+        ),
+      ),
+      child: Row(
         children: [
-          if (peer?.connectionState != PeerConnectionState.connected)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              color: Colors.orange.shade50,
-              child: Row(
-                children: [
-                  Icon(Icons.cloud_off,
-                      size: 18, color: Colors.orange.shade700),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Peer is offline. Messages will be sent when they reconnect.',
-                      style: TextStyle(
-                          fontSize: 13, color: Colors.orange.shade800),
-                    ),
-                  ),
-                ],
+          CircleAvatar(
+            radius: 18,
+            backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+            child: Text(
+              peerName.isNotEmpty ? peerName[0].toUpperCase() : '?',
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onPrimaryContainer,
+                fontSize: 14,
               ),
             ),
-          Expanded(
-            child: messages.isEmpty
-                ? _buildEmptyState()
-                : _buildMessageList(messages),
           ),
-          _buildInputBar(),
-          if (_showEmojiPicker)
-            FilteredEmojiPicker(
-              textEditingController: _messageController,
-              onEmojiSelected: (category, emoji) {
-                // Emoji is auto-inserted by the textEditingController binding
-              },
-              onBackspacePressed: () {
-                _messageController
-                  ..text = _messageController.text.characters.skipLast(1).string
-                  ..selection = TextSelection.fromPosition(
-                    TextPosition(offset: _messageController.text.length),
-                  );
-              },
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  peerName,
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                Text(
+                  _getConnectionStatus(peer),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _getConnectionColor(peer),
+                  ),
+                ),
+              ],
             ),
+          ),
+          ..._buildChatActions(peer),
         ],
       ),
     );
+  }
+
+  List<Widget> _buildChatActions(Peer? peer) {
+    return [
+      IconButton(
+        icon: const Icon(Icons.call),
+        tooltip: 'Voice call',
+        onPressed: () => _startCall(withVideo: false),
+      ),
+      IconButton(
+        icon: const Icon(Icons.videocam),
+        tooltip: 'Video call',
+        onPressed: () => _startCall(withVideo: true),
+      ),
+      PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert),
+        onSelected: (value) {
+          switch (value) {
+            case 'rename':
+              _showRenameDialog(peer);
+            case 'delete':
+              _showDeleteDialog(peer);
+            case 'info':
+              _showPeerInfo(context, peer);
+          }
+        },
+        itemBuilder: (context) => [
+          const PopupMenuItem(
+            value: 'rename',
+            child: Row(
+              children: [
+                Icon(Icons.edit),
+                SizedBox(width: 8),
+                Text('Rename'),
+              ],
+            ),
+          ),
+          const PopupMenuItem(
+            value: 'delete',
+            child: Row(
+              children: [
+                Icon(Icons.delete_outline, color: Colors.red),
+                SizedBox(width: 8),
+                Text('Delete conversation'),
+              ],
+            ),
+          ),
+          const PopupMenuItem(
+            value: 'info',
+            child: Row(
+              children: [
+                Icon(Icons.info_outline),
+                SizedBox(width: 8),
+                Text('Info'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ];
   }
 
   Widget _buildEmptyState() {

@@ -111,10 +111,6 @@ class ConnectionManager {
   final _messagesController =
       StreamController<(String peerId, String message)>.broadcast();
 
-  /// Buffer of received messages per peer, stored as ciphertext so messages
-  /// remain encrypted in memory until the ChatScreen opens and decrypts them.
-  final Map<String, List<(String peerId, String ciphertext)>> _messageBuffer =
-      {};
   final _fileChunksController = StreamController<
       (
         String peerId,
@@ -176,12 +172,6 @@ class ConnectionManager {
   /// Stream of incoming messages (peerId, plaintext).
   Stream<(String, String)> get messages => _messagesController.stream;
 
-  /// Drain buffered messages for a peer (returns and clears the buffer).
-  /// Call this when opening a chat to retrieve messages that arrived while
-  /// the ChatScreen was closed.
-  List<(String, String)> drainBufferedMessages(String peerId) {
-    return _messageBuffer.remove(peerId) ?? [];
-  }
 
   /// Stream of incoming file chunks.
   Stream<(String, String, Uint8List, int, int)> get fileChunks =>
@@ -540,10 +530,7 @@ class ConnectionManager {
         return;
       }
 
-      // Buffer the message so it's not lost if ChatScreen isn't open
-      _messageBuffer.putIfAbsent(peerId, () => []).add((peerId, message));
-
-      // Normal peer message - emit to UI
+      // Emit to UI — persistence is handled by the global listener in main.dart
       _messagesController.add((peerId, message));
 
       // Also forward to all connected linked devices

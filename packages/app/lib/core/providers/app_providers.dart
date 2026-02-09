@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -28,6 +29,42 @@ import '../storage/trusted_peers_storage_impl.dart';
 final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
   throw UnimplementedError('Must be overridden with actual instance');
 });
+
+/// Provider for theme mode selection (Light / Dark / System).
+/// Persisted to SharedPreferences under 'themeMode'.
+final themeModeProvider =
+    StateNotifierProvider<ThemeModeNotifier, ThemeMode>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return ThemeModeNotifier(prefs);
+});
+
+class ThemeModeNotifier extends StateNotifier<ThemeMode> {
+  final SharedPreferences _prefs;
+  static const _key = 'themeMode';
+
+  ThemeModeNotifier(this._prefs) : super(_load(_prefs));
+
+  static ThemeMode _load(SharedPreferences prefs) {
+    final value = prefs.getString(_key);
+    return switch (value) {
+      'light' => ThemeMode.light,
+      'dark' => ThemeMode.dark,
+      _ => ThemeMode.system,
+    };
+  }
+
+  Future<void> setThemeMode(ThemeMode mode) async {
+    state = mode;
+    await _prefs.setString(
+      _key,
+      switch (mode) {
+        ThemeMode.light => 'light',
+        ThemeMode.dark => 'dark',
+        ThemeMode.system => 'system',
+      },
+    );
+  }
+}
 
 /// Provider for the user's display name.
 final displayNameProvider = StateProvider<String>((ref) {
@@ -279,7 +316,18 @@ class ChatMessagesNotifier extends StateNotifier<List<Message>> {
     }
   }
 
+  /// Reload messages from DB. Called when a new message is persisted
+  /// by the global listener so the UI picks it up.
+  Future<void> reload() async {
+    final messages = await _storage.getMessages(peerId);
+    if (mounted) {
+      state = messages;
+    }
+  }
+
   void addMessage(Message message) {
+    // Dedup guard: skip if a message with same localId already exists
+    if (state.any((m) => m.localId == message.localId)) return;
     state = [...state, message];
     _storage.saveMessage(message);
   }
@@ -299,6 +347,14 @@ class ChatMessagesNotifier extends StateNotifier<List<Message>> {
     _storage.deleteMessages(peerId);
   }
 }
+
+/// Provider for the last message per peer (for conversation list preview).
+/// Watches the chatMessagesProvider state to auto-update when messages change.
+final lastMessageProvider = Provider.family<Message?, String>((ref, peerId) {
+  final messages = ref.watch(chatMessagesProvider(peerId));
+  if (messages.isEmpty) return null;
+  return messages.last;
+});
 
 /// Provider for peer aliases (peerId -> alias).
 /// Loaded from TrustedPeersStorage and updated in-memory when user renames.

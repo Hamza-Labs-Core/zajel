@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
 import 'app_router.dart';
 import 'core/config/environment.dart';
 import 'core/logging/logger_service.dart';
 import 'core/media/media_service.dart';
 import 'core/models/models.dart';
+import 'core/network/signaling_client.dart' show SignalingConnectionState;
 import 'core/network/voip_service.dart';
 import 'core/notifications/call_foreground_service.dart';
 import 'core/providers/app_providers.dart';
@@ -62,6 +64,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   StreamSubscription<CallState>? _voipCallStateSubscription;
   bool _disposed = false;
   bool _isIncomingCallDialogOpen = false;
+  bool _isReconnecting = false;
   final _callForegroundService = CallForegroundService();
 
   @override
@@ -161,9 +164,68 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       final connectionManager = ref.read(connectionManagerProvider);
       await _connectToSignaling(connectionManager);
       logger.info('ZajelApp', 'Signaling connection complete');
+
+      // Set up auto-reconnect on disconnect
+      _setupSignalingReconnect(connectionManager);
     } catch (e, stack) {
       logger.error('ZajelApp', 'Signaling connection failed', e, stack);
+      // Even on initial failure, try to reconnect
+      final connectionManager = ref.read(connectionManagerProvider);
+      _setupSignalingReconnect(connectionManager);
     }
+  }
+
+  void _setupSignalingReconnect(dynamic connectionManager) {
+    final signalingClient = ref.read(signalingClientProvider);
+    if (signalingClient == null) return;
+
+    signalingClient.connectionState.listen((state) async {
+      if (state == SignalingConnectionState.disconnected ||
+          state == SignalingConnectionState.failed) {
+        ref.read(signalingConnectedProvider.notifier).state = false;
+        ref.read(signalingDisplayStateProvider.notifier).state =
+            SignalingDisplayState.disconnected;
+
+        if (_isReconnecting || _disposed) return;
+        _isReconnecting = true;
+
+        // Exponential backoff: 3s, 6s, 12s, 24s, 48s (capped at 60s)
+        var delay = const Duration(seconds: 3);
+        const maxDelay = Duration(seconds: 60);
+        const maxRetries = 5;
+
+        for (var attempt = 1; attempt <= maxRetries; attempt++) {
+          if (_disposed) break;
+          logger.info('ZajelApp',
+              'Signaling reconnect attempt $attempt/$maxRetries in ${delay.inSeconds}s');
+          ref.read(signalingDisplayStateProvider.notifier).state =
+              SignalingDisplayState.connecting;
+
+          await Future<void>.delayed(delay);
+          if (_disposed) break;
+
+          try {
+            await _connectToSignaling(connectionManager);
+            logger.info('ZajelApp', 'Signaling reconnected on attempt $attempt');
+            _isReconnecting = false;
+            return;
+          } catch (e) {
+            logger.warning(
+                'ZajelApp', 'Reconnect attempt $attempt failed: $e');
+          }
+
+          delay = Duration(
+            seconds: (delay.inSeconds * 2).clamp(0, maxDelay.inSeconds),
+          );
+        }
+
+        logger.error('ZajelApp',
+            'Signaling reconnect failed after $maxRetries attempts');
+        ref.read(signalingDisplayStateProvider.notifier).state =
+            SignalingDisplayState.disconnected;
+        _isReconnecting = false;
+      }
+    });
   }
 
   Future<void> _connectToSignaling(dynamic connectionManager) async {
@@ -526,12 +588,23 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     final connectionManager = ref.read(connectionManagerProvider);
     final notificationService = ref.read(notificationServiceProvider);
 
-    // Notify on incoming messages (only when not on the chat screen for that peer)
+    // Global message listener: persist to DB immediately, then notify
     connectionManager.messages.listen((event) {
       final (peerId, message) = event;
-      final settings = ref.read(notificationSettingsProvider);
 
-      // Try to get peer name
+      // Persist incoming message to DB immediately (prevents message drops)
+      final msg = Message(
+        localId: const Uuid().v4(),
+        peerId: peerId,
+        content: message,
+        timestamp: DateTime.now(),
+        isOutgoing: false,
+        status: MessageStatus.delivered,
+      );
+      ref.read(chatMessagesProvider(peerId).notifier).addMessage(msg);
+
+      // Show notification
+      final settings = ref.read(notificationSettingsProvider);
       String peerName = peerId;
       final peersAsync = ref.read(peersProvider);
       peersAsync.whenData((peers) {
@@ -785,7 +858,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
-      themeMode: ThemeMode.system,
+      themeMode: ref.watch(themeModeProvider),
       routerConfig: appRouter,
     );
   }

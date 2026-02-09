@@ -6,6 +6,7 @@ import 'features/connection/connect_screen.dart';
 import 'features/contacts/contact_detail_screen.dart';
 import 'features/contacts/contacts_screen.dart';
 import 'features/home/home_screen.dart';
+import 'features/home/main_layout.dart';
 import 'features/settings/blocked_peers_screen.dart';
 import 'features/settings/media_settings_screen.dart';
 import 'features/settings/notification_settings_screen.dart';
@@ -14,21 +15,32 @@ import 'features/settings/settings_screen.dart';
 /// Root navigator key for showing dialogs from anywhere in the app.
 final rootNavigatorKey = GlobalKey<NavigatorState>();
 
+/// Shell navigator key for the main layout shell.
+final _shellNavigatorKey = GlobalKey<NavigatorState>();
+
 /// App router configuration.
+/// Uses a ShellRoute to wrap the home and chat routes in MainLayout,
+/// enabling the responsive sidebar + chat split-view on wide screens.
 final appRouter = GoRouter(
   navigatorKey: rootNavigatorKey,
   initialLocation: '/',
   routes: [
-    GoRoute(
-      path: '/',
-      builder: (context, state) => const HomeScreen(),
-    ),
-    GoRoute(
-      path: '/chat/:peerId',
-      builder: (context, state) {
-        final peerId = state.pathParameters['peerId']!;
-        return ChatScreen(peerId: peerId);
-      },
+    ShellRoute(
+      navigatorKey: _shellNavigatorKey,
+      builder: (context, state, child) => MainLayout(child: child),
+      routes: [
+        GoRoute(
+          path: '/',
+          builder: (context, state) => const HomeScreen(),
+        ),
+        GoRoute(
+          path: '/chat/:peerId',
+          builder: (context, state) {
+            final peerId = state.pathParameters['peerId']!;
+            return ChatScreen(peerId: peerId);
+          },
+        ),
+      ],
     ),
     GoRoute(
       path: '/connect',

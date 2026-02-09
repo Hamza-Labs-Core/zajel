@@ -119,6 +119,23 @@ class MessageStorage {
     return rows.map(_rowToMessage).toList();
   }
 
+  /// Get the last message for a peer (for conversation list preview).
+  Future<Message?> getLastMessage(String peerId) async {
+    final db = _db;
+    if (db == null) return null;
+
+    final rows = await db.query(
+      _tableName,
+      where: 'peerId = ?',
+      whereArgs: [peerId],
+      orderBy: 'timestamp DESC',
+      limit: 1,
+    );
+
+    if (rows.isEmpty) return null;
+    return _rowToMessage(rows.first);
+  }
+
   /// Get the total message count for a peer.
   Future<int> getMessageCount(String peerId) async {
     final db = _db;
