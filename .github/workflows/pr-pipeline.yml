@@ -1255,6 +1255,7 @@ jobs:
             gir1.2-atspi-2.0 \
             python3-dogtail \
             libsecret-1-0 \
+            gir1.2-secret-1 \
             gnome-keyring \
             libatk-adaptor \
             libjsoncpp25 \
@@ -1289,8 +1290,23 @@ jobs:
           # Enable AT-SPI accessibility (required by dogtail)
           gsettings set org.gnome.desktop.interface toolkit-accessibility true
 
-          # Start gnome-keyring (Flutter's secure_storage needs it)
-          echo "" | gnome-keyring-daemon --unlock --start --components=secrets || true
+          # Start gnome-keyring — Flutter's secure_storage uses libsecret on Linux,
+          # which requires an unlocked keyring. Without proper setup, libsecret
+          # spawns gcr-prompter (a GUI unlock dialog) which blocks the GTK main
+          # loop and makes AT-SPI queries timeout ("application may be hanging").
+          #
+          # CRITICAL: use eval $(...) to capture GNOME_KEYRING_CONTROL env var.
+          # Without it, subsequent processes can't find the keyring daemon.
+          mkdir -p ~/.local/share/keyrings
+          eval $(echo -n "" | gnome-keyring-daemon --unlock --start --components=secrets 2>/dev/null) || true
+          echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL" >> $GITHUB_ENV
+          echo "GNOME_KEYRING_PID=$GNOME_KEYRING_PID" >> $GITHUB_ENV
+
+          # Safety net: kill gcr-prompter if it somehow still appears.
+          # gcr-prompter is the keyring unlock GUI — in headless CI it can never
+          # be dismissed, blocking libsecret calls and freezing the GTK main loop.
+          (while true; do pkill -9 -f gcr-prompter 2>/dev/null; sleep 0.5; done) &
+          echo "GCR_KILLER_PID=$!" >> $GITHUB_ENV
 
           # Start AT-SPI accessibility bus
           /usr/lib/at-spi2-core/at-spi-bus-launcher &
@@ -1306,14 +1322,39 @@ jobs:
           pip3 install --break-system-packages pytest pytest-timeout
           pip3 install --break-system-packages -e packages/headless-client
 
-      - name: Verify display and AT-SPI
+      - name: Verify display, keyring, and AT-SPI
         env:
           ZAJEL_APP_PATH: ${{ github.workspace }}/linux-app/zajel
         run: |
           echo "=== Environment ==="
           echo "DISPLAY=$DISPLAY"
           echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS"
-          xdpyinfo | head -3 || echo "xdpyinfo failed"
+          echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL"
+          echo "GNOME_KEYRING_PID=$GNOME_KEYRING_PID"
+
+          echo "=== Keyring check ==="
+          # Verify gnome-keyring-daemon is running and accessible
+          pgrep -a gnome-keyring || echo "WARNING: gnome-keyring-daemon not running"
+
+          # Try storing and retrieving a test secret via libsecret
+          python3 -c "
+          import gi
+          gi.require_version('Secret', '1')
+          from gi.repository import Secret
+          schema = Secret.Schema.new('org.zajel.test', Secret.SchemaFlags.NONE,
+              {'app': Secret.SchemaAttributeType.STRING})
+          # Store a test secret (validates keyring is unlocked)
+          Secret.password_store_sync(schema, {'app': 'test'}, Secret.COLLECTION_DEFAULT,
+              'test-label', 'test-value', None)
+          # Read it back
+          val = Secret.password_lookup_sync(schema, {'app': 'test'}, None)
+          print(f'Secret store/retrieve: {\"OK\" if val == \"test-value\" else \"FAILED\"}')
+          # Clean up
+          Secret.password_clear_sync(schema, {'app': 'test'}, None)
+          " || echo "WARNING: libsecret test failed — app may block on keyring"
+
+          echo "=== gcr-prompter check ==="
+          pgrep -a gcr-prompter && echo "WARNING: gcr-prompter running (will be killed)" || echo "OK: no gcr-prompter"
 
           echo "=== AT-SPI bus check ==="
           python3 -c "
@@ -1321,50 +1362,46 @@ jobs:
           gi.require_version('Atspi', '2.0')
           from gi.repository import Atspi
           desktop = Atspi.get_desktop(0)
-          print(f'AT-SPI desktop: {desktop}')
-          print(f'AT-SPI children: {desktop.get_child_count()}')
-          for i in range(desktop.get_child_count()):
-              child = desktop.get_child_at_index(i)
-              print(f'  Child {i}: {child.get_name() if child else \"None\"}')
+          print(f'AT-SPI desktop children: {desktop.get_child_count()}')
           " || echo "AT-SPI check failed"
 
-          echo "=== Checking ATK bridge modules ==="
-          find /usr/lib -name "*atk-bridge*" -o -name "*gail*" 2>/dev/null | head -10
-          ls /usr/lib/*/gtk-3.0/modules/ 2>/dev/null || echo "No GTK3 modules dir"
-
-          echo "=== Launching app briefly ==="
+          echo "=== Launching app briefly (30s warm-up) ==="
           GTK_MODULES=gail:atk-bridge LIBGL_ALWAYS_SOFTWARE=1 $ZAJEL_APP_PATH &
           APP_PID=$!
-          sleep 15
+          # Software rendering (llvmpipe) needs more time for first frame
+          sleep 30
 
-          echo "=== Checking AT-SPI after app launch ==="
+          echo "=== gcr-prompter check after app launch ==="
+          pgrep -a gcr-prompter && echo "gcr-prompter was running (killer should handle it)" || echo "OK: no gcr-prompter"
+
+          echo "=== AT-SPI after app launch ==="
           python3 -c "
           import gi
           gi.require_version('Atspi', '2.0')
           from gi.repository import Atspi
           desktop = Atspi.get_desktop(0)
-          print(f'AT-SPI children after launch: {desktop.get_child_count()}')
-          for i in range(desktop.get_child_count()):
-              child = desktop.get_child_at_index(i)
-              if child:
-                  print(f'  Child {i}: name={repr(child.get_name())} pid={child.get_process_id()} role={child.get_role_name()}')
-                  try:
-                      print(f'    child_count={child.get_child_count()}')
-                      for j in range(min(3, child.get_child_count())):
+          count = desktop.get_child_count()
+          print(f'AT-SPI children: {count}')
+          for i in range(count):
+              try:
+                  child = desktop.get_child_at_index(i)
+                  if child:
+                      name = child.get_name()
+                      pid = child.get_process_id()
+                      role = child.get_role_name()
+                      print(f'  Child {i}: name={repr(name)} pid={pid} role={role}')
+                      cc = child.get_child_count()
+                      print(f'    child_count={cc}')
+                      for j in range(min(3, cc)):
                           gc = child.get_child_at_index(j)
                           if gc:
                               print(f'    grandchild {j}: name={repr(gc.get_name())} role={gc.get_role_name()}')
-                  except Exception as e:
-                      print(f'    error inspecting children: {e}')
+              except Exception as e:
+                  print(f'  Child {i}: error — {e}')
           " || echo "AT-SPI check after launch failed"
-          echo "=== App PID: $APP_PID ==="
 
-          echo "=== Checking X windows ==="
-          xdotool search --name "." 2>/dev/null | head -5 || echo "No X windows found"
-          xdotool search --name -i zajel 2>/dev/null || echo "No zajel window found"
-
-          echo "=== App process status ==="
-          ps aux | grep zajel | grep -v grep || echo "App not running"
+          echo "=== App process ==="
+          ps aux | grep -E "[z]ajel" || echo "App not running"
 
           kill $APP_PID 2>/dev/null || true
           wait $APP_PID 2>/dev/null || true
@@ -1372,6 +1409,7 @@ jobs:
       - name: Run Linux E2E tests
         timeout-minutes: 20
         env:
+          CI: 'true'
           ZAJEL_APP_PATH: ${{ github.workspace }}/linux-app/zajel
           SIGNALING_URL: ${{ vars.VPS_QA_WS_URL || '' }}
         working-directory: ${{ github.workspace }}/e2e-tests-linux
