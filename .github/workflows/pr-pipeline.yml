@@ -1295,12 +1295,26 @@ jobs:
           # spawns gcr-prompter (a GUI unlock dialog) which blocks the GTK main
           # loop and makes AT-SPI queries timeout ("application may be hanging").
           #
-          # CRITICAL: use eval $(...) to capture GNOME_KEYRING_CONTROL env var.
-          # Without it, subsequent processes can't find the keyring daemon.
+          # XDG_RUNTIME_DIR must exist for gnome-keyring-daemon to create its
+          # control socket. On GitHub Actions runners this dir doesn't exist.
+          sudo mkdir -p /run/user/$(id -u)
+          sudo chown $(id -u):$(id -g) /run/user/$(id -u)
+          export XDG_RUNTIME_DIR=/run/user/$(id -u)
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> $GITHUB_ENV
+
+          # Create the keyrings directory so gnome-keyring has a place to store data
           mkdir -p ~/.local/share/keyrings
-          eval $(echo -n "" | gnome-keyring-daemon --unlock --start --components=secrets 2>/dev/null) || true
-          echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL" >> $GITHUB_ENV
-          echo "GNOME_KEYRING_PID=$GNOME_KEYRING_PID" >> $GITHUB_ENV
+
+          # Start gnome-keyring-daemon. Use printf to pipe empty password (no newline issues).
+          # The daemon outputs GNOME_KEYRING_CONTROL=... which we MUST eval to capture.
+          eval $(printf '' | gnome-keyring-daemon --unlock --start --components=secrets) || true
+          if [ -z "$GNOME_KEYRING_CONTROL" ]; then
+            echo "WARNING: gnome-keyring --unlock produced no output, trying --start only"
+            eval $(gnome-keyring-daemon --start --components=secrets) || true
+          fi
+          echo "GNOME_KEYRING_CONTROL=${GNOME_KEYRING_CONTROL:-}" >> $GITHUB_ENV
+          echo "GNOME_KEYRING_PID=${GNOME_KEYRING_PID:-}" >> $GITHUB_ENV
+          echo "Keyring control: GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL"
 
           # Safety net: kill gcr-prompter if it somehow still appears.
           # gcr-prompter is the keyring unlock GUI — in headless CI it can never
