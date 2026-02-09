@@ -1475,20 +1475,22 @@ jobs:
 
   phase-5-e2e:
     name: "✓ Phase 5: E2E Tests"
-    # Windows E2E excluded from gate — Flutter ANGLE/DirectX rendering
-    # fails on CI runners (black screen). Runs as informational only.
-    needs: [e2e-tests, e2e-linux]
+    # Desktop E2E (Linux/Windows) excluded from gate:
+    # - Linux: Flutter AT-SPI doesn't register in headless CI (Xvfb)
+    # - Windows: Flutter ANGLE/DirectX rendering fails (black screen)
+    # Both run as informational only. Android E2E is the gate.
+    needs: [e2e-tests]
     if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
     runs-on: ubuntu-latest
     steps:
-      - run: echo "All E2E tests passed (Android, Linux)"
+      - run: echo "All E2E tests passed (Android)"
 
   # ============================================
   # Cleanup Pre-release Tag on Failure
   # ============================================
   cleanup:
     name: Cleanup on Failure
-    needs: [tag-prerelease, e2e-tests, e2e-linux]
+    needs: [tag-prerelease, e2e-tests]
     if: failure()
     runs-on: ubuntu-latest
     permissions:
