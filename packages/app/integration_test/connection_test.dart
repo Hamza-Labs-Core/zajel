@@ -67,7 +67,8 @@ void main() {
         ProviderScope(
           overrides: [
             sharedPreferencesProvider.overrideWithValue(prefs),
-            bootstrapServerUrlProvider.overrideWith((ref) => config.bootstrapServerUrl),
+            bootstrapServerUrlProvider
+                .overrideWith((ref) => config.bootstrapServerUrl),
           ],
           child: Builder(
             builder: (context) {
@@ -98,7 +99,8 @@ void main() {
         if (config.verboseLogging) {
           debugPrint('Discovered ${servers.length} servers');
           for (final server in servers) {
-            debugPrint('  - ${server.serverId}: ${server.endpoint} (${server.region})');
+            debugPrint(
+                '  - ${server.serverId}: ${server.endpoint} (${server.region})');
           }
         }
 
@@ -106,7 +108,8 @@ void main() {
         expect(servers, isA<List<DiscoveredServer>>());
       } catch (e) {
         if (config.verboseLogging) {
-          debugPrint('Server discovery failed (expected if no server running): $e');
+          debugPrint(
+              'Server discovery failed (expected if no server running): $e');
         }
         // Don't fail the test if server is unreachable - just skip
         markTestSkipped('Bootstrap server unreachable: $e');
@@ -127,7 +130,8 @@ void main() {
         ProviderScope(
           overrides: [
             sharedPreferencesProvider.overrideWithValue(prefs),
-            bootstrapServerUrlProvider.overrideWith((ref) => config.bootstrapServerUrl),
+            bootstrapServerUrlProvider
+                .overrideWith((ref) => config.bootstrapServerUrl),
           ],
           child: Builder(
             builder: (context) {
@@ -337,8 +341,10 @@ void main() {
       await tester.pumpAndSettle();
 
       // Look for either a pairing code, loading indicator, or error message
-      final hasCode = find.textContaining(RegExp(r'^[A-Z0-9]{6}$')).evaluate().isNotEmpty;
-      final hasLoading = find.byType(CircularProgressIndicator).evaluate().isNotEmpty;
+      final hasCode =
+          find.textContaining(RegExp(r'^[A-Z0-9]{6}$')).evaluate().isNotEmpty;
+      final hasLoading =
+          find.byType(CircularProgressIndicator).evaluate().isNotEmpty;
       final hasError = find.byIcon(Icons.error_outline).evaluate().isNotEmpty;
       final hasRetry = find.text('Retry').evaluate().isNotEmpty;
 
@@ -402,7 +408,8 @@ void main() {
       );
 
       final hasQrCode = qrCodeFinder.evaluate().isNotEmpty;
-      final hasLoading = find.byType(CircularProgressIndicator).evaluate().isNotEmpty;
+      final hasLoading =
+          find.byType(CircularProgressIndicator).evaluate().isNotEmpty;
       final hasError = find.byIcon(Icons.error_outline).evaluate().isNotEmpty;
 
       if (config.verboseLogging) {
@@ -528,7 +535,8 @@ void main() {
       // This test requires a real second device or test peer
       if (config.testPeerCode == null) {
         debugPrint('Skipping two-device test - no TEST_PEER_CODE configured');
-        markTestSkipped('Two-device test requires TEST_PEER_CODE environment variable');
+        markTestSkipped(
+            'Two-device test requires TEST_PEER_CODE environment variable');
         return;
       }
 
@@ -596,7 +604,8 @@ void main() {
         );
 
         if (config.verboseLogging) {
-          debugPrint('Two-device pairing result: ${connected ? 'SUCCESS' : 'FAILED'}');
+          debugPrint(
+              'Two-device pairing result: ${connected ? 'SUCCESS' : 'FAILED'}');
           debugPrint('Total peer updates received: ${peerUpdates.length}');
         }
 
@@ -644,7 +653,8 @@ void main() {
       if (config.verboseLogging) {
         debugPrint('Connection manager initialized');
         debugPrint('  Current peers: ${connectionManager.currentPeers.length}');
-        debugPrint('  External pairing code: ${connectionManager.externalPairingCode ?? 'null'}');
+        debugPrint(
+            '  External pairing code: ${connectionManager.externalPairingCode ?? 'null'}');
       }
     });
 
@@ -744,7 +754,8 @@ void main() {
       if (config.verboseLogging) {
         final pubKey = cryptoService.publicKeyBase64;
         debugPrint('Crypto service initialized');
-        debugPrint('  Public key (first 32 chars): ${pubKey.substring(0, 32.clamp(0, pubKey.length))}...');
+        debugPrint(
+            '  Public key (first 32 chars): ${pubKey.substring(0, 32.clamp(0, pubKey.length))}...');
       }
     });
   });

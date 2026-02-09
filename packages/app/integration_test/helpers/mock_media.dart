@@ -51,7 +51,8 @@ class MockMediaStream implements MediaStream {
       List.unmodifiable([..._audioTracks, ..._videoTracks]);
 
   @override
-  Future<void> addTrack(MediaStreamTrack track, {bool addToNative = true}) async {
+  Future<void> addTrack(MediaStreamTrack track,
+      {bool addToNative = true}) async {
     if (track.kind == 'audio') {
       _audioTracks.add(track);
     } else if (track.kind == 'video') {

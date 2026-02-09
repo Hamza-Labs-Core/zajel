@@ -19,8 +19,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:zajel/core/crypto/crypto_service.dart';
 import 'package:zajel/core/network/connection_manager.dart';
 import 'package:zajel/core/network/device_link_service.dart';
+import 'package:zajel/core/network/meeting_point_service.dart';
 import 'package:zajel/core/network/webrtc_service.dart';
 import 'package:zajel/core/models/models.dart';
+import 'package:zajel/core/storage/trusted_peers_storage_impl.dart';
 
 import 'test_config.dart';
 
@@ -70,11 +72,15 @@ void main() {
         cryptoService: cryptoA,
         webrtcService: webrtcA,
         deviceLinkService: deviceLinkA,
+        trustedPeersStorage: SecureTrustedPeersStorage(),
+        meetingPointService: MeetingPointService(),
       );
       connectionManagerB = ConnectionManager(
         cryptoService: cryptoB,
         webrtcService: webrtcB,
         deviceLinkService: deviceLinkB,
+        trustedPeersStorage: SecureTrustedPeersStorage(),
+        meetingPointService: MeetingPointService(),
       );
     });
 
@@ -134,8 +140,8 @@ void main() {
       }
 
       // Set up listeners for pairing requests
-      final pairRequestCompleterA = Completer<(String, String)>();
-      final pairRequestCompleterB = Completer<(String, String)>();
+      final pairRequestCompleterA = Completer<(String, String, String?)>();
+      final pairRequestCompleterB = Completer<(String, String, String?)>();
 
       connectionManagerA.pairRequests.listen((request) {
         if (!pairRequestCompleterA.isCompleted) {
@@ -190,8 +196,10 @@ void main() {
         timeout: config.connectionTimeout,
       );
 
-      expect(peersConnectedA, isTrue, reason: 'Device A should be connected to B');
-      expect(peersConnectedB, isTrue, reason: 'Device B should be connected to A');
+      expect(peersConnectedA, isTrue,
+          reason: 'Device A should be connected to B');
+      expect(peersConnectedB, isTrue,
+          reason: 'Device B should be connected to A');
 
       if (config.verboseLogging) {
         debugPrint('Both devices connected successfully!');
