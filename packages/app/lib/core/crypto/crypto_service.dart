@@ -6,6 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:crypto/crypto.dart' as crypto;
 
 import '../constants.dart';
+
 /// Cryptographic service implementing X25519 key exchange and ChaCha20-Poly1305 encryption.
 ///
 /// This implements a simplified Double Ratchet-like protocol for forward secrecy:
@@ -28,8 +29,12 @@ class CryptoService {
   final Map<String, String> _peerPublicKeys = {};
 
   CryptoService({FlutterSecureStorage? secureStorage})
-      : _secureStorage = secureStorage ?? const FlutterSecureStorage() {
-    _hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: CryptoConstants.hkdfOutputLength);
+      : _secureStorage = secureStorage ??
+            const FlutterSecureStorage(
+              aOptions: AndroidOptions(encryptedSharedPreferences: true),
+            ) {
+    _hkdf = Hkdf(
+        hmac: Hmac.sha256(), outputLength: CryptoConstants.hkdfOutputLength);
   }
 
   /// Initialize the crypto service and generate/load identity keys.
@@ -45,7 +50,8 @@ class CryptoService {
   /// Get our public key as a base64 string (synchronous, requires initialize() first).
   String get publicKeyBase64 {
     if (_publicKeyBase64Cache == null) {
-      throw CryptoException('CryptoService not initialized. Call initialize() first.');
+      throw CryptoException(
+          'CryptoService not initialized. Call initialize() first.');
     }
     return _publicKeyBase64Cache!;
   }
@@ -199,7 +205,7 @@ class CryptoService {
     // Derive session key using HKDF
     final sessionKey = await _hkdf.deriveKey(
       secretKey: SecretKey(sharedSecretBytes),
-      info: utf8.encode('zajel_session_$peerId'),
+      info: utf8.encode('zajel_session'),
       nonce: const [],
     );
 

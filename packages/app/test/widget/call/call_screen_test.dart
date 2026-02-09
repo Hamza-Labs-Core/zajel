@@ -35,7 +35,7 @@ void main() {
     when(() => mockVoIPService.addListener(any())).thenReturn(null);
     when(() => mockVoIPService.removeListener(any())).thenReturn(null);
     when(() => mockVoIPService.toggleMute()).thenReturn(true);
-    when(() => mockVoIPService.toggleVideo()).thenReturn(false);
+    when(() => mockVoIPService.toggleVideo()).thenReturn(true);
     when(() => mockVoIPService.switchCamera()).thenAnswer((_) async {});
     when(() => mockVoIPService.hangup()).thenReturn(null);
 
@@ -123,7 +123,7 @@ void main() {
 
       // Check for control labels
       expect(find.text('Mute'), findsOneWidget);
-      expect(find.text('Video Off'), findsOneWidget);
+      expect(find.text('Video On'), findsOneWidget);
       expect(find.text('Flip'), findsOneWidget);
       expect(find.text('End'), findsOneWidget);
     });
@@ -133,7 +133,7 @@ void main() {
       await tester.pump();
 
       expect(find.byIcon(Icons.mic), findsOneWidget);
-      expect(find.byIcon(Icons.videocam), findsOneWidget);
+      expect(find.byIcon(Icons.videocam_off), findsOneWidget);
       expect(find.byIcon(Icons.switch_camera), findsOneWidget);
       expect(find.byIcon(Icons.call_end), findsOneWidget);
     });
@@ -154,8 +154,8 @@ void main() {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
-      // Find the FAB with videocam icon and tap it
-      await tester.tap(find.byIcon(Icons.videocam));
+      // Find the FAB with videocam_off icon and tap it (video starts off)
+      await tester.tap(find.byIcon(Icons.videocam_off));
       await tester.pump();
 
       verify(() => mockVoIPService.toggleVideo()).called(1);
@@ -203,15 +203,15 @@ void main() {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
-      // Initial state should show 'Video Off'
-      expect(find.text('Video Off'), findsOneWidget);
+      // Initial state should show 'Video On' (video starts off by default)
+      expect(find.text('Video On'), findsOneWidget);
 
-      // Toggle video by tapping the videocam icon
-      await tester.tap(find.byIcon(Icons.videocam));
+      // Toggle video by tapping the videocam_off icon
+      await tester.tap(find.byIcon(Icons.videocam_off));
       await tester.pump();
 
-      // After toggle, should show 'Video On'
-      expect(find.text('Video On'), findsOneWidget);
+      // After toggle, should show 'Video Off' (video is now on)
+      expect(find.text('Video Off'), findsOneWidget);
     });
 
     testWidgets('displays back button', (tester) async {

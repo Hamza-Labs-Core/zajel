@@ -35,7 +35,8 @@ class PeerReconnectionService with SubscriptionManager {
 
   // Event streams
   final _peerFoundController = StreamController<PeerFoundEvent>.broadcast();
-  final _connectionRequestController = StreamController<ConnectionRequestEvent>.broadcast();
+  final _connectionRequestController =
+      StreamController<ConnectionRequestEvent>.broadcast();
   final _statusController = StreamController<ReconnectionStatus>.broadcast();
 
   /// Emits when a peer is found via meeting point or dead drop.
@@ -98,7 +99,8 @@ class PeerReconnectionService with SubscriptionManager {
     ));
 
     // Listen for signaling messages
-    _signalingSubscription = _signalingClient!.messages.listen(_handleSignalingMessage);
+    _signalingSubscription =
+        _signalingClient!.messages.listen(_handleSignalingMessage);
 
     // Register at meeting points for all trusted peers
     await _registerAllMeetingPoints();
@@ -176,7 +178,8 @@ class PeerReconnectionService with SubscriptionManager {
       // Derive hourly tokens from shared secret (if we have one)
       final sharedSecret = await _cryptoService.getSessionKeyBytes(peerId);
       if (sharedSecret != null) {
-        final hourlyTokens = _meetingPointService.deriveHourlyTokens(sharedSecret);
+        final hourlyTokens =
+            _meetingPointService.deriveHourlyTokens(sharedSecret);
         allHourlyTokens.addAll(hourlyTokens);
       }
     }
@@ -227,7 +230,8 @@ class PeerReconnectionService with SubscriptionManager {
       // Check hourly tokens
       final sharedSecret = await _cryptoService.getSessionKeyBytes(peerId);
       if (sharedSecret != null) {
-        final hourlyTokens = _meetingPointService.deriveHourlyTokens(sharedSecret);
+        final hourlyTokens =
+            _meetingPointService.deriveHourlyTokens(sharedSecret);
         if (hourlyTokens.contains(meetingPoint)) {
           return peerId;
         }
@@ -243,7 +247,8 @@ class PeerReconnectionService with SubscriptionManager {
       final encrypted = await _cryptoService.encryptForPeer(peerId, plaintext);
       return encrypted;
     } catch (e) {
-      logger.error('PeerReconnection', 'Failed to create dead drop for $peerId', e);
+      logger.error(
+          'PeerReconnection', 'Failed to create dead drop for $peerId', e);
       return null;
     }
   }
@@ -251,10 +256,12 @@ class PeerReconnectionService with SubscriptionManager {
   Future<ConnectionInfo?> _decryptDeadDrop(
       String peerId, String encryptedData) async {
     try {
-      final plaintext = await _cryptoService.decryptFromPeer(peerId, encryptedData);
+      final plaintext =
+          await _cryptoService.decryptFromPeer(peerId, encryptedData);
       return ConnectionInfo.fromJsonString(plaintext);
     } catch (e) {
-      logger.error('PeerReconnection', 'Failed to decrypt dead drop from $peerId', e);
+      logger.error(
+          'PeerReconnection', 'Failed to decrypt dead drop from $peerId', e);
       return null;
     }
   }
@@ -283,7 +290,8 @@ class PeerReconnectionService with SubscriptionManager {
       'source_id': _relayClient.mySourceId,
     });
 
-    final encryptedPayload = await _cryptoService.encryptForPeer(peerId, introPayload);
+    final encryptedPayload =
+        await _cryptoService.encryptForPeer(peerId, introPayload);
 
     // If they have a relay, connect through it
     if (connectionInfo.relayId != null) {
@@ -314,7 +322,8 @@ class PeerReconnectionService with SubscriptionManager {
         );
         return; // Success, don't try more fallbacks
       } catch (e) {
-        logger.warning('PeerReconnection', 'Fallback relay $fallbackRelay failed: $e');
+        logger.warning(
+            'PeerReconnection', 'Fallback relay $fallbackRelay failed: $e');
         continue;
       }
     }
@@ -323,7 +332,8 @@ class PeerReconnectionService with SubscriptionManager {
   }
 
   /// Process a received dead drop and emit peer found event.
-  Future<void> processDeadDrop(String meetingPoint, String encryptedData) async {
+  Future<void> processDeadDrop(
+      String meetingPoint, String encryptedData) async {
     final peerId = await _identifyPeerFromMeetingPoint(meetingPoint);
     if (peerId == null) return;
 
@@ -351,6 +361,65 @@ class PeerReconnectionService with SubscriptionManager {
         meetingPoint: meetingPoint,
         isLive: true,
       ));
+    }
+  }
+
+  /// Process a live match from rendezvous response (peerId already known).
+  ///
+  /// This is called when the server provides the peerId directly in the
+  /// rendezvous result, rather than just the meeting point hash.
+  void processLiveMatchFromRendezvous(String peerId, String? relayId) {
+    logger.info(
+      'PeerReconnection',
+      'Live match from rendezvous: $peerId (relay: $relayId)',
+    );
+
+    _peerFoundController.add(PeerFoundEvent(
+      peerId: peerId,
+      meetingPoint: '', // Unknown - server matched by peerId
+      isLive: true,
+      connectionInfo: relayId != null
+          ? ConnectionInfo(
+              publicKey: '', // Will be fetched from trusted peers
+              relayId: relayId,
+              sourceId: null,
+              fallbackRelays: [],
+              timestamp: DateTime.now().toUtc(),
+            )
+          : null,
+    ));
+  }
+
+  /// Process a dead drop from rendezvous response (peerId already known).
+  ///
+  /// This is called when the server provides the peerId along with the
+  /// encrypted dead drop data in the rendezvous result.
+  Future<void> processDeadDropFromRendezvous(
+    String peerId,
+    String encryptedData,
+    String? relayId,
+  ) async {
+    logger.info(
+      'PeerReconnection',
+      'Dead drop from rendezvous: $peerId (relay: $relayId)',
+    );
+
+    try {
+      final connectionInfo = await _decryptDeadDrop(peerId, encryptedData);
+      if (connectionInfo != null) {
+        _peerFoundController.add(PeerFoundEvent(
+          peerId: peerId,
+          meetingPoint: '', // Unknown - server matched by peerId
+          isLive: false,
+          connectionInfo: connectionInfo,
+        ));
+      }
+    } catch (e) {
+      logger.error(
+        'PeerReconnection',
+        'Failed to decrypt dead drop from $peerId',
+        e,
+      );
     }
   }
 

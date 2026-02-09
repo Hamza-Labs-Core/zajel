@@ -74,7 +74,8 @@ class MalformedRelayMessageException extends RelayException {
   final String rawMessage;
 
   MalformedRelayMessageException(this.rawMessage)
-      : super('Malformed relay message: ${rawMessage.length > 100 ? '${rawMessage.substring(0, 100)}...' : rawMessage}');
+      : super(
+            'Malformed relay message: ${rawMessage.length > 100 ? '${rawMessage.substring(0, 100)}...' : rawMessage}');
 }
 
 /// Exception thrown when relay handshake fails.

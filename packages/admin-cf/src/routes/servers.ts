@@ -7,7 +7,7 @@ import type { Env, VpsServer, ApiResponse } from '../types.js';
 import { requireAuth } from './auth.js';
 
 // Default bootstrap URL if not configured
-const DEFAULT_BOOTSTRAP_URL = 'https://zajel-signaling.mahmoud-s-darwish.workers.dev';
+const DEFAULT_BOOTSTRAP_URL = 'https://signal.zajel.hamzalabs.dev';
 
 // Health check timeout in milliseconds
 const HEALTH_CHECK_TIMEOUT = 5000;

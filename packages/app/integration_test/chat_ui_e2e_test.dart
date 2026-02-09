@@ -28,8 +28,10 @@ import 'package:zajel/core/models/models.dart';
 import 'package:zajel/core/network/connection_manager.dart';
 import 'package:zajel/core/network/device_link_service.dart';
 import 'package:zajel/core/network/server_discovery_service.dart';
+import 'package:zajel/core/network/meeting_point_service.dart';
 import 'package:zajel/core/network/webrtc_service.dart';
 import 'package:zajel/core/providers/app_providers.dart';
+import 'package:zajel/core/storage/trusted_peers_storage_impl.dart';
 import 'package:zajel/features/chat/chat_screen.dart';
 
 import 'test_config.dart';
@@ -60,12 +62,14 @@ void main() {
   setUpAll(() async {
     // Discover servers from Cloudflare bootstrap using TestConfig
     final config = TestConfig.auto();
-    serverDiscovery = ServerDiscoveryService(bootstrapUrl: config.bootstrapServerUrl);
+    serverDiscovery =
+        ServerDiscoveryService(bootstrapUrl: config.bootstrapServerUrl);
     final server = await serverDiscovery.selectServer();
 
     if (server != null) {
       serverUrl = serverDiscovery.getWebSocketUrl(server);
-      debugPrint('Discovered server: ${server.serverId} at $serverUrl (${server.region})');
+      debugPrint(
+          'Discovered server: ${server.serverId} at $serverUrl (${server.region})');
     } else {
       serverUrl = null;
       debugPrint('No servers discovered from bootstrap');
@@ -114,11 +118,15 @@ void main() {
       cryptoService: cryptoA,
       webrtcService: webrtcA,
       deviceLinkService: deviceLinkA,
+      trustedPeersStorage: SecureTrustedPeersStorage(),
+      meetingPointService: MeetingPointService(),
     );
     connectionManagerB = ConnectionManager(
       cryptoService: cryptoB,
       webrtcService: webrtcB,
       deviceLinkService: deviceLinkB,
+      trustedPeersStorage: SecureTrustedPeersStorage(),
+      meetingPointService: MeetingPointService(),
     );
 
     // Connect to discovered server with exponential backoff retry
@@ -255,7 +263,8 @@ void main() {
       debugPrint('Message sent through UI and received: ${receivedMsg.$2}');
     });
 
-    testWidgets('receives real message from peer and displays in UI', (tester) async {
+    testWidgets('receives real message from peer and displays in UI',
+        (tester) async {
       if (!isConnected) {
         markTestSkipped('No server available or connection failed');
         return;

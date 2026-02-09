@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+
+import '../crypto/bootstrap_verifier.dart';
+import '../logging/logger_service.dart';
 
 /// Represents a discovered VPS server from the bootstrap service.
 class DiscoveredServer {
@@ -55,6 +57,9 @@ class ServerDiscoveryService {
   /// HTTP client for making requests.
   final http.Client _client;
 
+  /// Optional verifier for bootstrap response signatures.
+  final BootstrapVerifier? _verifier;
+
   /// Cached list of discovered servers.
   List<DiscoveredServer> _cachedServers = [];
 
@@ -65,7 +70,8 @@ class ServerDiscoveryService {
   static const cacheDuration = Duration(minutes: 2);
 
   /// Controller for server list updates.
-  final _serversController = StreamController<List<DiscoveredServer>>.broadcast();
+  final _serversController =
+      StreamController<List<DiscoveredServer>>.broadcast();
 
   /// Timer for periodic refresh.
   Timer? _refreshTimer;
@@ -73,7 +79,9 @@ class ServerDiscoveryService {
   ServerDiscoveryService({
     required this.bootstrapUrl,
     http.Client? client,
-  }) : _client = client ?? http.Client();
+    BootstrapVerifier? bootstrapVerifier,
+  })  : _client = client ?? http.Client(),
+        _verifier = bootstrapVerifier;
 
   /// Stream of server list updates.
   Stream<List<DiscoveredServer>> get servers => _serversController.stream;
@@ -85,7 +93,8 @@ class ServerDiscoveryService {
   ///
   /// Returns a list of discovered servers, or an empty list if the
   /// bootstrap server is unreachable.
-  Future<List<DiscoveredServer>> fetchServers({bool forceRefresh = false}) async {
+  Future<List<DiscoveredServer>> fetchServers(
+      {bool forceRefresh = false}) async {
     // Return cached servers if still fresh
     if (!forceRefresh && _cacheTime != null) {
       final age = DateTime.now().difference(_cacheTime!);
@@ -97,12 +106,24 @@ class ServerDiscoveryService {
     try {
       final uri = Uri.parse('$bootstrapUrl/servers');
       final response = await _client.get(uri).timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => throw TimeoutException('Bootstrap server timeout'),
-      );
+            const Duration(seconds: 10),
+            onTimeout: () => throw TimeoutException('Bootstrap server timeout'),
+          );
 
       if (response.statusCode != 200) {
         throw Exception('Bootstrap server returned ${response.statusCode}');
+      }
+
+      // Verify bootstrap response signature if verifier is configured
+      if (_verifier != null) {
+        final signature = response.headers['x-bootstrap-signature'];
+        if (signature == null || signature.isEmpty) {
+          throw Exception('Bootstrap response missing signature');
+        }
+        final valid = await _verifier.verify(response.body, signature);
+        if (!valid) {
+          throw Exception('Bootstrap response signature verification failed');
+        }
       }
 
       final json = jsonDecode(response.body) as Map<String, dynamic>;
@@ -121,7 +142,8 @@ class ServerDiscoveryService {
       // Graceful degradation: Return cached servers on discovery error.
       // Network errors, timeouts, or server unavailability shouldn't block the app.
       // Cached servers may be stale but still usable for connection attempts.
-      debugPrint('[ServerDiscovery] Discovery failed, using cache: $e');
+      logger.error('ServerDiscovery',
+          'Discovery failed (url: $bootstrapUrl/servers), using cache', e);
       return _cachedServers;
     }
   }
@@ -144,7 +166,8 @@ class ServerDiscoveryService {
     // Filter by region if preferred
     List<DiscoveredServer> candidates = servers;
     if (preferredRegion != null) {
-      final regionServers = servers.where((s) => s.region == preferredRegion).toList();
+      final regionServers =
+          servers.where((s) => s.region == preferredRegion).toList();
       if (regionServers.isNotEmpty) {
         candidates = regionServers;
       }
@@ -188,7 +211,8 @@ class ServerDiscoveryService {
   /// Useful for keeping the server list up-to-date while the app is running.
   void startPeriodicRefresh({Duration interval = const Duration(minutes: 1)}) {
     stopPeriodicRefresh();
-    _refreshTimer = Timer.periodic(interval, (_) => fetchServers(forceRefresh: true));
+    _refreshTimer =
+        Timer.periodic(interval, (_) => fetchServers(forceRefresh: true));
   }
 
   /// Stop periodic server list refresh.
