@@ -12,6 +12,8 @@
  * - POST /servers/heartbeat - Keep-alive for registered servers
  */
 
+import { importSigningKey, signPayload } from './crypto/signing.js';
+
 export { ServerRegistryDO } from './durable-objects/server-registry-do.js';
 
 export default {
@@ -22,6 +24,7 @@ export default {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Expose-Headers': 'X-Bootstrap-Signature',
     };
 
     // Handle CORS preflight
@@ -70,7 +73,37 @@ export default {
       );
     }
 
-    // All /servers/* routes go to the ServerRegistry Durable Object
+    // GET /servers — fetch from DO, add timestamp, and sign the response
+    if (url.pathname === '/servers' && request.method === 'GET') {
+      const id = env.SERVER_REGISTRY.idFromName('global');
+      const stub = env.SERVER_REGISTRY.get(id);
+      const doResponse = await stub.fetch(request);
+      const data = await doResponse.json();
+
+      // Add timestamp for replay protection
+      data.timestamp = Date.now();
+
+      const body = JSON.stringify(data);
+      const headers = {
+        'Content-Type': 'application/json',
+        ...corsHeaders,
+      };
+
+      // Sign the response if the signing key is configured
+      if (env.BOOTSTRAP_SIGNING_KEY) {
+        try {
+          const key = await importSigningKey(env.BOOTSTRAP_SIGNING_KEY);
+          headers['X-Bootstrap-Signature'] = await signPayload(key, body);
+        } catch (e) {
+          // Log but don't fail — unsigned response is still useful
+          console.error('Failed to sign bootstrap response:', e);
+        }
+      }
+
+      return new Response(body, { headers });
+    }
+
+    // All other /servers/* routes go to the ServerRegistry Durable Object
     if (url.pathname.startsWith('/servers')) {
       const id = env.SERVER_REGISTRY.idFromName('global');
       const stub = env.SERVER_REGISTRY.get(id);

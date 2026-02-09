@@ -103,6 +103,12 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
   }
 
   @override
+  Future<bool> isTrustedByPublicKey(String publicKey) async {
+    await _ensureInitialized();
+    return _cache.values.any((peer) => peer.publicKey == publicKey);
+  }
+
+  @override
   Future<void> updateLastSeen(String peerId, DateTime timestamp) async {
     await _ensureInitialized();
     final peer = _cache[peerId];
@@ -118,6 +124,18 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
     final peer = _cache[peerId];
     if (peer != null) {
       _cache[peerId] = peer.copyWith(displayName: displayName);
+      await _persist();
+    }
+  }
+
+  @override
+  Future<void> updateAlias(String peerId, String? alias) async {
+    await _ensureInitialized();
+    final peer = _cache[peerId];
+    if (peer != null) {
+      _cache[peerId] = alias != null
+          ? peer.copyWith(alias: alias)
+          : peer.copyWith(clearAlias: true);
       await _persist();
     }
   }
