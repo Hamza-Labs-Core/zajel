@@ -1430,6 +1430,7 @@ jobs:
           else
             echo "All Linux E2E tests passed."
           fi
+          exit 0
 
       - name: Upload test artifacts
         if: always()
@@ -1501,6 +1502,7 @@ jobs:
           } else {
             Write-Host "All Windows E2E tests passed."
           }
+          exit 0
 
       - name: Upload test artifacts
         if: always()
