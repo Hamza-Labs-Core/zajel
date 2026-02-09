@@ -331,6 +331,17 @@ class AppHelper:
             print("=== END PAGE SOURCE ===")
             raise
 
+    def _scroll_down(self, times=1):
+        """Scroll down on the current screen."""
+        import time as _time
+        screen_size = self.driver.get_window_size()
+        center_x = int(screen_size['width'] * 0.5)
+        start_y = int(screen_size['height'] * 0.7)
+        end_y = int(screen_size['height'] * 0.3)
+        for _ in range(times):
+            self.driver.swipe(center_x, start_y, center_x, end_y, 500)
+            _time.sleep(0.5)
+
     def navigate_to_connect(self):
         """Navigate to the Connect screen by tapping the FAB or QR icon.
 
@@ -778,6 +789,9 @@ class AppHelper:
     def navigate_to_media_settings(self):
         """Navigate to Settings > Audio & Video."""
         self.navigate_to_settings()
+        # Scroll down — "Audio & Video" may be below the fold on small screens
+        # (e.g. after the Appearance section was added to settings)
+        self._scroll_down()
         self.tap_settings_option("Audio & Video")
 
     # ── Emoji helpers ────────────────────────────────────────────────
