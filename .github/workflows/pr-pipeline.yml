@@ -1256,6 +1256,7 @@ jobs:
             python3-dogtail \
             libsecret-1-0 \
             gnome-keyring \
+            libatk-adaptor \
             libjsoncpp25 \
             xdotool
 
@@ -1327,10 +1328,14 @@ jobs:
               print(f'  Child {i}: {child.get_name() if child else \"None\"}')
           " || echo "AT-SPI check failed"
 
+          echo "=== Checking ATK bridge modules ==="
+          find /usr/lib -name "*atk-bridge*" -o -name "*gail*" 2>/dev/null | head -10
+          ls /usr/lib/*/gtk-3.0/modules/ 2>/dev/null || echo "No GTK3 modules dir"
+
           echo "=== Launching app briefly ==="
-          LIBGL_ALWAYS_SOFTWARE=1 $ZAJEL_APP_PATH &
+          GTK_MODULES=gail:atk-bridge LIBGL_ALWAYS_SOFTWARE=1 $ZAJEL_APP_PATH &
           APP_PID=$!
-          sleep 10
+          sleep 15
 
           echo "=== Checking AT-SPI after app launch ==="
           python3 -c "

@@ -70,9 +70,14 @@ class LinuxAppHelper:
         # Flutter's software renderer bypasses the GTK embedder's normal
         # rendering path, which also skips AT-SPI accessibility registration.
         # llvmpipe keeps the full GTK pipeline intact while using CPU rendering.
+        #
+        # GTK_MODULES=gail:atk-bridge forces GTK to load the ATK bridge,
+        # which registers the app with AT-SPI. Without it, the bridge may
+        # not load in headless environments where accessibility isn't autodetected.
         cmd = [self.app_path]
         if os.environ.get("CI"):
             env["LIBGL_ALWAYS_SOFTWARE"] = "1"
+            env["GTK_MODULES"] = "gail:atk-bridge"
 
         self.process = subprocess.Popen(
             cmd,
