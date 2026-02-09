@@ -65,10 +65,14 @@ class LinuxAppHelper:
         env["XDG_CONFIG_HOME"] = os.path.join(self.data_dir, "config")
         env["XDG_CACHE_HOME"] = os.path.join(self.data_dir, "cache")
 
-        # Build command — use software rendering on CI (no GPU)
+        # On CI (no GPU), use Mesa's software rasterizer (llvmpipe) via
+        # LIBGL_ALWAYS_SOFTWARE instead of Flutter's --enable-software-rendering.
+        # Flutter's software renderer bypasses the GTK embedder's normal
+        # rendering path, which also skips AT-SPI accessibility registration.
+        # llvmpipe keeps the full GTK pipeline intact while using CPU rendering.
         cmd = [self.app_path]
         if os.environ.get("CI"):
-            cmd.append("--enable-software-rendering")
+            env["LIBGL_ALWAYS_SOFTWARE"] = "1"
 
         self.process = subprocess.Popen(
             cmd,

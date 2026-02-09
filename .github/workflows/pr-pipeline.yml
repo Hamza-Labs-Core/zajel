@@ -1255,6 +1255,7 @@ jobs:
             gir1.2-atspi-2.0 \
             python3-dogtail \
             libsecret-1-0 \
+            gnome-keyring \
             libjsoncpp25
 
       - name: Start virtual display and audio
@@ -1285,6 +1286,9 @@ jobs:
 
           # Enable AT-SPI accessibility (required by dogtail)
           gsettings set org.gnome.desktop.interface toolkit-accessibility true
+
+          # Start gnome-keyring (Flutter's secure_storage needs it)
+          echo "" | gnome-keyring-daemon --unlock --start --components=secrets || true
 
           # Start AT-SPI accessibility bus
           /usr/lib/at-spi2-core/at-spi-bus-launcher &
