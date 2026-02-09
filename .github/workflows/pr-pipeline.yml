@@ -1346,8 +1346,18 @@ jobs:
           print(f'AT-SPI children after launch: {desktop.get_child_count()}')
           for i in range(desktop.get_child_count()):
               child = desktop.get_child_at_index(i)
-              print(f'  Child {i}: {child.get_name() if child else \"None\"}')
+              if child:
+                  print(f'  Child {i}: name={repr(child.get_name())} pid={child.get_process_id()} role={child.get_role_name()}')
+                  try:
+                      print(f'    child_count={child.get_child_count()}')
+                      for j in range(min(3, child.get_child_count())):
+                          gc = child.get_child_at_index(j)
+                          if gc:
+                              print(f'    grandchild {j}: name={repr(gc.get_name())} role={gc.get_role_name()}')
+                  except Exception as e:
+                      print(f'    error inspecting children: {e}')
           " || echo "AT-SPI check after launch failed"
+          echo "=== App PID: $APP_PID ==="
 
           echo "=== Checking X windows ==="
           xdotool search --name "." 2>/dev/null | head -5 || echo "No X windows found"

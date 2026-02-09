@@ -87,38 +87,45 @@ class LinuxAppHelper:
         )
 
         # Wait for the app to register with AT-SPI.
-        # Flutter's Linux embedder may register with an empty application name
-        # on headless CI, so we search by name then fall back to PID matching.
+        # Flutter Linux apps may register with an empty name in headless CI.
+        _system_apps = {"gcr-prompter", "gnome-keyring-daemon"}
         deadline = time.time() + timeout
         while time.time() < deadline:
+            # Check if process crashed
+            if self.process.poll() is not None:
+                stderr = self.process.stderr.read().decode(errors="replace")
+                raise RuntimeError(
+                    f"App exited with code {self.process.returncode}. "
+                    f"stderr:\n{stderr[-2000:]}"
+                )
+            # Try by name first (works on real desktop sessions)
             try:
-                # Check if process crashed
-                if self.process.poll() is not None:
-                    stderr = self.process.stderr.read().decode(errors="replace")
-                    raise RuntimeError(
-                        f"App exited with code {self.process.returncode}. "
-                        f"stderr:\n{stderr[-2000:]}"
-                    )
-                # Try by name first (works on desktop sessions)
-                try:
-                    self.app = root.application("zajel")
-                    return
-                except Exception:
-                    pass
-                # Flutter may register with empty name — find by PID.
-                # dogtail's root.children returns Atspi.Accessible objects
-                # with the dogtail Node mixin, so all methods work on them.
+                self.app = root.application("zajel")
+                return
+            except Exception:
+                pass
+            # Flutter may register with empty or different name — search all
+            # AT-SPI children by PID, then by exclusion of known system apps.
+            try:
                 for child in root.children:
                     try:
-                        if child.get_process_id() == self.process.pid:
+                        pid = child.get_process_id()
+                        if pid == self.process.pid:
                             self.app = child
                             return
                     except Exception:
                         continue
-            except RuntimeError:
-                raise
+                # If PID matching fails, try finding any non-system app
+                for child in root.children:
+                    try:
+                        name = child.name if hasattr(child, 'name') else ""
+                        if name not in _system_apps:
+                            self.app = child
+                            return
+                    except Exception:
+                        continue
             except Exception:
-                time.sleep(1)
+                pass
             time.sleep(1)
 
         # Timeout — capture stderr for diagnostics
