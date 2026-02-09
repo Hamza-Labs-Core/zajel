@@ -56,6 +56,36 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ],
           ),
           const SizedBox(height: 24),
+          _buildAppearanceSection(context),
+          const SizedBox(height: 24),
+          _buildSection(
+            context,
+            title: 'Notifications',
+            children: [
+              ListTile(
+                leading: const Icon(Icons.notifications),
+                title: const Text('Notifications'),
+                subtitle: const Text('DND, sounds, and per-peer mute'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push('/settings/notifications'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          _buildSection(
+            context,
+            title: 'Audio & Video',
+            children: [
+              ListTile(
+                leading: const Icon(Icons.videocam),
+                title: const Text('Audio & Video'),
+                subtitle: const Text('Microphone, speaker, camera settings'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push('/settings/media'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
           _buildSection(
             context,
             title: 'Privacy & Security',
@@ -166,7 +196,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 title: const Text('Source Code'),
                 subtitle: const Text('Open source and auditable'),
                 trailing: const Icon(Icons.open_in_new),
-                onTap: () => _launchUrl('https://github.com/Hamza-Labs-Core/zajel'),
+                onTap: () =>
+                    _launchUrl('https://github.com/Hamza-Labs-Core/zajel'),
               ),
               ListTile(
                 leading: const Icon(Icons.privacy_tip_outlined),
@@ -192,6 +223,52 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildAppearanceSection(BuildContext context) {
+    final themeMode = ref.watch(themeModeProvider);
+
+    return _buildSection(
+      context,
+      title: 'Appearance',
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Theme'),
+              const SizedBox(height: 8),
+              SegmentedButton<ThemeMode>(
+                segments: const [
+                  ButtonSegment(
+                    value: ThemeMode.light,
+                    label: Text('Light'),
+                    icon: Icon(Icons.light_mode),
+                  ),
+                  ButtonSegment(
+                    value: ThemeMode.dark,
+                    label: Text('Dark'),
+                    icon: Icon(Icons.dark_mode),
+                  ),
+                  ButtonSegment(
+                    value: ThemeMode.system,
+                    label: Text('System'),
+                    icon: Icon(Icons.settings_brightness),
+                  ),
+                ],
+                selected: {themeMode},
+                onSelectionChanged: (selected) {
+                  ref
+                      .read(themeModeProvider.notifier)
+                      .setThemeMode(selected.first);
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 

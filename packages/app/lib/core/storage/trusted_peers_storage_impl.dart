@@ -22,7 +22,8 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
       : _storage = storage ??
             const FlutterSecureStorage(
               aOptions: AndroidOptions(encryptedSharedPreferences: true),
-              iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
+              iOptions:
+                  IOSOptions(accessibility: KeychainAccessibility.first_unlock),
             );
 
   /// Initialize and load from storage.
@@ -35,7 +36,8 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
         final List<dynamic> list = jsonDecode(json);
         _cache = {
           for (final item in list)
-            (item['id'] as String): TrustedPeer.fromJson(item as Map<String, dynamic>)
+            (item['id'] as String):
+                TrustedPeer.fromJson(item as Map<String, dynamic>)
         };
       }
       _initialized = true;
@@ -103,6 +105,12 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
   }
 
   @override
+  Future<bool> isTrustedByPublicKey(String publicKey) async {
+    await _ensureInitialized();
+    return _cache.values.any((peer) => peer.publicKey == publicKey);
+  }
+
+  @override
   Future<void> updateLastSeen(String peerId, DateTime timestamp) async {
     await _ensureInitialized();
     final peer = _cache[peerId];
@@ -118,6 +126,18 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
     final peer = _cache[peerId];
     if (peer != null) {
       _cache[peerId] = peer.copyWith(displayName: displayName);
+      await _persist();
+    }
+  }
+
+  @override
+  Future<void> updateAlias(String peerId, String? alias) async {
+    await _ensureInitialized();
+    final peer = _cache[peerId];
+    if (peer != null) {
+      _cache[peerId] = alias != null
+          ? peer.copyWith(alias: alias)
+          : peer.copyWith(clearAlias: true);
       await _persist();
     }
   }

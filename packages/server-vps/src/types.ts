@@ -101,6 +101,22 @@ export interface DailyPointEntry {
   vectorClock: VectorClock;
 }
 
+// Client message types for rendezvous registration
+export interface RegisterRendezvousClientMessage {
+  type: 'register_rendezvous';
+  peerId: string;
+  // Support both naming conventions for backward compatibility
+  dailyPoints?: string[];
+  daily_points?: string[];
+  hourlyTokens?: string[];
+  hourly_tokens?: string[];
+  // Support both single dead drop (legacy) and map (new)
+  deadDrop?: string;
+  deadDrops?: Record<string, string>;  // point -> encrypted payload
+  dead_drops?: Record<string, string>; // snake_case variant
+  relayId: string;
+}
+
 export interface HourlyTokenEntry {
   id?: number;
   tokenHash: string;
