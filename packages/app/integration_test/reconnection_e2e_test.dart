@@ -37,7 +37,8 @@ void main() {
   });
 
   group('Reconnection E2E', () {
-    testWidgets('app initializes PeerReconnectionService after signaling connect',
+    testWidgets(
+        'app initializes PeerReconnectionService after signaling connect',
         (WidgetTester tester) async {
       // Skip if using mock server (no real connection)
       if (config.useMockServer) {
@@ -97,10 +98,12 @@ void main() {
       await tester.pump(const Duration(seconds: 5));
 
       // Try to get the reconnection service
-      final reconnectionService = container.read(peerReconnectionServiceProvider);
+      final reconnectionService =
+          container.read(peerReconnectionServiceProvider);
 
       if (reconnectionService == null) {
-        debugPrint('PeerReconnectionService not yet initialized - this is expected if signaling not connected');
+        debugPrint(
+            'PeerReconnectionService not yet initialized - this is expected if signaling not connected');
         return;
       }
 
@@ -232,7 +235,8 @@ void main() {
       final signalingClient = container.read(signalingClientProvider);
 
       if (signalingClient == null) {
-        debugPrint('SignalingClient not yet connected - this is expected in offline mode');
+        debugPrint(
+            'SignalingClient not yet connected - this is expected in offline mode');
         return;
       }
 

@@ -20,22 +20,26 @@ void main() {
 
     group('getPinsForUrl', () {
       test('returns empty for workers.dev domains (no longer pinned)', () {
-        final pins = CertificatePins.getPinsForUrl('wss://my-worker.workers.dev/ws');
+        final pins =
+            CertificatePins.getPinsForUrl('wss://my-worker.workers.dev/ws');
         expect(pins, isEmpty);
       });
 
       test('returns empty for hamzalabs.dev domains (no longer pinned)', () {
-        final pins = CertificatePins.getPinsForUrl('wss://signal.zajel.hamzalabs.dev/ws');
+        final pins = CertificatePins.getPinsForUrl(
+            'wss://signal.zajel.hamzalabs.dev/ws');
         expect(pins, isEmpty);
       });
 
       test('returns Zajel pins for zajel.app domains', () {
-        final pins = CertificatePins.getPinsForUrl('wss://signaling.zajel.app/ws');
+        final pins =
+            CertificatePins.getPinsForUrl('wss://signaling.zajel.app/ws');
         expect(pins, equals(CertificatePins.zajelApp));
       });
 
       test('returns Zajel pins for subdomains of zajel.app', () {
-        final pins = CertificatePins.getPinsForUrl('wss://api.relay.zajel.app/ws');
+        final pins =
+            CertificatePins.getPinsForUrl('wss://api.relay.zajel.app/ws');
         expect(pins, equals(CertificatePins.zajelApp));
       });
 
@@ -50,7 +54,8 @@ void main() {
       });
 
       test('handles case-insensitive domain matching', () {
-        final pins = CertificatePins.getPinsForUrl('wss://Signaling.Zajel.App/ws');
+        final pins =
+            CertificatePins.getPinsForUrl('wss://Signaling.Zajel.App/ws');
         expect(pins, equals(CertificatePins.zajelApp));
       });
     });
@@ -59,9 +64,12 @@ void main() {
   group('PinnedWebSocketState', () {
     test('has all expected values', () {
       expect(PinnedWebSocketState.values, hasLength(4));
-      expect(PinnedWebSocketState.values, contains(PinnedWebSocketState.disconnected));
-      expect(PinnedWebSocketState.values, contains(PinnedWebSocketState.connecting));
-      expect(PinnedWebSocketState.values, contains(PinnedWebSocketState.connected));
+      expect(PinnedWebSocketState.values,
+          contains(PinnedWebSocketState.disconnected));
+      expect(PinnedWebSocketState.values,
+          contains(PinnedWebSocketState.connecting));
+      expect(PinnedWebSocketState.values,
+          contains(PinnedWebSocketState.connected));
       expect(PinnedWebSocketState.values, contains(PinnedWebSocketState.error));
     });
   });
@@ -74,7 +82,8 @@ void main() {
 
     test('toString includes class name and message', () {
       final exception = PinnedWebSocketException('Connection failed');
-      expect(exception.toString(), equals('PinnedWebSocketException: Connection failed'));
+      expect(exception.toString(),
+          equals('PinnedWebSocketException: Connection failed'));
     });
 
     test('is an Exception', () {
@@ -121,7 +130,8 @@ void main() {
           onListen: (arguments, events) {
             eventController.stream.listen(
               (data) => events.success(data),
-              onError: (error) => events.error(code: 'ERROR', message: error.toString()),
+              onError: (error) =>
+                  events.error(code: 'ERROR', message: error.toString()),
             );
           },
           onCancel: (arguments) {},
@@ -218,8 +228,10 @@ void main() {
 
         expect(methodCalls, hasLength(1));
         expect(methodCalls[0].method, equals('connect'));
-        expect(methodCalls[0].arguments['url'], equals('wss://signaling.zajel.app/ws'));
-        expect(methodCalls[0].arguments['pins'], equals(CertificatePins.zajelApp));
+        expect(methodCalls[0].arguments['url'],
+            equals('wss://signaling.zajel.app/ws'));
+        expect(
+            methodCalls[0].arguments['pins'], equals(CertificatePins.zajelApp));
         expect(methodCalls[0].arguments['timeoutMs'], equals(45000));
         await socket.dispose();
       });
@@ -295,7 +307,8 @@ void main() {
             .setMockMethodCallHandler(
           const MethodChannel('zajel/pinned_websocket'),
           (MethodCall call) async {
-            throw PlatformException(code: 'SSL_ERROR', message: 'Certificate validation failed');
+            throw PlatformException(
+                code: 'SSL_ERROR', message: 'Certificate validation failed');
           },
         );
 
@@ -324,7 +337,8 @@ void main() {
 
         expect(methodCalls, hasLength(1));
         expect(methodCalls[0].method, equals('send'));
-        expect(methodCalls[0].arguments['connectionId'], equals('test-connection-123'));
+        expect(methodCalls[0].arguments['connectionId'],
+            equals('test-connection-123'));
         expect(methodCalls[0].arguments['message'], equals('test message'));
         await socket.dispose();
       });
@@ -352,7 +366,8 @@ void main() {
           const MethodChannel('zajel/pinned_websocket'),
           (MethodCall call) async {
             if (call.method == 'send') {
-              throw PlatformException(code: 'SEND_FAILED', message: 'Failed to send');
+              throw PlatformException(
+                  code: 'SEND_FAILED', message: 'Failed to send');
             }
             return {'success': true, 'connectionId': 'test-connection-123'};
           },
@@ -376,7 +391,8 @@ void main() {
 
         expect(methodCalls, hasLength(1));
         expect(methodCalls[0].method, equals('close'));
-        expect(methodCalls[0].arguments['connectionId'], equals('test-connection-123'));
+        expect(methodCalls[0].arguments['connectionId'],
+            equals('test-connection-123'));
       });
 
       test('transitions to disconnected state', () async {
@@ -582,7 +598,8 @@ void main() {
 
         await Future.delayed(Duration.zero);
 
-        expect(errors.any((e) => e.contains('Certificate pinning failed')), isTrue);
+        expect(errors.any((e) => e.contains('Certificate pinning failed')),
+            isTrue);
         await socket.dispose();
       });
 

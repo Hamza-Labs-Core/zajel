@@ -50,10 +50,12 @@ void main() {
     });
 
     group('connect', () {
-      test('throws when cryptoService not initialized (publicKeyBase64 throws)', () async {
+      test('throws when cryptoService not initialized (publicKeyBase64 throws)',
+          () async {
         // When publicKeyBase64 is accessed before initialize(), it throws
         when(() => mockCryptoService.publicKeyBase64).thenThrow(
-          CryptoException('CryptoService not initialized. Call initialize() first.'),
+          CryptoException(
+              'CryptoService not initialized. Call initialize() first.'),
         );
 
         // Attempting to connect should throw

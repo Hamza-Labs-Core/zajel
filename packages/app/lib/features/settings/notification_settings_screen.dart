@@ -60,8 +60,10 @@ class NotificationSettingsScreen extends ConsumerWidget {
                       _DndChip(
                         label: 'Until tomorrow',
                         onTap: () {
-                          final tomorrow = DateTime.now().add(const Duration(days: 1));
-                          final morning = DateTime(tomorrow.year, tomorrow.month, tomorrow.day, 8);
+                          final tomorrow =
+                              DateTime.now().add(const Duration(days: 1));
+                          final morning = DateTime(
+                              tomorrow.year, tomorrow.month, tomorrow.day, 8);
                           notifier.setGlobalDnd(true, until: morning);
                         },
                       ),
@@ -123,14 +125,16 @@ class NotificationSettingsScreen extends ConsumerWidget {
                 title: const Text('Peer Status'),
                 subtitle: const Text('When peers come online or go offline'),
                 value: settings.peerStatusNotifications,
-                onChanged: (value) => notifier.setPeerStatusNotifications(value),
+                onChanged: (value) =>
+                    notifier.setPeerStatusNotifications(value),
               ),
               SwitchListTile(
                 secondary: const Icon(Icons.insert_drive_file),
                 title: const Text('File Received'),
                 subtitle: const Text('When a file transfer completes'),
                 value: settings.fileReceivedNotifications,
-                onChanged: (value) => notifier.setFileReceivedNotifications(value),
+                onChanged: (value) =>
+                    notifier.setFileReceivedNotifications(value),
               ),
             ],
           ),

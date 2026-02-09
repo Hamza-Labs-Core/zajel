@@ -37,7 +37,8 @@ final displayNameProvider = StateProvider<String>((ref) {
 
 /// Provider for notification settings with SharedPreferences persistence.
 final notificationSettingsProvider =
-    StateNotifierProvider<NotificationSettingsNotifier, NotificationSettings>((ref) {
+    StateNotifierProvider<NotificationSettingsNotifier, NotificationSettings>(
+        (ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
   return NotificationSettingsNotifier(prefs);
 });
@@ -101,7 +102,8 @@ final relayClientProvider = Provider<RelayClient?>((ref) {
 });
 
 /// Provider for peer reconnection service (created lazily when relay is available).
-final peerReconnectionServiceProvider = Provider<PeerReconnectionService?>((ref) {
+final peerReconnectionServiceProvider =
+    Provider<PeerReconnectionService?>((ref) {
   final relayClient = ref.watch(relayClientProvider);
   final signalingClient = ref.watch(signalingClientProvider);
   if (relayClient == null) return null;
@@ -128,18 +130,24 @@ final peerReconnectionServiceProvider = Provider<PeerReconnectionService?>((ref)
           }
           // Process dead drops
           for (final drop in deadDrops) {
-            service.processDeadDropFromRendezvous(drop.peerId, drop.encryptedData, drop.relayId);
+            service.processDeadDropFromRendezvous(
+                drop.peerId, drop.encryptedData, drop.relayId);
           }
-        case RendezvousPartial(:final liveMatches, :final deadDrops, redirects: _):
+        case RendezvousPartial(
+            :final liveMatches,
+            :final deadDrops,
+            redirects: _
+          ):
           // Process local results
           for (final match in liveMatches) {
             service.processLiveMatchFromRendezvous(match.peerId, match.relayId);
           }
           for (final drop in deadDrops) {
-            service.processDeadDropFromRendezvous(drop.peerId, drop.encryptedData, drop.relayId);
+            service.processDeadDropFromRendezvous(
+                drop.peerId, drop.encryptedData, drop.relayId);
           }
-          // Redirects are handled by the signaling layer - no action needed here
-          // Future: implement federated server connection for redirects
+        // Redirects are handled by the signaling layer - no action needed here
+        // Future: implement federated server connection for redirects
         case RendezvousMatch(:final peerId, :final relayId, meetingPoint: _):
           service.processLiveMatchFromRendezvous(peerId, relayId);
       }
@@ -407,13 +415,12 @@ class BlockedPeersNotifier extends StateNotifier<Set<String>> {
   }
 
   /// Update TrustedPeer.isBlocked to keep both storage layers in sync.
-  Future<void> _syncBlockToTrustedPeers(
-      String publicKey, {required bool blocked}) async {
+  Future<void> _syncBlockToTrustedPeers(String publicKey,
+      {required bool blocked}) async {
     final peers = await _trustedPeersStorage.getAllPeers();
     for (final peer in peers) {
       if (peer.publicKey == publicKey) {
-        await _trustedPeersStorage.savePeer(
-            peer.copyWith(isBlocked: blocked));
+        await _trustedPeersStorage.savePeer(peer.copyWith(isBlocked: blocked));
         break;
       }
     }
@@ -430,7 +437,8 @@ enum SignalingDisplayState {
   connected,
 }
 
-final signalingDisplayStateProvider = StateProvider<SignalingDisplayState>((ref) {
+final signalingDisplayStateProvider =
+    StateProvider<SignalingDisplayState>((ref) {
   return SignalingDisplayState.disconnected;
 });
 
@@ -439,8 +447,9 @@ final signalingDisplayStateProvider = StateProvider<SignalingDisplayState>((ref)
 const defaultBootstrapUrl = 'https://signal.zajel.hamzalabs.dev';
 
 /// Effective bootstrap URL (compile-time override or default).
-String get _effectiveBootstrapUrl =>
-    Environment.hasCustomBootstrapUrl ? Environment.bootstrapUrl : defaultBootstrapUrl;
+String get _effectiveBootstrapUrl => Environment.hasCustomBootstrapUrl
+    ? Environment.bootstrapUrl
+    : defaultBootstrapUrl;
 
 /// Provider for the bootstrap server URL.
 final bootstrapServerUrlProvider = StateProvider<String>((ref) {
@@ -470,7 +479,8 @@ final serverDiscoveryServiceProvider = Provider<ServerDiscoveryService>((ref) {
 });
 
 /// Provider for discovered servers.
-final discoveredServersProvider = FutureProvider<List<DiscoveredServer>>((ref) async {
+final discoveredServersProvider =
+    FutureProvider<List<DiscoveredServer>>((ref) async {
   final service = ref.watch(serverDiscoveryServiceProvider);
   return service.fetchServers();
 });
@@ -510,13 +520,15 @@ final fileTransfersStreamProvider = StreamProvider<FileTransfer>((ref) {
 });
 
 /// Provider for file transfer starts.
-final fileStartsStreamProvider = StreamProvider<(String, String, String, int, int)>((ref) {
+final fileStartsStreamProvider =
+    StreamProvider<(String, String, String, int, int)>((ref) {
   final connectionManager = ref.watch(connectionManagerProvider);
   return connectionManager.fileStarts;
 });
 
 /// Provider for file transfer chunks.
-final fileChunksStreamProvider = StreamProvider<(String, String, dynamic, int, int)>((ref) {
+final fileChunksStreamProvider =
+    StreamProvider<(String, String, dynamic, int, int)>((ref) {
   final connectionManager = ref.watch(connectionManagerProvider);
   return connectionManager.fileChunks;
 });
@@ -579,7 +591,8 @@ final voipServiceProvider = Provider<VoIPService?>((ref) {
     ];
   }
 
-  final voipService = VoIPService(mediaService, signalingClient, iceServers: iceServers);
+  final voipService =
+      VoIPService(mediaService, signalingClient, iceServers: iceServers);
   ref.onDispose(() => voipService.dispose());
   return voipService;
 });
@@ -602,7 +615,10 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
   }
 
   Future<void> setGlobalDnd(bool enabled, {DateTime? until}) async {
-    state = state.copyWith(globalDnd: enabled, dndUntil: until, clearDndUntil: until == null && !enabled);
+    state = state.copyWith(
+        globalDnd: enabled,
+        dndUntil: until,
+        clearDndUntil: until == null && !enabled);
     await _save();
   }
 
@@ -642,7 +658,8 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
   }
 
   Future<void> unmutePeer(String peerId) async {
-    state = state.copyWith(mutedPeerIds: {...state.mutedPeerIds}..remove(peerId));
+    state =
+        state.copyWith(mutedPeerIds: {...state.mutedPeerIds}..remove(peerId));
     await _save();
   }
 

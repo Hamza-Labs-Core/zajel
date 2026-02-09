@@ -42,8 +42,10 @@ class NotificationSettings {
       previewEnabled: previewEnabled ?? this.previewEnabled,
       messageNotifications: messageNotifications ?? this.messageNotifications,
       callNotifications: callNotifications ?? this.callNotifications,
-      peerStatusNotifications: peerStatusNotifications ?? this.peerStatusNotifications,
-      fileReceivedNotifications: fileReceivedNotifications ?? this.fileReceivedNotifications,
+      peerStatusNotifications:
+          peerStatusNotifications ?? this.peerStatusNotifications,
+      fileReceivedNotifications:
+          fileReceivedNotifications ?? this.fileReceivedNotifications,
       mutedPeerIds: mutedPeerIds ?? this.mutedPeerIds,
       dndUntil: clearDndUntil ? null : (dndUntil ?? this.dndUntil),
     );
@@ -83,7 +85,8 @@ class NotificationSettings {
       messageNotifications: json['messageNotifications'] as bool? ?? true,
       callNotifications: json['callNotifications'] as bool? ?? true,
       peerStatusNotifications: json['peerStatusNotifications'] as bool? ?? true,
-      fileReceivedNotifications: json['fileReceivedNotifications'] as bool? ?? true,
+      fileReceivedNotifications:
+          json['fileReceivedNotifications'] as bool? ?? true,
       mutedPeerIds: (json['mutedPeerIds'] as List<dynamic>?)
               ?.map((e) => e as String)
               .toSet() ??

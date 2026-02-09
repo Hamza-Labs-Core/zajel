@@ -65,7 +65,8 @@ class ConnectionInfo extends Equatable {
 
   /// Create from JSON string.
   factory ConnectionInfo.fromJsonString(String jsonString) {
-    return ConnectionInfo.fromJson(jsonDecode(jsonString) as Map<String, dynamic>);
+    return ConnectionInfo.fromJson(
+        jsonDecode(jsonString) as Map<String, dynamic>);
   }
 
   /// Convert to JSON for storage in dead drops.

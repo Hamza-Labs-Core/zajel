@@ -98,8 +98,7 @@ class SignalingClient {
   StreamSubscription? _pinnedStateSubscription;
   StreamSubscription? _pinnedErrorSubscription;
 
-  final _messageController =
-      StreamController<SignalingMessage>.broadcast();
+  final _messageController = StreamController<SignalingMessage>.broadcast();
   final _connectionStateController =
       StreamController<SignalingConnectionState>.broadcast();
 
@@ -128,11 +127,13 @@ class SignalingClient {
         // Use pinned WebSocket only on platforms with native implementations (Android/iOS)
         // Disabled on: web (no native access), desktop (no native impl), and test env
         _usePinnedWebSocket = usePinnedWebSocket ??
-            (_supportsPinnedWebSocket && !const bool.fromEnvironment('FLUTTER_TEST', defaultValue: false)) {
+            (_supportsPinnedWebSocket &&
+                !const bool.fromEnvironment('FLUTTER_TEST',
+                    defaultValue: false)) {
     _logger.debug(
       'SignalingClient',
       'Initialized: usePinnedWebSocket=$_usePinnedWebSocket, '
-      'isWeb=$kIsWeb, supportsPinnedWS=$_supportsPinnedWebSocket',
+          'isWeb=$kIsWeb, supportsPinnedWS=$_supportsPinnedWebSocket',
     );
   }
 
@@ -209,7 +210,8 @@ class SignalingClient {
       _logger.info('SignalingClient', 'Connected successfully');
 
       // Register with our pairing code and public key
-      _logger.debug('SignalingClient', 'Registering with pairing code: $_pairingCode');
+      _logger.debug(
+          'SignalingClient', 'Registering with pairing code: $_pairingCode');
       _send({
         'type': 'register',
         'pairingCode': _pairingCode,
@@ -234,19 +236,22 @@ class SignalingClient {
 
   /// Connect using standard WebSocket (no pinning).
   Future<void> _connectStandard() async {
-    _logger.debug('SignalingClient', 'Creating standard WebSocket to $serverUrl');
+    _logger.debug(
+        'SignalingClient', 'Creating standard WebSocket to $serverUrl');
     _channel = WebSocketChannel.connect(Uri.parse(serverUrl));
 
     _logger.debug('SignalingClient', 'Waiting for WebSocket ready...');
     await _channel!.ready;
-    _logger.debug('SignalingClient', 'WebSocket ready, setting up stream listener');
+    _logger.debug(
+        'SignalingClient', 'WebSocket ready, setting up stream listener');
 
     _subscription = _channel!.stream.listen(
       _handleMessage,
       onError: _handleError,
       onDone: _handleDisconnect,
     );
-    _logger.debug('SignalingClient', 'Standard WebSocket connected successfully');
+    _logger.debug(
+        'SignalingClient', 'Standard WebSocket connected successfully');
   }
 
   /// Connect using pinned WebSocket (certificate pinning enabled).
@@ -386,7 +391,8 @@ class SignalingClient {
   }
 
   /// Respond to a device link request (accept or reject web client linking).
-  void respondToLinkRequest(String linkCode, {required bool accept, String? deviceId}) {
+  void respondToLinkRequest(String linkCode,
+      {required bool accept, String? deviceId}) {
     _send({
       'type': 'link_response',
       'linkCode': linkCode,
@@ -405,7 +411,8 @@ class SignalingClient {
   /// [targetId] - The pairing code of the peer to call
   /// [sdp] - The SDP offer string
   /// [withVideo] - Whether this is a video call
-  void sendCallOffer(String callId, String targetId, String sdp, bool withVideo) {
+  void sendCallOffer(
+      String callId, String targetId, String sdp, bool withVideo) {
     _send(CallOfferMessage(
       callId: callId,
       targetId: targetId,
@@ -498,7 +505,8 @@ class SignalingClient {
     }
 
     final encodedMessage = jsonEncode(message);
-    _logger.debug('SignalingClient', 'Sending message: ${message['type']} -> $encodedMessage');
+    _logger.debug('SignalingClient',
+        'Sending message: ${message['type']} -> $encodedMessage');
 
     // Use pinned WebSocket if available, otherwise use standard
     if (_pinnedSocket != null) {
@@ -513,7 +521,8 @@ class SignalingClient {
     } else if (_channel != null) {
       _channel!.sink.add(encodedMessage);
     } else {
-      _logger.error('SignalingClient', 'No socket available to send message: ${message['type']}');
+      _logger.error('SignalingClient',
+          'No socket available to send message: ${message['type']}');
     }
   }
 
@@ -651,7 +660,8 @@ class SignalingClient {
 
         // Rendezvous messages
         case 'rendezvous_result':
-          _logger.info('SignalingClient', 'Received rendezvous_result: liveMatches=${json['liveMatches']?.length ?? 0}, deadDrops=${json['deadDrops']?.length ?? 0}');
+          _logger.info('SignalingClient',
+              'Received rendezvous_result: liveMatches=${json['liveMatches']?.length ?? 0}, deadDrops=${json['deadDrops']?.length ?? 0}');
           _handleRendezvousResult(json);
           break;
 
@@ -661,7 +671,8 @@ class SignalingClient {
           break;
 
         case 'rendezvous_match':
-          _logger.info('SignalingClient', 'Received rendezvous_match: ${json['match']}');
+          _logger.info(
+              'SignalingClient', 'Received rendezvous_match: ${json['match']}');
           _handleRendezvousMatch(json);
           break;
 
@@ -683,7 +694,8 @@ class SignalingClient {
         'SignalingClient',
         'Invalid message format: $e\nMessage: $data',
       );
-      _logger.debug('SignalingClient', 'Message parse stack trace: $stackTrace');
+      _logger.debug(
+          'SignalingClient', 'Message parse stack trace: $stackTrace');
     }
   }
 
@@ -1024,7 +1036,9 @@ class CallOfferMessage {
     final payload = json['payload'] as Map<String, dynamic>? ?? json;
     return CallOfferMessage(
       callId: payload['callId'] as String,
-      targetId: json['from'] as String? ?? json['target'] as String? ?? payload['targetId'] as String,
+      targetId: json['from'] as String? ??
+          json['target'] as String? ??
+          payload['targetId'] as String,
       sdp: payload['sdp'] as String,
       withVideo: payload['withVideo'] as bool,
     );
@@ -1056,7 +1070,9 @@ class CallAnswerMessage {
     final payload = json['payload'] as Map<String, dynamic>? ?? json;
     return CallAnswerMessage(
       callId: payload['callId'] as String,
-      targetId: json['from'] as String? ?? json['target'] as String? ?? payload['targetId'] as String,
+      targetId: json['from'] as String? ??
+          json['target'] as String? ??
+          payload['targetId'] as String,
       sdp: payload['sdp'] as String,
     );
   }
@@ -1087,7 +1103,9 @@ class CallRejectMessage {
     final payload = json['payload'] as Map<String, dynamic>? ?? json;
     return CallRejectMessage(
       callId: payload['callId'] as String,
-      targetId: json['from'] as String? ?? json['target'] as String? ?? payload['targetId'] as String,
+      targetId: json['from'] as String? ??
+          json['target'] as String? ??
+          payload['targetId'] as String,
       reason: payload['reason'] as String?,
     );
   }
@@ -1115,7 +1133,9 @@ class CallHangupMessage {
     final payload = json['payload'] as Map<String, dynamic>? ?? json;
     return CallHangupMessage(
       callId: payload['callId'] as String,
-      targetId: json['from'] as String? ?? json['target'] as String? ?? payload['targetId'] as String,
+      targetId: json['from'] as String? ??
+          json['target'] as String? ??
+          payload['targetId'] as String,
     );
   }
 }
@@ -1145,7 +1165,9 @@ class CallIceMessage {
     final payload = json['payload'] as Map<String, dynamic>? ?? json;
     return CallIceMessage(
       callId: payload['callId'] as String,
-      targetId: json['from'] as String? ?? json['target'] as String? ?? payload['targetId'] as String,
+      targetId: json['from'] as String? ??
+          json['target'] as String? ??
+          payload['targetId'] as String,
       candidate: payload['candidate'] as String,
     );
   }

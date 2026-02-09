@@ -146,15 +146,18 @@ void main() {
     });
 
     test('reconnectionTimeout is 10 seconds', () {
-      expect(CallConstants.reconnectionTimeout, equals(const Duration(seconds: 10)));
+      expect(CallConstants.reconnectionTimeout,
+          equals(const Duration(seconds: 10)));
     });
 
     test('iceGatheringTimeout is 30 seconds', () {
-      expect(CallConstants.iceGatheringTimeout, equals(const Duration(seconds: 30)));
+      expect(CallConstants.iceGatheringTimeout,
+          equals(const Duration(seconds: 30)));
     });
 
     test('cleanupDelay is 500 milliseconds', () {
-      expect(CallConstants.cleanupDelay, equals(const Duration(milliseconds: 500)));
+      expect(CallConstants.cleanupDelay,
+          equals(const Duration(milliseconds: 500)));
     });
   });
 
@@ -259,7 +262,9 @@ void main() {
     });
 
     group('toggleMute', () {
-      test('returns current state without calling MediaService when no active call', () {
+      test(
+          'returns current state without calling MediaService when no active call',
+          () {
         // Without an active call, toggleMute validates state and returns isAudioMuted
         when(() => mockMediaService.isAudioMuted).thenReturn(true);
 
@@ -280,7 +285,9 @@ void main() {
     });
 
     group('toggleVideo', () {
-      test('returns current state without calling MediaService when no active call', () {
+      test(
+          'returns current state without calling MediaService when no active call',
+          () {
         // Without an active call, toggleVideo validates state and returns !isVideoMuted
         when(() => mockMediaService.isVideoMuted).thenReturn(true);
 
@@ -386,7 +393,8 @@ void main() {
         final iceMessage = CallIceMessage(
           callId: 'unknown-call',
           targetId: 'PEER01',
-          candidate: '{"candidate":"candidate:1 1 UDP 2130706431 ...","sdpMid":"0","sdpMLineIndex":0}',
+          candidate:
+              '{"candidate":"candidate:1 1 UDP 2130706431 ...","sdpMid":"0","sdpMLineIndex":0}',
         );
 
         // Should not throw
@@ -424,7 +432,8 @@ void main() {
 
         // Verify MediaService.stopAllTracks was called at least once
         // (may be called multiple times due to tearDown interactions)
-        verify(() => mockMediaService.stopAllTracks()).called(greaterThanOrEqualTo(1));
+        verify(() => mockMediaService.stopAllTracks())
+            .called(greaterThanOrEqualTo(1));
       });
 
       test('dispose can be called when no active call', () {
@@ -610,7 +619,8 @@ void main() {
       final json = CallIceMessage(
         callId: 'call-006',
         targetId: 'PEER06',
-        candidate: '{"candidate":"candidate:1 1 UDP 2130706431 ...","sdpMid":"0","sdpMLineIndex":0}',
+        candidate:
+            '{"candidate":"candidate:1 1 UDP 2130706431 ...","sdpMid":"0","sdpMLineIndex":0}',
       ).toJson();
 
       expect(json['type'], equals('call_ice'));

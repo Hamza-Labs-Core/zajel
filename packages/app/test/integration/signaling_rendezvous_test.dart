@@ -58,7 +58,10 @@ void main() {
             LiveMatch(peerId: 'peer2', relayId: null),
           ],
           deadDrops: [
-            DeadDrop(peerId: 'peer3', encryptedData: 'encrypted-data-1', relayId: 'relay2'),
+            DeadDrop(
+                peerId: 'peer3',
+                encryptedData: 'encrypted-data-1',
+                relayId: 'relay2'),
           ],
         );
 
@@ -125,11 +128,19 @@ void main() {
             case RendezvousResult(:final liveMatches, :final deadDrops):
               expect(liveMatches, isA<List<LiveMatch>>());
               expect(deadDrops, isA<List<DeadDrop>>());
-            case RendezvousPartial(:final liveMatches, :final deadDrops, :final redirects):
+            case RendezvousPartial(
+                :final liveMatches,
+                :final deadDrops,
+                :final redirects
+              ):
               expect(liveMatches, isA<List<LiveMatch>>());
               expect(deadDrops, isA<List<DeadDrop>>());
               expect(redirects, isA<List<RendezvousRedirect>>());
-            case RendezvousMatch(:final peerId, :final relayId, meetingPoint: _):
+            case RendezvousMatch(
+                :final peerId,
+                :final relayId,
+                meetingPoint: _
+              ):
               expect(peerId, isA<String>());
               expect(relayId, anyOf(isNull, isA<String>()));
           }
@@ -137,8 +148,10 @@ void main() {
 
         // Test each type
         handleEvent(RendezvousResult(liveMatches: [], deadDrops: []));
-        handleEvent(RendezvousPartial(liveMatches: [], deadDrops: [], redirects: []));
-        handleEvent(RendezvousMatch(peerId: 'test', relayId: null, meetingPoint: null));
+        handleEvent(
+            RendezvousPartial(liveMatches: [], deadDrops: [], redirects: []));
+        handleEvent(
+            RendezvousMatch(peerId: 'test', relayId: null, meetingPoint: null));
       });
     });
 

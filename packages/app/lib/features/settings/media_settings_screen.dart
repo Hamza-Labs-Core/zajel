@@ -70,8 +70,7 @@ class _MediaSettingsScreenState extends ConsumerState<MediaSettingsScreen> {
         },
       };
 
-      _previewStream =
-          await navigator.mediaDevices.getUserMedia(constraints);
+      _previewStream = await navigator.mediaDevices.getUserMedia(constraints);
       _previewRenderer!.srcObject = _previewStream;
 
       if (mounted) {
@@ -137,8 +136,7 @@ class _MediaSettingsScreenState extends ConsumerState<MediaSettingsScreen> {
                     if (_audioInputs.isEmpty)
                       const ListTile(
                         title: Text('No microphones detected'),
-                        subtitle: Text(
-                            'Connect a microphone and refresh'),
+                        subtitle: Text('Connect a microphone and refresh'),
                       )
                     else
                       _buildDeviceDropdown(
@@ -160,14 +158,12 @@ class _MediaSettingsScreenState extends ConsumerState<MediaSettingsScreen> {
                     if (_audioOutputs.isEmpty)
                       const ListTile(
                         title: Text('No speakers detected'),
-                        subtitle:
-                            Text('Connect a speaker and refresh'),
+                        subtitle: Text('Connect a speaker and refresh'),
                       )
                     else
                       _buildDeviceDropdown(
                         devices: _audioOutputs,
-                        selectedId:
-                            mediaService.selectedAudioOutputId,
+                        selectedId: mediaService.selectedAudioOutputId,
                         onChanged: (id) async {
                           await mediaService.selectAudioOutput(id);
                           setState(() {});
@@ -183,17 +179,15 @@ class _MediaSettingsScreenState extends ConsumerState<MediaSettingsScreen> {
                   children: [
                     if (_videoInputs.isEmpty)
                       const ListTile(
-                        leading: Icon(Icons.videocam_off,
-                            color: Colors.grey),
+                        leading: Icon(Icons.videocam_off, color: Colors.grey),
                         title: Text('No camera detected'),
-                        subtitle: Text(
-                            'Connect a camera to enable video calls'),
+                        subtitle:
+                            Text('Connect a camera to enable video calls'),
                       )
                     else ...[
                       _buildDeviceDropdown(
                         devices: _videoInputs,
-                        selectedId:
-                            mediaService.selectedVideoInputId,
+                        selectedId: mediaService.selectedVideoInputId,
                         onChanged: (id) async {
                           await mediaService.selectVideoInput(id);
                           // Restart preview with new camera
@@ -217,34 +211,30 @@ class _MediaSettingsScreenState extends ConsumerState<MediaSettingsScreen> {
                   children: [
                     SwitchListTile(
                       title: const Text('Noise Suppression'),
-                      subtitle: const Text(
-                          'Reduce background noise during calls'),
+                      subtitle:
+                          const Text('Reduce background noise during calls'),
                       value: mediaService.noiseSuppression,
                       onChanged: (val) async {
-                        await mediaService
-                            .setNoiseSuppression(val);
+                        await mediaService.setNoiseSuppression(val);
                         setState(() {});
                       },
                     ),
                     SwitchListTile(
                       title: const Text('Echo Cancellation'),
-                      subtitle: const Text(
-                          'Prevent echo from your speakers'),
+                      subtitle: const Text('Prevent echo from your speakers'),
                       value: mediaService.echoCancellation,
                       onChanged: (val) async {
-                        await mediaService
-                            .setEchoCancellation(val);
+                        await mediaService.setEchoCancellation(val);
                         setState(() {});
                       },
                     ),
                     SwitchListTile(
                       title: const Text('Auto Gain Control'),
-                      subtitle: const Text(
-                          'Automatically adjust microphone volume'),
+                      subtitle:
+                          const Text('Automatically adjust microphone volume'),
                       value: mediaService.autoGainControl,
                       onChanged: (val) async {
-                        await mediaService
-                            .setAutoGainControl(val);
+                        await mediaService.setAutoGainControl(val);
                         setState(() {});
                       },
                     ),
@@ -277,9 +267,12 @@ class _MediaSettingsScreenState extends ConsumerState<MediaSettingsScreen> {
                           min: 0.0,
                           max: 1.0,
                           divisions: 10,
-                          label: '${(ref.read(backgroundBlurProvider).strength * 100).round()}%',
+                          label:
+                              '${(ref.read(backgroundBlurProvider).strength * 100).round()}%',
                           onChanged: (val) async {
-                            await ref.read(backgroundBlurProvider).setStrength(val);
+                            await ref
+                                .read(backgroundBlurProvider)
+                                .setStrength(val);
                             setState(() {});
                           },
                         ),
@@ -316,8 +309,7 @@ class _MediaSettingsScreenState extends ConsumerState<MediaSettingsScreen> {
           child: Row(
             children: [
               Icon(icon,
-                  size: 18,
-                  color: Theme.of(context).colorScheme.primary),
+                  size: 18, color: Theme.of(context).colorScheme.primary),
               const SizedBox(width: 8),
               Text(
                 title,
@@ -351,8 +343,7 @@ class _MediaSettingsScreenState extends ConsumerState<MediaSettingsScreen> {
         value: validId,
         decoration: const InputDecoration(
           border: OutlineInputBorder(),
-          contentPadding:
-              EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         ),
         isExpanded: true,
         items: [
@@ -387,8 +378,7 @@ class _MediaSettingsScreenState extends ConsumerState<MediaSettingsScreen> {
                 child: RTCVideoView(
                   _previewRenderer!,
                   mirror: true,
-                  objectFit:
-                      RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                 ),
               ),
             )
@@ -404,8 +394,7 @@ class _MediaSettingsScreenState extends ConsumerState<MediaSettingsScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.videocam_off,
-                        size: 48, color: Colors.grey),
+                    Icon(Icons.videocam_off, size: 48, color: Colors.grey),
                     SizedBox(height: 8),
                     Text('Camera preview off',
                         style: TextStyle(color: Colors.grey)),
@@ -415,10 +404,8 @@ class _MediaSettingsScreenState extends ConsumerState<MediaSettingsScreen> {
             ),
           const SizedBox(height: 8),
           FilledButton.tonalIcon(
-            icon: Icon(
-                _previewActive ? Icons.stop : Icons.play_arrow),
-            label:
-                Text(_previewActive ? 'Stop Preview' : 'Test Camera'),
+            icon: Icon(_previewActive ? Icons.stop : Icons.play_arrow),
+            label: Text(_previewActive ? 'Stop Preview' : 'Test Camera'),
             onPressed: () {
               if (_previewActive) {
                 _stopPreview();

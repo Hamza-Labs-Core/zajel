@@ -22,7 +22,8 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
       : _storage = storage ??
             const FlutterSecureStorage(
               aOptions: AndroidOptions(encryptedSharedPreferences: true),
-              iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
+              iOptions:
+                  IOSOptions(accessibility: KeychainAccessibility.first_unlock),
             );
 
   /// Initialize and load from storage.
@@ -35,7 +36,8 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
         final List<dynamic> list = jsonDecode(json);
         _cache = {
           for (final item in list)
-            (item['id'] as String): TrustedPeer.fromJson(item as Map<String, dynamic>)
+            (item['id'] as String):
+                TrustedPeer.fromJson(item as Map<String, dynamic>)
         };
       }
       _initialized = true;

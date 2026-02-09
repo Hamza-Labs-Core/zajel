@@ -78,9 +78,21 @@ class HomeScreen extends ConsumerWidget {
 
     // Determine status indicator based on signaling connection state
     final (statusColor, statusBgColor, statusText) = switch (signalingState) {
-      SignalingDisplayState.connected => (Colors.green, Colors.green.shade100, 'Online'),
-      SignalingDisplayState.connecting => (Colors.orange, Colors.orange.shade100, 'Connecting...'),
-      SignalingDisplayState.disconnected => (Colors.red, Colors.red.shade100, 'Offline'),
+      SignalingDisplayState.connected => (
+          Colors.green,
+          Colors.green.shade100,
+          'Online'
+        ),
+      SignalingDisplayState.connecting => (
+          Colors.orange,
+          Colors.orange.shade100,
+          'Connecting...'
+        ),
+      SignalingDisplayState.disconnected => (
+          Colors.red,
+          Colors.red.shade100,
+          'Offline'
+        ),
     };
 
     return Container(
@@ -119,8 +131,7 @@ class HomeScreen extends ConsumerWidget {
                 ),
               ),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: statusBgColor,
                   borderRadius: BorderRadius.circular(12),
@@ -162,8 +173,7 @@ class HomeScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildPeerList(
-      BuildContext context, WidgetRef ref, List<Peer> peers) {
+  Widget _buildPeerList(BuildContext context, WidgetRef ref, List<Peer> peers) {
     if (peers.isEmpty) {
       return Center(
         child: Padding(
@@ -202,14 +212,18 @@ class HomeScreen extends ConsumerWidget {
     }
 
     // Split into online and offline groups
-    final onlinePeers = peers.where((p) =>
-        p.connectionState == PeerConnectionState.connected ||
-        p.connectionState == PeerConnectionState.connecting ||
-        p.connectionState == PeerConnectionState.handshaking).toList();
-    final offlinePeers = peers.where((p) =>
-        p.connectionState == PeerConnectionState.disconnected ||
-        p.connectionState == PeerConnectionState.failed ||
-        p.connectionState == PeerConnectionState.discovering).toList();
+    final onlinePeers = peers
+        .where((p) =>
+            p.connectionState == PeerConnectionState.connected ||
+            p.connectionState == PeerConnectionState.connecting ||
+            p.connectionState == PeerConnectionState.handshaking)
+        .toList();
+    final offlinePeers = peers
+        .where((p) =>
+            p.connectionState == PeerConnectionState.disconnected ||
+            p.connectionState == PeerConnectionState.failed ||
+            p.connectionState == PeerConnectionState.discovering)
+        .toList();
 
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -252,11 +266,10 @@ class _PeerCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isConnected =
-        peer.connectionState == PeerConnectionState.connected;
+    final isConnected = peer.connectionState == PeerConnectionState.connected;
     final isConnecting =
         peer.connectionState == PeerConnectionState.connecting ||
-        peer.connectionState == PeerConnectionState.handshaking;
+            peer.connectionState == PeerConnectionState.handshaking;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),

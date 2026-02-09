@@ -76,8 +76,9 @@ void main() {
     test('expired timestamp returns false', () async {
       final verifier = BootstrapVerifier.withKey(publicKeyBase64);
       // Timestamp 10 minutes in the past
-      final oldTimestamp =
-          DateTime.now().subtract(const Duration(minutes: 10)).millisecondsSinceEpoch;
+      final oldTimestamp = DateTime.now()
+          .subtract(const Duration(minutes: 10))
+          .millisecondsSinceEpoch;
       final payload = makePayload(timestamp: oldTimestamp);
       final body = jsonEncode(payload);
       final sig = await signPayload(body);

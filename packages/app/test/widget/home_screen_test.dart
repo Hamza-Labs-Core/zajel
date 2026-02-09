@@ -34,7 +34,8 @@ void main() {
         ),
         displayNameProvider.overrideWith((ref) => displayName),
         pairingCodeProvider.overrideWith((ref) => 'ABC123'),
-        signalingDisplayStateProvider.overrideWith((ref) => SignalingDisplayState.disconnected),
+        signalingDisplayStateProvider
+            .overrideWith((ref) => SignalingDisplayState.disconnected),
         connectionManagerProvider.overrideWithValue(mockConnectionManager),
         peersProvider.overrideWith((ref) {
           if (error != null) {

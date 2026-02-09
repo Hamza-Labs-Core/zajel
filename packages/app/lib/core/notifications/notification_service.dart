@@ -9,7 +9,8 @@ import '../models/notification_settings.dart';
 class NotificationService {
   static const _tag = 'NotificationService';
 
-  final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _plugin =
+      FlutterLocalNotificationsPlugin();
   final void Function(String? payload)? onNotificationTap;
   bool _initialized = false;
 
@@ -20,13 +21,15 @@ class NotificationService {
   Future<void> initialize() async {
     if (_initialized) return;
 
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
     const darwinSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
       requestSoundPermission: true,
     );
-    const linuxSettings = LinuxInitializationSettings(defaultActionName: 'Open');
+    const linuxSettings =
+        LinuxInitializationSettings(defaultActionName: 'Open');
 
     const initSettings = InitializationSettings(
       android: androidSettings,

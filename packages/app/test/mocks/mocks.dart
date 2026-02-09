@@ -20,7 +20,8 @@ import 'package:zajel/core/network/relay_client.dart';
 // Mock classes
 class MockFlutterSecureStorage extends Mock implements FlutterSecureStorage {}
 
-class MockPeerReconnectionService extends Mock implements PeerReconnectionService {}
+class MockPeerReconnectionService extends Mock
+    implements PeerReconnectionService {}
 
 class MockRelayClient extends Mock implements RelayClient {}
 
@@ -116,7 +117,8 @@ class FakeWebSocketChannel implements WebSocketChannel {
         methodName.contains('changeStream') ||
         methodName.contains('pipe') ||
         methodName.contains('transform')) {
-      throw UnimplementedError('$methodName not implemented in FakeWebSocketChannel');
+      throw UnimplementedError(
+          '$methodName not implemented in FakeWebSocketChannel');
     }
     return super.noSuchMethod(invocation);
   }

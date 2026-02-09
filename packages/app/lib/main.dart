@@ -51,7 +51,8 @@ class ZajelApp extends ConsumerStatefulWidget {
   ConsumerState<ZajelApp> createState() => _ZajelAppState();
 }
 
-class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver {
+class _ZajelAppState extends ConsumerState<ZajelApp>
+    with WidgetsBindingObserver {
   bool _initialized = false;
   StreamSubscription? _fileStartSubscription;
   StreamSubscription? _fileChunkSubscription;
@@ -192,8 +193,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
 
         // Store the selected server
         ref.read(selectedServerProvider.notifier).state = selectedServer;
-        logger.info(
-            'ZajelApp', 'Selected server: ${selectedServer.region} - ${selectedServer.endpoint}');
+        logger.info('ZajelApp',
+            'Selected server: ${selectedServer.region} - ${selectedServer.endpoint}');
 
         // Get the WebSocket URL for the selected server
         serverUrl = discoveryService.getWebSocketUrl(selectedServer);
@@ -202,9 +203,11 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
       logger.debug('ZajelApp', 'Connecting to WebSocket URL: $serverUrl');
 
       final code = await connectionManager.connect(serverUrl: serverUrl);
-      logger.info('ZajelApp', 'Connected to signaling with pairing code: $code');
+      logger.info(
+          'ZajelApp', 'Connected to signaling with pairing code: $code');
       ref.read(pairingCodeProvider.notifier).state = code;
-      ref.read(signalingClientProvider.notifier).state = connectionManager.signalingClient;
+      ref.read(signalingClientProvider.notifier).state =
+          connectionManager.signalingClient;
       ref.read(signalingConnectedProvider.notifier).state = true;
       ref.read(signalingDisplayStateProvider.notifier).state =
           SignalingDisplayState.connected;
@@ -241,7 +244,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
     });
 
     // Listen for file transfer completions
-    _fileCompleteSubscription = connectionManager.fileCompletes.listen((event) async {
+    _fileCompleteSubscription =
+        connectionManager.fileCompletes.listen((event) async {
       final (peerId, fileId) = event;
       final savedPath = await fileReceiveService.completeTransfer(fileId);
 
@@ -251,19 +255,19 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
         if (transfer != null) {
           // Add received file message to chat
           ref.read(chatMessagesProvider(peerId).notifier).addMessage(
-            Message(
-              localId: fileId,
-              peerId: peerId,
-              content: 'Received file: ${transfer.fileName}',
-              type: MessageType.file,
-              timestamp: DateTime.now(),
-              isOutgoing: false,
-              status: MessageStatus.delivered,
-              attachmentPath: savedPath,
-              attachmentName: transfer.fileName,
-              attachmentSize: transfer.totalSize,
-            ),
-          );
+                Message(
+                  localId: fileId,
+                  peerId: peerId,
+                  content: 'Received file: ${transfer.fileName}',
+                  type: MessageType.file,
+                  timestamp: DateTime.now(),
+                  isOutgoing: false,
+                  status: MessageStatus.delivered,
+                  attachmentPath: savedPath,
+                  attachmentName: transfer.fileName,
+                  attachmentSize: transfer.totalSize,
+                ),
+              );
         }
       }
     });
@@ -275,14 +279,17 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
     _pairRequestSubscription = connectionManager.pairRequests.listen((event) {
       final (fromCode, fromPublicKey, proposedName) = event;
       logger.info('ZajelApp', 'Showing pair request dialog for $fromCode');
-      _showPairRequestDialog(fromCode, fromPublicKey, proposedName: proposedName);
+      _showPairRequestDialog(fromCode, fromPublicKey,
+          proposedName: proposedName);
     });
   }
 
-  Future<void> _showPairRequestDialog(String fromCode, String fromPublicKey, {String? proposedName}) async {
+  Future<void> _showPairRequestDialog(String fromCode, String fromPublicKey,
+      {String? proposedName}) async {
     final context = rootNavigatorKey.currentContext;
     if (context == null) {
-      logger.warning('ZajelApp', 'No context available to show pair request dialog');
+      logger.warning(
+          'ZajelApp', 'No context available to show pair request dialog');
       return;
     }
 
@@ -382,7 +389,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
 
     _linkRequestSubscription = connectionManager.linkRequests.listen((event) {
       final (linkCode, publicKey, deviceName) = event;
-      logger.info('ZajelApp', 'Showing link request dialog for $linkCode from $deviceName');
+      logger.info('ZajelApp',
+          'Showing link request dialog for $linkCode from $deviceName');
       _showLinkRequestDialog(linkCode, publicKey, deviceName);
     });
   }
@@ -394,16 +402,20 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
   ) async {
     final context = rootNavigatorKey.currentContext;
     if (context == null) {
-      logger.warning('ZajelApp', 'No context available to show link request dialog');
+      logger.warning(
+          'ZajelApp', 'No context available to show link request dialog');
       return;
     }
 
     // Generate fingerprint for verification (first 32 chars, grouped by 4)
-    final truncated = publicKey.length > 32 ? publicKey.substring(0, 32) : publicKey;
-    final fingerprint = truncated.replaceAllMapped(
-      RegExp(r'.{4}'),
-      (match) => '${match.group(0)} ',
-    ).trim();
+    final truncated =
+        publicKey.length > 32 ? publicKey.substring(0, 32) : publicKey;
+    final fingerprint = truncated
+        .replaceAllMapped(
+          RegExp(r'.{4}'),
+          (match) => '${match.group(0)} ',
+        )
+        .trim();
 
     final approved = await showDialog<bool>(
       context: context,
@@ -608,7 +620,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
               String callerName = call.peerId;
               final peersAsync = ref.read(peersProvider);
               peersAsync.whenData((peers) {
-                final peer = peers.where((p) => p.id == call.peerId).firstOrNull;
+                final peer =
+                    peers.where((p) => p.id == call.peerId).firstOrNull;
                 if (peer != null) callerName = peer.displayName;
               });
               final notificationService = ref.read(notificationServiceProvider);
@@ -620,7 +633,9 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
               );
             }
           } else if (_isIncomingCallDialogOpen &&
-              (state == CallState.ended || state == CallState.connecting || state == CallState.idle)) {
+              (state == CallState.ended ||
+                  state == CallState.connecting ||
+                  state == CallState.idle)) {
             _dismissIncomingCallDialog();
           }
 
@@ -653,7 +668,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
   void _showIncomingCallDialog() {
     final context = rootNavigatorKey.currentContext;
     if (context == null) {
-      logger.warning('ZajelApp', 'No context available to show incoming call dialog');
+      logger.warning(
+          'ZajelApp', 'No context available to show incoming call dialog');
       return;
     }
 
@@ -690,13 +706,15 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
           _isIncomingCallDialogOpen = false;
           Navigator.of(context).pop();
           voipService.acceptCall(call.callId, false);
-          _navigateToCallScreen(voipService, mediaService, callerName, withVideo: false);
+          _navigateToCallScreen(voipService, mediaService, callerName,
+              withVideo: false);
         },
         onAcceptWithVideo: () {
           _isIncomingCallDialogOpen = false;
           Navigator.of(context).pop();
           voipService.acceptCall(call.callId, true);
-          _navigateToCallScreen(voipService, mediaService, callerName, withVideo: true);
+          _navigateToCallScreen(voipService, mediaService, callerName,
+              withVideo: true);
         },
         onReject: () {
           _isIncomingCallDialogOpen = false;
@@ -715,7 +733,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp> with WidgetsBindingObserver
   }) {
     final context = rootNavigatorKey.currentContext;
     if (context == null) {
-      logger.warning('ZajelApp', 'No context available to navigate to call screen');
+      logger.warning(
+          'ZajelApp', 'No context available to navigate to call screen');
       return;
     }
 

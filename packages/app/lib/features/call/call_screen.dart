@@ -361,7 +361,8 @@ class _ControlButton extends StatelessWidget {
         FloatingActionButton(
           heroTag: 'control_$label',
           tooltip: label,
-          backgroundColor: color ?? (isActive ? Colors.white24 : Colors.white10),
+          backgroundColor:
+              color ?? (isActive ? Colors.white24 : Colors.white10),
           onPressed: onPressed,
           child: Icon(icon, color: Colors.white),
         ),

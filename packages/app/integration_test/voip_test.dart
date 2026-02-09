@@ -270,7 +270,9 @@ void main() {
 
       // Wait for connected state (depends on WebRTC ICE)
       final connected = await TestUtils.waitFor(
-        () => voipA.state == CallState.connected && voipB.state == CallState.connected,
+        () =>
+            voipA.state == CallState.connected &&
+            voipB.state == CallState.connected,
         timeout: const Duration(seconds: 30),
       );
 
@@ -361,7 +363,8 @@ void main() {
         timeout: const Duration(seconds: 5),
       );
 
-      expect(bEnded, isTrue, reason: 'Device B should receive hangup notification');
+      expect(bEnded, isTrue,
+          reason: 'Device B should receive hangup notification');
     });
 
     test('mute toggle changes track enabled state', () async {

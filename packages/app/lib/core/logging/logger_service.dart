@@ -101,7 +101,8 @@ class LoggerService {
   }
 
   /// Log an error message with optional stack trace.
-  void error(String tag, String message, [Object? error, StackTrace? stackTrace]) {
+  void error(String tag, String message,
+      [Object? error, StackTrace? stackTrace]) {
     var fullMessage = message;
     if (error != null) {
       fullMessage += '\nError: $error';
@@ -161,7 +162,8 @@ class LoggerService {
   }
 
   String _getLogFileName(DateTime date) {
-    final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+    final dateStr =
+        '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
     return 'zajel_$dateStr.log';
   }
 

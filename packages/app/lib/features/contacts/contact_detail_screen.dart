@@ -13,7 +13,8 @@ class ContactDetailScreen extends ConsumerStatefulWidget {
   const ContactDetailScreen({super.key, required this.peerId});
 
   @override
-  ConsumerState<ContactDetailScreen> createState() => _ContactDetailScreenState();
+  ConsumerState<ContactDetailScreen> createState() =>
+      _ContactDetailScreenState();
 }
 
 class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
@@ -77,7 +78,8 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
               children: [
                 CircleAvatar(
                   radius: 48,
-                  backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                  backgroundColor:
+                      Theme.of(context).colorScheme.primaryContainer,
                   child: Text(
                     displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
                     style: TextStyle(
@@ -155,7 +157,8 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
                   title: const Text('Peer ID'),
                   subtitle: Text(
                     peer.id,
-                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                    style:
+                        const TextStyle(fontFamily: 'monospace', fontSize: 12),
                   ),
                 ),
                 ListTile(

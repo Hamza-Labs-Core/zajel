@@ -78,10 +78,10 @@ class TestConfig {
   /// - `TEST_VERBOSE`: Set to 'true' for verbose logging
   factory TestConfig.fromEnvironment() {
     return TestConfig(
-      vpsServerUrl: Platform.environment['TEST_VPS_SERVER_URL'] ??
-          'ws://localhost:8080',
-      bootstrapServerUrl: Platform.environment['TEST_BOOTSTRAP_URL'] ??
-          'http://localhost:8787',
+      vpsServerUrl:
+          Platform.environment['TEST_VPS_SERVER_URL'] ?? 'ws://localhost:8080',
+      bootstrapServerUrl:
+          Platform.environment['TEST_BOOTSTRAP_URL'] ?? 'http://localhost:8787',
       connectionTimeoutSeconds:
           int.tryParse(Platform.environment['TEST_CONNECTION_TIMEOUT'] ?? '') ??
               30,
@@ -239,10 +239,12 @@ class TestUtils {
 
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
       final timeout = baseTimeout * (1 << (attempt - 1)); // 10s, 20s, 40s
-      logFn('Connection attempt $attempt/$maxAttempts with ${timeout.inSeconds}s timeout');
+      logFn(
+          'Connection attempt $attempt/$maxAttempts with ${timeout.inSeconds}s timeout');
 
       try {
-        final pairingCode = await (connectionManager.connect(serverUrl: serverUrl) as Future<String>)
+        final pairingCode = await (connectionManager.connect(
+                serverUrl: serverUrl) as Future<String>)
             .timeout(timeout);
         logFn('Connected on attempt $attempt');
         return pairingCode;

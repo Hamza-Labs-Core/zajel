@@ -196,8 +196,10 @@ void main() {
         timeout: config.connectionTimeout,
       );
 
-      expect(peersConnectedA, isTrue, reason: 'Device A should be connected to B');
-      expect(peersConnectedB, isTrue, reason: 'Device B should be connected to A');
+      expect(peersConnectedA, isTrue,
+          reason: 'Device A should be connected to B');
+      expect(peersConnectedB, isTrue,
+          reason: 'Device B should be connected to A');
 
       if (config.verboseLogging) {
         debugPrint('Both devices connected successfully!');

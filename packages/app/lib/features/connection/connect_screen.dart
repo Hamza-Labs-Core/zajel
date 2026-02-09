@@ -46,7 +46,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
   /// Listen for incoming link requests from web clients and show approval dialog.
   void _listenForLinkRequests() {
     final connectionManager = ref.read(connectionManagerProvider);
-    _linkRequestsSubscription = connectionManager.linkRequests.listen((request) {
+    _linkRequestsSubscription =
+        connectionManager.linkRequests.listen((request) {
       final (linkCode, publicKey, deviceName) = request;
       _showLinkApprovalDialog(linkCode, publicKey, deviceName);
     });
@@ -128,7 +129,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
               ),
               child: Row(
                 children: [
-                  Icon(Icons.warning_amber, color: Colors.orange.shade800, size: 20),
+                  Icon(Icons.warning_amber,
+                      color: Colors.orange.shade800, size: 20),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -179,11 +181,14 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
   String _generateFingerprint(String publicKey) {
     // Simple fingerprint: first 16 characters of the public key
     // In production, this would use SHA-256 hash
-    final truncated = publicKey.length > 32 ? publicKey.substring(0, 32) : publicKey;
-    return truncated.replaceAllMapped(
-      RegExp(r'.{4}'),
-      (match) => '${match.group(0)} ',
-    ).trim();
+    final truncated =
+        publicKey.length > 32 ? publicKey.substring(0, 32) : publicKey;
+    return truncated
+        .replaceAllMapped(
+          RegExp(r'.{4}'),
+          (match) => '${match.group(0)} ',
+        )
+        .trim();
   }
 
   Future<void> _connectToServer() async {
@@ -196,7 +201,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
     }
 
     // Update UI state to show "Connecting..."
-    ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.connecting;
+    ref.read(signalingDisplayStateProvider.notifier).state =
+        SignalingDisplayState.connecting;
 
     try {
       // First, discover and select a VPS server
@@ -204,8 +210,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
       final selectedServer = await discoveryService.selectServer();
 
       if (selectedServer == null) {
-        setState(() => _error = 'No servers available. Please try again later.');
-        ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.disconnected;
+        setState(
+            () => _error = 'No servers available. Please try again later.');
+        ref.read(signalingDisplayStateProvider.notifier).state =
+            SignalingDisplayState.disconnected;
         return;
       }
 
@@ -222,15 +230,18 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
       );
 
       ref.read(pairingCodeProvider.notifier).state = code;
-      ref.read(signalingClientProvider.notifier).state = connectionManager.signalingClient;
+      ref.read(signalingClientProvider.notifier).state =
+          connectionManager.signalingClient;
       ref.read(signalingConnectedProvider.notifier).state = true;
-      ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.connected;
+      ref.read(signalingDisplayStateProvider.notifier).state =
+          SignalingDisplayState.connected;
 
       // Re-register meeting points for trusted peer reconnection
       await connectionManager.reconnectTrustedPeers();
     } catch (e) {
       setState(() => _error = 'Failed to connect to server: $e');
-      ref.read(signalingDisplayStateProvider.notifier).state = SignalingDisplayState.disconnected;
+      ref.read(signalingDisplayStateProvider.notifier).state =
+          SignalingDisplayState.disconnected;
     }
   }
 
@@ -341,7 +352,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
               ElevatedButton(
                 onPressed: _isConnecting ? null : _connectWithCode,
                 style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
                 ),
                 child: _isConnecting
                     ? const SizedBox(
@@ -479,7 +491,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
+              color: Theme.of(context)
+                  .colorScheme
+                  .primaryContainer
+                  .withOpacity(0.3),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Row(
@@ -548,7 +563,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
                   IconButton(
                     icon: const Icon(Icons.copy),
                     onPressed: () {
-                      Clipboard.setData(ClipboardData(text: _linkSession!.linkCode));
+                      Clipboard.setData(
+                          ClipboardData(text: _linkSession!.linkCode));
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(content: Text('Link code copied')),
                       );
@@ -608,7 +624,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
                 return Container(
                   padding: const EdgeInsets.all(24),
                   decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    color:
+                        Theme.of(context).colorScheme.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Column(
@@ -622,7 +639,9 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
                       Text(
                         'No linked devices',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
                             ),
                       ),
                     ],
@@ -631,7 +650,9 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
               }
 
               return Column(
-                children: devices.map((device) => _buildLinkedDeviceCard(device)).toList(),
+                children: devices
+                    .map((device) => _buildLinkedDeviceCard(device))
+                    .toList(),
               );
             },
             loading: () => const Center(child: CircularProgressIndicator()),
@@ -708,7 +729,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
     final serverUrl = ref.read(signalingServerUrlProvider);
     if (serverUrl == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No server selected. Please wait or retry.')),
+        const SnackBar(
+            content: Text('No server selected. Please wait or retry.')),
       );
       return;
     }
@@ -786,7 +808,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
   Future<void> _connectWithCode() async {
     final code = _codeController.text.trim();
-    logger.info('ConnectScreen', '_connectWithCode called with code: "$code" (length: ${code.length})');
+    logger.info('ConnectScreen',
+        '_connectWithCode called with code: "$code" (length: ${code.length})');
     if (code.isEmpty || code.length != 6) {
       logger.warning('ConnectScreen', 'Invalid code - empty or wrong length');
       ScaffoldMessenger.of(context).showSnackBar(

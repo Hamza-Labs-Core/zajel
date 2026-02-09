@@ -84,10 +84,8 @@ void main() {
         final alicePublicKey = await alice.getPublicKeyBase64();
         final bobPublicKey = await bob.getPublicKeyBase64();
 
-        final aliceSharedSecret =
-            await alice.performKeyExchange(bobPublicKey);
-        final bobSharedSecret =
-            await bob.performKeyExchange(alicePublicKey);
+        final aliceSharedSecret = await alice.performKeyExchange(bobPublicKey);
+        final bobSharedSecret = await bob.performKeyExchange(alicePublicKey);
 
         // Both parties should derive the same shared secret
         expect(aliceSharedSecret, bobSharedSecret);
@@ -215,7 +213,8 @@ void main() {
         await charlie.initialize();
 
         // Charlie establishes a different session
-        await charlie.establishSession('different-session', await alice.getPublicKeyBase64());
+        await charlie.establishSession(
+            'different-session', await alice.getPublicKeyBase64());
 
         final encrypted = await alice.encrypt(sessionId, 'Secret message');
 

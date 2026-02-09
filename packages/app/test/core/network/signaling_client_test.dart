@@ -188,10 +188,14 @@ void main() {
   group('SignalingConnectionState', () {
     test('has all expected values', () {
       expect(SignalingConnectionState.values, hasLength(4));
-      expect(SignalingConnectionState.values, contains(SignalingConnectionState.disconnected));
-      expect(SignalingConnectionState.values, contains(SignalingConnectionState.connecting));
-      expect(SignalingConnectionState.values, contains(SignalingConnectionState.connected));
-      expect(SignalingConnectionState.values, contains(SignalingConnectionState.failed));
+      expect(SignalingConnectionState.values,
+          contains(SignalingConnectionState.disconnected));
+      expect(SignalingConnectionState.values,
+          contains(SignalingConnectionState.connecting));
+      expect(SignalingConnectionState.values,
+          contains(SignalingConnectionState.connected));
+      expect(SignalingConnectionState.values,
+          contains(SignalingConnectionState.failed));
     });
   });
 
@@ -202,7 +206,8 @@ void main() {
 
     setUp(() {
       fakeChannel = FakeWebSocketChannel();
-      connectionStateController = StreamController<SignalingConnectionState>.broadcast();
+      connectionStateController =
+          StreamController<SignalingConnectionState>.broadcast();
       messageController = StreamController<SignalingMessage>.broadcast();
     });
 
@@ -583,7 +588,8 @@ void main() {
         'type': 'ice_candidate',
         'target': 'PEER03',
         'payload': {
-          'candidate': 'candidate:1 1 UDP 2130706431 192.168.1.1 54321 typ host',
+          'candidate':
+              'candidate:1 1 UDP 2130706431 192.168.1.1 54321 typ host',
           'sdpMid': 'data',
           'sdpMLineIndex': 0,
         },
@@ -788,7 +794,8 @@ void main() {
         final message = CallIceMessage(
           callId: 'call-123',
           targetId: 'PEER01',
-          candidate: '{"candidate":"candidate:1 1 UDP ...","sdpMid":"0","sdpMLineIndex":0}',
+          candidate:
+              '{"candidate":"candidate:1 1 UDP ...","sdpMid":"0","sdpMLineIndex":0}',
         );
 
         final json = message.toJson();
@@ -1110,7 +1117,8 @@ void main() {
       final message = CallIceMessage(
         callId: 'call-006',
         targetId: 'PEER06',
-        candidate: '{"candidate":"candidate:1 1 UDP 2130706431 ...","sdpMid":"0"}',
+        candidate:
+            '{"candidate":"candidate:1 1 UDP 2130706431 ...","sdpMid":"0"}',
       ).toJson();
 
       final json = jsonEncode(message);

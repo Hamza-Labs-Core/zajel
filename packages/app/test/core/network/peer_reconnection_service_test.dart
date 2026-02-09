@@ -11,8 +11,11 @@ import 'package:zajel/core/network/relay_client.dart';
 import 'package:zajel/core/storage/trusted_peers_storage.dart';
 
 class MockCryptoServiceImpl extends Mock implements CryptoService {}
+
 class MockTrustedPeersStorageImpl extends Mock implements TrustedPeersStorage {}
+
 class MockMeetingPointServiceImpl extends Mock implements MeetingPointService {}
+
 class MockRelayClientImpl extends Mock implements RelayClient {}
 
 class FakeTrustedPeer extends Fake implements TrustedPeer {}
@@ -41,13 +44,16 @@ void main() {
     );
     when(() => mockRelay.mySourceId).thenReturn('test-source-id');
     when(() => mockRelay.getCurrentRelayId()).thenReturn('relay-001');
-    when(() => mockRelay.getConnectedRelayIds()).thenReturn(['relay-001', 'relay-002']);
+    when(() => mockRelay.getConnectedRelayIds())
+        .thenReturn(['relay-001', 'relay-002']);
     when(() => mockRelay.maxCapacity).thenReturn(100);
     when(() => mockRelay.currentLoad).thenReturn(5);
 
     when(() => mockCrypto.publicKeyBase64).thenReturn('test-public-key-base64');
-    when(() => mockCrypto.getPublicKeyBase64()).thenAnswer((_) async => 'test-public-key-base64');
-    when(() => mockCrypto.getPublicKeyBytes()).thenAnswer((_) async => Uint8List(32));
+    when(() => mockCrypto.getPublicKeyBase64())
+        .thenAnswer((_) async => 'test-public-key-base64');
+    when(() => mockCrypto.getPublicKeyBytes())
+        .thenAnswer((_) async => Uint8List(32));
 
     service = PeerReconnectionService(
       cryptoService: mockCrypto,
@@ -78,7 +84,8 @@ void main() {
         // Arrange
         final peerIds = ['peer1', 'peer2'];
         final peer1PublicKey = Uint8List.fromList(List.generate(32, (i) => i));
-        final peer2PublicKey = Uint8List.fromList(List.generate(32, (i) => i + 32));
+        final peer2PublicKey =
+            Uint8List.fromList(List.generate(32, (i) => i + 32));
 
         when(() => mockStorage.getAllPeerIds())
             .thenAnswer((_) async => peerIds);
@@ -112,7 +119,8 @@ void main() {
         // Arrange
         final peerIds = ['peer1'];
         final peerPublicKey = Uint8List.fromList(List.generate(32, (i) => i));
-        final sessionKey = Uint8List.fromList(List.generate(32, (i) => i + 100));
+        final sessionKey =
+            Uint8List.fromList(List.generate(32, (i) => i + 100));
 
         when(() => mockStorage.getAllPeerIds())
             .thenAnswer((_) async => peerIds);
@@ -137,7 +145,9 @@ void main() {
     });
 
     group('Peer Discovery', () {
-      test('emits PeerFoundEvent on live match via processLiveMatchFromRendezvous', () async {
+      test(
+          'emits PeerFoundEvent on live match via processLiveMatchFromRendezvous',
+          () async {
         // Listen for events
         final events = <PeerFoundEvent>[];
         service.onPeerFound.listen(events.add);
@@ -153,7 +163,9 @@ void main() {
         expect(events.first.isLive, isTrue);
       });
 
-      test('emits PeerFoundEvent with connectionInfo on dead drop via processDeadDropFromRendezvous', () async {
+      test(
+          'emits PeerFoundEvent with connectionInfo on dead drop via processDeadDropFromRendezvous',
+          () async {
         // Arrange
         final connectionInfo = ConnectionInfo(
           publicKey: 'peer-public-key',
@@ -172,7 +184,8 @@ void main() {
         service.onPeerFound.listen(events.add);
 
         // Process a dead drop
-        await service.processDeadDropFromRendezvous('peer-abc', encryptedData, 'relay-001');
+        await service.processDeadDropFromRendezvous(
+            'peer-abc', encryptedData, 'relay-001');
 
         // Allow stream to propagate
         await Future.delayed(Duration.zero);
@@ -187,7 +200,8 @@ void main() {
       test('identifies peer from daily meeting point', () async {
         // Arrange
         final myPublicKey = Uint8List.fromList(List.generate(32, (i) => i));
-        final peerPublicKey = Uint8List.fromList(List.generate(32, (i) => i + 32));
+        final peerPublicKey =
+            Uint8List.fromList(List.generate(32, (i) => i + 32));
 
         when(() => mockCrypto.getPublicKeyBytes())
             .thenAnswer((_) async => myPublicKey);
@@ -198,7 +212,8 @@ void main() {
         when(() => mockCrypto.getSessionKeyBytes('peer1'))
             .thenAnswer((_) async => null);
 
-        when(() => mockMeetingPoints.deriveDailyPoints(myPublicKey, peerPublicKey))
+        when(() =>
+                mockMeetingPoints.deriveDailyPoints(myPublicKey, peerPublicKey))
             .thenReturn(['daily-point-1', 'daily-point-2']);
 
         // Listen for events
@@ -218,8 +233,10 @@ void main() {
       test('identifies peer from hourly token', () async {
         // Arrange
         final myPublicKey = Uint8List.fromList(List.generate(32, (i) => i));
-        final peerPublicKey = Uint8List.fromList(List.generate(32, (i) => i + 32));
-        final sessionKey = Uint8List.fromList(List.generate(32, (i) => i + 100));
+        final peerPublicKey =
+            Uint8List.fromList(List.generate(32, (i) => i + 32));
+        final sessionKey =
+            Uint8List.fromList(List.generate(32, (i) => i + 100));
 
         when(() => mockCrypto.getPublicKeyBytes())
             .thenAnswer((_) async => myPublicKey);
@@ -230,7 +247,8 @@ void main() {
         when(() => mockCrypto.getSessionKeyBytes('peer1'))
             .thenAnswer((_) async => sessionKey);
 
-        when(() => mockMeetingPoints.deriveDailyPoints(myPublicKey, peerPublicKey))
+        when(() =>
+                mockMeetingPoints.deriveDailyPoints(myPublicKey, peerPublicKey))
             .thenReturn(['daily-point']);
         when(() => mockMeetingPoints.deriveHourlyTokens(sessionKey))
             .thenReturn(['hourly-token-1', 'hourly-token-2']);
@@ -261,7 +279,8 @@ void main() {
         service.onPeerFound.listen(events.add);
 
         // Process a dead drop with bad data
-        await service.processDeadDropFromRendezvous('peer-abc', 'bad-encrypted-data', null);
+        await service.processDeadDropFromRendezvous(
+            'peer-abc', 'bad-encrypted-data', null);
 
         // Allow stream to propagate
         await Future.delayed(Duration.zero);
@@ -287,10 +306,10 @@ void main() {
         when(() => mockRelay.ensureConnectedToRelay(any()))
             .thenAnswer((_) async {});
         when(() => mockRelay.sendIntroduction(
-          relayId: any(named: 'relayId'),
-          targetSourceId: any(named: 'targetSourceId'),
-          encryptedPayload: any(named: 'encryptedPayload'),
-        )).thenAnswer((_) async {});
+              relayId: any(named: 'relayId'),
+              targetSourceId: any(named: 'targetSourceId'),
+              encryptedPayload: any(named: 'encryptedPayload'),
+            )).thenAnswer((_) async {});
 
         // Act
         await service.connectToPeer('peer-abc', connectionInfo);
@@ -298,10 +317,10 @@ void main() {
         // Assert
         verify(() => mockRelay.ensureConnectedToRelay('relay-001')).called(1);
         verify(() => mockRelay.sendIntroduction(
-          relayId: 'relay-001',
-          targetSourceId: 'source-123',
-          encryptedPayload: 'encrypted-intro',
-        )).called(1);
+              relayId: 'relay-001',
+              targetSourceId: 'source-123',
+              encryptedPayload: 'encrypted-intro',
+            )).called(1);
       });
 
       test('tries fallback relays on failure', () async {
@@ -329,10 +348,10 @@ void main() {
         when(() => mockRelay.ensureConnectedToRelay('relay-003'))
             .thenAnswer((_) async {});
         when(() => mockRelay.sendIntroduction(
-          relayId: any(named: 'relayId'),
-          targetSourceId: any(named: 'targetSourceId'),
-          encryptedPayload: any(named: 'encryptedPayload'),
-        )).thenAnswer((_) async {});
+              relayId: any(named: 'relayId'),
+              targetSourceId: any(named: 'targetSourceId'),
+              encryptedPayload: any(named: 'encryptedPayload'),
+            )).thenAnswer((_) async {});
 
         // Act
         await service.connectToPeer('peer-abc', connectionInfo);
@@ -342,10 +361,10 @@ void main() {
         verify(() => mockRelay.ensureConnectedToRelay('relay-002')).called(1);
         verify(() => mockRelay.ensureConnectedToRelay('relay-003')).called(1);
         verify(() => mockRelay.sendIntroduction(
-          relayId: 'relay-003',
-          targetSourceId: 'source-123',
-          encryptedPayload: 'encrypted-intro',
-        )).called(1);
+              relayId: 'relay-003',
+              targetSourceId: 'source-123',
+              encryptedPayload: 'encrypted-intro',
+            )).called(1);
       });
 
       test('throws PeerConnectionException when all relays fail', () async {
@@ -398,10 +417,8 @@ void main() {
       test('addTrustedPeer saves peer to storage', () async {
         // Arrange
         final peer = _createMockPeer('new-peer');
-        when(() => mockStorage.savePeer(any()))
-            .thenAnswer((_) async {});
-        when(() => mockStorage.getAllPeerIds())
-            .thenAnswer((_) async => []);
+        when(() => mockStorage.savePeer(any())).thenAnswer((_) async {});
+        when(() => mockStorage.getAllPeerIds()).thenAnswer((_) async => []);
 
         // Act
         await service.addTrustedPeer(peer);

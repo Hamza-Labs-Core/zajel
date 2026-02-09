@@ -232,7 +232,7 @@ class MediaService {
       logger.info(
         _tag,
         'Media acquired: audioTracks=${_localStream!.getAudioTracks().length}, '
-            'videoTracks=${_localStream!.getVideoTracks().length}',
+        'videoTracks=${_localStream!.getVideoTracks().length}',
       );
 
       return _localStream!;
@@ -445,7 +445,8 @@ class MediaService {
       return devices
           .map((d) => MediaDevice(
                 deviceId: d.deviceId,
-                label: d.label.isNotEmpty ? d.label : _defaultLabel(d.kind ?? ''),
+                label:
+                    d.label.isNotEmpty ? d.label : _defaultLabel(d.kind ?? ''),
                 kind: d.kind ?? '',
               ))
           .toList();

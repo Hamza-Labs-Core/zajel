@@ -134,8 +134,7 @@ void main() {
       expect(find.text('Link Web'), findsOneWidget);
     });
 
-    testWidgets('can navigate to settings screen',
-        (WidgetTester tester) async {
+    testWidgets('can navigate to settings screen', (WidgetTester tester) async {
       SharedPreferences.setMockInitialValues({
         'displayName': config.testDisplayName,
       });

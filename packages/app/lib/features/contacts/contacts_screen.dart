@@ -69,7 +69,8 @@ class _ContactsScreenState extends ConsumerState<ContactsScreen> {
                     child: Text(
                       _searchQuery.isEmpty ? 'No contacts yet' : 'No matches',
                       style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
                           ),
                     ),
                   );
@@ -113,7 +114,8 @@ class _ContactTile extends ConsumerWidget {
 
     return ListTile(
       leading: CircleAvatar(
-        backgroundColor: isOnline ? Colors.green.shade100 : Colors.grey.shade200,
+        backgroundColor:
+            isOnline ? Colors.green.shade100 : Colors.grey.shade200,
         child: Text(
           displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
           style: TextStyle(

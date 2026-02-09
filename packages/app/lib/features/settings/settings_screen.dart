@@ -194,7 +194,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 title: const Text('Source Code'),
                 subtitle: const Text('Open source and auditable'),
                 trailing: const Icon(Icons.open_in_new),
-                onTap: () => _launchUrl('https://github.com/Hamza-Labs-Core/zajel'),
+                onTap: () =>
+                    _launchUrl('https://github.com/Hamza-Labs-Core/zajel'),
               ),
               ListTile(
                 leading: const Icon(Icons.privacy_tip_outlined),

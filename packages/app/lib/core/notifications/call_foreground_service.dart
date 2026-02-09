@@ -13,7 +13,8 @@ class CallForegroundService {
   static const _notificationId = 9999;
   static const _channelId = 'ongoing_call';
 
-  final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _plugin =
+      FlutterLocalNotificationsPlugin();
   bool _isActive = false;
 
   bool get isActive => _isActive;

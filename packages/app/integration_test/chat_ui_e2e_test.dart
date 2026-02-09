@@ -62,12 +62,14 @@ void main() {
   setUpAll(() async {
     // Discover servers from Cloudflare bootstrap using TestConfig
     final config = TestConfig.auto();
-    serverDiscovery = ServerDiscoveryService(bootstrapUrl: config.bootstrapServerUrl);
+    serverDiscovery =
+        ServerDiscoveryService(bootstrapUrl: config.bootstrapServerUrl);
     final server = await serverDiscovery.selectServer();
 
     if (server != null) {
       serverUrl = serverDiscovery.getWebSocketUrl(server);
-      debugPrint('Discovered server: ${server.serverId} at $serverUrl (${server.region})');
+      debugPrint(
+          'Discovered server: ${server.serverId} at $serverUrl (${server.region})');
     } else {
       serverUrl = null;
       debugPrint('No servers discovered from bootstrap');
@@ -261,7 +263,8 @@ void main() {
       debugPrint('Message sent through UI and received: ${receivedMsg.$2}');
     });
 
-    testWidgets('receives real message from peer and displays in UI', (tester) async {
+    testWidgets('receives real message from peer and displays in UI',
+        (tester) async {
       if (!isConnected) {
         markTestSkipped('No server available or connection failed');
         return;

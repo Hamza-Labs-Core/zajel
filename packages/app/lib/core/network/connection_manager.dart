@@ -113,11 +113,24 @@ class ConnectionManager {
 
   /// Buffer of received messages per peer, stored as ciphertext so messages
   /// remain encrypted in memory until the ChatScreen opens and decrypts them.
-  final Map<String, List<(String peerId, String ciphertext)>> _messageBuffer = {};
-  final _fileChunksController =
-      StreamController<(String peerId, String fileId, Uint8List chunk, int index, int total)>.broadcast();
-  final _fileStartController =
-      StreamController<(String peerId, String fileId, String fileName, int totalSize, int totalChunks)>.broadcast();
+  final Map<String, List<(String peerId, String ciphertext)>> _messageBuffer =
+      {};
+  final _fileChunksController = StreamController<
+      (
+        String peerId,
+        String fileId,
+        Uint8List chunk,
+        int index,
+        int total
+      )>.broadcast();
+  final _fileStartController = StreamController<
+      (
+        String peerId,
+        String fileId,
+        String fileName,
+        int totalSize,
+        int totalChunks
+      )>.broadcast();
   final _fileCompleteController =
       StreamController<(String peerId, String fileId)>.broadcast();
 
@@ -132,7 +145,6 @@ class ConnectionManager {
 
   /// Subscription to rendezvous events (meeting point matches).
   StreamSubscription? _rendezvousSubscription;
-
 
   /// Callback to check if a public key is blocked.
   bool Function(String publicKey)? _isPublicKeyBlocked;
@@ -180,23 +192,22 @@ class ConnectionManager {
       _fileStartController.stream;
 
   /// Stream of file transfer completions.
-  Stream<(String, String)> get fileCompletes =>
-      _fileCompleteController.stream;
+  Stream<(String, String)> get fileCompletes => _fileCompleteController.stream;
 
   /// Current list of peers.
   List<Peer> get currentPeers => _peers.values.toList();
 
   /// Our external pairing code (for sharing).
   String? get externalPairingCode => switch (_signalingState) {
-    SignalingConnected(pairingCode: final code) => code,
-    SignalingDisconnected() => null,
-  };
+        SignalingConnected(pairingCode: final code) => code,
+        SignalingDisconnected() => null,
+      };
 
   /// The current signaling client, if connected.
   SignalingClient? get signalingClient => switch (_signalingState) {
-    SignalingConnected(client: final c) => c,
-    SignalingDisconnected() => null,
-  };
+        SignalingConnected(client: final c) => c,
+        SignalingDisconnected() => null,
+      };
 
   /// Initialize the connection manager.
   Future<void> initialize() async {
@@ -224,18 +235,20 @@ class ConnectionManager {
   }
 
   /// Stream of incoming pair requests for UI to show approval dialog.
-  final _pairRequestController =
-      StreamController<(String code, String publicKey, String? proposedName)>.broadcast();
+  final _pairRequestController = StreamController<
+      (String code, String publicKey, String? proposedName)>.broadcast();
 
   /// Stream of incoming pair requests.
-  Stream<(String, String, String?)> get pairRequests => _pairRequestController.stream;
+  Stream<(String, String, String?)> get pairRequests =>
+      _pairRequestController.stream;
 
   /// Stream of incoming link requests from web clients.
-  final _linkRequestController =
-      StreamController<(String linkCode, String publicKey, String deviceName)>.broadcast();
+  final _linkRequestController = StreamController<
+      (String linkCode, String publicKey, String deviceName)>.broadcast();
 
   /// Stream of incoming link requests.
-  Stream<(String, String, String)> get linkRequests => _linkRequestController.stream;
+  Stream<(String, String, String)> get linkRequests =>
+      _linkRequestController.stream;
 
   /// Connect to the signaling server to enable peer connections.
   ///
@@ -278,7 +291,8 @@ class ConnectionManager {
     // the stream-based approach. This eliminates the race condition that
     // occurred when the callback was overwritten by each new connection.
     // The stream subscription is set up once and handles all peers.
-    _signalingEventsSubscription = _webrtcService.signalingEvents.listen((event) {
+    _signalingEventsSubscription =
+        _webrtcService.signalingEvents.listen((event) {
       // Check if we're still connected before sending
       final state = _signalingState;
       if (state is! SignalingConnected || !state.client.isConnected) return;
@@ -289,7 +303,8 @@ class ConnectionManager {
     });
 
     // Subscribe to rendezvous events for trusted peer reconnection
-    _rendezvousSubscription = client.rendezvousEvents.listen(_handleRendezvousEvent);
+    _rendezvousSubscription =
+        client.rendezvousEvents.listen(_handleRendezvousEvent);
 
     await client.connect();
 
@@ -318,20 +333,24 @@ class ConnectionManager {
   /// Request to connect to a peer using their pairing code.
   /// This sends a pair request that the peer must approve.
   Future<void> connectToPeer(String pairingCode, {String? proposedName}) async {
-    logger.info('ConnectionManager', 'connectToPeer called with code: $pairingCode');
+    logger.info(
+        'ConnectionManager', 'connectToPeer called with code: $pairingCode');
 
     // Normalize and validate pairing code format
     final normalizedCode = pairingCode.toUpperCase().trim();
     if (!_isValidPairingCode(normalizedCode)) {
-      logger.error('ConnectionManager', 'Invalid pairing code format: $normalizedCode');
+      logger.error(
+          'ConnectionManager', 'Invalid pairing code format: $normalizedCode');
       throw ConnectionException('Invalid pairing code format');
     }
 
     // Pattern 2: Guard with early return using local variable capture
     final state = _signalingState;
-    logger.debug('ConnectionManager', 'Signaling state: ${state.runtimeType}, isConnected: ${state is SignalingConnected ? state.client.isConnected : "N/A"}');
+    logger.debug('ConnectionManager',
+        'Signaling state: ${state.runtimeType}, isConnected: ${state is SignalingConnected ? state.client.isConnected : "N/A"}');
     if (state is! SignalingConnected || !state.client.isConnected) {
-      logger.error('ConnectionManager', 'Not connected to signaling server - cannot pair');
+      logger.error('ConnectionManager',
+          'Not connected to signaling server - cannot pair');
       throw ConnectionException('Not connected to signaling server');
     }
 
@@ -348,7 +367,8 @@ class ConnectionManager {
 
     // Request pairing (peer must approve before WebRTC starts)
     // Using captured state.client - guaranteed non-null by pattern match
-    logger.info('ConnectionManager', 'Sending pair_request for code: $normalizedCode');
+    logger.info(
+        'ConnectionManager', 'Sending pair_request for code: $normalizedCode');
     state.client.requestPairing(normalizedCode, proposedName: proposedName);
   }
 
@@ -368,11 +388,13 @@ class ConnectionManager {
   }
 
   /// Respond to an incoming link request from a web client.
-  void respondToLinkRequest(String linkCode, {required bool accept, String? deviceId}) {
+  void respondToLinkRequest(String linkCode,
+      {required bool accept, String? deviceId}) {
     // Safe access using pattern matching
     final state = _signalingState;
     if (state is SignalingConnected) {
-      state.client.respondToLinkRequest(linkCode, accept: accept, deviceId: deviceId);
+      state.client
+          .respondToLinkRequest(linkCode, accept: accept, deviceId: deviceId);
     }
 
     if (!accept) {
@@ -381,7 +403,8 @@ class ConnectionManager {
   }
 
   /// Start WebRTC connection after pairing is matched.
-  Future<void> _startWebRTCConnection(String peerCode, String peerPublicKey, bool isInitiator) async {
+  Future<void> _startWebRTCConnection(
+      String peerCode, String peerPublicKey, bool isInitiator) async {
     // Pattern 1: Capture signaling client before async operations (HIGH risk fix)
     final state = _signalingState;
     if (state is! SignalingConnected || !state.client.isConnected) {
@@ -418,7 +441,8 @@ class ConnectionManager {
   }
 
   /// Start WebRTC connection for device linking (web client → mobile).
-  Future<void> _startLinkConnection(String linkCode, String webPublicKey, bool isInitiator) async {
+  Future<void> _startLinkConnection(
+      String linkCode, String webPublicKey, bool isInitiator) async {
     // Capture signaling client before async operations
     final state = _signalingState;
     if (state is! SignalingConnected || !state.client.isConnected) {
@@ -533,8 +557,10 @@ class ConnectionManager {
       _fileChunksController.add((peerId, fileId, chunk, index, total));
     };
 
-    _webrtcService.onFileStart = (peerId, fileId, fileName, totalSize, totalChunks) {
-      _fileStartController.add((peerId, fileId, fileName, totalSize, totalChunks));
+    _webrtcService.onFileStart =
+        (peerId, fileId, fileName, totalSize, totalChunks) {
+      _fileStartController
+          .add((peerId, fileId, fileName, totalSize, totalChunks));
     };
 
     _webrtcService.onFileComplete = (peerId, fileId) {
@@ -547,7 +573,7 @@ class ConnectionManager {
         if (state == PeerConnectionState.connected) {
           _deviceLinkService.handleDeviceConnected(peerId);
         } else if (state == PeerConnectionState.disconnected ||
-                   state == PeerConnectionState.failed) {
+            state == PeerConnectionState.failed) {
           _deviceLinkService.handleDeviceDisconnected(peerId);
         }
         return;
@@ -560,11 +586,10 @@ class ConnectionManager {
         final peer = _peers[peerId];
         if (peer != null && peer.publicKey != null) {
           _trustedPeersStorage.savePeer(TrustedPeer.fromPeer(peer)).then((_) {
-            logger.info('ConnectionManager',
-                'Saved trusted peer: $peerId');
+            logger.info('ConnectionManager', 'Saved trusted peer: $peerId');
           }).catchError((e) {
-            logger.error('ConnectionManager',
-                'Failed to save trusted peer: $peerId', e);
+            logger.error(
+                'ConnectionManager', 'Failed to save trusted peer: $peerId', e);
           });
         }
       }
@@ -576,7 +601,8 @@ class ConnectionManager {
           _deviceLinkService.proxyMessageToDevice(
             toDeviceId: device.id,
             fromPeerId: peerId,
-            plaintext: '{"type":"peer_state","peerId":"$peerId","state":"${state.name}"}',
+            plaintext:
+                '{"type":"peer_state","peerId":"$peerId","state":"${state.name}"}',
           );
         }
       }
@@ -620,13 +646,19 @@ class ConnectionManager {
   }
 
   void _handleSignalingMessage(SignalingMessage message) async {
-    logger.debug('ConnectionManager', 'Received signaling message: ${message.runtimeType}');
+    logger.debug('ConnectionManager',
+        'Received signaling message: ${message.runtimeType}');
     try {
       switch (message) {
-        case SignalingPairIncoming(fromCode: final fromCode, fromPublicKey: final fromPublicKey, proposedName: final proposedName):
+        case SignalingPairIncoming(
+            fromCode: final fromCode,
+            fromPublicKey: final fromPublicKey,
+            proposedName: final proposedName
+          ):
           logger.info('ConnectionManager', 'Pair request from $fromCode');
           // Check if this public key is blocked
-          if (_isPublicKeyBlocked != null && _isPublicKeyBlocked!(fromPublicKey)) {
+          if (_isPublicKeyBlocked != null &&
+              _isPublicKeyBlocked!(fromPublicKey)) {
             // Auto-reject blocked users silently
             final state = _signalingState;
             if (state is SignalingConnected) {
@@ -635,15 +667,18 @@ class ConnectionManager {
             break;
           }
           // Auto-accept reconnection from trusted (previously paired) peers
-          final isTrusted = await _trustedPeersStorage.isTrustedByPublicKey(fromPublicKey);
+          final isTrusted =
+              await _trustedPeersStorage.isTrustedByPublicKey(fromPublicKey);
           if (isTrusted) {
-            logger.info('ConnectionManager', 'Auto-accepting trusted peer $fromCode');
+            logger.info(
+                'ConnectionManager', 'Auto-accepting trusted peer $fromCode');
             respondToPairRequest(fromCode, accept: true);
             break;
           }
           // In E2E test mode, auto-accept all pair requests
           if (Environment.isE2eTest) {
-            logger.info('ConnectionManager', 'E2E mode: auto-accepting pair request from $fromCode');
+            logger.info('ConnectionManager',
+                'E2E mode: auto-accepting pair request from $fromCode');
             respondToPairRequest(fromCode, accept: true);
             break;
           }
@@ -651,7 +686,11 @@ class ConnectionManager {
           _pairRequestController.add((fromCode, fromPublicKey, proposedName));
           break;
 
-        case SignalingPairMatched(peerCode: final peerCode, peerPublicKey: final peerPublicKey, isInitiator: final isInitiator):
+        case SignalingPairMatched(
+            peerCode: final peerCode,
+            peerPublicKey: final peerPublicKey,
+            isInitiator: final isInitiator
+          ):
           // Pairing approved by both sides - start WebRTC connection
           // Update or create peer with public key for blocking support
           _peers[peerCode] = Peer(
@@ -752,12 +791,20 @@ class ConnectionManager {
           break;
 
         // Device linking messages (web client → mobile app)
-        case SignalingLinkRequest(linkCode: final linkCode, publicKey: final publicKey, deviceName: final deviceName):
+        case SignalingLinkRequest(
+            linkCode: final linkCode,
+            publicKey: final publicKey,
+            deviceName: final deviceName
+          ):
           // Web client wants to link with us - emit event for UI to show approval
           _linkRequestController.add((linkCode, publicKey, deviceName));
           break;
 
-        case SignalingLinkMatched(linkCode: final linkCode, peerPublicKey: final peerPublicKey, isInitiator: final isInitiator):
+        case SignalingLinkMatched(
+            linkCode: final linkCode,
+            peerPublicKey: final peerPublicKey,
+            isInitiator: final isInitiator
+          ):
           // Link approved - establish WebRTC tunnel with web client
           await _startLinkConnection(linkCode, peerPublicKey, isInitiator);
           break;
@@ -775,7 +822,8 @@ class ConnectionManager {
     } catch (e, stackTrace) {
       // Log error to prevent silent failures in async void handler
       // This ensures exceptions from WebRTC operations are captured and visible
-      logger.error('ConnectionManager', 'Failed to handle signaling message', e, stackTrace);
+      logger.error('ConnectionManager', 'Failed to handle signaling message', e,
+          stackTrace);
       // TODO: Consider emitting error to a dedicated error stream for UI notification
     }
   }
@@ -824,17 +872,20 @@ class ConnectionManager {
     final allDailyPoints = <String>{};
     final allHourlyTokens = <String>{};
 
-    logger.debug('ConnectionManager', 'My public key: ${base64Encode(myPublicKey)}');
+    logger.debug(
+        'ConnectionManager', 'My public key: ${base64Encode(myPublicKey)}');
 
     final peers = await _trustedPeersStorage.getAllPeers();
     for (final peer in peers) {
       if (peer.isBlocked) continue;
-      final theirPublicKey = await _trustedPeersStorage.getPublicKeyBytes(peer.id);
+      final theirPublicKey =
+          await _trustedPeersStorage.getPublicKeyBytes(peer.id);
       if (theirPublicKey == null) continue;
 
-      logger.debug('ConnectionManager',
+      logger.debug(
+          'ConnectionManager',
           'Trusted peer ${peer.id}: storedPubKey=${peer.publicKey}, '
-          'decodedBytes=${base64Encode(theirPublicKey)}');
+              'decodedBytes=${base64Encode(theirPublicKey)}');
 
       // Daily points from public keys (for dead drops / async discovery)
       final dailyPoints = _meetingPointService.deriveDailyPoints(
@@ -848,7 +899,8 @@ class ConnectionManager {
       // Hourly tokens from session keys (for live matching with push notification)
       final sessionKeyBytes = await _cryptoService.getSessionKeyBytes(peer.id);
       if (sessionKeyBytes != null) {
-        final hourlyTokens = _meetingPointService.deriveHourlyTokens(sessionKeyBytes);
+        final hourlyTokens =
+            _meetingPointService.deriveHourlyTokens(sessionKeyBytes);
         allHourlyTokens.addAll(hourlyTokens);
       }
     }
@@ -861,12 +913,16 @@ class ConnectionManager {
     // Also register daily points as hourly tokens for live matching.
     // The server only sends push notifications for hourly token matches,
     // so we need daily points in both arrays to enable real-time discovery.
-    final combinedHourlyTokens = <String>{...allHourlyTokens, ...allDailyPoints};
+    final combinedHourlyTokens = <String>{
+      ...allHourlyTokens,
+      ...allDailyPoints
+    };
 
-    logger.info('ConnectionManager',
+    logger.info(
+        'ConnectionManager',
         'Registering ${allDailyPoints.length} daily points + '
-        '${combinedHourlyTokens.length} hourly tokens '
-        '(${allHourlyTokens.length} from sessions) for ${peers.length} trusted peers');
+            '${combinedHourlyTokens.length} hourly tokens '
+            '(${allHourlyTokens.length} from sessions) for ${peers.length} trusted peers');
 
     final rendezvousMsg = {
       'type': 'register_rendezvous',
@@ -883,8 +939,10 @@ class ConnectionManager {
     // on the first registration (server deletes tokens on disconnect).
     Future.delayed(const Duration(seconds: 5), () {
       final currentState = _signalingState;
-      if (currentState is SignalingConnected && currentState.client.isConnected) {
-        logger.debug('ConnectionManager', 'Re-registering rendezvous after delay');
+      if (currentState is SignalingConnected &&
+          currentState.client.isConnected) {
+        logger.debug(
+            'ConnectionManager', 'Re-registering rendezvous after delay');
         currentState.client.send(rendezvousMsg);
       }
     });
@@ -892,15 +950,18 @@ class ConnectionManager {
 
   /// Handle a rendezvous event (meeting point match from the server).
   void _handleRendezvousEvent(RendezvousEvent event) {
-    logger.info('ConnectionManager', 'Rendezvous event received: ${event.runtimeType}');
+    logger.info(
+        'ConnectionManager', 'Rendezvous event received: ${event.runtimeType}');
     switch (event) {
       case RendezvousResult(:final liveMatches, deadDrops: _):
-        logger.info('ConnectionManager', 'Rendezvous result: ${liveMatches.length} live matches');
+        logger.info('ConnectionManager',
+            'Rendezvous result: ${liveMatches.length} live matches');
         for (final match in liveMatches) {
           _handleLiveMatch(match.peerId);
         }
       case RendezvousPartial(:final liveMatches, deadDrops: _, redirects: _):
-        logger.info('ConnectionManager', 'Rendezvous partial: ${liveMatches.length} live matches');
+        logger.info('ConnectionManager',
+            'Rendezvous partial: ${liveMatches.length} live matches');
         for (final match in liveMatches) {
           _handleLiveMatch(match.peerId);
         }
@@ -922,8 +983,8 @@ class ConnectionManager {
     final existingPeer = _peers[matchedPeerId];
     if (existingPeer != null &&
         (existingPeer.connectionState == PeerConnectionState.connected ||
-         existingPeer.connectionState == PeerConnectionState.connecting ||
-         existingPeer.connectionState == PeerConnectionState.handshaking)) {
+            existingPeer.connectionState == PeerConnectionState.connecting ||
+            existingPeer.connectionState == PeerConnectionState.handshaking)) {
       return;
     }
 

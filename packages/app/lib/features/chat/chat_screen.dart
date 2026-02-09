@@ -54,8 +54,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       final connectionManager = ref.read(connectionManagerProvider);
       final buffered = connectionManager.drainBufferedMessages(widget.peerId);
       if (buffered.isNotEmpty) {
-        final notifier =
-            ref.read(chatMessagesProvider(widget.peerId).notifier);
+        final notifier = ref.read(chatMessagesProvider(widget.peerId).notifier);
         for (final (peerId, message) in buffered) {
           notifier.addMessage(
             Message(
@@ -82,7 +81,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           if (state == CallState.incoming && mounted) {
             _showIncomingCallDialog();
           } else if (_isIncomingCallDialogOpen &&
-              (state == CallState.ended || state == CallState.connecting || state == CallState.idle) &&
+              (state == CallState.ended ||
+                  state == CallState.connecting ||
+                  state == CallState.idle) &&
               mounted) {
             _dismissIncomingCallDialog();
           }
@@ -140,7 +141,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final peer = ref.watch(selectedPeerProvider);
     final messages = ref.watch(chatMessagesProvider(widget.peerId));
     final aliases = ref.watch(peerAliasesProvider);
-    final peerName = (peer != null ? aliases[peer.id] : null) ?? peer?.displayName ?? 'Unknown';
+    final peerName = (peer != null ? aliases[peer.id] : null) ??
+        peer?.displayName ??
+        'Unknown';
 
     return Scaffold(
       appBar: AppBar(
@@ -148,12 +151,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           children: [
             CircleAvatar(
               radius: 18,
-              backgroundColor:
-                  Theme.of(context).colorScheme.primaryContainer,
+              backgroundColor: Theme.of(context).colorScheme.primaryContainer,
               child: Text(
-                peerName.isNotEmpty
-                    ? peerName[0].toUpperCase()
-                    : '?',
+                peerName.isNotEmpty ? peerName[0].toUpperCase() : '?',
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.onPrimaryContainer,
                   fontSize: 14,
@@ -250,12 +250,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               color: Colors.orange.shade50,
               child: Row(
                 children: [
-                  Icon(Icons.cloud_off, size: 18, color: Colors.orange.shade700),
+                  Icon(Icons.cloud_off,
+                      size: 18, color: Colors.orange.shade700),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       'Peer is offline. Messages will be sent when they reconnect.',
-                      style: TextStyle(fontSize: 13, color: Colors.orange.shade800),
+                      style: TextStyle(
+                          fontSize: 13, color: Colors.orange.shade800),
                     ),
                   ),
                 ],
@@ -425,7 +427,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           children: [
             IconButton(
               icon: Icon(
-                _showEmojiPicker ? Icons.keyboard : Icons.emoji_emotions_outlined,
+                _showEmojiPicker
+                    ? Icons.keyboard
+                    : Icons.emoji_emotions_outlined,
               ),
               tooltip: _showEmojiPicker ? 'Keyboard' : 'Emoji',
               onPressed: () {
@@ -597,7 +601,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('VoIP not available. Connect to signaling server first.'),
+            content:
+                Text('VoIP not available. Connect to signaling server first.'),
           ),
         );
       }
@@ -669,7 +674,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   /// Navigate to the call screen.
-  void _navigateToCallScreen(VoIPService voipService, MediaService mediaService, {bool withVideo = false}) {
+  void _navigateToCallScreen(VoIPService voipService, MediaService mediaService,
+      {bool withVideo = false}) {
     final peer = ref.read(selectedPeerProvider);
     final peerName = peer?.displayName ?? 'Unknown';
 
@@ -1081,7 +1087,8 @@ class _FingerprintVerificationSectionState
     try {
       final cryptoService = ref.read(cryptoServiceProvider);
       final myFingerprint = await cryptoService.getPublicKeyFingerprint();
-      final peerFingerprint = cryptoService.getPeerFingerprintById(widget.peerId);
+      final peerFingerprint =
+          cryptoService.getPeerFingerprintById(widget.peerId);
 
       if (mounted) {
         setState(() {
@@ -1145,9 +1152,10 @@ class _FingerprintVerificationSectionState
                     children: [
                       Text(
                         'Verify Connection Security',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
-                            ),
+                        style:
+                            Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
                       ),
                       Text(
                         'Tap to compare fingerprints',
@@ -1329,7 +1337,8 @@ class _FingerprintCard extends StatelessWidget {
                 onTap: onCopy,
                 borderRadius: BorderRadius.circular(4),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [

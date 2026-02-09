@@ -6,6 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:crypto/crypto.dart' as crypto;
 
 import '../constants.dart';
+
 /// Cryptographic service implementing X25519 key exchange and ChaCha20-Poly1305 encryption.
 ///
 /// This implements a simplified Double Ratchet-like protocol for forward secrecy:
@@ -32,7 +33,8 @@ class CryptoService {
             const FlutterSecureStorage(
               aOptions: AndroidOptions(encryptedSharedPreferences: true),
             ) {
-    _hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: CryptoConstants.hkdfOutputLength);
+    _hkdf = Hkdf(
+        hmac: Hmac.sha256(), outputLength: CryptoConstants.hkdfOutputLength);
   }
 
   /// Initialize the crypto service and generate/load identity keys.
@@ -48,7 +50,8 @@ class CryptoService {
   /// Get our public key as a base64 string (synchronous, requires initialize() first).
   String get publicKeyBase64 {
     if (_publicKeyBase64Cache == null) {
-      throw CryptoException('CryptoService not initialized. Call initialize() first.');
+      throw CryptoException(
+          'CryptoService not initialized. Call initialize() first.');
     }
     return _publicKeyBase64Cache!;
   }

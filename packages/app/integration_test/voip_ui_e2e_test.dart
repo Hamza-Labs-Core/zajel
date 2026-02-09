@@ -66,12 +66,14 @@ void main() {
   setUpAll(() async {
     // Discover servers from Cloudflare bootstrap using TestConfig
     final config = TestConfig.auto();
-    serverDiscovery = ServerDiscoveryService(bootstrapUrl: config.bootstrapServerUrl);
+    serverDiscovery =
+        ServerDiscoveryService(bootstrapUrl: config.bootstrapServerUrl);
     final server = await serverDiscovery.selectServer();
 
     if (server != null) {
       serverUrl = serverDiscovery.getWebSocketUrl(server);
-      debugPrint('Discovered server: ${server.serverId} at $serverUrl (${server.region})');
+      debugPrint(
+          'Discovered server: ${server.serverId} at $serverUrl (${server.region})');
     } else {
       serverUrl = null;
       debugPrint('No servers discovered from bootstrap');
@@ -424,7 +426,8 @@ void main() {
   });
 
   group('Real E2E Incoming Call Tests', () {
-    testWidgets('incoming call is received through real signaling', (tester) async {
+    testWidgets('incoming call is received through real signaling',
+        (tester) async {
       if (!isConnected) {
         markTestSkipped('No server available or connection failed');
         return;
@@ -603,7 +606,8 @@ void main() {
   });
 
   group('Real E2E Call Flow Tests', () {
-    testWidgets('full call flow: dial → ring → accept → connected → hangup', (tester) async {
+    testWidgets('full call flow: dial → ring → accept → connected → hangup',
+        (tester) async {
       if (!isConnected) {
         markTestSkipped('No server available or connection failed');
         return;
@@ -639,7 +643,9 @@ void main() {
       await voipB.acceptCall(voipB.currentCall!.callId, false);
 
       final connected = await TestUtils.waitFor(
-        () => voipA.state == CallState.connected && voipB.state == CallState.connected,
+        () =>
+            voipA.state == CallState.connected &&
+            voipB.state == CallState.connected,
         timeout: const Duration(seconds: 30),
       );
 

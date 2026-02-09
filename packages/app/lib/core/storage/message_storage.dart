@@ -24,7 +24,8 @@ class MessageStorage {
     if (_db != null) return;
 
     // sqflite requires FFI initialization on desktop platforms
-    if (!kIsWeb && (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
+    if (!kIsWeb &&
+        (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
       sqfliteFfiInit();
       databaseFactory = databaseFactoryFfi;
     }

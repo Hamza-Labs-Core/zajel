@@ -96,7 +96,8 @@ class BlockedPeersScreen extends ConsumerWidget {
                 if (value == 'unblock') {
                   _showUnblockDialog(context, ref, peerId, displayName);
                 } else if (value == 'remove') {
-                  _showRemovePermanentlyDialog(context, ref, peerId, displayName);
+                  _showRemovePermanentlyDialog(
+                      context, ref, peerId, displayName);
                 }
               },
               itemBuilder: (context) => [
@@ -116,7 +117,8 @@ class BlockedPeersScreen extends ConsumerWidget {
                     children: [
                       Icon(Icons.delete_forever, color: Colors.red),
                       SizedBox(width: 8),
-                      Text('Remove Permanently', style: TextStyle(color: Colors.red)),
+                      Text('Remove Permanently',
+                          style: TextStyle(color: Colors.red)),
                     ],
                   ),
                 ),

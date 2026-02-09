@@ -98,7 +98,8 @@ class PinnedWebSocket {
   Future<void> connect() async {
     if (_state == PinnedWebSocketState.connected ||
         _state == PinnedWebSocketState.connecting) {
-      _logger.debug('PinnedWebSocket', 'Already connecting or connected, skipping');
+      _logger.debug(
+          'PinnedWebSocket', 'Already connecting or connected, skipping');
       return;
     }
 
@@ -151,7 +152,7 @@ class PinnedWebSocket {
       _logger.error(
         'PinnedWebSocket',
         'MissingPluginException: Native pinned WebSocket plugin not registered. '
-        'This may indicate a plugin registration issue or unsupported platform.',
+            'This may indicate a plugin registration issue or unsupported platform.',
         e,
       );
       throw PinnedWebSocketException(message);
@@ -236,8 +237,7 @@ class PinnedWebSocket {
   void _setupEventListener() {
     _eventSubscription?.cancel();
     _eventSubscription = _eventChannel
-        .receiveBroadcastStream({'connectionId': _connectionId})
-        .listen(
+        .receiveBroadcastStream({'connectionId': _connectionId}).listen(
       (event) {
         if (event is Map) {
           final type = event['type'] as String?;

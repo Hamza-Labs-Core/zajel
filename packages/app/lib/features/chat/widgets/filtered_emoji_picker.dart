@@ -77,14 +77,12 @@ class FilteredEmojiPicker extends StatelessWidget {
         emojiViewConfig: EmojiViewConfig(
           columns: 8,
           emojiSizeMax: 32,
-          backgroundColor: isDark
-              ? theme.colorScheme.surface
-              : const Color(0xFFF5F5F5),
+          backgroundColor:
+              isDark ? theme.colorScheme.surface : const Color(0xFFF5F5F5),
         ),
         categoryViewConfig: CategoryViewConfig(
-          backgroundColor: isDark
-              ? theme.colorScheme.surface
-              : const Color(0xFFF5F5F5),
+          backgroundColor:
+              isDark ? theme.colorScheme.surface : const Color(0xFFF5F5F5),
           indicatorColor: theme.colorScheme.primary,
           iconColorSelected: theme.colorScheme.primary,
           iconColor: theme.colorScheme.onSurfaceVariant,
@@ -94,9 +92,8 @@ class FilteredEmojiPicker extends StatelessWidget {
           showSearchViewButton: true,
         ),
         searchViewConfig: SearchViewConfig(
-          backgroundColor: isDark
-              ? theme.colorScheme.surface
-              : const Color(0xFFF5F5F5),
+          backgroundColor:
+              isDark ? theme.colorScheme.surface : const Color(0xFFF5F5F5),
         ),
       ),
     );

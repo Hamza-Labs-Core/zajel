@@ -70,7 +70,8 @@ class ServerDiscoveryService {
   static const cacheDuration = Duration(minutes: 2);
 
   /// Controller for server list updates.
-  final _serversController = StreamController<List<DiscoveredServer>>.broadcast();
+  final _serversController =
+      StreamController<List<DiscoveredServer>>.broadcast();
 
   /// Timer for periodic refresh.
   Timer? _refreshTimer;
@@ -92,7 +93,8 @@ class ServerDiscoveryService {
   ///
   /// Returns a list of discovered servers, or an empty list if the
   /// bootstrap server is unreachable.
-  Future<List<DiscoveredServer>> fetchServers({bool forceRefresh = false}) async {
+  Future<List<DiscoveredServer>> fetchServers(
+      {bool forceRefresh = false}) async {
     // Return cached servers if still fresh
     if (!forceRefresh && _cacheTime != null) {
       final age = DateTime.now().difference(_cacheTime!);
@@ -104,9 +106,9 @@ class ServerDiscoveryService {
     try {
       final uri = Uri.parse('$bootstrapUrl/servers');
       final response = await _client.get(uri).timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => throw TimeoutException('Bootstrap server timeout'),
-      );
+            const Duration(seconds: 10),
+            onTimeout: () => throw TimeoutException('Bootstrap server timeout'),
+          );
 
       if (response.statusCode != 200) {
         throw Exception('Bootstrap server returned ${response.statusCode}');
@@ -140,7 +142,8 @@ class ServerDiscoveryService {
       // Graceful degradation: Return cached servers on discovery error.
       // Network errors, timeouts, or server unavailability shouldn't block the app.
       // Cached servers may be stale but still usable for connection attempts.
-      logger.error('ServerDiscovery', 'Discovery failed (url: $bootstrapUrl/servers), using cache', e);
+      logger.error('ServerDiscovery',
+          'Discovery failed (url: $bootstrapUrl/servers), using cache', e);
       return _cachedServers;
     }
   }
@@ -163,7 +166,8 @@ class ServerDiscoveryService {
     // Filter by region if preferred
     List<DiscoveredServer> candidates = servers;
     if (preferredRegion != null) {
-      final regionServers = servers.where((s) => s.region == preferredRegion).toList();
+      final regionServers =
+          servers.where((s) => s.region == preferredRegion).toList();
       if (regionServers.isNotEmpty) {
         candidates = regionServers;
       }
@@ -207,7 +211,8 @@ class ServerDiscoveryService {
   /// Useful for keeping the server list up-to-date while the app is running.
   void startPeriodicRefresh({Duration interval = const Duration(minutes: 1)}) {
     stopPeriodicRefresh();
-    _refreshTimer = Timer.periodic(interval, (_) => fetchServers(forceRefresh: true));
+    _refreshTimer =
+        Timer.periodic(interval, (_) => fetchServers(forceRefresh: true));
   }
 
   /// Stop periodic server list refresh.

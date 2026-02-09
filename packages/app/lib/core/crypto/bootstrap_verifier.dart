@@ -11,7 +11,8 @@ import '../config/environment.dart';
 /// This class verifies those signatures using a hardcoded public key,
 /// providing transport-agnostic trust that survives TLS CA rotations.
 class BootstrapVerifier {
-  static const _productionPublicKey = 'attUirGAvR2WHcjz00q9lZoQTkWw5QmzJVM0waXwlWQ=';
+  static const _productionPublicKey =
+      'attUirGAvR2WHcjz00q9lZoQTkWw5QmzJVM0waXwlWQ=';
   static const _qaPublicKey = 'aT6HRI0epsGWdhIX2E2I0h/j/h/9ravxrjl09qnGc/A=';
 
   /// Maximum age of a signed response before it's considered stale.
