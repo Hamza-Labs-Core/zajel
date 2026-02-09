@@ -240,9 +240,21 @@ final linkSessionStateProvider = StateProvider<DeviceLinkState>((ref) {
 });
 
 /// Provider for the list of peers.
+/// Seeds with the current snapshot so cached peers appear immediately,
+/// then stays updated via the broadcast stream.
 final peersProvider = StreamProvider<List<Peer>>((ref) {
   final connectionManager = ref.watch(connectionManagerProvider);
-  return connectionManager.peers;
+
+  // Create a stream that emits the current snapshot first, then follows
+  // the broadcast stream. This prevents the UI from staying in "loading"
+  // state when the initial broadcast event was missed (broadcast streams
+  // don't buffer past events for late subscribers).
+  Stream<List<Peer>> seeded() async* {
+    yield connectionManager.currentPeers;
+    yield* connectionManager.peers;
+  }
+
+  return seeded();
 });
 
 /// Provider for visible peers (excluding blocked by public key).
