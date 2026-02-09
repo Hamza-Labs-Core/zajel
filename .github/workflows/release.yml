@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 env:
-  FLUTTER_VERSION: '3.27.1'
+  FLUTTER_VERSION: '3.38.5'
 
 jobs:
   # Check if this is a production release (not a pre-release tag)

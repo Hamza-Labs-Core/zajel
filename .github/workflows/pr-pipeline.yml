@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FLUTTER_VERSION: '3.27.1'
+  FLUTTER_VERSION: '3.38.5'
   NODE_VERSION: '20'
   # Version will be computed from latest release in determine-version job
 
