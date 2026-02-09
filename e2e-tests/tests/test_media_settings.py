@@ -47,8 +47,8 @@ class TestMediaSettings:
         # Find auto gain control
         helper._find("Auto Gain Control", timeout=5)
 
-    def test_background_blur_coming_soon(self, alice):
-        """Verify background blur shows as coming soon."""
+    def test_background_blur_toggle(self, alice):
+        """Verify background blur toggle is present in media settings."""
         helper = AppHelper(alice)
         helper.wait_for_app_ready()
 
@@ -64,7 +64,7 @@ class TestMediaSettings:
             alice.swipe(center_x, start_y, center_x, end_y, 500)
             time.sleep(0.5)
 
-        helper._find("Coming soon", timeout=10)
+        helper._find("Background Blur", timeout=10)
 
     def test_refresh_devices(self, alice):
         """Verify refresh devices button works."""
