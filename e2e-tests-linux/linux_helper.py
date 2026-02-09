@@ -86,7 +86,9 @@ class LinuxAppHelper:
             stderr=subprocess.PIPE,
         )
 
-        # Wait for the app to register with AT-SPI
+        # Wait for the app to register with AT-SPI.
+        # Flutter's Linux embedder may register with an empty application name
+        # on headless CI, so we search by name then fall back to PID matching.
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
@@ -97,12 +99,27 @@ class LinuxAppHelper:
                         f"App exited with code {self.process.returncode}. "
                         f"stderr:\n{stderr[-2000:]}"
                     )
-                self.app = root.application("zajel")
-                return
+                # Try by name first (works on desktop sessions)
+                try:
+                    self.app = root.application("zajel")
+                    return
+                except Exception:
+                    pass
+                # Flutter may register with empty name — find by PID.
+                # dogtail's root.children returns Atspi.Accessible objects
+                # with the dogtail Node mixin, so all methods work on them.
+                for child in root.children:
+                    try:
+                        if child.get_process_id() == self.process.pid:
+                            self.app = child
+                            return
+                    except Exception:
+                        continue
             except RuntimeError:
                 raise
             except Exception:
                 time.sleep(1)
+            time.sleep(1)
 
         # Timeout — capture stderr for diagnostics
         stderr = ""
