@@ -83,6 +83,10 @@ yarn-error.log*
 .react-router/
 dist/
 
+# Python
+.venv/
+*.egg-info/
+
 # Claude Code / Serena
 .claude/
 .serena/

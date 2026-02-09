@@ -11,9 +11,8 @@ class MainFlutterWindow: NSWindow {
     RegisterGeneratedPlugins(registry: flutterViewController)
 
     // Register custom pinned WebSocket plugin
-    if let registrar = flutterViewController.registrar(forPlugin: "PinnedWebSocketPlugin") {
-      PinnedWebSocketPlugin.register(with: registrar)
-    }
+    let registrar = flutterViewController.registrar(forPlugin: "PinnedWebSocketPlugin")
+    PinnedWebSocketPlugin.register(with: registrar)
 
     super.awakeFromNib()
   }

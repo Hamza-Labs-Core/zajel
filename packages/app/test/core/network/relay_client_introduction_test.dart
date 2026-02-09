@@ -175,8 +175,7 @@ void main() {
 
         when(() => mockWebRTC.createOffer(any()))
             .thenAnswer((_) async => {'type': 'offer', 'sdp': 'mock_sdp'});
-        when(() => mockWebRTC.closeConnection(any()))
-            .thenAnswer((_) async {});
+        when(() => mockWebRTC.closeConnection(any())).thenAnswer((_) async {});
 
         await client.connectToRelays([bob]);
 

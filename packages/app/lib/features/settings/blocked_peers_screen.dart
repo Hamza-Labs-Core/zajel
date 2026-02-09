@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/providers/app_providers.dart';
+import '../../shared/widgets/relative_time.dart';
 
 /// Screen for managing blocked peers.
 class BlockedPeersScreen extends ConsumerWidget {
@@ -60,6 +61,7 @@ class BlockedPeersScreen extends ConsumerWidget {
     Map<String, String> peerDetails,
   ) {
     final blockedList = blockedPeers.toList();
+    final notifier = ref.watch(blockedPeersProvider.notifier);
 
     return ListView.builder(
       padding: const EdgeInsets.all(16),
@@ -67,6 +69,7 @@ class BlockedPeersScreen extends ConsumerWidget {
       itemBuilder: (context, index) {
         final peerId = blockedList[index];
         final displayName = peerDetails[peerId] ?? 'Unknown User';
+        final blockedAt = notifier.getBlockedAt(peerId);
 
         return Card(
           margin: const EdgeInsets.only(bottom: 8),
@@ -80,14 +83,46 @@ class BlockedPeersScreen extends ConsumerWidget {
             ),
             title: Text(displayName),
             subtitle: Text(
-              'Blocked',
+              blockedAt != null
+                  ? 'Blocked ${formatRelativeTime(blockedAt)}'
+                  : 'Blocked',
               style: TextStyle(
                 color: Theme.of(context).colorScheme.error,
+                fontSize: 12,
               ),
             ),
-            trailing: TextButton(
-              onPressed: () => _showUnblockDialog(context, ref, peerId, displayName),
-              child: const Text('Unblock'),
+            trailing: PopupMenuButton<String>(
+              onSelected: (value) {
+                if (value == 'unblock') {
+                  _showUnblockDialog(context, ref, peerId, displayName);
+                } else if (value == 'remove') {
+                  _showRemovePermanentlyDialog(
+                      context, ref, peerId, displayName);
+                }
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'unblock',
+                  child: Row(
+                    children: [
+                      Icon(Icons.check_circle_outline),
+                      SizedBox(width: 8),
+                      Text('Unblock'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'remove',
+                  child: Row(
+                    children: [
+                      Icon(Icons.delete_forever, color: Colors.red),
+                      SizedBox(width: 8),
+                      Text('Remove Permanently',
+                          style: TextStyle(color: Colors.red)),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         );
@@ -123,11 +158,51 @@ class BlockedPeersScreen extends ConsumerWidget {
 
     if (confirmed == true) {
       await ref.read(blockedPeersProvider.notifier).unblock(peerId);
-      // Invalidate the details provider to refresh
       ref.invalidate(blockedPeerDetailsProvider);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('$displayName unblocked')),
+        );
+      }
+    }
+  }
+
+  Future<void> _showRemovePermanentlyDialog(
+    BuildContext context,
+    WidgetRef ref,
+    String peerId,
+    String displayName,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove Permanently?'),
+        content: Text(
+          'Remove $displayName permanently? This will unblock them and delete all stored data for this peer. They will need to re-pair to communicate.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await ref.read(blockedPeersProvider.notifier).removePermanently(peerId);
+      ref.invalidate(blockedPeerDetailsProvider);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$displayName removed permanently')),
         );
       }
     }

@@ -5,7 +5,7 @@
  * via the REAL deployed VPS signaling servers.
  *
  * Uses:
- * - Real CF Workers bootstrap: https://zajel-signaling.mahmoud-s-darwish.workers.dev
+ * - Real CF Workers bootstrap: https://signal.zajel.hamzalabs.dev
  * - Real VPS servers discovered from bootstrap
  * - Pre-built web client (configured with real VPS URL at build time)
  *

@@ -360,6 +360,125 @@ body {
   background: var(--primary-dark);
 }
 
+.emoji-toggle-btn {
+  font-size: 20px;
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.emoji-toggle-btn:hover {
+  background: var(--bg-input);
+}
+
+/* Emoji picker */
+.emoji-picker {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin: 0 12px 4px;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.emoji-picker-search {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.emoji-picker-search input {
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+}
+
+.emoji-picker-search input:focus {
+  border-color: var(--primary);
+}
+
+.emoji-picker-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.emoji-tab {
+  padding: 4px 6px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  opacity: 0.5;
+  transition: opacity 0.15s;
+}
+
+.emoji-tab:hover {
+  opacity: 0.8;
+  background: var(--bg-input);
+}
+
+.emoji-tab.active {
+  opacity: 1;
+  background: var(--bg-input);
+}
+
+.emoji-picker-grid {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.emoji-category-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 4px 0;
+  font-weight: 600;
+}
+
+.emoji-grid-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.emoji-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+  transition: background 0.1s;
+}
+
+.emoji-btn:hover {
+  background: var(--bg-input);
+}
+
+.emoji-no-results {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 24px;
+}
+
 /* File transfer */
 .file-zone {
   border: 2px dashed var(--border);

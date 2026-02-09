@@ -108,8 +108,8 @@ class DeviceLinkService {
   final _devicesController = StreamController<List<LinkedDevice>>.broadcast();
 
   /// Stream controller for incoming messages from web clients.
-  final _webMessagesController =
-      StreamController<(String deviceId, LinkTunnelMessage message)>.broadcast();
+  final _webMessagesController = StreamController<
+      (String deviceId, LinkTunnelMessage message)>.broadcast();
 
   /// Current link session (if any).
   LinkSession? _currentSession;
@@ -244,7 +244,8 @@ class DeviceLinkService {
 
       _notifyDevicesChanged();
 
-      logger.info('DeviceLinkService', 'Linked device: $deviceName ($webClientId)');
+      logger.info(
+          'DeviceLinkService', 'Linked device: $deviceName ($webClientId)');
     } catch (e) {
       _state = DeviceLinkWaitingForScan(session);
       rethrow;
@@ -290,7 +291,8 @@ class DeviceLinkService {
     }
 
     // Decrypt from web client's tunnel
-    final plaintext = await _cryptoService.decrypt(fromDeviceId, encryptedTunnelData);
+    final plaintext =
+        await _cryptoService.decrypt(fromDeviceId, encryptedTunnelData);
 
     // Re-encrypt for destination peer and send
     await _webrtcService.sendMessage(toPeerId, plaintext);
@@ -314,7 +316,8 @@ class DeviceLinkService {
     }
 
     // Encrypt for device tunnel
-    final encryptedForDevice = await _cryptoService.encrypt(toDeviceId, plaintext);
+    final encryptedForDevice =
+        await _cryptoService.encrypt(toDeviceId, plaintext);
 
     // Build tunnel message
     final tunnelMessage = jsonEncode({
@@ -405,7 +408,8 @@ class DeviceLinkService {
   void _startSessionTimeout(LinkSession session) {
     Future.delayed(DeviceLinkConstants.sessionTimeout, () {
       if (_currentSession == session) {
-        logger.info('DeviceLinkService', 'Link session expired: ${session.linkCode}');
+        logger.info(
+            'DeviceLinkService', 'Link session expired: ${session.linkCode}');
         cancelLinkSession();
       }
     });
@@ -420,7 +424,8 @@ class DeviceLinkService {
           try {
             final json = jsonDecode(entry.value) as Map<String, dynamic>;
             final device = LinkedDevice.fromJson(json).copyWith(
-              state: LinkedDeviceState.disconnected, // Always start disconnected
+              state:
+                  LinkedDeviceState.disconnected, // Always start disconnected
             );
             _linkedDevices[device.id] = device;
           } catch (e) {
@@ -473,7 +478,8 @@ class DeviceLinkException implements Exception {
 ///
 /// Format: zajel-link://{code}:{pubkey}:{server_url}
 /// Returns null if parsing fails.
-({String linkCode, String publicKey, String serverUrl})? parseQrData(String qrData) {
+({String linkCode, String publicKey, String serverUrl})? parseQrData(
+    String qrData) {
   if (!qrData.startsWith(DeviceLinkConstants.qrProtocol)) {
     return null;
   }
