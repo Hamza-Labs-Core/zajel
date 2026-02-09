@@ -107,14 +107,16 @@ class FileReceiveService {
     _transferController.add(transfer);
     _ensureTimeoutTimer();
 
-    logger.info('FileReceiveService', 'Started transfer: $fileId ($fileName, $totalChunks chunks)');
+    logger.info('FileReceiveService',
+        'Started transfer: $fileId ($fileName, $totalChunks chunks)');
   }
 
   /// Add a chunk to a transfer.
   void addChunk(String fileId, int chunkIndex, Uint8List chunk) {
     final transfer = _activeTransfers[fileId];
     if (transfer == null) {
-      logger.warning('FileReceiveService', 'Received chunk for unknown transfer: $fileId');
+      logger.warning(
+          'FileReceiveService', 'Received chunk for unknown transfer: $fileId');
       return;
     }
 
@@ -122,14 +124,16 @@ class FileReceiveService {
     transfer.lastChunkTime = DateTime.now();
     _transferController.add(transfer);
 
-    logger.debug('FileReceiveService', 'Chunk $chunkIndex/${transfer.totalChunks} for $fileId');
+    logger.debug('FileReceiveService',
+        'Chunk $chunkIndex/${transfer.totalChunks} for $fileId');
   }
 
   /// Complete a transfer - reassemble and save to disk.
   Future<String?> completeTransfer(String fileId) async {
     final transfer = _activeTransfers[fileId];
     if (transfer == null) {
-      logger.warning('FileReceiveService', 'Complete called for unknown transfer: $fileId');
+      logger.warning('FileReceiveService',
+          'Complete called for unknown transfer: $fileId');
       return null;
     }
 
@@ -139,7 +143,8 @@ class FileReceiveService {
       transfer.status = FileTransferStatus.failed;
       transfer.error = 'Missing $missing chunks';
       _transferController.add(transfer);
-      logger.warning('FileReceiveService', 'Transfer incomplete: $fileId ($missing missing)');
+      logger.warning('FileReceiveService',
+          'Transfer incomplete: $fileId ($missing missing)');
       return null;
     }
 
@@ -174,7 +179,8 @@ class FileReceiveService {
       var filePath = '${zajlDir.path}/$fileName';
       var counter = 1;
       while (await File(filePath).exists()) {
-        final ext = fileName.contains('.') ? '.${fileName.split('.').last}' : '';
+        final ext =
+            fileName.contains('.') ? '.${fileName.split('.').last}' : '';
         final base = fileName.contains('.')
             ? fileName.substring(0, fileName.lastIndexOf('.'))
             : fileName;
@@ -190,7 +196,8 @@ class FileReceiveService {
       transfer.receivedChunks.clear(); // Free memory
       _transferController.add(transfer);
 
-      logger.info('FileReceiveService', 'Transfer complete: $fileId -> $filePath');
+      logger.info(
+          'FileReceiveService', 'Transfer complete: $fileId -> $filePath');
       return filePath;
     } catch (e) {
       transfer.status = FileTransferStatus.failed;
@@ -213,7 +220,8 @@ class FileReceiveService {
           transfer.status = FileTransferStatus.failed;
           transfer.error = 'Transfer timed out';
           _transferController.add(transfer);
-          logger.warning('FileReceiveService', 'Transfer timed out: ${transfer.fileId}');
+          logger.warning(
+              'FileReceiveService', 'Transfer timed out: ${transfer.fileId}');
         }
       }
     }

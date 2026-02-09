@@ -146,15 +146,18 @@ void main() {
     });
 
     test('reconnectionTimeout is 10 seconds', () {
-      expect(CallConstants.reconnectionTimeout, equals(const Duration(seconds: 10)));
+      expect(CallConstants.reconnectionTimeout,
+          equals(const Duration(seconds: 10)));
     });
 
     test('iceGatheringTimeout is 30 seconds', () {
-      expect(CallConstants.iceGatheringTimeout, equals(const Duration(seconds: 30)));
+      expect(CallConstants.iceGatheringTimeout,
+          equals(const Duration(seconds: 30)));
     });
 
     test('cleanupDelay is 500 milliseconds', () {
-      expect(CallConstants.cleanupDelay, equals(const Duration(milliseconds: 500)));
+      expect(CallConstants.cleanupDelay,
+          equals(const Duration(milliseconds: 500)));
     });
   });
 
@@ -259,7 +262,9 @@ void main() {
     });
 
     group('toggleMute', () {
-      test('returns current state without calling MediaService when no active call', () {
+      test(
+          'returns current state without calling MediaService when no active call',
+          () {
         // Without an active call, toggleMute validates state and returns isAudioMuted
         when(() => mockMediaService.isAudioMuted).thenReturn(true);
 
@@ -280,7 +285,9 @@ void main() {
     });
 
     group('toggleVideo', () {
-      test('returns current state without calling MediaService when no active call', () {
+      test(
+          'returns current state without calling MediaService when no active call',
+          () {
         // Without an active call, toggleVideo validates state and returns !isVideoMuted
         when(() => mockMediaService.isVideoMuted).thenReturn(true);
 
@@ -386,7 +393,8 @@ void main() {
         final iceMessage = CallIceMessage(
           callId: 'unknown-call',
           targetId: 'PEER01',
-          candidate: '{"candidate":"candidate:1 1 UDP 2130706431 ...","sdpMid":"0","sdpMLineIndex":0}',
+          candidate:
+              '{"candidate":"candidate:1 1 UDP 2130706431 ...","sdpMid":"0","sdpMLineIndex":0}',
         );
 
         // Should not throw
@@ -424,7 +432,8 @@ void main() {
 
         // Verify MediaService.stopAllTracks was called at least once
         // (may be called multiple times due to tearDown interactions)
-        verify(() => mockMediaService.stopAllTracks()).called(greaterThanOrEqualTo(1));
+        verify(() => mockMediaService.stopAllTracks())
+            .called(greaterThanOrEqualTo(1));
       });
 
       test('dispose can be called when no active call', () {
@@ -547,10 +556,11 @@ void main() {
       ).toJson();
 
       expect(json['type'], equals('call_offer'));
-      expect(json['callId'], equals('call-001'));
-      expect(json['targetId'], equals('PEER01'));
-      expect(json['sdp'], equals('v=0\r\no=- 123...'));
-      expect(json['withVideo'], isTrue);
+      expect(json['target'], equals('PEER01'));
+      final payload = json['payload'] as Map<String, dynamic>;
+      expect(payload['callId'], equals('call-001'));
+      expect(payload['sdp'], equals('v=0\r\no=- 123...'));
+      expect(payload['withVideo'], isTrue);
     });
 
     test('sendCallAnswer format', () {
@@ -561,9 +571,10 @@ void main() {
       ).toJson();
 
       expect(json['type'], equals('call_answer'));
-      expect(json['callId'], equals('call-002'));
-      expect(json['targetId'], equals('PEER02'));
-      expect(json['sdp'], equals('v=0\r\no=- answer...'));
+      expect(json['target'], equals('PEER02'));
+      final payload = json['payload'] as Map<String, dynamic>;
+      expect(payload['callId'], equals('call-002'));
+      expect(payload['sdp'], equals('v=0\r\no=- answer...'));
     });
 
     test('sendCallReject format with reason', () {
@@ -574,9 +585,10 @@ void main() {
       ).toJson();
 
       expect(json['type'], equals('call_reject'));
-      expect(json['callId'], equals('call-003'));
-      expect(json['targetId'], equals('PEER03'));
-      expect(json['reason'], equals('busy'));
+      expect(json['target'], equals('PEER03'));
+      final payload = json['payload'] as Map<String, dynamic>;
+      expect(payload['callId'], equals('call-003'));
+      expect(payload['reason'], equals('busy'));
     });
 
     test('sendCallReject format without reason', () {
@@ -586,8 +598,9 @@ void main() {
       ).toJson();
 
       expect(json['type'], equals('call_reject'));
-      expect(json['callId'], equals('call-004'));
-      expect(json.containsKey('reason'), isFalse);
+      final payload = json['payload'] as Map<String, dynamic>;
+      expect(payload['callId'], equals('call-004'));
+      expect(payload.containsKey('reason'), isFalse);
     });
 
     test('sendCallHangup format', () {
@@ -597,21 +610,24 @@ void main() {
       ).toJson();
 
       expect(json['type'], equals('call_hangup'));
-      expect(json['callId'], equals('call-005'));
-      expect(json['targetId'], equals('PEER05'));
+      expect(json['target'], equals('PEER05'));
+      final payload = json['payload'] as Map<String, dynamic>;
+      expect(payload['callId'], equals('call-005'));
     });
 
     test('sendCallIce format', () {
       final json = CallIceMessage(
         callId: 'call-006',
         targetId: 'PEER06',
-        candidate: '{"candidate":"candidate:1 1 UDP 2130706431 ...","sdpMid":"0","sdpMLineIndex":0}',
+        candidate:
+            '{"candidate":"candidate:1 1 UDP 2130706431 ...","sdpMid":"0","sdpMLineIndex":0}',
       ).toJson();
 
       expect(json['type'], equals('call_ice'));
-      expect(json['callId'], equals('call-006'));
-      expect(json['targetId'], equals('PEER06'));
-      expect(json['candidate'], contains('candidate:'));
+      expect(json['target'], equals('PEER06'));
+      final payload = json['payload'] as Map<String, dynamic>;
+      expect(payload['callId'], equals('call-006'));
+      expect(payload['candidate'], contains('candidate:'));
     });
   });
 }
