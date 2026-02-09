@@ -1398,7 +1398,6 @@ jobs:
           wait $APP_PID 2>/dev/null || true
 
       - name: Run Linux E2E tests
-        timeout-minutes: 20
         env:
           CI: 'true'
           ZAJEL_APP_PATH: ${{ github.workspace }}/linux-app/zajel
@@ -1407,19 +1406,21 @@ jobs:
         run: |
           # Desktop E2E is informational — failures don't block the pipeline.
           # AT-SPI accessibility is unreliable on headless CI (Xvfb).
+          # Dogtail calls can hang forever, so we wrap each pytest with timeout(1)
+          # to ensure the step finishes and reaches exit 0.
           set +e
 
           echo "=== Running smoke tests ==="
-          python3 -m pytest tests/test_pairing.py -v -s --timeout=120 -k "smoke or test_app"
+          timeout 180 python3 -m pytest tests/test_pairing.py -v -s --timeout=120 -k "smoke or test_app"
 
           echo "=== Running single-device tests ==="
-          python3 -m pytest -m "not headless" -v -s --timeout=120
+          timeout 300 python3 -m pytest -m "not headless" -v -s --timeout=120
           SINGLE_RESULT=$?
 
           HEADLESS_RESULT=0
           if [ -n "$SIGNALING_URL" ]; then
             echo "=== Running headless-paired tests ==="
-            python3 -m pytest -m "headless" -v -s --timeout=300
+            timeout 600 python3 -m pytest -m "headless" -v -s --timeout=300
             HEADLESS_RESULT=$?
           else
             echo "=== Skipping headless tests (SIGNALING_URL not set) ==="
