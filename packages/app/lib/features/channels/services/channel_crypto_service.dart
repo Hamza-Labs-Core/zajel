@@ -64,8 +64,7 @@ class ChannelCryptoService {
     try {
       publicKeyBytes = base64Decode(publicKeyBase64);
     } on FormatException {
-      throw ChannelCryptoException(
-          'Invalid base64 encoding for public key');
+      throw ChannelCryptoException('Invalid base64 encoding for public key');
     }
     final hashAlgo = Sha256();
     final hash = await hashAlgo.hash(publicKeyBytes);

@@ -80,8 +80,7 @@ class ChunkPayload extends Equatable {
     try {
       payloadBytes = base64Decode(json['payload'] as String);
     } on FormatException {
-      throw const FormatException(
-          'Invalid base64 in chunk payload content');
+      throw const FormatException('Invalid base64 in chunk payload content');
     }
 
     return ChunkPayload(

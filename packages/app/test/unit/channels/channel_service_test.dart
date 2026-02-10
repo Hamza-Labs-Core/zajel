@@ -389,7 +389,10 @@ void main() {
       );
 
       // Duplicate the first chunk to simulate a replay attack
-      final duplicated = [chunks.first, chunks.first.copyWith(chunkId: 'ch_dup')];
+      final duplicated = [
+        chunks.first,
+        chunks.first.copyWith(chunkId: 'ch_dup')
+      ];
 
       expect(
         () => channelService.reassembleChunks(duplicated),
