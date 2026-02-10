@@ -35,9 +35,8 @@ void main() {
 
       // There should be 4 indicator dots (animated containers)
       // The active dot is wider (24px), the rest are 8px
-      final dots = tester
-          .widgetList<Container>(find.byType(Container))
-          .where((c) {
+      final dots =
+          tester.widgetList<Container>(find.byType(Container)).where((c) {
         final constraints = c.constraints;
         if (constraints == null) return false;
         return (constraints.maxWidth == 24 || constraints.maxWidth == 8) &&

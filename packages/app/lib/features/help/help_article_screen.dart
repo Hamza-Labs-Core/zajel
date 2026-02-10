@@ -83,12 +83,16 @@ class HelpArticleScreen extends ConsumerWidget {
   Widget _buildArticleSection(BuildContext context, HelpSection section) {
     if (section.isWarning) {
       final isDark = Theme.of(context).brightness == Brightness.dark;
-      final warningBg =
-          isDark ? Colors.orange.shade900.withValues(alpha: 0.2) : Colors.orange.shade50;
-      final warningBorder =
-          isDark ? Colors.orange.shade700.withValues(alpha: 0.4) : Colors.orange.shade200;
-      final warningFg = isDark ? Colors.orange.shade300 : Colors.orange.shade900;
-      final warningIcon = isDark ? Colors.orange.shade400 : Colors.orange.shade800;
+      final warningBg = isDark
+          ? Colors.orange.shade900.withValues(alpha: 0.2)
+          : Colors.orange.shade50;
+      final warningBorder = isDark
+          ? Colors.orange.shade700.withValues(alpha: 0.4)
+          : Colors.orange.shade200;
+      final warningFg =
+          isDark ? Colors.orange.shade300 : Colors.orange.shade900;
+      final warningIcon =
+          isDark ? Colors.orange.shade400 : Colors.orange.shade800;
 
       return Padding(
         padding: const EdgeInsets.only(bottom: 20),
