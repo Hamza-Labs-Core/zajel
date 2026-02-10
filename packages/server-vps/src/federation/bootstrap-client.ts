@@ -21,7 +21,7 @@ export interface BootstrapClient {
   register(): Promise<void>;
   unregister(): Promise<void>;
   getServers(): Promise<BootstrapServerEntry[]>;
-  startHeartbeat(): void;
+  startHeartbeat(onPeersDiscovered?: (peers: BootstrapServerEntry[]) => void): void;
   stopHeartbeat(): void;
 }
 
@@ -128,13 +128,16 @@ export function createBootstrapClient(
     }
   }
 
-  function startHeartbeat(): void {
+  function startHeartbeat(onPeersDiscovered?: (peers: BootstrapServerEntry[]) => void): void {
     if (heartbeatTimer) return;
 
     heartbeatTimer = setInterval(async () => {
       const peers = await heartbeat();
       if (peers.length > 0) {
         console.log(`[Bootstrap] Heartbeat: ${peers.length} peers known`);
+        if (onPeersDiscovered) {
+          onPeersDiscovered(peers);
+        }
       }
     }, config.bootstrap.heartbeatInterval);
 

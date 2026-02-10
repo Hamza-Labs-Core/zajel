@@ -215,6 +215,49 @@ export class FederationManager extends EventEmitter {
   }
 
   /**
+   * Add a discovered peer and attempt to connect.
+   * Called by external bootstrap when new peers are found via heartbeat.
+   */
+  async addDiscoveredPeer(peer: { serverId: string; endpoint: string; publicKey: string; region?: string }): Promise<void> {
+    if (peer.serverId === this.identity.serverId) return;
+
+    // Check if already known
+    const existing = this.gossip.getMembership().get(peer.serverId);
+    if (existing && existing.status === 'alive') return;
+
+    console.log(`[Federation] Discovered new peer: ${peer.serverId} at ${peer.endpoint}`);
+
+    // Create a membership entry
+    const entry: MembershipEntry = {
+      serverId: peer.serverId,
+      nodeId: peer.serverId, // Use serverId as nodeId for discovered peers
+      endpoint: peer.endpoint,
+      publicKey: new Uint8Array(Buffer.from(peer.publicKey, 'base64')),
+      status: 'alive',
+      incarnation: 0,
+      lastSeen: Date.now(),
+      metadata: { region: peer.region },
+    };
+
+    // Add to gossip membership
+    this.gossip.getMembership().upsert(entry);
+
+    // Add to ring
+    this.ring.addNode({
+      serverId: entry.serverId,
+      nodeId: entry.nodeId,
+      endpoint: entry.endpoint,
+      status: 'alive',
+      metadata: entry.metadata,
+    });
+
+    // Try to connect via transport
+    this.transport.connect(entry).catch((error) => {
+      console.warn(`[Federation] Failed to connect to discovered peer ${peer.serverId}:`, error);
+    });
+  }
+
+  /**
    * Connect to bootstrap nodes
    */
   private async bootstrap(): Promise<void> {
@@ -263,11 +306,31 @@ export class FederationManager extends EventEmitter {
   }
 
   /**
+   * Resolve the federation WebSocket URL from a peer's base endpoint.
+   * Appends /federation path if not already present.
+   */
+  private getFederationUrl(endpoint: string): string {
+    try {
+      const url = new URL(endpoint);
+      if (!url.pathname || url.pathname === '/') {
+        url.pathname = '/federation';
+      }
+      return url.toString();
+    } catch {
+      // Fallback: simple string append
+      const base = endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
+      return `${base}/federation`;
+    }
+  }
+
+  /**
    * Connect to a bootstrap node
    */
   private async connectToBootstrap(endpoint: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const ws = new WsWebSocket(endpoint);
+      const federationUrl = this.getFederationUrl(endpoint);
+      console.log(`[Federation] Connecting to bootstrap at ${federationUrl}`);
+      const ws = new WsWebSocket(federationUrl);
 
       const timeout = setTimeout(() => {
         ws.close();

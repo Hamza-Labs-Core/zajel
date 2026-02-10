@@ -142,6 +142,10 @@ class ConnectionManager {
   /// Subscription to rendezvous events (meeting point matches).
   StreamSubscription? _rendezvousSubscription;
 
+  /// Secondary signaling clients for federated redirect servers.
+  /// Key: server endpoint URL, Value: client and its subscriptions.
+  final Map<String, _RedirectConnection> _redirectConnections = {};
+
   /// Callback to check if a public key is blocked.
   bool Function(String publicKey)? _isPublicKeyBlocked;
 
@@ -302,6 +306,9 @@ class ConnectionManager {
 
   /// Disconnect from the signaling server.
   Future<void> disconnect() async {
+    // Close redirect connections first
+    await _closeRedirectConnections();
+
     // Cancel signaling events subscription first to prevent stale callbacks
     await _rendezvousSubscription?.cancel();
     _rendezvousSubscription = null;
@@ -493,6 +500,9 @@ class ConnectionManager {
 
   /// Dispose resources.
   Future<void> dispose() async {
+    // Close redirect connections
+    await _closeRedirectConnections();
+
     // Cancel signaling events subscription
     await _rendezvousSubscription?.cancel();
     _rendezvousSubscription = null;
@@ -945,16 +955,139 @@ class ConnectionManager {
         for (final match in liveMatches) {
           _handleLiveMatch(match.peerId);
         }
-      case RendezvousPartial(:final liveMatches, deadDrops: _, redirects: _):
-        logger.info('ConnectionManager',
-            'Rendezvous partial: ${liveMatches.length} live matches');
+      case RendezvousPartial(
+          :final liveMatches,
+          deadDrops: _,
+          :final redirects
+        ):
+        logger.info(
+            'ConnectionManager',
+            'Rendezvous partial: ${liveMatches.length} live matches, '
+                '${redirects.length} redirects');
         for (final match in liveMatches) {
           _handleLiveMatch(match.peerId);
+        }
+        // Follow redirects: register tokens on the responsible servers
+        if (redirects.isNotEmpty) {
+          _handleRendezvousRedirects(redirects);
         }
       case RendezvousMatch(:final peerId, relayId: _, meetingPoint: _):
         logger.info('ConnectionManager', 'Rendezvous match: peerId=$peerId');
         _handleLiveMatch(peerId);
     }
+  }
+
+  /// Follow rendezvous redirects by connecting to other federated servers
+  /// and registering the tokens that belong to them.
+  Future<void> _handleRendezvousRedirects(
+      List<RendezvousRedirect> redirects) async {
+    final state = _signalingState;
+    if (state is! SignalingConnected) return;
+
+    for (final redirect in redirects) {
+      if (redirect.endpoint.isEmpty) continue;
+      if (redirect.dailyPoints.isEmpty && redirect.hourlyTokens.isEmpty) {
+        continue;
+      }
+
+      logger.info(
+          'ConnectionManager',
+          'Following redirect to ${redirect.endpoint}: '
+              '${redirect.dailyPoints.length} daily, '
+              '${redirect.hourlyTokens.length} hourly tokens');
+
+      try {
+        await _connectToRedirectServer(
+          endpoint: redirect.endpoint,
+          pairingCode: state.pairingCode,
+          publicKey: _cryptoService.publicKeyBase64,
+          dailyPoints: redirect.dailyPoints,
+          hourlyTokens: redirect.hourlyTokens,
+        );
+      } catch (e) {
+        logger.error('ConnectionManager',
+            'Failed to follow redirect to ${redirect.endpoint}', e);
+      }
+    }
+  }
+
+  /// Connect to a federated redirect server, register, and send tokens.
+  Future<void> _connectToRedirectServer({
+    required String endpoint,
+    required String pairingCode,
+    required String publicKey,
+    required List<String> dailyPoints,
+    required List<String> hourlyTokens,
+  }) async {
+    // Close existing connection to this endpoint if any
+    final existing = _redirectConnections[endpoint];
+    if (existing != null) {
+      await existing.dispose();
+      _redirectConnections.remove(endpoint);
+    }
+
+    // Create a new signaling client for this server
+    final client = SignalingClient(
+      serverUrl: endpoint,
+      pairingCode: pairingCode,
+      publicKey: publicKey,
+    );
+
+    // Listen for rendezvous events from this redirect server
+    final sub = client.rendezvousEvents.listen((event) {
+      logger.info(
+          'ConnectionManager',
+          'Redirect server rendezvous event: ${event.runtimeType} '
+              'from $endpoint');
+      // Process matches from the redirect server the same way
+      switch (event) {
+        case RendezvousResult(:final liveMatches, deadDrops: _):
+          for (final match in liveMatches) {
+            _handleLiveMatch(match.peerId);
+          }
+        case RendezvousPartial(:final liveMatches, deadDrops: _, redirects: _):
+          for (final match in liveMatches) {
+            _handleLiveMatch(match.peerId);
+          }
+        case RendezvousMatch(:final peerId, relayId: _, meetingPoint: _):
+          _handleLiveMatch(peerId);
+      }
+    });
+
+    _redirectConnections[endpoint] =
+        _RedirectConnection(client: client, rendezvousSub: sub);
+
+    try {
+      await client.connect();
+
+      // Register the redirected tokens on this server
+      final rendezvousMsg = {
+        'type': 'register_rendezvous',
+        'peerId': pairingCode,
+        'daily_points': dailyPoints,
+        'hourly_tokens': hourlyTokens,
+        'dead_drops': <String, String>{},
+      };
+
+      await client.send(rendezvousMsg);
+      logger.info(
+          'ConnectionManager',
+          'Registered ${dailyPoints.length + hourlyTokens.length} tokens '
+              'on redirect server $endpoint');
+    } catch (e) {
+      // Clean up on failure
+      await _redirectConnections[endpoint]?.dispose();
+      _redirectConnections.remove(endpoint);
+      rethrow;
+    }
+  }
+
+  /// Close all redirect connections.
+  Future<void> _closeRedirectConnections() async {
+    for (final conn in _redirectConnections.values) {
+      await conn.dispose();
+    }
+    _redirectConnections.clear();
   }
 
   /// Handle a live match: initiate pairing with the matched peer.
@@ -987,6 +1120,19 @@ class ConnectionManager {
     logger.info('ConnectionManager',
         'Live match with $matchedPeerId - initiating reconnection');
     connectToPeer(matchedPeerId);
+  }
+}
+
+/// Holds a secondary signaling connection to a federated redirect server.
+class _RedirectConnection {
+  final SignalingClient client;
+  final StreamSubscription rendezvousSub;
+
+  _RedirectConnection({required this.client, required this.rendezvousSub});
+
+  Future<void> dispose() async {
+    await rendezvousSub.cancel();
+    await client.dispose();
   }
 }
 

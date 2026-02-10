@@ -52,6 +52,15 @@ export interface JwtPayload {
 }
 
 /**
+ * Service binding interface for worker-to-worker communication.
+ * CF Workers calling other CF Workers via custom domains on the same zone
+ * return 530 errors. Service bindings bypass this by routing internally.
+ */
+export interface ServiceBinding {
+  fetch(request: Request): Promise<Response>;
+}
+
+/**
  * Environment bindings for CF Worker
  */
 export interface Env {
@@ -59,6 +68,8 @@ export interface Env {
   ZAJEL_ADMIN_JWT_SECRET: string;
   ZAJEL_BOOTSTRAP_URL?: string;
   APP_VERSION?: string;
+  /** Service binding to the bootstrap server (zajel-signaling worker) */
+  BOOTSTRAP_SERVICE?: ServiceBinding;
 }
 
 /**

@@ -410,7 +410,7 @@ describe('Server Monitoring', () => {
 
     const res = await client.listServers();
 
-    // Bootstrap may be unreachable, so accept both
+    // Bootstrap may be unreachable, so accept both 200 and 502
     if (res.status === 200) {
       const body = (await res.json()) as ApiResponse<ServersData>;
       expect(body.success).toBe(true);
@@ -429,8 +429,8 @@ describe('Server Monitoring', () => {
         agg.totalServers
       );
     } else {
-      // Bootstrap registry unavailable
-      expect([500, 502]).toContain(res.status);
+      // Bootstrap registry unavailable — error handler returns 502
+      expect(res.status).toBe(502);
       const body = (await res.json()) as ApiResponse;
       expect(body.success).toBe(false);
     }

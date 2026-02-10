@@ -23,6 +23,14 @@
     }
   ],
 
+  // Service binding to the bootstrap server (avoids CF-to-CF 530 errors)
+  "services": [
+    {
+      "binding": "BOOTSTRAP_SERVICE",
+      "service": "zajel-signaling"
+    }
+  ],
+
   // Secrets (already exists in secret store as ZAJEL_ADMIN_JWT_SECRET)
   // The secret is automatically available as env.ZAJEL_ADMIN_JWT_SECRET
   // To update: wrangler secret put ZAJEL_ADMIN_JWT_SECRET
@@ -38,6 +46,11 @@
     { "pattern": "admin.zajel.hamzalabs.dev", "custom_domain": true }
   ],
 
+  // Production vars
+  "vars": {
+    "ZAJEL_BOOTSTRAP_URL": "https://signal.zajel.hamzalabs.dev"
+  },
+
   // QA Environment for PR testing
   "env": {
     "qa": {
@@ -50,9 +63,19 @@
           }
         ]
       },
+      // Service binding for QA (references the QA bootstrap worker)
+      "services": [
+        {
+          "binding": "BOOTSTRAP_SERVICE",
+          "service": "zajel-signaling-qa"
+        }
+      ],
       "routes": [
         { "pattern": "admin.zajel.qa.hamzalabs.dev", "custom_domain": true }
-      ]
+      ],
+      "vars": {
+        "ZAJEL_BOOTSTRAP_URL": "https://signal.zajel.qa.hamzalabs.dev"
+      }
     }
   }
 }

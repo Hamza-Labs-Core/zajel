@@ -285,12 +285,13 @@ export async function createZajelServer(
   });
 
   // Register with CF Workers bootstrap server and get peers
+  let discoveredPeers: import('./federation/bootstrap-client.js').BootstrapServerEntry[] = [];
   try {
     await bootstrap.register();
-    const discoveredPeers = await bootstrap.getServers();
+    discoveredPeers = await bootstrap.getServers();
     if (discoveredPeers.length > 0) {
       console.log(`[Zajel] Discovered ${discoveredPeers.length} peers from bootstrap server`);
-      // Add discovered peers to federation config
+      // Add discovered peers to federation config for initial bootstrap
       for (const peer of discoveredPeers) {
         if (!federationConfig.bootstrap.nodes.includes(peer.endpoint)) {
           federationConfig.bootstrap.nodes.push(peer.endpoint);
@@ -305,8 +306,21 @@ export async function createZajelServer(
   await federation.start(federationWss);
   console.log('[Zajel] Federation started');
 
-  // Start bootstrap heartbeat
-  bootstrap.startHeartbeat();
+  // After federation starts, add initially discovered peers directly
+  for (const peer of discoveredPeers) {
+    federation.addDiscoveredPeer(peer).catch((err) => {
+      console.warn(`[Zajel] Failed to connect to discovered peer ${peer.serverId}:`, err);
+    });
+  }
+
+  // Start bootstrap heartbeat with callback to feed new peers into federation
+  bootstrap.startHeartbeat((peers) => {
+    for (const peer of peers) {
+      federation.addDiscoveredPeer(peer).catch((err) => {
+        console.warn(`[Zajel] Failed to connect to heartbeat peer ${peer.serverId}:`, err);
+      });
+    }
+  });
 
   // Create admin module (requires clientHandler and federation)
   const adminModule = createAdminModule({
