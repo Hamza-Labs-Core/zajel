@@ -1,10 +1,13 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/providers/app_providers.dart';
 import '../models/channel.dart';
+import '../services/background_sync_service.dart';
 import '../services/channel_crypto_service.dart';
 import '../services/channel_service.dart';
 import '../services/channel_storage_service.dart';
 import '../services/channel_sync_service.dart';
+import '../services/routing_hash_service.dart';
 import '../services/upstream_service.dart';
 import '../services/poll_service.dart';
 import '../services/live_stream_service.dart';
@@ -63,14 +66,27 @@ final subscribedChannelsProvider = FutureProvider<List<Channel>>((ref) async {
 
 /// Provider for the channel sync service.
 ///
-/// Must be overridden in [ProviderScope] with actual WebSocket send function
-/// and peer ID. This is because the sync service depends on the signaling
-/// client which is initialized at runtime.
+/// Uses the signaling client's send function when connected, or a no-op
+/// when disconnected. The peer ID comes from [pairingCodeProvider].
 final channelSyncServiceProvider = Provider<ChannelSyncService>((ref) {
-  throw UnimplementedError(
-    'channelSyncServiceProvider must be overridden with actual '
-    'WebSocket send function and peer ID',
+  final storageService = ref.watch(channelStorageServiceProvider);
+  final signalingClient = ref.watch(signalingClientProvider);
+  final pairingCode = ref.watch(pairingCodeProvider);
+
+  // Build a send function: use the signaling client if connected,
+  // otherwise silently drop messages (sync will retry on next interval).
+  void sendMessage(Map<String, dynamic> message) {
+    signalingClient?.send(message);
+  }
+
+  final service = ChannelSyncService(
+    storageService: storageService,
+    sendMessage: sendMessage,
+    peerId: pairingCode ?? '',
   );
+
+  ref.onDispose(() => service.dispose());
+  return service;
 });
 
 /// Provider for the upstream service (handles subscriber -> owner messaging).
@@ -96,4 +112,31 @@ final liveStreamServiceProvider = Provider<LiveStreamService>((ref) {
     cryptoService: cryptoService,
     channelService: channelService,
   );
+});
+
+/// Provider for the routing hash service.
+final routingHashServiceProvider = Provider<RoutingHashService>((ref) {
+  return RoutingHashService();
+});
+
+/// Provider for the background sync service.
+///
+/// Handles periodic synchronization of channel chunks in the background.
+/// On mobile, registers with platform background task schedulers.
+/// On desktop/web, uses a foreground timer.
+final backgroundSyncServiceProvider = Provider<BackgroundSyncService>((ref) {
+  final storageService = ref.watch(channelStorageServiceProvider);
+  final routingHashService = ref.watch(routingHashServiceProvider);
+  final channelSyncService = ref.watch(channelSyncServiceProvider);
+
+  final service = BackgroundSyncService(
+    storageService: storageService,
+    routingHashService: routingHashService,
+  );
+
+  // Wire up the channel sync service for chunk downloads
+  service.setChannelSyncService(channelSyncService);
+
+  ref.onDispose(() => service.dispose());
+  return service;
 });

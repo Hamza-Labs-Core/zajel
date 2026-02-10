@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/group.dart';
 import '../models/group_message.dart';
+import '../services/group_connection_service.dart';
 import '../services/group_crypto_service.dart';
 import '../services/group_service.dart';
 import '../services/group_storage_service.dart';
@@ -37,6 +38,35 @@ final groupServiceProvider = Provider<GroupService>((ref) {
     storageService: storageService,
     syncService: syncService,
   );
+});
+
+/// Provider for the P2P connection adapter.
+///
+/// This must be overridden at the app level to provide a real adapter
+/// that bridges to [ConnectionManager] and [WebRTCService].
+///
+/// Example:
+/// ```dart
+/// final p2pConnectionAdapterProvider = Provider<P2PConnectionAdapter>((ref) {
+///   final connectionManager = ref.watch(connectionManagerProvider);
+///   return ConnectionManagerAdapter(connectionManager);
+/// });
+/// ```
+final p2pConnectionAdapterProvider = Provider<P2PConnectionAdapter>((ref) {
+  throw UnimplementedError(
+    'p2pConnectionAdapterProvider must be overridden with a real '
+    'P2PConnectionAdapter that bridges to the WebRTC layer.',
+  );
+});
+
+/// Provider for the group connection service (mesh WebRTC connections).
+///
+/// Manages P2P connections to all members of active groups.
+final groupConnectionServiceProvider = Provider<GroupConnectionService>((ref) {
+  final adapter = ref.watch(p2pConnectionAdapterProvider);
+  final service = GroupConnectionService(adapter: adapter);
+  ref.onDispose(() => service.dispose());
+  return service;
 });
 
 /// Provider for all groups.

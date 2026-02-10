@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../../core/logging/logger_service.dart';
 import '../models/channel.dart';
 import '../models/upstream_message.dart';
 
@@ -26,6 +27,7 @@ class UpstreamService {
   final X25519 _x25519 = X25519();
   final Chacha20 _chacha20 = Chacha20.poly1305Aead();
   final Ed25519 _ed25519 = Ed25519();
+  final _logger = LoggerService.instance;
 
   /// Pending upstream messages queued when no WebSocket is available.
   final List<Map<String, dynamic>> _pendingMessages = [];
@@ -253,7 +255,10 @@ class UpstreamService {
       final message = UpstreamMessage.fromJson(messageJson);
       onUpstreamMessage?.call(message);
     } catch (e) {
-      // Silently drop malformed upstream messages
+      _logger.debug(
+        'UpstreamService',
+        'Dropped malformed upstream message: $e (data keys: ${data.keys.toList()})',
+      );
     }
   }
 
@@ -368,11 +373,28 @@ class UpstreamService {
           SimplePublicKey(publicKeyBytes, type: KeyPairType.ed25519);
       final signature = Signature(signatureBytes, publicKey: publicKey);
 
-      return await _ed25519.verify(
+      final isValid = await _ed25519.verify(
         message.encryptedPayload,
         signature: signature,
       );
-    } catch (_) {
+
+      if (!isValid) {
+        _logger.debug(
+          'UpstreamService',
+          'Signature verification failed for message ${message.id}: '
+              'Ed25519 verify returned false '
+              '(sig length: ${signatureBytes.length}, '
+              'pubkey length: ${publicKeyBytes.length}, '
+              'payload length: ${message.encryptedPayload.length})',
+        );
+      }
+
+      return isValid;
+    } catch (e) {
+      _logger.debug(
+        'UpstreamService',
+        'Signature verification error for message ${message.id}: $e',
+      );
       return false;
     }
   }

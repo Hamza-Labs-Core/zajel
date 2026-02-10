@@ -359,6 +359,169 @@ class RoutingHashService {
     return [...notBlocking, ...blocking];
   }
 
+  // ---------------------------------------------------------------------------
+  // Automatic fallback logic
+  // ---------------------------------------------------------------------------
+
+  /// The currently active VPS node URL, if any.
+  String? _activeNodeUrl;
+
+  /// The currently active node URL (read-only).
+  String? get activeNodeUrl => _activeNodeUrl;
+
+  /// Maximum consecutive failures before a node is considered unhealthy.
+  static const int _maxConsecutiveFailures = 3;
+
+  /// Cooldown period before retrying a node that was marked unhealthy.
+  static const Duration _unhealthyCooldown = Duration(minutes: 10);
+
+  /// Select the best available VPS node and set it as the active node.
+  ///
+  /// Uses [getBestNode] to find the healthiest node, taking into account
+  /// success rates, blocking status, and recency of successful fetches.
+  ///
+  /// Returns the selected node's URL, or null if no nodes are available.
+  String? selectBestNode() {
+    final best = getBestNode();
+    if (best != null) {
+      _activeNodeUrl = best.url;
+    }
+    return best?.url;
+  }
+
+  /// Handle a node failure: record the failure and automatically switch
+  /// to a fallback node if the current one is unreliable.
+  ///
+  /// [nodeUrl] is the URL of the node that failed.
+  /// [routingHash] is the routing hash that was being fetched (for censorship
+  ///   detection). Pass null if this is a general connectivity failure.
+  /// [result] is the type of failure (defaults to [FetchResult.networkError]).
+  ///
+  /// Returns the URL of the new active node if a fallback was triggered,
+  /// or null if no fallback was needed or possible.
+  String? handleNodeFailure({
+    required String nodeUrl,
+    String? routingHash,
+    FetchResult result = FetchResult.networkError,
+  }) {
+    // Record the failure for health tracking
+    if (routingHash != null) {
+      recordFetchResult(
+        routingHash: routingHash,
+        vpsUrl: nodeUrl,
+        result: result,
+      );
+    } else {
+      // General failure -- update node health directly
+      final node = _getOrCreateNode(nodeUrl);
+      node.failureCount++;
+      node.lastFailure = DateTime.now();
+    }
+
+    final node = _getOrCreateNode(nodeUrl);
+
+    // Check if this node has too many consecutive recent failures
+    final recentFailures = _countRecentFailures(node);
+    if (recentFailures >= _maxConsecutiveFailures) {
+      node.suspectedBlocking = true;
+    }
+
+    // If this was the active node, try to fall back
+    if (_activeNodeUrl == nodeUrl) {
+      return fallbackToAlternativeNode(
+        excludeUrl: nodeUrl,
+        routingHash: routingHash,
+      );
+    }
+
+    return null;
+  }
+
+  /// Automatically switch to an alternative VPS node when the current
+  /// node appears blocked or unreachable.
+  ///
+  /// [excludeUrl] is the URL to avoid (typically the failing node).
+  /// [routingHash] is used for censorship-aware selection: if a specific
+  ///   routing hash is being blocked, the method prefers nodes that haven't
+  ///   blocked it.
+  ///
+  /// Returns the new active node URL, or null if no alternatives are available.
+  String? fallbackToAlternativeNode({
+    String? excludeUrl,
+    String? routingHash,
+  }) {
+    final candidates =
+        getNodeFallbackOrder().where((n) => n.url != excludeUrl).toList();
+
+    if (candidates.isEmpty) {
+      // No alternatives; check if excluded node has cooled down
+      if (excludeUrl != null) {
+        final excluded = _getOrCreateNode(excludeUrl);
+        if (_hasCooledDown(excluded)) {
+          // Reset the node and retry it
+          excluded.suspectedBlocking = false;
+          _activeNodeUrl = excluded.url;
+          return excluded.url;
+        }
+      }
+      return null;
+    }
+
+    // If we have a routing hash, check censorship detection to prefer
+    // nodes that aren't blocking this specific content
+    if (routingHash != null) {
+      final detection = detectCensorship(routingHash: routingHash);
+      if (detection.isCensored) {
+        // Filter out nodes that are known to block this content
+        final nonBlockingCandidates = candidates
+            .where((n) => !_isNodeBlockingHash(n.url, routingHash))
+            .toList();
+        if (nonBlockingCandidates.isNotEmpty) {
+          _activeNodeUrl = nonBlockingCandidates.first.url;
+          return _activeNodeUrl;
+        }
+      }
+    }
+
+    // Use the best available candidate
+    _activeNodeUrl = candidates.first.url;
+    return _activeNodeUrl;
+  }
+
+  /// Check if a specific node is known to be blocking a routing hash.
+  bool _isNodeBlockingHash(String nodeUrl, String routingHash) {
+    final results = _fetchHistory[routingHash];
+    if (results == null || results.isEmpty) return false;
+
+    final nodeResults = results.where((r) => r.vpsUrl == nodeUrl).toList();
+    if (nodeResults.isEmpty) return false;
+
+    final blocked =
+        nodeResults.where((r) => r.result == FetchResult.blocked).length;
+    return blocked > nodeResults.length / 2;
+  }
+
+  /// Count recent failures for a node (failures in the last 5 minutes).
+  int _countRecentFailures(VpsNodeHealth node) {
+    if (node.lastFailure == null) return 0;
+
+    final cutoff = DateTime.now().subtract(const Duration(minutes: 5));
+    if (node.lastFailure!.isBefore(cutoff)) return 0;
+
+    // Use failure count as a proxy for recent failures.
+    // A more precise implementation would track individual failure timestamps.
+    return node.failureCount;
+  }
+
+  /// Check if an unhealthy node has cooled down and can be retried.
+  bool _hasCooledDown(VpsNodeHealth node) {
+    if (!node.suspectedBlocking) return true;
+    if (node.lastFailure == null) return true;
+
+    final cooldownEnd = node.lastFailure!.add(_unhealthyCooldown);
+    return DateTime.now().isAfter(cooldownEnd);
+  }
+
   /// Reset the health statistics for all nodes.
   /// Useful when the routing hash epoch changes.
   void resetNodeHealth() {

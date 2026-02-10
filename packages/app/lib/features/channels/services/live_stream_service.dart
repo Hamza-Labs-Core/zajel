@@ -4,11 +4,13 @@ import 'dart:typed_data';
 
 import 'package:uuid/uuid.dart';
 
+import '../../../core/logging/logger_service.dart';
 import '../models/channel.dart';
 import '../models/chunk.dart';
 import '../models/live_stream.dart';
 import 'channel_crypto_service.dart';
 import 'channel_service.dart';
+import 'channel_sync_service.dart';
 
 /// Callback type for sending messages over WebSocket.
 typedef StreamWebSocketSender = void Function(Map<String, dynamic> message);
@@ -32,6 +34,7 @@ class LiveStreamService {
   final ChannelCryptoService _cryptoService;
   final ChannelService _channelService;
   final _uuid = const Uuid();
+  final _logger = LoggerService.instance;
 
   /// The currently active stream (if any).
   LiveStreamMetadata? _activeStream;
@@ -251,7 +254,10 @@ class LiveStreamService {
       final frame = LiveStreamFrame.fromJson(frameJson);
       onFrame?.call(frame);
     } catch (e) {
-      // Silently drop malformed frames
+      _logger.debug(
+        'LiveStreamService',
+        'Dropped malformed stream frame: $e (data keys: ${data.keys.toList()})',
+      );
     }
   }
 
@@ -347,6 +353,36 @@ class LiveStreamService {
     }
 
     return allChunks;
+  }
+
+  /// Announce VOD chunks to the sync service so live viewers become seeders.
+  ///
+  /// After [convertToVod] produces chunks, call this method to register them
+  /// with the [syncService]. This makes subscribers who watched the stream live
+  /// (and therefore already have the frame data) available as seeders for
+  /// peers who want to watch the VOD later.
+  ///
+  /// Also stores the chunks locally via [channelService] so they are persisted
+  /// for future seeding across sessions.
+  Future<void> seedVodChunks({
+    required List<Chunk> vodChunks,
+    required ChannelSyncService syncService,
+    required String channelId,
+  }) async {
+    if (vodChunks.isEmpty) return;
+
+    // Store chunks locally
+    await _channelService.saveChunks(channelId, vodChunks);
+
+    // Announce each chunk to the sync service so we become a seeder
+    for (final chunk in vodChunks) {
+      syncService.announceChunk(chunk);
+    }
+
+    _logger.debug(
+      'LiveStreamService',
+      'Seeded ${vodChunks.length} VOD chunks for channel $channelId',
+    );
   }
 
   /// Check if a subscriber already has live stream data that matches VOD chunks.

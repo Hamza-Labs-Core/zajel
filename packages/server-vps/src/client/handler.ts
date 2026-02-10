@@ -15,6 +15,8 @@ import type { DeadDropResult, LiveMatchResult } from '../registry/rendezvous-reg
 import { logger } from '../utils/logger.js';
 
 import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING } from '../constants.js';
+import { ChunkRelay } from './chunk-relay.js';
+import type { Storage } from '../storage/interface.js';
 
 export interface ClientHandlerConfig {
   heartbeatInterval: number;   // Expected heartbeat interval from clients
@@ -206,6 +208,26 @@ interface ChannelOwnerRegisterMessage {
   channelId: string;
 }
 
+// Chunk relay messages
+interface ChunkAnnounceMessage {
+  type: 'chunk_announce';
+  peerId: string;
+  chunks: Array<{ chunkId: string; channelId: string }>;
+}
+
+interface ChunkRequestMessage {
+  type: 'chunk_request';
+  chunkId: string;
+  channelId: string;
+}
+
+interface ChunkPushMessage {
+  type: 'chunk_push';
+  chunkId: string;
+  channelId: string;
+  data: string; // base64-encoded chunk data
+}
+
 // Pending pair request tracking
 interface PendingPairRequest {
   requesterCode: string;
@@ -260,7 +282,10 @@ type ClientMessage =
   | StreamFrameMessage
   | StreamEndMessage
   | ChannelSubscribeMessage
-  | ChannelOwnerRegisterMessage;
+  | ChannelOwnerRegisterMessage
+  | ChunkAnnounceMessage
+  | ChunkRequestMessage
+  | ChunkPushMessage;
 
 export class ClientHandler extends EventEmitter {
   private identity: ServerIdentity;
@@ -328,6 +353,9 @@ export class ClientHandler extends EventEmitter {
   private upstreamRateLimits: Map<WebSocket, RateLimitInfo> = new Map();
   // Upstream message queue for offline owners: channelId -> queued messages
   private upstreamQueues: Map<string, Array<{ data: object; timestamp: number }>> = new Map();
+
+  // Chunk relay service (optional - only initialized when storage is provided)
+  private chunkRelay: ChunkRelay | null = null;
   // Maximum queued upstream messages per channel
   private static readonly MAX_UPSTREAM_QUEUE_SIZE = 100;
   // Upstream rate limit: max messages per window
@@ -339,7 +367,8 @@ export class ClientHandler extends EventEmitter {
     config: ClientHandlerConfig,
     relayRegistry: RelayRegistry,
     distributedRendezvous: DistributedRendezvous,
-    metadata: ServerMetadata = {}
+    metadata: ServerMetadata = {},
+    storage?: Storage
   ) {
     super();
     this.identity = identity;
@@ -352,6 +381,13 @@ export class ClientHandler extends EventEmitter {
     // Initialize configurable timeout values
     this.pairRequestTimeout = config.pairRequestTimeout ?? PAIRING.DEFAULT_REQUEST_TIMEOUT;
     this.pairRequestWarningTime = config.pairRequestWarningTime ?? PAIRING.DEFAULT_REQUEST_WARNING_TIME;
+
+    // Initialize chunk relay if storage is provided
+    if (storage) {
+      this.chunkRelay = new ChunkRelay(storage);
+      this.chunkRelay.setSendCallback((peerId, message) => this.notifyClient(peerId, message));
+      this.chunkRelay.startCleanup();
+    }
 
     // Forward match notifications to clients
     this.distributedRendezvous.on('match', (peerId, match) => {
@@ -589,6 +625,19 @@ export class ClientHandler extends EventEmitter {
 
         case 'channel-owner-register':
           this.handleChannelOwnerRegister(ws, message as ChannelOwnerRegisterMessage);
+          break;
+
+        // Chunk relay messages
+        case 'chunk_announce':
+          await this.handleChunkAnnounce(ws, message as ChunkAnnounceMessage);
+          break;
+
+        case 'chunk_request':
+          await this.handleChunkRequest(ws, message as ChunkRequestMessage);
+          break;
+
+        case 'chunk_push':
+          await this.handleChunkPush(ws, message as ChunkPushMessage);
           break;
 
         case 'update_load':
@@ -1865,6 +1914,149 @@ export class ClientHandler extends EventEmitter {
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // Chunk relay handlers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handle chunk_announce: peer announces it has chunks.
+   */
+  private async handleChunkAnnounce(ws: WebSocket, message: ChunkAnnounceMessage): Promise<void> {
+    if (!this.chunkRelay) {
+      this.sendError(ws, 'Chunk relay not available');
+      return;
+    }
+
+    const { peerId, chunks } = message;
+
+    if (!peerId) {
+      this.sendError(ws, 'Missing required field: peerId');
+      return;
+    }
+
+    if (!chunks || !Array.isArray(chunks) || chunks.length === 0) {
+      this.sendError(ws, 'Missing or empty chunks array');
+      return;
+    }
+
+    // Validate chunk entries
+    for (const chunk of chunks) {
+      if (!chunk.chunkId) {
+        this.sendError(ws, 'Each chunk must have a chunkId');
+        return;
+      }
+    }
+
+    // Register the peer as online for chunk relay
+    this.chunkRelay.registerPeer(peerId, ws);
+
+    const result = await this.chunkRelay.handleAnnounce(peerId, chunks);
+
+    this.send(ws, {
+      type: 'chunk_announce_ack',
+      registered: result.registered,
+    });
+  }
+
+  /**
+   * Handle chunk_request: peer requests a chunk.
+   */
+  private async handleChunkRequest(ws: WebSocket, message: ChunkRequestMessage): Promise<void> {
+    if (!this.chunkRelay) {
+      this.sendError(ws, 'Chunk relay not available');
+      return;
+    }
+
+    const { chunkId, channelId } = message;
+
+    if (!chunkId) {
+      this.sendError(ws, 'Missing required field: chunkId');
+      return;
+    }
+
+    if (!channelId) {
+      this.sendError(ws, 'Missing required field: channelId');
+      return;
+    }
+
+    // Identify the requesting peer
+    const peerId = this.wsToClient.get(ws) || this.wsToPairingCode.get(ws);
+    if (!peerId) {
+      this.sendError(ws, 'Not registered');
+      return;
+    }
+
+    // Register this peer as online for relay purposes
+    this.chunkRelay.registerPeer(peerId, ws);
+
+    const result = await this.chunkRelay.handleRequest(peerId, ws, chunkId, channelId);
+
+    if (result.error) {
+      this.send(ws, {
+        type: 'chunk_error',
+        chunkId,
+        error: result.error,
+      });
+    } else if (!result.served && result.pulling) {
+      // Notify the requester that we're pulling the chunk
+      this.send(ws, {
+        type: 'chunk_pulling',
+        chunkId,
+      });
+    }
+    // If result.served is true, chunk_response was already sent by the relay
+  }
+
+  /**
+   * Handle chunk_push: peer sends chunk data (response to chunk_pull).
+   */
+  private async handleChunkPush(ws: WebSocket, message: ChunkPushMessage): Promise<void> {
+    if (!this.chunkRelay) {
+      this.sendError(ws, 'Chunk relay not available');
+      return;
+    }
+
+    const { chunkId, channelId, data } = message;
+
+    if (!chunkId) {
+      this.sendError(ws, 'Missing required field: chunkId');
+      return;
+    }
+
+    if (!channelId) {
+      this.sendError(ws, 'Missing required field: channelId');
+      return;
+    }
+
+    if (!data) {
+      this.sendError(ws, 'Missing required field: data');
+      return;
+    }
+
+    // Identify the pushing peer
+    const peerId = this.wsToClient.get(ws) || this.wsToPairingCode.get(ws);
+    if (!peerId) {
+      this.sendError(ws, 'Not registered');
+      return;
+    }
+
+    const result = await this.chunkRelay.handlePush(peerId, chunkId, channelId, data);
+
+    this.send(ws, {
+      type: 'chunk_push_ack',
+      chunkId,
+      cached: result.cached,
+      servedCount: result.servedCount,
+    });
+  }
+
+  /**
+   * Get the chunk relay instance (for testing or external access).
+   */
+  getChunkRelay(): ChunkRelay | null {
+    return this.chunkRelay;
+  }
+
   /**
    * Handle WebSocket disconnect
    */
@@ -1971,6 +2163,11 @@ export class ClientHandler extends EventEmitter {
     // Remove from registries
     this.relayRegistry.unregister(peerId);
     await this.distributedRendezvous.unregisterPeer(peerId);
+
+    // Clean up chunk relay for this peer
+    if (this.chunkRelay) {
+      await this.chunkRelay.unregisterPeer(peerId);
+    }
 
     // Clean up mappings
     this.clients.delete(peerId);
@@ -2149,6 +2346,11 @@ export class ClientHandler extends EventEmitter {
     this.channelSubscribers.clear();
     this.activeStreams.clear();
     this.upstreamQueues.clear();
+
+    // Shutdown chunk relay
+    if (this.chunkRelay) {
+      this.chunkRelay.shutdown();
+    }
 
     // Close all relay clients
     for (const [peerId, client] of this.clients) {

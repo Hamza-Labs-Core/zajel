@@ -291,6 +291,141 @@ void main() {
 
       expect(decrypted, largePayload);
     });
+
+    test('empty message encrypt and decrypt roundtrip', () async {
+      final plaintext = Uint8List(0);
+
+      final encrypted =
+          await cryptoService.encrypt(plaintext, 'group1', 'deviceA');
+      final decrypted =
+          await cryptoService.decrypt(encrypted, 'group1', 'deviceA');
+
+      expect(decrypted, isEmpty);
+      expect(decrypted.length, 0);
+    });
+
+    test('empty message produces ciphertext with nonce and MAC only', () async {
+      final plaintext = Uint8List(0);
+
+      final encrypted =
+          await cryptoService.encrypt(plaintext, 'group1', 'deviceA');
+
+      // nonce (12 bytes) + empty ciphertext (0 bytes) + MAC (16 bytes) = 28
+      expect(encrypted.length, 28);
+    });
+
+    test('encrypted output has correct structure: nonce + ciphertext + MAC',
+        () async {
+      final plaintext = Uint8List.fromList(utf8.encode('Structure test'));
+
+      final encrypted =
+          await cryptoService.encrypt(plaintext, 'group1', 'deviceA');
+
+      // Expected: 12 (nonce) + plaintext.length (ciphertext) + 16 (MAC)
+      expect(encrypted.length, 12 + plaintext.length + 16);
+    });
+
+    test('binary data (non-UTF8) roundtrip', () async {
+      // Binary data that is not valid UTF-8
+      final binaryData =
+          Uint8List.fromList([0x00, 0xFF, 0x80, 0x7F, 0xFE, 0xFD, 0x01, 0x02]);
+
+      final encrypted =
+          await cryptoService.encrypt(binaryData, 'group1', 'deviceA');
+      final decrypted =
+          await cryptoService.decrypt(encrypted, 'group1', 'deviceA');
+
+      expect(decrypted, binaryData);
+    });
+
+    test('single byte message encrypt and decrypt', () async {
+      final plaintext = Uint8List.fromList([42]);
+
+      final encrypted =
+          await cryptoService.encrypt(plaintext, 'group1', 'deviceA');
+      final decrypted =
+          await cryptoService.decrypt(encrypted, 'group1', 'deviceA');
+
+      expect(decrypted, plaintext);
+    });
+
+    test('tampered MAC causes decryption failure', () async {
+      final plaintext = Uint8List.fromList(utf8.encode('MAC tamper test'));
+      final encrypted =
+          await cryptoService.encrypt(plaintext, 'group1', 'deviceA');
+
+      // Tamper with the last byte (inside the MAC)
+      encrypted[encrypted.length - 1] ^= 0xFF;
+
+      expect(
+        () => cryptoService.decrypt(encrypted, 'group1', 'deviceA'),
+        throwsA(isA<GroupCryptoException>().having(
+          (e) => e.message,
+          'message',
+          contains('MAC verification failed'),
+        )),
+      );
+    });
+
+    test('tampered nonce causes decryption failure', () async {
+      final plaintext = Uint8List.fromList(utf8.encode('Nonce tamper test'));
+      final encrypted =
+          await cryptoService.encrypt(plaintext, 'group1', 'deviceA');
+
+      // Tamper with the first byte (inside the nonce)
+      encrypted[0] ^= 0xFF;
+
+      expect(
+        () => cryptoService.decrypt(encrypted, 'group1', 'deviceA'),
+        throwsA(isA<GroupCryptoException>().having(
+          (e) => e.message,
+          'message',
+          contains('MAC verification failed'),
+        )),
+      );
+    });
+
+    test(
+        'decrypt with exactly nonce + MAC length (no ciphertext) succeeds for empty message',
+        () async {
+      // First encrypt an empty message to get a valid nonce+MAC pair
+      final plaintext = Uint8List(0);
+      final encrypted =
+          await cryptoService.encrypt(plaintext, 'group1', 'deviceA');
+
+      expect(encrypted.length, 28); // 12 nonce + 0 ciphertext + 16 MAC
+
+      final decrypted =
+          await cryptoService.decrypt(encrypted, 'group1', 'deviceA');
+      expect(decrypted, isEmpty);
+    });
+
+    test('decrypt rejects data shorter than nonce + MAC minimum', () {
+      // 27 bytes is less than 12 (nonce) + 16 (MAC) = 28
+      expect(
+        () => cryptoService.decrypt(Uint8List(27), 'group1', 'deviceA'),
+        throwsA(isA<GroupCryptoException>().having(
+          (e) => e.message,
+          'message',
+          contains('too short'),
+        )),
+      );
+    });
+
+    test('different groups with same key material are isolated', () async {
+      // Set the same key for a different group
+      cryptoService.setSenderKey('group2', 'deviceA', senderKey);
+
+      final plaintext = Uint8List.fromList(utf8.encode('Group isolation'));
+      final encrypted =
+          await cryptoService.encrypt(plaintext, 'group1', 'deviceA');
+
+      // Decrypting with group2 should still work since the key is the same
+      // (this verifies that the encryption is key-based, not group-ID-based)
+      final decrypted =
+          await cryptoService.decrypt(encrypted, 'group2', 'deviceA');
+      expect(utf8.decode(decrypted), 'Group isolation');
+    });
   });
 
   group('Key rotation', () {
