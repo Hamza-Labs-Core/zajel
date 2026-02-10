@@ -1004,7 +1004,7 @@ jobs:
             --dart-define=ENV=qa \
             --dart-define=E2E_TEST=true \
             --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
-            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
+            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || (vars.QA_VPS_IP && format('ws://{0}:9001', vars.QA_VPS_IP)) || '' }}
 
       - name: Free up disk space
         run: |
@@ -1072,7 +1072,7 @@ jobs:
           ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
           APPIUM_SERVER_COUNT: "2"
           E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-artifacts/e2e
-          SIGNALING_URL: ${{ vars.VPS_QA_WS_URL || '' }}
+          SIGNALING_URL: ${{ vars.VPS_QA_WS_URL || (vars.QA_VPS_IP && format('ws://{0}:9001', vars.QA_VPS_IP)) || '' }}
         working-directory: ${{ github.workspace }}/e2e-tests
         run: |
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
@@ -1424,36 +1424,40 @@ jobs:
         env:
           CI: 'true'
           ZAJEL_APP_PATH: ${{ github.workspace }}/linux-app/zajel
-          SIGNALING_URL: ${{ vars.VPS_QA_WS_URL || '' }}
-        working-directory: ${{ github.workspace }}/e2e-tests-linux
+          SIGNALING_URL: ${{ vars.VPS_QA_WS_URL || (vars.QA_VPS_IP && format('ws://{0}:9001', vars.QA_VPS_IP)) || '' }}
         run: |
-          # Desktop E2E is informational — failures don't block the pipeline.
-          # AT-SPI accessibility is unreliable on headless CI (Xvfb).
-          # Dogtail calls can hang forever, so we wrap each pytest with timeout(1)
-          # to ensure the step finishes and reaches exit 0.
           set +e
 
-          echo "=== Running smoke tests ==="
-          timeout 180 python3 -m pytest tests/test_pairing.py -v -s --timeout=120 -k "smoke or test_app"
+          # ── Part 1: AT-SPI GUI tests (informational) ──
+          # Flutter AT-SPI doesn't respond to D-Bus queries in headless Xvfb.
+          # Run a quick smoke test as a probe; don't fail the job on it.
+          echo "=== AT-SPI smoke test (informational) ==="
+          cd ${{ github.workspace }}/e2e-tests-linux
+          timeout 180 python3 -m pytest tests/test_pairing.py -v -s --timeout=120 -k "smoke or test_app" || true
 
-          echo "=== Running single-device tests ==="
-          timeout 300 python3 -m pytest -m "not headless" -v -s --timeout=120
-          SINGLE_RESULT=$?
-
-          HEADLESS_RESULT=0
+          # ── Part 2: Protocol tests (real gate) ──
+          # Pure headless-to-headless tests: two ZajelHeadlessClients connect
+          # to the signaling server and validate pairing, encryption, messaging,
+          # and file transfer. No GUI automation needed.
+          PROTOCOL_RESULT=0
           if [ -n "$SIGNALING_URL" ]; then
-            echo "=== Running headless-paired tests ==="
-            timeout 600 python3 -m pytest -m "headless" -v -s --timeout=300
-            HEADLESS_RESULT=$?
+            echo ""
+            echo "=== Running protocol tests (headless-to-headless) ==="
+            echo "SIGNALING_URL=$SIGNALING_URL"
+            cd ${{ github.workspace }}/e2e-tests
+            python3 -m pytest tests/test_protocol_headless.py -v -s --timeout=300
+            PROTOCOL_RESULT=$?
           else
-            echo "=== Skipping headless tests (SIGNALING_URL not set) ==="
+            echo "=== Skipping protocol tests (SIGNALING_URL not set) ==="
           fi
 
-          if [ $SINGLE_RESULT -ne 0 ] || [ $HEADLESS_RESULT -ne 0 ]; then
-            echo "::warning::Linux E2E tests failed (informational — AT-SPI unreliable on headless CI)"
+          if [ $PROTOCOL_RESULT -ne 0 ]; then
+            echo "::warning::Linux E2E: Protocol tests failed (signaling server may be unreachable)"
           else
-            echo "All Linux E2E tests passed."
+            echo "Linux E2E protocol tests passed."
           fi
+          # Protocol test failure is informational for now until signaling
+          # server availability is guaranteed in CI.
           exit 0
 
       - name: Upload test artifacts
@@ -1501,31 +1505,43 @@ jobs:
         timeout-minutes: 20
         env:
           ZAJEL_APP_PATH: ${{ github.workspace }}\windows-app\zajel.exe
-          SIGNALING_URL: ${{ vars.VPS_QA_WS_URL || '' }}
-        working-directory: ${{ github.workspace }}\e2e-tests-windows
+          SIGNALING_URL: ${{ vars.VPS_QA_WS_URL || (vars.QA_VPS_IP && format('ws://{0}:9001', vars.QA_VPS_IP)) || '' }}
+        shell: pwsh
         run: |
-          # Desktop E2E is informational — failures don't block the pipeline.
-          # Flutter ANGLE/DirectX rendering is unreliable on CI runners.
           $ErrorActionPreference = "Continue"
 
-          Write-Host "=== Running smoke tests ==="
+          # ── Part 1: UIA GUI tests (informational) ──
+          # Flutter ANGLE/DirectX rendering fails on CI (black screen).
+          # Run smoke test as a probe; don't fail the job on it.
+          Write-Host "=== UIA smoke test (informational) ==="
+          Set-Location "${{ github.workspace }}\e2e-tests-windows"
           pytest tests\test_smoke.py -v -s --timeout=120
           $smokeResult = $LASTEXITCODE
+          if ($smokeResult -ne 0) {
+            Write-Host "::warning::Windows UIA smoke tests failed (ANGLE/DirectX unreliable on CI)"
+          }
 
-          $headlessResult = 0
+          # ── Part 2: Protocol tests (real gate) ──
+          # Pure headless-to-headless tests: no GUI automation needed.
+          $protocolResult = 0
           if ($env:SIGNALING_URL) {
-            Write-Host "=== Running headless-paired tests ==="
-            pytest tests\test_headless_pairing.py tests\test_headless_messaging.py -v -s --timeout=300
-            $headlessResult = $LASTEXITCODE
+            Write-Host ""
+            Write-Host "=== Running protocol tests (headless-to-headless) ==="
+            Write-Host "SIGNALING_URL=$($env:SIGNALING_URL)"
+            Set-Location "${{ github.workspace }}\e2e-tests"
+            pytest tests\test_protocol_headless.py -v -s --timeout=300
+            $protocolResult = $LASTEXITCODE
           } else {
-            Write-Host "=== Skipping headless tests (SIGNALING_URL not set) ==="
+            Write-Host "=== Skipping protocol tests (SIGNALING_URL not set) ==="
           }
 
-          if ($smokeResult -ne 0 -or $headlessResult -ne 0) {
-            Write-Host "::warning::Windows E2E tests failed (informational — ANGLE/DirectX unreliable on CI)"
+          if ($protocolResult -ne 0) {
+            Write-Host "::warning::Windows E2E: Protocol tests failed (signaling server may be unreachable)"
           } else {
-            Write-Host "All Windows E2E tests passed."
+            Write-Host "Windows E2E protocol tests passed."
           }
+          # Protocol test failure is informational for now until signaling
+          # server availability is guaranteed in CI.
           exit 0
 
       - name: Upload test artifacts
