@@ -1,0 +1,1658 @@
+name: PR Pipeline - E2E Tests
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      skip_e2e:
+        description: 'Skip E2E tests'
+        required: false
+        default: 'false'
+        type: boolean
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.38.5'
+  NODE_VERSION: '20'
+  # Version will be computed from latest release in determine-version job
+
+jobs:
+  # ============================================
+  # Determine version from latest release
+  # ============================================
+  determine-version:
+    name: Determine Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Get latest release and compute version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Get latest release tag
+          LATEST=$(gh release view --repo ${{ github.repository }} --json tagName -q '.tagName' 2>/dev/null || echo "v0.0.0")
+          echo "Latest release: $LATEST"
+
+          # Strip 'v' prefix and extract major.minor.patch
+          LATEST_VERSION="${LATEST#v}"
+
+          # Parse version components
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_VERSION"
+          MAJOR=${MAJOR:-0}
+          MINOR=${MINOR:-0}
+          PATCH=${PATCH:-0}
+
+          # Increment patch for pre-release
+          NEXT_PATCH=$((PATCH + 1))
+
+          # Create pre-release version: X.Y.Z-build.NNNN
+          # Zero-pad build number to 4 digits for proper semver sorting
+          BUILD_NUM=$(printf "%04d" ${{ github.run_number }})
+          VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}-build.${BUILD_NUM}"
+
+          echo "Computed version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+  # ============================================
+  # PHASE 1: Tests
+  # ============================================
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        working-directory: packages/app
+        run: flutter pub get
+
+      - name: Analyze code
+        working-directory: packages/app
+        run: flutter analyze --no-fatal-infos
+
+      - name: Run unit tests
+        working-directory: packages/app
+        run: flutter test test/
+
+  server-tests:
+    name: Server Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Test server-vps
+        working-directory: packages/server-vps
+        run: |
+          npm ci
+          npm test -- --run
+
+      - name: Test server (CF)
+        working-directory: packages/server
+        run: |
+          npm ci
+          npm test -- --run
+
+  headless-client-tests:
+    name: Headless Client Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install headless client
+        run: pip install -e packages/headless-client[dev]
+
+      - name: Run tests
+        run: pytest packages/headless-client/tests/ -v --timeout=30
+
+  phase-1-tests:
+    name: "✓ Phase 1: Tests"
+    needs: [unit-tests, server-tests, headless-client-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "All tests passed"
+
+  # ============================================
+  # PHASE 2: Tag Pre-release
+  # ============================================
+  tag-prerelease:
+    name: Tag Pre-release
+    needs: [determine-version, phase-1-tests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.determine-version.outputs.version }}
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ needs.determine-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create pre-release tag
+        id: tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Configure git identity for tagging
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          TAG="v${{ env.VERSION }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          # Delete existing tag if present (for re-runs)
+          git push origin :refs/tags/$TAG 2>/dev/null || true
+
+          # Create and push tag
+          git tag -a $TAG -m "Pre-release for PR #${{ github.event.pull_request.number || 'manual' }}"
+          git push origin $TAG
+
+          echo "Created tag: $TAG"
+
+  phase-2-tag:
+    name: "✓ Phase 2: Tag"
+    needs: [tag-prerelease]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Tag created - ${{ needs.tag-prerelease.outputs.tag }}"
+
+  # ============================================
+  # PHASE 3: Builds & Server Deployments (parallel)
+  # ============================================
+  build-android:
+    name: Build Android
+    needs: [tag-prerelease]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        working-directory: packages/app
+        run: flutter pub get
+
+      - name: Build APK with QA config
+        working-directory: packages/app
+        run: |
+          flutter build apk --release \
+            --dart-define=ENV=qa \
+            --dart-define=VERSION=${{ env.VERSION }} \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
+            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }} \
+            --dart-define=E2E_TEST=true
+
+          mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/zajel-${{ env.VERSION }}-android.apk
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build
+          path: packages/app/build/app/outputs/flutter-apk/zajel-${{ env.VERSION }}-android.apk
+          retention-days: 1
+
+  # ----------------------------------------
+  # Build iOS
+  # ----------------------------------------
+  build-ios:
+    name: Build iOS
+    needs: [tag-prerelease]
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        working-directory: packages/app
+        run: flutter pub get
+
+      - name: Build iOS (no codesign)
+        working-directory: packages/app
+        run: |
+          flutter build ios --release --no-codesign \
+            --dart-define=ENV=qa \
+            --dart-define=VERSION=${{ env.VERSION }} \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
+            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
+
+          # Create IPA-like archive for distribution
+          cd build/ios/iphoneos
+          mkdir Payload
+          cp -r Runner.app Payload/
+          zip -r zajel-${{ env.VERSION }}-ios.ipa Payload
+          mv zajel-${{ env.VERSION }}-ios.ipa ../../../
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build
+          path: packages/app/zajel-${{ env.VERSION }}-ios.ipa
+          retention-days: 1
+
+  # ----------------------------------------
+  # Build Linux
+  # ----------------------------------------
+  build-linux:
+    name: Build Linux
+    needs: [tag-prerelease]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libsecret-1-dev libjsoncpp-dev
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Enable Linux desktop
+        working-directory: packages/app
+        run: |
+          flutter config --enable-linux-desktop
+          flutter create --platforms=linux . || true
+
+      - name: Install dependencies
+        working-directory: packages/app
+        run: flutter pub get
+
+      - name: Build Linux
+        working-directory: packages/app
+        run: |
+          flutter build linux --release \
+            --dart-define=ENV=qa \
+            --dart-define=VERSION=${{ env.VERSION }} \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
+            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }} \
+            --dart-define=E2E_TEST=true
+
+          cd build/linux/x64/release/bundle
+          tar -czvf zajel-${{ env.VERSION }}-linux-x64.tar.gz *
+          mv zajel-${{ env.VERSION }}-linux-x64.tar.gz ../../../../../
+
+      # NOTE: Linux E2E runs in the e2e-linux job with ALSA→PulseAudio routing
+      # and software rendering to handle headless CI (no GPU, no audio device).
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: packages/app/zajel-${{ env.VERSION }}-linux-x64.tar.gz
+          retention-days: 1
+
+  # ----------------------------------------
+  # Build macOS
+  # ----------------------------------------
+  build-macos:
+    name: Build macOS
+    needs: [tag-prerelease]
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Enable macOS desktop and prepare
+        working-directory: packages/app
+        run: |
+          flutter config --enable-macos-desktop
+          flutter create --platforms=macos . || true
+
+      - name: Install dependencies
+        working-directory: packages/app
+        run: flutter pub get
+
+      - name: Build macOS
+        working-directory: packages/app
+        run: |
+          flutter build macos --release \
+            --dart-define=ENV=qa \
+            --dart-define=VERSION=${{ env.VERSION }} \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
+            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
+
+          cd build/macos/Build/Products/Release
+          zip -r zajel-${{ env.VERSION }}-macos.zip zajel.app
+          mv zajel-${{ env.VERSION }}-macos.zip ../../../../../
+
+      # NOTE: macOS smoke test skipped - WebRTC may crash on headless CI runners
+      # due to sandbox/entitlement issues with audio/camera access. The build
+      # success validates the binary. Android E2E tests verify full app launch.
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: packages/app/zajel-${{ env.VERSION }}-macos.zip
+          retention-days: 1
+
+  # ----------------------------------------
+  # Build Windows
+  # ----------------------------------------
+  build-windows:
+    name: Build Windows
+    needs: [tag-prerelease]
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install OpenSSL
+        run: |
+          # Install OpenSSL with development files (no pinned version - use latest available)
+          choco install openssl -y --no-progress
+
+          # Find the installed OpenSSL directory
+          $opensslRoot = "C:\Program Files\OpenSSL-Win64"
+          if (-not (Test-Path $opensslRoot)) {
+            $opensslRoot = "C:\Program Files\OpenSSL"
+          }
+
+          # Find the lib directory - structure varies by version
+          $libDir = $null
+          $searchPaths = @(
+            "$opensslRoot\lib\VC\x64\MD",
+            "$opensslRoot\lib\VC\x64",
+            "$opensslRoot\lib"
+          )
+          foreach ($path in $searchPaths) {
+            if (Test-Path "$path\libssl.lib") {
+              $libDir = $path
+              break
+            }
+          }
+
+          if ($libDir -eq $null) {
+            Write-Host "ERROR: Could not find OpenSSL libraries"
+            dir "$opensslRoot" -Recurse | Where-Object { $_.Name -like "*.lib" }
+            exit 1
+          }
+
+          Write-Host "Found OpenSSL libs in: $libDir"
+          echo "OPENSSL_ROOT_DIR=$opensslRoot" >> $env:GITHUB_ENV
+          echo "OPENSSL_INCLUDE_DIR=$opensslRoot\include" >> $env:GITHUB_ENV
+          echo "OPENSSL_CRYPTO_LIBRARY=$libDir\libcrypto.lib" >> $env:GITHUB_ENV
+          echo "OPENSSL_SSL_LIBRARY=$libDir\libssl.lib" >> $env:GITHUB_ENV
+
+          # Verify the files exist
+          dir "$libDir\*.lib"
+          dir "$opensslRoot\include\openssl\" | Select-Object -First 5
+
+      - name: Enable Windows desktop
+        working-directory: packages/app
+        run: flutter config --enable-windows-desktop
+
+      - name: Install dependencies
+        working-directory: packages/app
+        run: flutter pub get
+
+      - name: Build Windows
+        working-directory: packages/app
+        run: |
+          flutter build windows --release `
+            --dart-define=ENV=qa `
+            --dart-define=VERSION=${{ env.VERSION }} `
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} `
+            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }} `
+            --dart-define=E2E_TEST=true
+
+          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath zajel-${{ env.VERSION }}-windows.zip
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: packages/app/zajel-${{ env.VERSION }}-windows.zip
+          retention-days: 1
+
+  # ----------------------------------------
+  # Build Web
+  # ----------------------------------------
+  build-web:
+    name: Build Web
+    needs: [tag-prerelease]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        working-directory: packages/app
+        run: flutter pub get
+
+      - name: Build Web
+        working-directory: packages/app
+        run: |
+          flutter build web --release \
+            --dart-define=ENV=qa \
+            --dart-define=VERSION=${{ env.VERSION }} \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
+            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
+
+          cd build/web
+          zip -r zajel-${{ env.VERSION }}-web.zip *
+          mv zajel-${{ env.VERSION }}-web.zip ../../
+
+      - name: Smoke test - serve web app
+        working-directory: packages/app
+        run: |
+          # Serve the web build briefly and check it returns valid HTML
+          cd build/web
+          python3 -m http.server 8080 &
+          SERVER_PID=$!
+          sleep 2
+
+          # Check that the app serves index.html with Flutter content
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/)
+          BODY=$(curl -s http://localhost:8080/)
+
+          kill $SERVER_PID 2>/dev/null || true
+
+          if [ "$HTTP_CODE" = "200" ] && echo "$BODY" | grep -q "flutter"; then
+            echo "Web smoke test passed (app serves correctly)"
+          else
+            echo "Web smoke test FAILED (HTTP $HTTP_CODE)"
+            exit 1
+          fi
+
+      - name: Upload Web artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: packages/app/zajel-${{ env.VERSION }}-web.zip
+          retention-days: 1
+
+  # Phase 3 gate - after all builds and deployments
+  phase-3-build-deploy:
+    name: "✓ Phase 3: Build & Deploy"
+    # Note: deploy-vps removed from dependencies - VPS deployment failures should not block pipeline
+    # E2E tests now run on GitHub Actions runners with hardware-accelerated emulators
+    needs: [build-android, build-ios, build-linux, build-macos, build-windows, build-web, deploy-cf-signaling, deploy-cf-admin, deploy-cf-website]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "All builds and deployments completed"
+
+  # ============================================
+  # PHASE 4: Release & APK Deployment
+  # ============================================
+  create-prerelease:
+    name: Create GitHub Pre-release
+    needs: [phase-3-build-deploy, tag-prerelease]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Generate changelog
+        id: changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Use PR description as changelog (summarized changes, not commit list)
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+
+          echo "## What's Changed" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+
+          if [ -n "$PR_NUMBER" ]; then
+            # Get PR body (which should contain a summary of changes)
+            PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body // empty' 2>/dev/null || echo "")
+            if [ -n "$PR_BODY" ]; then
+              # Extract just the Summary section if it exists, otherwise use full body
+              echo "$PR_BODY" | sed -n '/^## Summary/,/^## /p' | head -n -1 >> CHANGELOG.md 2>/dev/null || echo "$PR_BODY" >> CHANGELOG.md
+            else
+              echo "Pre-release build for PR #$PR_NUMBER" >> CHANGELOG.md
+            fi
+          else
+            echo "Manual pre-release build" >> CHANGELOG.md
+          fi
+
+          echo "" >> CHANGELOG.md
+          echo "---" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "### Build Info" >> CHANGELOG.md
+          echo "- **Version:** ${{ env.VERSION }}" >> CHANGELOG.md
+          echo "- **PR:** #${{ github.event.pull_request.number }}" >> CHANGELOG.md
+          echo "- **Branch:** ${{ github.head_ref }}" >> CHANGELOG.md
+          echo "- **Commit:** \`${{ github.sha }}\`" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "### Downloads" >> CHANGELOG.md
+          echo "| Platform | File |" >> CHANGELOG.md
+          echo "|----------|------|" >> CHANGELOG.md
+          echo "| Android | zajel-${{ env.VERSION }}-android.apk |" >> CHANGELOG.md
+          echo "| iOS | zajel-${{ env.VERSION }}-ios.ipa |" >> CHANGELOG.md
+          echo "| Linux | zajel-${{ env.VERSION }}-linux-x64.tar.gz |" >> CHANGELOG.md
+          echo "| macOS | zajel-${{ env.VERSION }}-macos.zip |" >> CHANGELOG.md
+          echo "| Windows | zajel-${{ env.VERSION }}-windows.zip |" >> CHANGELOG.md
+          echo "| Web | zajel-${{ env.VERSION }}-web.zip |" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "> ⚠️ **Pre-release:** This is a test build for PR #${{ github.event.pull_request.number }}. Not for production use." >> CHANGELOG.md
+
+          cat CHANGELOG.md
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+
+          # Move all artifacts to release-assets with proper names
+          find ./artifacts -type f \( -name "*.apk" -o -name "*.ipa" -o -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} ./release-assets/ \;
+
+          ls -la release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.tag-prerelease.outputs.tag }}
+          name: "Pre-release ${{ needs.tag-prerelease.outputs.tag }}"
+          body_path: CHANGELOG.md
+          prerelease: true
+          files: |
+            release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup old pre-releases (keep latest 5)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Fetching all pre-releases..."
+          PRERELEASES=$(gh release list --limit 100 --json tagName,isPrerelease,createdAt \
+            --jq '[.[] | select(.isPrerelease)] | sort_by(.createdAt) | reverse | .[5:] | .[].tagName')
+
+          if [ -z "$PRERELEASES" ]; then
+            echo "No old pre-releases to clean up (5 or fewer exist)"
+            exit 0
+          fi
+
+          echo "Deleting old pre-releases:"
+          for TAG in $PRERELEASES; do
+            echo "  Deleting $TAG..."
+            gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          done
+          echo "Cleanup complete"
+
+  # ============================================
+  # PHASE 3: Deploy to QA Environment (parallel with builds)
+  # ============================================
+  deploy-cf-signaling:
+    name: Deploy CF Signaling
+    needs: [tag-prerelease]
+    runs-on: ubuntu-latest
+    environment: qa
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy signaling server
+        id: deploy-signaling
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/server
+          command: deploy -c wrangler.jsonc --env qa
+
+      - name: Verify deployment
+        run: |
+          echo "Waiting for deployment to propagate..."
+          sleep 10
+
+          # Get URL from deployment output
+          DEPLOY_URL="${{ steps.deploy-signaling.outputs.deployment-url }}"
+          if [ -z "$DEPLOY_URL" ]; then
+            echo "No deployment URL found, skipping health check"
+            exit 0
+          fi
+
+          echo "Checking health at: $DEPLOY_URL"
+          for i in {1..5}; do
+            if curl -sf "$DEPLOY_URL/health"; then
+              echo "Signaling server healthy"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying..."
+            sleep 5
+          done
+          echo "Warning: Health check failed, continuing anyway"
+
+  deploy-cf-admin:
+    name: Deploy CF Admin
+    needs: [tag-prerelease]
+    runs-on: ubuntu-latest
+    environment: qa
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy admin dashboard
+        id: deploy-admin
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/admin-cf
+          command: deploy -c wrangler.jsonc --env qa
+        env:
+          APP_VERSION: ${{ env.VERSION }}
+
+      - name: Verify deployment
+        run: |
+          echo "Waiting for deployment to propagate..."
+          sleep 10
+
+          DEPLOY_URL="${{ steps.deploy-admin.outputs.deployment-url }}"
+          if [ -z "$DEPLOY_URL" ]; then
+            echo "No deployment URL found, skipping health check"
+            exit 0
+          fi
+
+          echo "Checking health at: $DEPLOY_URL"
+          for i in {1..5}; do
+            RESPONSE=$(curl -sf "$DEPLOY_URL/health" || echo '{}')
+            if echo "$RESPONSE" | grep -q "healthy"; then
+              echo "Admin server healthy: $RESPONSE"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying..."
+            sleep 5
+          done
+          echo "Warning: Health check failed, continuing anyway"
+
+  deploy-cf-website:
+    name: Deploy CF Website
+    needs: [tag-prerelease]
+    runs-on: ubuntu-latest
+    environment: qa
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        working-directory: packages/website
+        run: npm ci
+
+      - name: Build website
+        working-directory: packages/website
+        run: npm run build
+
+      - name: Deploy website
+        id: deploy-website
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/website
+          command: deploy -c wrangler.jsonc --env qa
+
+      - name: Verify deployment
+        run: |
+          echo "Waiting for deployment to propagate..."
+          sleep 10
+
+          DEPLOY_URL="${{ steps.deploy-website.outputs.deployment-url }}"
+          if [ -z "$DEPLOY_URL" ]; then
+            echo "No deployment URL found, skipping health check"
+            exit 0
+          fi
+
+          echo "Checking deployment at: $DEPLOY_URL"
+          for i in {1..5}; do
+            if curl -sf "$DEPLOY_URL" > /dev/null; then
+              echo "Website deployed successfully"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying..."
+            sleep 5
+          done
+          echo "Warning: Health check failed, continuing anyway"
+
+  deploy-vps:
+    name: Deploy QA VPS
+    needs: [tag-prerelease]
+    runs-on: ubuntu-latest
+    environment: qa
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: packages/server-vps/package-lock.json
+
+      - name: Build server
+        working-directory: packages/server-vps
+        run: |
+          npm ci
+          npm run build
+
+      - name: Acquire deployment lock
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ vars.QA_VPS_IP }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            LOCK_FILE="/tmp/zajel-deploy.lock"
+
+            # Check for test lock (wait up to 5 minutes)
+            for i in {1..30}; do
+              if [ ! -f "/tmp/zajel-e2e.lock" ]; then
+                break
+              fi
+              echo "Waiting for E2E tests to complete... ($i/30)"
+              sleep 10
+            done
+
+            # Create deployment lock
+            echo "PR-${{ github.event.pull_request.number }}-${{ github.run_id }}" > $LOCK_FILE
+
+      - name: Deploy to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ vars.QA_VPS_IP }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          source: "packages/server-vps/dist/*,packages/server-vps/package*.json,packages/server-vps/migrations/*"
+          target: "/opt/zajel/server-vps-qa"
+          strip_components: 2
+
+      - name: Start server
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          APP_VERSION: ${{ needs.tag-prerelease.outputs.version }}
+          BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL }}
+        with:
+          host: ${{ vars.QA_VPS_IP }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          envs: APP_VERSION,BOOTSTRAP_URL
+          script: |
+            set -e
+
+            # Install Node.js if not present
+            if ! command -v node &> /dev/null; then
+              echo "Installing Node.js..."
+              curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+              sudo apt-get install -y nodejs
+            fi
+
+            # Install pm2 if not present
+            if ! command -v pm2 &> /dev/null; then
+              echo "Installing pm2..."
+              sudo npm install -g pm2
+            fi
+
+            # Create deployment directory
+            sudo mkdir -p /opt/zajel/server-vps-qa
+            sudo chown -R $USER:$USER /opt/zajel
+
+            cd /opt/zajel/server-vps-qa
+
+            # Install dependencies
+            npm ci --omit=dev
+
+            # Create QA startup script with env vars
+            PUBLIC_IP=$(curl -sf http://checkip.amazonaws.com || curl -sf http://ifconfig.me || echo "localhost")
+            cat > start-qa.sh << EOF
+            #!/bin/bash
+            export ZAJEL_PORT=9001
+            export ZAJEL_KEY_PATH=./data-qa/server.key
+            export ZAJEL_DB_PATH=./data-qa/zajel.db
+            export ZAJEL_PUBLIC_ENDPOINT=ws://${PUBLIC_IP}:9001
+            export ZAJEL_REGION=qa
+            export ZAJEL_BOOTSTRAP_URL=${BOOTSTRAP_URL}
+            export NODE_ENV=qa
+            export APP_VERSION=${APP_VERSION}
+            cd /opt/zajel/server-vps-qa
+            exec node dist/index.js
+            EOF
+            chmod +x start-qa.sh
+
+            mkdir -p data-qa
+
+            # Stop existing QA server
+            pm2 delete zajel-server-qa 2>/dev/null || true
+
+            # Start QA server
+            pm2 start start-qa.sh --name zajel-server-qa --interpreter bash
+            pm2 save
+
+            # Health check
+            sleep 5
+            for i in {1..6}; do
+              if curl -sf http://localhost:9001/health | grep -q "healthy"; then
+                echo "Server healthy"
+                exit 0
+              fi
+              echo "Waiting for server... ($i/6)"
+              sleep 5
+            done
+
+            echo "Health check failed"
+            pm2 logs zajel-server-qa --lines 50 --nostream
+            exit 1
+
+      - name: Release deployment lock
+        if: always()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ vars.QA_VPS_IP }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            rm -f /tmp/zajel-deploy.lock
+
+  # ============================================
+  # PHASE 5: E2E Tests (Ubuntu with KVM-accelerated emulator)
+  # ============================================
+  e2e-tests:
+    name: E2E Tests
+    needs: [unit-tests]
+    # Run on PR events always, and on workflow_dispatch unless skip_e2e is true
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
+    runs-on: ubuntu-latest-4-cores
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Enable KVM for hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Appium
+        run: |
+          npm install -g appium
+          appium driver install uiautomator2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: e2e-tests/requirements.txt
+
+      - name: Install E2E dependencies
+        run: |
+          pip install -r e2e-tests/requirements.txt
+          pip install -e packages/headless-client
+
+      - name: Resolve signaling URL
+        run: |
+          URL="${{ vars.VPS_QA_WS_URL }}"
+          if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
+            IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
+            for ip in "${IPS[@]}"; do
+              ip=$(echo "$ip" | tr -d ' ')
+              echo "Probing VPS at $ip:9001..."
+              if timeout 10 curl -sf "http://${ip}:9001/health" >/dev/null 2>&1; then
+                URL="ws://${ip}:9001"
+                echo "Reachable and healthy: $ip:9001"
+                break
+              else
+                echo "Not reachable: $ip:9001"
+              fi
+            done
+            if [ -z "$URL" ]; then
+              echo "::warning::No VPS signaling server reachable — protocol tests will be skipped"
+            fi
+          fi
+          echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
+          echo "Resolved SIGNALING_URL=${URL:-<empty>}"
+
+      - name: Build E2E APK
+        working-directory: packages/app
+        run: |
+          flutter pub get
+          flutter build apk --release \
+            --dart-define=ENV=qa \
+            --dart-define=E2E_TEST=true \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
+            --dart-define=SIGNALING_URL=${{ env.SIGNALING_URL }}
+
+      - name: Free up disk space
+        run: |
+          echo "Disk space before cleanup:"
+          df -h /
+          # Remove unnecessary large packages to free ~20GB
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android/sdk/ndk
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/lib/android/sdk/build-tools/33*
+          sudo rm -rf /usr/local/lib/android/sdk/build-tools/34*
+          sudo rm -rf /usr/share/swift
+          sudo rm -rf /usr/local/graalvm
+          # Clean docker
+          docker system prune -af || true
+          echo "Disk space after cleanup:"
+          df -h /
+
+      - name: Create and start emulators
+        timeout-minutes: 10
+        env:
+          ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
+        run: |
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+
+          mkdir -p "$ANDROID_AVD_HOME"
+
+          echo "Installing system image..."
+          yes | sdkmanager "system-images;android-31;google_apis;x86_64" --channel=0
+
+          echo "Creating AVDs..."
+          echo "no" | avdmanager create avd -n test-avd-1 -k "system-images;android-31;google_apis;x86_64" --force
+          echo "no" | avdmanager create avd -n test-avd-2 -k "system-images;android-31;google_apis;x86_64" --force
+
+          echo "Restarting adb server..."
+          adb kill-server || true
+          adb start-server
+
+          echo "Starting emulator 1 (port 5554)..."
+          nohup $ANDROID_HOME/emulator/emulator -avd test-avd-1 -port 5554 -no-snapshot-load -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -wipe-data -partition-size 2048 2>&1 &
+          EMULATOR1_PID=$!
+          echo "EMULATOR1_PID=$EMULATOR1_PID" >> $GITHUB_ENV
+
+          echo "Starting emulator 2 (port 5556)..."
+          nohup $ANDROID_HOME/emulator/emulator -avd test-avd-2 -port 5556 -no-snapshot-load -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -wipe-data -partition-size 2048 2>&1 &
+          EMULATOR2_PID=$!
+          echo "EMULATOR2_PID=$EMULATOR2_PID" >> $GITHUB_ENV
+
+          echo "Waiting for emulators to boot..."
+          sleep 5
+          adb -s emulator-5554 wait-for-device
+          adb -s emulator-5556 wait-for-device
+          timeout 180 adb -s emulator-5554 shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 2; done'
+          echo "Emulator 1 booted"
+          timeout 180 adb -s emulator-5556 shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 2; done'
+          echo "Emulator 2 booted"
+          adb devices
+
+      - name: Run E2E tests
+        timeout-minutes: 30
+        env:
+          APK_PATH: ${{ github.workspace }}/packages/app/build/app/outputs/flutter-apk/app-release.apk
+          ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
+          APPIUM_SERVER_COUNT: "2"
+          E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-artifacts/e2e
+          SIGNALING_URL: ${{ env.SIGNALING_URL }}
+        working-directory: ${{ github.workspace }}/e2e-tests
+        run: |
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+
+          # Wait for package manager service to be ready on both emulators
+          for EMU in emulator-5554 emulator-5556; do
+            echo "Waiting for package manager on $EMU..."
+            for i in $(seq 1 30); do
+              if adb -s $EMU shell pm list packages 2>/dev/null | grep -q "android"; then
+                echo "Package manager ready on $EMU"
+                break
+              fi
+              sleep 2
+            done
+          done
+
+          # Disable animations on both emulators
+          for EMU in emulator-5554 emulator-5556; do
+            adb -s $EMU shell settings put global window_animation_scale 0
+            adb -s $EMU shell settings put global transition_animation_scale 0
+            adb -s $EMU shell settings put global animator_duration_scale 0
+          done
+
+          # Install APK on both emulators
+          adb -s emulator-5554 install "$APK_PATH"
+          adb -s emulator-5556 install "$APK_PATH"
+
+          # Start 2 Appium servers, each bound to a specific emulator
+          appium --address 127.0.0.1 --port 4723 --relaxed-security --default-capabilities '{"appium:udid":"emulator-5554"}' &
+          APPIUM1_PID=$!
+          appium --address 127.0.0.1 --port 4724 --relaxed-security --default-capabilities '{"appium:udid":"emulator-5556"}' &
+          APPIUM2_PID=$!
+          sleep 10
+          curl -sf http://localhost:4723/status && echo "Appium 1 (emulator-5554) is ready"
+          curl -sf http://localhost:4724/status && echo "Appium 2 (emulator-5556) is ready"
+
+          # ── Phase A: Smoke test (does the app even launch?) ──
+          echo "=== Running smoke test ==="
+          pytest tests/test_pairing.py::TestPairing::test_app_launches_successfully -v -s --timeout=120
+          SMOKE_RESULT=$?
+          if [ $SMOKE_RESULT -ne 0 ]; then
+            echo "Smoke test failed — app does not launch. Skipping remaining tests."
+            kill $APPIUM1_PID $APPIUM2_PID 2>/dev/null || true
+            exit 1
+          fi
+
+          # ── Phase B: Single-device tests (mandatory gate) ──
+          # These test UI navigation, settings, toggles — no P2P pairing needed.
+          # Deselect the smoke test since it already ran above.
+          echo "=== Running single-device tests (mandatory) ==="
+          SINGLE_RESULT=0
+          pytest -m "single_device and not headless" -v -s --timeout=120 --deselect tests/test_pairing.py::TestPairing::test_app_launches_successfully || SINGLE_RESULT=$?
+
+          # ── Phase C: Headless-paired tests (informational) ──
+          # The headless client connects to the same signaling server as the app.
+          # These tests need WebRTC between the emulator (10.0.2.x virtual network)
+          # and the host — which requires a TURN relay not yet configured on CI.
+          # Run them for visibility but don't gate the pipeline on them.
+          HEADLESS_RESULT=0
+          if [ -n "$SIGNALING_URL" ]; then
+            echo "=== Running headless-paired tests (informational) ==="
+            pytest -m "headless and single_device" -v -s --timeout=300 || HEADLESS_RESULT=$?
+            if [ $HEADLESS_RESULT -ne 0 ]; then
+              echo "::warning::Headless-paired tests failed (expected — WebRTC between emulator and host needs TURN relay)"
+            fi
+          else
+            echo "=== Skipping headless tests (SIGNALING_URL not set) ==="
+          fi
+
+          # ── Phase D: Signaling protocol tests (mandatory) ──
+          # Two headless clients validate the signaling protocol: registration,
+          # pairing handshake, rejection, and signal relay. No WebRTC/ICE needed.
+          PROTOCOL_RESULT=0
+          if [ -n "$SIGNALING_URL" ]; then
+            echo "=== Running signaling protocol tests ==="
+            pytest tests/test_signaling_headless.py -v -s --timeout=120 || PROTOCOL_RESULT=$?
+          else
+            echo "=== Skipping signaling tests (SIGNALING_URL not set) ==="
+          fi
+
+          # ── Phase E: Multi-device pairing probe (informational) ──
+          # P2P between emulators on CI requires TURN relay which isn't
+          # configured yet. Run one pairing test as a connectivity probe
+          # but don't fail the pipeline on it.
+          echo "=== Running pairing probe (informational) ==="
+          pytest tests/test_pairing.py::TestPairing::test_two_devices_can_pair -v -s --timeout=300 || true
+          echo "Note: Multi-device tests are informational until TURN relay is configured for CI."
+
+          # Cleanup Appium
+          kill $APPIUM1_PID $APPIUM2_PID 2>/dev/null || true
+
+          # Fail if any mandatory phase failed
+          FAILED=0
+          if [ $SINGLE_RESULT -ne 0 ]; then
+            echo "FAILED: Single-device tests"
+            FAILED=1
+          fi
+          if [ $PROTOCOL_RESULT -ne 0 ]; then
+            echo "FAILED: Signaling protocol tests"
+            FAILED=1
+          fi
+          if [ $FAILED -ne 0 ]; then
+            exit 1
+          fi
+          echo "All mandatory E2E tests passed."
+
+      - name: Collect logs on failure
+        if: failure()
+        timeout-minutes: 2
+        run: |
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          mkdir -p test-artifacts
+          # Collect logcat BEFORE stopping emulators (otherwise we get "waiting for device")
+          timeout 10 adb -s emulator-5554 logcat -d > test-artifacts/logcat-emu1.txt 2>&1 || true
+          timeout 10 adb -s emulator-5556 logcat -d > test-artifacts/logcat-emu2.txt 2>&1 || true
+          cp /tmp/appium*.log test-artifacts/ 2>/dev/null || true
+          # Collect E2E failure artifacts (screenshots, page sources)
+          cp ${{ github.workspace }}/test-artifacts/e2e/* test-artifacts/ 2>/dev/null || true
+
+      - name: Stop emulators
+        if: always()
+        timeout-minutes: 1
+        run: |
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          adb -s emulator-5554 emu kill 2>/dev/null || true
+          adb -s emulator-5556 emu kill 2>/dev/null || true
+          kill $EMULATOR1_PID $EMULATOR2_PID 2>/dev/null || true
+          pkill -9 qemu-system-x86_64 2>/dev/null || true
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-artifacts
+          path: test-artifacts/
+          retention-days: 3
+
+  # ============================================
+  # PHASE 5b: Linux E2E Tests (Xvfb + AT-SPI + headless client)
+  # ============================================
+  e2e-linux:
+    name: E2E Tests (Linux)
+    needs: [build-linux]
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DISPLAY: ':99'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux build
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-build
+          path: ./linux-artifact
+
+      - name: Extract Linux app
+        run: |
+          mkdir -p linux-app
+          tar -xzf linux-artifact/zajel-*-linux-x64.tar.gz -C linux-app
+          chmod +x linux-app/zajel
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            xvfb \
+            dbus-x11 \
+            at-spi2-core \
+            pulseaudio \
+            libasound2-plugins \
+            libegl1 \
+            libgles2 \
+            libgl1-mesa-dri \
+            libgtk-3-0 \
+            python3-gi \
+            gir1.2-atspi-2.0 \
+            python3-dogtail \
+            libsecret-1-0 \
+            gir1.2-secret-1 \
+            gnome-keyring \
+            libatk-adaptor \
+            libjsoncpp25 \
+            xdotool
+
+      - name: Start virtual display and audio
+        run: |
+          # Start Xvfb virtual display
+          Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 2
+
+          # Start PulseAudio with null sink (no real audio device)
+          pulseaudio --start --load="module-null-sink sink_name=NullSink" --exit-idle-time=-1 || true
+          sleep 1
+
+          # Route ALSA through PulseAudio — WebRTC ADM uses ALSA by default
+          # and crashes if no ALSA device exists. This bridges ALSA→PulseAudio.
+          mkdir -p ~/.config/pulse
+          cat > ~/.asoundrc << 'ASOUNDRC'
+          pcm.default pulse
+          ctl.default pulse
+          ASOUNDRC
+
+          # Verify PulseAudio is running and has a sink
+          pactl info || echo "WARNING: PulseAudio not responding"
+          pactl list sinks short || echo "WARNING: No PulseAudio sinks"
+
+          # Start D-Bus session bus
+          eval $(dbus-launch --sh-syntax)
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> $GITHUB_ENV
+
+          # Enable AT-SPI accessibility (required by dogtail)
+          gsettings set org.gnome.desktop.interface toolkit-accessibility true
+
+          # Start gnome-keyring — Flutter's secure_storage uses libsecret on Linux,
+          # which requires an unlocked keyring. Without proper setup, libsecret
+          # spawns gcr-prompter (a GUI unlock dialog) which blocks the GTK main
+          # loop and makes AT-SPI queries timeout ("application may be hanging").
+          #
+          # XDG_RUNTIME_DIR and its keyring subdirectory must exist for
+          # gnome-keyring-daemon to create its control socket.
+          sudo mkdir -p /run/user/$(id -u)/keyring
+          sudo chown -R $(id -u):$(id -g) /run/user/$(id -u)
+          chmod 0700 /run/user/$(id -u)/keyring
+          export XDG_RUNTIME_DIR=/run/user/$(id -u)
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> $GITHUB_ENV
+
+          # Create the keyrings data directory
+          mkdir -p ~/.local/share/keyrings
+
+          # gnome-keyring-daemon 46.x: --start and --unlock are INCOMPATIBLE.
+          # Start the daemon first, then unlock with empty password.
+          # --foreground is not what we want (it blocks), but --replace ensures
+          # we replace any broken instance. Redirect stderr to see errors.
+          KEYRING_OUTPUT=$(gnome-keyring-daemon --start --components=secrets 2>&1) || true
+          echo "gnome-keyring-daemon --start output: $KEYRING_OUTPUT"
+          eval $(echo "$KEYRING_OUTPUT" | grep -E '^(GNOME_KEYRING|SSH_AUTH)') || true
+          echo "Parsed: GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL"
+
+          # If --start didn't set GNOME_KEYRING_CONTROL, try --replace
+          if [ -z "$GNOME_KEYRING_CONTROL" ]; then
+            echo "Trying --replace..."
+            pkill -f gnome-keyring-daemon 2>/dev/null || true
+            sleep 1
+            KEYRING_OUTPUT=$(gnome-keyring-daemon --replace --components=secrets 2>&1 &
+              sleep 2
+              cat /proc/$!/environ 2>/dev/null | tr '\0' '\n' | grep GNOME_KEYRING || true
+            ) || true
+            echo "--replace output: $KEYRING_OUTPUT"
+            eval $(echo "$KEYRING_OUTPUT" | grep -E '^GNOME_KEYRING') || true
+          fi
+
+          # Unlock the login keyring with empty password
+          if [ -n "$GNOME_KEYRING_CONTROL" ]; then
+            printf '' | gnome-keyring-daemon --unlock 2>&1 || echo "Unlock returned non-zero (may be OK)"
+          else
+            echo "WARNING: GNOME_KEYRING_CONTROL still empty — keyring not initialized"
+            echo "Checking if keyring daemon is running..."
+            pgrep -a gnome-keyring || echo "No gnome-keyring-daemon found"
+            ls -la /run/user/$(id -u)/keyring/ 2>/dev/null || echo "No keyring dir contents"
+          fi
+          echo "GNOME_KEYRING_CONTROL=${GNOME_KEYRING_CONTROL:-}" >> $GITHUB_ENV
+          echo "GNOME_KEYRING_PID=${GNOME_KEYRING_PID:-}" >> $GITHUB_ENV
+
+          # Safety net: kill gcr-prompter if it somehow still appears.
+          (while true; do pkill -9 -f gcr-prompter 2>/dev/null; sleep 0.5; done) &
+          echo "GCR_KILLER_PID=$!" >> $GITHUB_ENV
+
+          # Start AT-SPI accessibility bus.
+          # Ubuntu 24.04 moved binaries from /usr/lib/at-spi2-core/ to /usr/libexec/.
+          # Try both paths; D-Bus activation may also auto-start these.
+          ATSPI_LAUNCHER=$(command -v at-spi-bus-launcher 2>/dev/null || find /usr/libexec /usr/lib -name at-spi-bus-launcher 2>/dev/null | head -1)
+          ATSPI_REGISTRYD=$(command -v at-spi2-registryd 2>/dev/null || find /usr/libexec /usr/lib -name at-spi2-registryd 2>/dev/null | head -1)
+          if [ -n "$ATSPI_LAUNCHER" ]; then
+            echo "Starting AT-SPI bus launcher: $ATSPI_LAUNCHER"
+            $ATSPI_LAUNCHER &
+            sleep 1
+          fi
+          if [ -n "$ATSPI_REGISTRYD" ]; then
+            echo "Starting AT-SPI registryd: $ATSPI_REGISTRYD"
+            $ATSPI_REGISTRYD &
+            sleep 1
+          fi
+
+      # NOTE: We use the system Python3 (not setup-python) because dogtail
+      # requires PyGObject (python3-gi) which is installed as a system package
+      # via apt. setup-python installs an isolated Python that can't see these.
+      - name: Install E2E dependencies
+        run: |
+          pip3 install --break-system-packages pytest pytest-timeout
+          pip3 install --break-system-packages -e packages/headless-client
+
+      - name: Verify display and AT-SPI
+        timeout-minutes: 3
+        env:
+          ZAJEL_APP_PATH: ${{ github.workspace }}/linux-app/zajel
+        run: |
+          echo "=== Environment ==="
+          echo "DISPLAY=$DISPLAY"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS"
+          echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL"
+
+          echo "=== Process check ==="
+          pgrep -a gnome-keyring || echo "WARNING: gnome-keyring-daemon not running"
+          pgrep -a gcr-prompter && echo "WARNING: gcr-prompter running" || echo "OK: no gcr-prompter"
+
+          echo "=== AT-SPI bus check ==="
+          timeout 10 python3 -c "
+          import gi
+          gi.require_version('Atspi', '2.0')
+          from gi.repository import Atspi
+          desktop = Atspi.get_desktop(0)
+          print(f'AT-SPI desktop children: {desktop.get_child_count()}')
+          " || echo "AT-SPI check failed"
+
+          echo "=== Quick app launch test (15s) ==="
+          GTK_MODULES=gail:atk-bridge LIBGL_ALWAYS_SOFTWARE=1 $ZAJEL_APP_PATH &
+          APP_PID=$!
+          sleep 15
+
+          echo "=== AT-SPI after app launch ==="
+          timeout 10 python3 -c "
+          import gi
+          gi.require_version('Atspi', '2.0')
+          from gi.repository import Atspi
+          desktop = Atspi.get_desktop(0)
+          count = desktop.get_child_count()
+          print(f'AT-SPI children: {count}')
+          for i in range(count):
+              try:
+                  child = desktop.get_child_at_index(i)
+                  if child:
+                      name = child.get_name()
+                      pid = child.get_process_id()
+                      role = child.get_role_name()
+                      print(f'  Child {i}: name={repr(name)} pid={pid} role={role}')
+              except Exception as e:
+                  print(f'  Child {i}: error — {e}')
+          " || echo "AT-SPI check after launch failed"
+
+          ps aux | grep -E "[z]ajel" || echo "App not running"
+          kill $APP_PID 2>/dev/null || true
+          wait $APP_PID 2>/dev/null || true
+
+      - name: Resolve signaling URL
+        run: |
+          URL="${{ vars.VPS_QA_WS_URL }}"
+          if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
+            IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
+            for ip in "${IPS[@]}"; do
+              ip=$(echo "$ip" | tr -d ' ')
+              echo "Probing VPS at $ip:9001..."
+              if timeout 10 curl -sf "http://${ip}:9001/health" >/dev/null 2>&1; then
+                URL="ws://${ip}:9001"
+                echo "Reachable and healthy: $ip:9001"
+                break
+              else
+                echo "Not reachable: $ip:9001"
+              fi
+            done
+            if [ -z "$URL" ]; then
+              echo "::warning::No VPS signaling server reachable — protocol tests will be skipped"
+            fi
+          fi
+          echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
+          echo "Resolved SIGNALING_URL=${URL:-<empty>}"
+
+      - name: Run Linux E2E tests
+        env:
+          CI: 'true'
+          ZAJEL_APP_PATH: ${{ github.workspace }}/linux-app/zajel
+          SIGNALING_URL: ${{ env.SIGNALING_URL }}
+        run: |
+          set +e
+
+          # ── Part 1: AT-SPI GUI tests (informational) ──
+          # Flutter AT-SPI doesn't respond to D-Bus queries in headless Xvfb.
+          # Run a quick smoke test as a probe; don't fail the job on it.
+          echo "=== AT-SPI smoke test (informational) ==="
+          cd ${{ github.workspace }}/e2e-tests-linux
+          timeout 180 python3 -m pytest tests/test_pairing.py -v -s --timeout=120 -k "smoke or test_app" || true
+
+          # ── Part 2: Signaling tests (no WebRTC needed) ──
+          # Validates registration, pairing handshake, and signal relay
+          # using the SignalingClient directly. No aiortc/ICE required.
+          SIGNALING_RESULT=0
+          if [ -n "$SIGNALING_URL" ]; then
+            echo ""
+            echo "=== Running signaling tests ==="
+            echo "SIGNALING_URL=$SIGNALING_URL"
+            cd ${{ github.workspace }}/e2e-tests
+            python3 -m pytest tests/test_signaling_headless.py -v -s --timeout=120
+            SIGNALING_RESULT=$?
+          else
+            echo "=== Skipping signaling tests (SIGNALING_URL not set) ==="
+          fi
+
+          if [ $SIGNALING_RESULT -ne 0 ]; then
+            echo "::warning::Linux E2E: Signaling tests failed"
+          else
+            echo "Linux E2E signaling tests passed."
+          fi
+          exit 0
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-linux-test-artifacts
+          path: e2e-tests-linux/test-artifacts/
+          retention-days: 3
+          if-no-files-found: ignore
+
+  # ============================================
+  # PHASE 5c: Windows E2E Tests (pywinauto + headless client)
+  # ============================================
+  e2e-windows:
+    name: E2E Tests (Windows)
+    needs: [build-windows]
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Windows build
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+          path: ./windows-artifact
+
+      - name: Extract Windows app
+        run: |
+          Expand-Archive -Path windows-artifact\zajel-*-windows.zip -DestinationPath windows-app
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install E2E dependencies
+        run: |
+          pip install -r e2e-tests-windows\requirements.txt
+          pip install -e packages\headless-client
+
+      - name: Resolve signaling URL
+        shell: bash
+        run: |
+          URL="${{ vars.VPS_QA_WS_URL }}"
+          if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
+            FIRST_IP=$(echo "${{ vars.QA_VPS_IP }}" | cut -d',' -f1 | tr -d ' ')
+            URL="ws://${FIRST_IP}:9001"
+          fi
+          echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
+          echo "Resolved SIGNALING_URL=$URL"
+
+      - name: Run Windows E2E tests
+        timeout-minutes: 20
+        env:
+          ZAJEL_APP_PATH: ${{ github.workspace }}\windows-app\zajel.exe
+          SIGNALING_URL: ${{ env.SIGNALING_URL }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+
+          # ── Part 1: UIA GUI tests (informational) ──
+          # Flutter ANGLE/DirectX rendering fails on CI (black screen).
+          # Run smoke test as a probe; don't fail the job on it.
+          Write-Host "=== UIA smoke test (informational) ==="
+          Set-Location "${{ github.workspace }}\e2e-tests-windows"
+          pytest tests\test_smoke.py -v -s --timeout=120
+          $smokeResult = $LASTEXITCODE
+          if ($smokeResult -ne 0) {
+            Write-Host "::warning::Windows UIA smoke tests failed (ANGLE/DirectX unreliable on CI)"
+          }
+
+          # ── Part 2: Signaling tests (no WebRTC needed) ──
+          $signalingResult = 0
+          if ($env:SIGNALING_URL) {
+            Write-Host ""
+            Write-Host "=== Running signaling tests ==="
+            Write-Host "SIGNALING_URL=$($env:SIGNALING_URL)"
+            Set-Location "${{ github.workspace }}\e2e-tests"
+            pytest tests\test_signaling_headless.py -v -s --timeout=120
+            $signalingResult = $LASTEXITCODE
+          } else {
+            Write-Host "=== Skipping signaling tests (SIGNALING_URL not set) ==="
+          }
+
+          if ($signalingResult -ne 0) {
+            Write-Host "::warning::Windows E2E: Signaling tests failed"
+          } else {
+            Write-Host "Windows E2E signaling tests passed."
+          }
+          exit 0
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-windows-test-artifacts
+          path: e2e-tests-windows/test-artifacts/
+          retention-days: 3
+          if-no-files-found: ignore
+
+  phase-5-e2e:
+    name: "✓ Phase 5: E2E Tests"
+    # Desktop E2E (Linux/Windows) excluded from gate:
+    # - Linux: Flutter AT-SPI doesn't register in headless CI (Xvfb)
+    # - Windows: Flutter ANGLE/DirectX rendering fails (black screen)
+    # Both run as informational only. Android E2E is the gate.
+    needs: [e2e-tests]
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "All E2E tests passed (Android)"
+
+  # ============================================
+  # Cleanup Pre-release Tag on Failure
+  # ============================================
+  cleanup:
+    name: Cleanup on Failure
+    needs: [tag-prerelease, e2e-tests]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Delete pre-release tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ env.VERSION }}"
+          git push origin :refs/tags/$TAG 2>/dev/null || true
+          echo "Deleted tag: $TAG"
+
+  # ============================================
+  # Summary
+  # ============================================
+  summary:
+    name: Pipeline Summary
+    needs: [phase-1-tests, phase-2-tag, phase-3-build-deploy, phase-5-e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## PR Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase 1: Tests | ${{ needs.phase-1-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase 2: Tag | ${{ needs.phase-2-tag.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase 3: Build & Deploy | ${{ needs.phase-3-build-deploy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase 5: E2E Tests | ${{ needs.phase-5-e2e.result }} |" >> $GITHUB_STEP_SUMMARY

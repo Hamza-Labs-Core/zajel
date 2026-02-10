@@ -54,9 +54,9 @@ class LoggerService {
     if (_initialized) return;
 
     try {
-      // Get the documents directory
-      final appDir = await getApplicationDocumentsDirectory();
-      _logDirectory = Directory('${appDir.path}/zajel_logs');
+      // Get the app support directory (AppData on Windows, Application Support on macOS)
+      final appDir = await getApplicationSupportDirectory();
+      _logDirectory = Directory('${appDir.path}/logs');
 
       // Create logs directory if it doesn't exist
       if (!await _logDirectory!.exists()) {
@@ -101,7 +101,8 @@ class LoggerService {
   }
 
   /// Log an error message with optional stack trace.
-  void error(String tag, String message, [Object? error, StackTrace? stackTrace]) {
+  void error(String tag, String message,
+      [Object? error, StackTrace? stackTrace]) {
     var fullMessage = message;
     if (error != null) {
       fullMessage += '\nError: $error';
@@ -123,9 +124,15 @@ class LoggerService {
       message: message,
     );
 
-    // Always print to debug console
+    // Print to console (debug mode uses debugPrint, release uses print)
     if (kDebugMode) {
       debugPrint(entry.formatted);
+    } else {
+      // In release mode, still print errors and warnings to console
+      if (level == LogLevel.error || level == LogLevel.warning) {
+        // ignore: avoid_print
+        print(entry.formatted);
+      }
     }
 
     // Emit to stream for real-time monitoring
@@ -155,7 +162,8 @@ class LoggerService {
   }
 
   String _getLogFileName(DateTime date) {
-    final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+    final dateStr =
+        '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
     return 'zajel_$dateStr.log';
   }
 

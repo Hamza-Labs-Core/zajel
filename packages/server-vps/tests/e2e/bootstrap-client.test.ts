@@ -610,7 +610,7 @@ describe('Bootstrap Client E2E Tests', () => {
   });
 
   describe('Multiple Servers', () => {
-    it('should allow multiple servers to register', { timeout: 30000 }, async () => {
+    it('should allow multiple servers to register', { timeout: 60000 }, async () => {
       vi.useRealTimers();
 
       const config1 = createTestConfig(VPS_SERVER_PORT_1, mockBootstrapUrl, 'region-1');

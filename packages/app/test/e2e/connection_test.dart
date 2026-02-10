@@ -25,6 +25,7 @@ void main() {
     late MockCryptoService mockCryptoService;
     late MockWebRTCService mockWebRTCService;
     late MockDeviceLinkService mockDeviceLinkService;
+    late MockTrustedPeersStorage mockTrustedPeersStorage;
     late MockHttpClient mockHttpClient;
     late ConnectionManager connectionManager;
     late ServerDiscoveryService discoveryService;
@@ -35,12 +36,15 @@ void main() {
       mockCryptoService = MockCryptoService();
       mockWebRTCService = MockWebRTCService();
       mockDeviceLinkService = MockDeviceLinkService();
+      mockTrustedPeersStorage = MockTrustedPeersStorage();
       mockHttpClient = MockHttpClient();
 
       // Default stubs
       when(() => mockWebRTCService.dispose()).thenAnswer((_) async {});
       when(() => mockWebRTCService.signalingEvents)
           .thenAnswer((_) => const Stream.empty());
+      when(() => mockTrustedPeersStorage.getAllPeers())
+          .thenAnswer((_) async => []);
 
       discoveryService = ServerDiscoveryService(
         bootstrapUrl: testBootstrapUrl,
@@ -51,6 +55,8 @@ void main() {
         cryptoService: mockCryptoService,
         webrtcService: mockWebRTCService,
         deviceLinkService: mockDeviceLinkService,
+        trustedPeersStorage: mockTrustedPeersStorage,
+        meetingPointService: MockMeetingPointService(),
       );
     });
 
@@ -101,7 +107,8 @@ void main() {
         verify(() => mockCryptoService.initialize()).called(1);
       });
 
-      test('enabling external connections requires initialized crypto', () async {
+      test('enabling external connections requires initialized crypto',
+          () async {
         // Arrange - crypto not initialized
         when(() => mockCryptoService.publicKeyBase64).thenThrow(
           CryptoException('CryptoService not initialized'),
@@ -225,7 +232,8 @@ void main() {
         final iceCandidate = SignalingMessage.iceCandidate(
           from: 'PEER01',
           payload: {
-            'candidate': 'candidate:1 1 UDP 2130706431 192.168.1.1 54321 typ host',
+            'candidate':
+                'candidate:1 1 UDP 2130706431 192.168.1.1 54321 typ host',
             'sdpMid': 'data',
             'sdpMLineIndex': 0,
           },
@@ -346,32 +354,36 @@ void main() {
           if (firstCall) {
             firstCall = false;
             // First call - server is online
-            return http.Response(jsonEncode({
-              'servers': [
-                {
-                  'serverId': 'ed25519:server1',
-                  'endpoint': 'wss://server1.example.com',
-                  'publicKey': 'key1',
-                  'region': 'us-east',
-                  'registeredAt': now,
-                  'lastSeen': now,
-                },
-              ],
-            }), 200);
+            return http.Response(
+                jsonEncode({
+                  'servers': [
+                    {
+                      'serverId': 'ed25519:server1',
+                      'endpoint': 'wss://server1.example.com',
+                      'publicKey': 'key1',
+                      'region': 'us-east',
+                      'registeredAt': now,
+                      'lastSeen': now,
+                    },
+                  ],
+                }),
+                200);
           } else {
             // Second call - server is stale
-            return http.Response(jsonEncode({
-              'servers': [
-                {
-                  'serverId': 'ed25519:server1',
-                  'endpoint': 'wss://server1.example.com',
-                  'publicKey': 'key1',
-                  'region': 'us-east',
-                  'registeredAt': now,
-                  'lastSeen': now - 300000, // 5 minutes ago - stale
-                },
-              ],
-            }), 200);
+            return http.Response(
+                jsonEncode({
+                  'servers': [
+                    {
+                      'serverId': 'ed25519:server1',
+                      'endpoint': 'wss://server1.example.com',
+                      'publicKey': 'key1',
+                      'region': 'us-east',
+                      'registeredAt': now,
+                      'lastSeen': now - 300000, // 5 minutes ago - stale
+                    },
+                  ],
+                }),
+                200);
           }
         });
 
@@ -380,7 +392,8 @@ void main() {
         expect(servers1, hasLength(1));
 
         // Act - Force refresh (server now stale)
-        final servers2 = await discoveryService.fetchServers(forceRefresh: true);
+        final servers2 =
+            await discoveryService.fetchServers(forceRefresh: true);
 
         // Assert - Stale server filtered out
         expect(servers2, isEmpty);
@@ -389,12 +402,18 @@ void main() {
 
     group('Connection State Management', () {
       test('connection states are properly defined', () {
-        expect(PeerConnectionState.values, contains(PeerConnectionState.disconnected));
-        expect(PeerConnectionState.values, contains(PeerConnectionState.discovering));
-        expect(PeerConnectionState.values, contains(PeerConnectionState.connecting));
-        expect(PeerConnectionState.values, contains(PeerConnectionState.handshaking));
-        expect(PeerConnectionState.values, contains(PeerConnectionState.connected));
-        expect(PeerConnectionState.values, contains(PeerConnectionState.failed));
+        expect(PeerConnectionState.values,
+            contains(PeerConnectionState.disconnected));
+        expect(PeerConnectionState.values,
+            contains(PeerConnectionState.discovering));
+        expect(PeerConnectionState.values,
+            contains(PeerConnectionState.connecting));
+        expect(PeerConnectionState.values,
+            contains(PeerConnectionState.handshaking));
+        expect(PeerConnectionState.values,
+            contains(PeerConnectionState.connected));
+        expect(
+            PeerConnectionState.values, contains(PeerConnectionState.failed));
       });
 
       test('peers stream emits updates', () async {
@@ -425,7 +444,8 @@ void main() {
     });
 
     group('Error Handling', () {
-      test('network error during server discovery is handled gracefully', () async {
+      test('network error during server discovery is handled gracefully',
+          () async {
         // Arrange
         when(() => mockHttpClient.get(any()))
             .thenThrow(Exception('Network unreachable'));
@@ -448,7 +468,8 @@ void main() {
         );
       });
 
-      test('connecting without signaling server throws ConnectionException', () async {
+      test('connecting without signaling server throws ConnectionException',
+          () async {
         // Act & Assert
         expect(
           () => connectionManager.connectToPeer('ABC234'),
@@ -564,10 +585,14 @@ void main() {
     group('Signaling Connection State', () {
       test('all connection states are defined', () {
         expect(SignalingConnectionState.values, hasLength(4));
-        expect(SignalingConnectionState.values, contains(SignalingConnectionState.disconnected));
-        expect(SignalingConnectionState.values, contains(SignalingConnectionState.connecting));
-        expect(SignalingConnectionState.values, contains(SignalingConnectionState.connected));
-        expect(SignalingConnectionState.values, contains(SignalingConnectionState.failed));
+        expect(SignalingConnectionState.values,
+            contains(SignalingConnectionState.disconnected));
+        expect(SignalingConnectionState.values,
+            contains(SignalingConnectionState.connecting));
+        expect(SignalingConnectionState.values,
+            contains(SignalingConnectionState.connected));
+        expect(SignalingConnectionState.values,
+            contains(SignalingConnectionState.failed));
       });
     });
   });
@@ -633,7 +658,8 @@ void main() {
 
         // Assert - Only fresh servers returned
         expect(servers, hasLength(2)); // Stale US server filtered
-        expect(servers.map((s) => s.serverId), isNot(contains('ed25519:staleUS')));
+        expect(
+            servers.map((s) => s.serverId), isNot(contains('ed25519:staleUS')));
 
         // Selected server should be one of the fresh ones
         expect(selected, isNotNull);
@@ -664,7 +690,8 @@ void main() {
         );
 
         // Act - Request US region (not available)
-        final selected = await discoveryService.selectServer(preferredRegion: 'us-east');
+        final selected =
+            await discoveryService.selectServer(preferredRegion: 'us-east');
 
         // Assert - Falls back to available EU server
         expect(selected, isNotNull);
@@ -680,18 +707,20 @@ void main() {
 
         when(() => mockHttpClient.get(any())).thenAnswer((_) async {
           callCount++;
-          return http.Response(jsonEncode({
-            'servers': [
-              {
-                'serverId': 'ed25519:server$callCount',
-                'endpoint': 'wss://server$callCount.example.com',
-                'publicKey': 'key$callCount',
-                'region': 'us-east',
-                'registeredAt': now,
-                'lastSeen': now,
-              },
-            ],
-          }), 200);
+          return http.Response(
+              jsonEncode({
+                'servers': [
+                  {
+                    'serverId': 'ed25519:server$callCount',
+                    'endpoint': 'wss://server$callCount.example.com',
+                    'publicKey': 'key$callCount',
+                    'region': 'us-east',
+                    'registeredAt': now,
+                    'lastSeen': now,
+                  },
+                ],
+              }),
+              200);
         });
 
         // Act - Multiple fetches
@@ -710,18 +739,20 @@ void main() {
 
         when(() => mockHttpClient.get(any())).thenAnswer((_) async {
           callCount++;
-          return http.Response(jsonEncode({
-            'servers': [
-              {
-                'serverId': 'ed25519:server$callCount',
-                'endpoint': 'wss://server$callCount.example.com',
-                'publicKey': 'key$callCount',
-                'region': 'us-east',
-                'registeredAt': now,
-                'lastSeen': now,
-              },
-            ],
-          }), 200);
+          return http.Response(
+              jsonEncode({
+                'servers': [
+                  {
+                    'serverId': 'ed25519:server$callCount',
+                    'endpoint': 'wss://server$callCount.example.com',
+                    'publicKey': 'key$callCount',
+                    'region': 'us-east',
+                    'registeredAt': now,
+                    'lastSeen': now,
+                  },
+                ],
+              }),
+              200);
         });
 
         // Act - Fetches with force refresh
@@ -743,18 +774,20 @@ void main() {
         when(() => mockHttpClient.get(any())).thenAnswer((_) async {
           if (firstCall) {
             firstCall = false;
-            return http.Response(jsonEncode({
-              'servers': [
-                {
-                  'serverId': 'ed25519:cached',
-                  'endpoint': 'wss://cached.example.com',
-                  'publicKey': 'cachedKey',
-                  'region': 'us-east',
-                  'registeredAt': now,
-                  'lastSeen': now,
-                },
-              ],
-            }), 200);
+            return http.Response(
+                jsonEncode({
+                  'servers': [
+                    {
+                      'serverId': 'ed25519:cached',
+                      'endpoint': 'wss://cached.example.com',
+                      'publicKey': 'cachedKey',
+                      'region': 'us-east',
+                      'registeredAt': now,
+                      'lastSeen': now,
+                    },
+                  ],
+                }),
+                200);
           }
           throw Exception('Network error');
         });
@@ -764,7 +797,8 @@ void main() {
         expect(servers1, hasLength(1));
 
         // Act - Second fetch fails, returns cache
-        final servers2 = await discoveryService.fetchServers(forceRefresh: true);
+        final servers2 =
+            await discoveryService.fetchServers(forceRefresh: true);
 
         // Assert - Returns cached data
         expect(servers2, hasLength(1));

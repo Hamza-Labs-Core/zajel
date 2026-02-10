@@ -1,19 +1,51 @@
 /**
  * Server list route handlers
  * Fetches VPS server info from the bootstrap registry
+ *
+ * Uses a CF Service Binding (BOOTSTRAP_SERVICE) to call the bootstrap
+ * worker directly. This avoids 530 errors that occur when one CF Worker
+ * calls another via its custom domain on the same Cloudflare zone.
  */
 
 import type { Env, VpsServer, ApiResponse } from '../types.js';
 import { requireAuth } from './auth.js';
 
-// Default bootstrap URL if not configured
-const DEFAULT_BOOTSTRAP_URL = 'https://zajel-signaling.mahmoud-s-darwish.workers.dev';
+// Default bootstrap URL if not configured (fallback for local dev)
+const DEFAULT_BOOTSTRAP_URL = 'https://signal.zajel.hamzalabs.dev';
 
 // Health check timeout in milliseconds
 const HEALTH_CHECK_TIMEOUT = 5000;
 
 // TTL for considering a server offline (5 minutes)
 const OFFLINE_TTL = 5 * 60 * 1000;
+
+/**
+ * Fetch from the bootstrap registry, preferring the service binding.
+ *
+ * Service bindings route the request internally within Cloudflare,
+ * bypassing the public internet and avoiding CF-to-CF 530 errors.
+ * Falls back to a regular fetch if the binding is not configured
+ * (e.g., during local development).
+ */
+async function fetchFromBootstrap(
+  path: string,
+  env: Env
+): Promise<Response> {
+  if (env.BOOTSTRAP_SERVICE) {
+    // Use service binding — the URL is ignored for routing but must be valid
+    return env.BOOTSTRAP_SERVICE.fetch(
+      new Request(`https://bootstrap-internal${path}`, {
+        headers: { 'Accept': 'application/json' },
+      })
+    );
+  }
+
+  // Fallback: fetch via public URL (works in local dev, fails in prod CF-to-CF)
+  const bootstrapUrl = env.ZAJEL_BOOTSTRAP_URL || DEFAULT_BOOTSTRAP_URL;
+  return fetch(`${bootstrapUrl}${path}`, {
+    headers: { 'Accept': 'application/json' },
+  });
+}
 
 /**
  * List all VPS servers with their health status
@@ -28,15 +60,9 @@ export async function handleListServers(
     return authResult;
   }
 
-  const bootstrapUrl = env.ZAJEL_BOOTSTRAP_URL || DEFAULT_BOOTSTRAP_URL;
-
   try {
     // Fetch server list from bootstrap registry
-    const response = await fetch(`${bootstrapUrl}/servers`, {
-      headers: {
-        'Accept': 'application/json',
-      },
-    });
+    const response = await fetchFromBootstrap('/servers', env);
 
     if (!response.ok) {
       return jsonResponse({
@@ -46,8 +72,10 @@ export async function handleListServers(
     }
 
     interface RegistryServer {
+      serverId?: string;
       endpoint: string;
       region?: string;
+      lastSeen?: number;
       lastHeartbeat?: number;
     }
 
@@ -61,7 +89,7 @@ export async function handleListServers(
           id: `srv-${String(index + 1).padStart(2, '0')}`,
           endpoint: server.endpoint,
           region: server.region || 'unknown',
-          lastHeartbeat: server.lastHeartbeat || Date.now(),
+          lastHeartbeat: server.lastSeen || server.lastHeartbeat || Date.now(),
           status: 'healthy',
         };
 
@@ -147,11 +175,12 @@ export async function handleListServers(
       },
     });
   } catch (error) {
-    console.error('Failed to fetch servers:', error);
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error('Failed to fetch servers:', errMsg);
     return jsonResponse({
       success: false,
-      error: 'Failed to fetch server list',
-    }, 500);
+      error: `Failed to fetch server list from bootstrap registry: ${errMsg}`,
+    }, 502);
   }
 }
 

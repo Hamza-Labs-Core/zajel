@@ -122,6 +122,7 @@ class VoIPService extends ChangeNotifier {
 
   final MediaService _mediaService;
   final SignalingClient _signaling;
+  final List<Map<String, dynamic>>? _iceServers;
 
   RTCPeerConnection? _peerConnection;
   CallInfo? _currentCall;
@@ -130,6 +131,10 @@ class VoIPService extends ChangeNotifier {
 
   // Guard against double cleanup
   bool _isCleaningUp = false;
+
+  // Track whether remote description has been set (getRemoteDescription()
+  // returns a Future, so comparing it to null doesn't work for checking).
+  bool _remoteDescriptionSet = false;
 
   // ICE candidates received before remote description is set
   final List<RTCIceCandidate> _pendingIceCandidates = [];
@@ -150,7 +155,9 @@ class VoIPService extends ChangeNotifier {
   ///
   /// [mediaService] - Service for managing local media tracks.
   /// [signalingClient] - Client for signaling message exchange.
-  VoIPService(this._mediaService, this._signaling) {
+  VoIPService(this._mediaService, this._signaling,
+      {List<Map<String, dynamic>>? iceServers})
+      : _iceServers = iceServers {
     _setupSignalingHandlers();
   }
 
@@ -187,7 +194,8 @@ class VoIPService extends ChangeNotifier {
     }
 
     final callId = const Uuid().v4();
-    logger.info(_tag, 'Starting call $callId to peer $peerId (video: $withVideo)');
+    logger.info(
+        _tag, 'Starting call $callId to peer $peerId (video: $withVideo)');
 
     _currentCall = CallInfo(
       callId: callId,
@@ -239,7 +247,8 @@ class VoIPService extends ChangeNotifier {
     }
 
     if (_currentCall!.state != CallState.incoming) {
-      throw CallException('Call is not in incoming state: ${_currentCall!.state}');
+      throw CallException(
+          'Call is not in incoming state: ${_currentCall!.state}');
     }
 
     logger.info(_tag, 'Accepting call $callId (video: $withVideo)');
@@ -282,7 +291,8 @@ class VoIPService extends ChangeNotifier {
       return;
     }
 
-    logger.info(_tag, 'Rejecting call $callId (reason: ${reason ?? 'declined'})');
+    logger.info(
+        _tag, 'Rejecting call $callId (reason: ${reason ?? 'declined'})');
 
     _signaling.sendCallReject(
       callId,
@@ -326,7 +336,9 @@ class VoIPService extends ChangeNotifier {
   /// without making changes.
   bool toggleMute() {
     if (!_isMediaControlAllowed()) {
-      logger.warning(_tag, 'Cannot toggle mute: no active call or invalid state '
+      logger.warning(
+          _tag,
+          'Cannot toggle mute: no active call or invalid state '
           '(hasCall: ${_currentCall != null}, state: ${_currentCall?.state})');
       return _mediaService.isAudioMuted;
     }
@@ -342,7 +354,9 @@ class VoIPService extends ChangeNotifier {
   /// without making changes.
   bool toggleVideo() {
     if (!_isMediaControlAllowed()) {
-      logger.warning(_tag, 'Cannot toggle video: no active call or invalid state '
+      logger.warning(
+          _tag,
+          'Cannot toggle video: no active call or invalid state '
           '(hasCall: ${_currentCall != null}, state: ${_currentCall?.state})');
       return !_mediaService.isVideoMuted;
     }
@@ -358,9 +372,12 @@ class VoIPService extends ChangeNotifier {
 
   /// Create and configure a new RTCPeerConnection.
   Future<RTCPeerConnection> _createPeerConnection() async {
-    final config = {
-      'iceServers': WebRTCConstants.defaultIceServers,
+    final config = <String, dynamic>{
+      'iceServers': _iceServers ?? WebRTCConstants.defaultIceServers,
     };
+    if (_iceServers != null) {
+      config['iceTransportPolicy'] = 'relay';
+    }
 
     final pc = await createPeerConnection(config);
     logger.debug(_tag, 'Created peer connection');
@@ -454,7 +471,8 @@ class VoIPService extends ChangeNotifier {
 
   /// Handle incoming call offer.
   Future<void> _handleOffer(CallOfferMessage msg) async {
-    logger.info(_tag, 'Received call offer: ${msg.callId} from ${msg.targetId}');
+    logger.info(
+        _tag, 'Received call offer: ${msg.callId} from ${msg.targetId}');
 
     // Check if already in a call
     if (_currentCall != null && _currentCall!.state != CallState.ended) {
@@ -464,19 +482,24 @@ class VoIPService extends ChangeNotifier {
     }
 
     try {
-      // Create peer connection and set remote description
-      _peerConnection = await _createPeerConnection();
-      await _peerConnection!.setRemoteDescription(
-        RTCSessionDescription(msg.sdp, 'offer'),
-      );
-
-      // Create call info with incoming state
+      // Set _currentCall BEFORE async operations so incoming ICE candidates
+      // (which arrive via the event loop during awaits) can be matched by callId.
       _currentCall = CallInfo(
         callId: msg.callId,
         peerId: msg.targetId,
         withVideo: msg.withVideo,
         state: CallState.incoming,
       );
+
+      // Create peer connection and set remote description
+      _peerConnection = await _createPeerConnection();
+      await _peerConnection!.setRemoteDescription(
+        RTCSessionDescription(msg.sdp, 'offer'),
+      );
+      _remoteDescriptionSet = true;
+
+      // Process any ICE candidates that arrived during PC creation
+      await _processPendingIceCandidates();
 
       _notifyState(CallState.incoming);
     } catch (e) {
@@ -501,6 +524,7 @@ class VoIPService extends ChangeNotifier {
       await _peerConnection!.setRemoteDescription(
         RTCSessionDescription(msg.sdp, 'answer'),
       );
+      _remoteDescriptionSet = true;
 
       // Process any pending ICE candidates
       await _processPendingIceCandidates();
@@ -548,15 +572,20 @@ class VoIPService extends ChangeNotifier {
       );
 
       // If remote description is not set yet, queue the candidate
-      if (_peerConnection?.getRemoteDescription() == null) {
+      if (!_remoteDescriptionSet) {
         // Enforce queue bounds to prevent memory exhaustion
-        if (_pendingIceCandidates.length >= CallConstants.maxPendingIceCandidates) {
-          logger.warning(_tag, 'ICE candidate queue full '
+        if (_pendingIceCandidates.length >=
+            CallConstants.maxPendingIceCandidates) {
+          logger.warning(
+              _tag,
+              'ICE candidate queue full '
               '(${CallConstants.maxPendingIceCandidates}), dropping oldest candidate');
           _pendingIceCandidates.removeAt(0);
         }
         _pendingIceCandidates.add(candidate);
-        logger.debug(_tag, 'Queued ICE candidate '
+        logger.debug(
+            _tag,
+            'Queued ICE candidate '
             '(${_pendingIceCandidates.length}/${CallConstants.maxPendingIceCandidates})');
       } else {
         await _peerConnection?.addCandidate(candidate);
@@ -570,7 +599,8 @@ class VoIPService extends ChangeNotifier {
   Future<void> _processPendingIceCandidates() async {
     if (_pendingIceCandidates.isEmpty) return;
 
-    logger.debug(_tag, 'Processing ${_pendingIceCandidates.length} pending ICE candidates');
+    logger.debug(_tag,
+        'Processing ${_pendingIceCandidates.length} pending ICE candidates');
 
     for (final candidate in _pendingIceCandidates) {
       try {
@@ -620,8 +650,9 @@ class VoIPService extends ChangeNotifier {
       // Stop media tracks
       await _mediaService.stopAllTracks();
 
-      // Clear pending ICE candidates
+      // Clear pending ICE candidates and reset remote description flag
       _pendingIceCandidates.clear();
+      _remoteDescriptionSet = false;
 
       // Update state
       if (_currentCall != null) {

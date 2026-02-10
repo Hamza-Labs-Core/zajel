@@ -1,5 +1,9 @@
 # Zajel Project Guidelines
 
+## Behavioral Rules
+
+- **NEVER dismiss failures** — Do not say things like "this is not related to your/our code changes", "this is a pre-existing issue", or any variation that deflects responsibility for CI/test failures. Every failure on the branch is our problem to investigate and fix.
+
 ## Licensing & IP Guidelines
 
 ### Third-Party Licensing

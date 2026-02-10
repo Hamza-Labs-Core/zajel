@@ -5,6 +5,12 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/index.ts",
@@ -14,7 +20,9 @@
     "test:integration": "vitest run tests/integration",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit",
-    "migrate": "tsx src/storage/migrate.ts"
+    "migrate": "tsx src/storage/migrate.ts",
+    "dev:cluster": "tsx dev/local-cluster.ts",
+    "dev:test-pairing": "tsx dev/test-pairing.ts"
   },
   "dependencies": {
     "@noble/ed25519": "^2.1.0",

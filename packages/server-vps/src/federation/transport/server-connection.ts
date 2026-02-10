@@ -209,11 +209,31 @@ export class ServerConnectionManager extends EventEmitter {
   }
 
   /**
+   * Resolve the federation WebSocket URL from a peer's base endpoint.
+   * Appends /federation path if not already present.
+   */
+  private getFederationUrl(endpoint: string): string {
+    try {
+      const url = new URL(endpoint);
+      if (!url.pathname || url.pathname === '/') {
+        url.pathname = '/federation';
+      }
+      return url.toString();
+    } catch {
+      // Fallback: simple string append
+      const base = endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
+      return `${base}/federation`;
+    }
+  }
+
+  /**
    * Initiate outgoing connection to a peer
    */
   private async initiateConnection(entry: MembershipEntry): Promise<void> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(entry.endpoint);
+      const federationUrl = this.getFederationUrl(entry.endpoint);
+      logger.info(`[Transport] Connecting to ${logger.serverId(entry.serverId)} at ${federationUrl}`);
+      const ws = new WebSocket(federationUrl);
 
       const handshakeTimer = setTimeout(() => {
         ws.close();

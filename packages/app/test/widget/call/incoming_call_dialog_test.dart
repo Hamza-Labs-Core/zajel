@@ -155,12 +155,15 @@ void main() {
       expect(find.text('?'), findsOneWidget);
     });
 
-    testWidgets('has transparent dialog background', (tester) async {
+    testWidgets('has themed surface dialog background', (tester) async {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
       final dialog = tester.widget<Dialog>(find.byType(Dialog));
-      expect(dialog.backgroundColor, Colors.transparent);
+      // Dialog uses theme surface color instead of transparent to avoid
+      // GTK compositor issues on Linux desktop
+      expect(dialog.backgroundColor, isNot(Colors.transparent));
+      expect(dialog.backgroundColor, isNotNull);
     });
   });
 }

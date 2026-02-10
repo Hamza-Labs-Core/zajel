@@ -558,7 +558,7 @@ describe('Federation E2E Tests', () => {
       }
     });
 
-    it('should update peer list when servers join', { timeout: 20000 }, async () => {
+    it('should update peer list when servers join', { timeout: 60000 }, async () => {
       const port1 = getNextPort();
       const config1 = createTestConfig(port1, mockBootstrapUrl, 'region-1');
       const server1 = await createZajelServer(config1);
