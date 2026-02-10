@@ -26,13 +26,13 @@ def get_config():
     """Return the platform-specific config module."""
     platform = get_platform()
     if platform == "android":
-        from platforms import android_config
+        from . import android_config
         return android_config
     elif platform == "linux":
-        from platforms import linux_config
+        from . import linux_config
         return linux_config
     elif platform == "windows":
-        from platforms import windows_config
+        from . import windows_config
         return windows_config
     else:
         raise ValueError(f"Unknown platform: {platform}")
@@ -52,17 +52,17 @@ def create_helper(platform: str = None, **kwargs):
         platform = get_platform()
 
     if platform == "android":
-        from platforms.android_helper import AppHelper
+        from .android_helper import AppHelper
         return AppHelper(kwargs["driver"])
     elif platform == "linux":
-        from platforms.linux_helper import LinuxAppHelper
+        from .linux_helper import LinuxAppHelper
         return LinuxAppHelper(
             kwargs["app_path"],
             kwargs["data_dir"],
             kwargs.get("name", "zajel"),
         )
     elif platform == "windows":
-        from platforms.windows_helper import WindowsAppHelper
+        from .windows_helper import WindowsAppHelper
         return WindowsAppHelper(kwargs["app_path"])
     else:
         raise ValueError(f"Unknown platform: {platform}")
