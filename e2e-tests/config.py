@@ -1,49 +1,22 @@
 """
-E2E Test Configuration
+E2E Test Configuration -- Platform-dispatched.
 
-Environment variables:
-- APPIUM_SERVER_COUNT: Number of Appium servers available
-- APK_PATH: Path to the APK on Appium servers (default: /tmp/zajel-test.apk)
-- SIGNALING_URL: WebSocket URL for the signaling server (headless client tests)
+Re-exports all config values from the platform-specific config module
+based on ZAJEL_TEST_PLATFORM environment variable.
+
+For backward compatibility, Android config values are still importable
+directly (e.g., `from config import SIGNALING_URL`).
 """
 
-import os
+from platforms import get_platform
 
-# Appium configuration
-APPIUM_PORT = 4723
-SERVER_COUNT = int(os.environ.get("APPIUM_SERVER_COUNT", "2"))
-APK_PATH = os.environ.get("APK_PATH", "/tmp/zajel-test.apk")
+_platform = get_platform()
 
-# Signaling server for headless client tests
-SIGNALING_URL = os.environ.get("SIGNALING_URL", "ws://localhost:8080/ws")
-
-# Timeouts (in seconds)
-APP_LAUNCH_TIMEOUT = 60
-ELEMENT_WAIT_TIMEOUT = 10
-CONNECTION_TIMEOUT = 30
-P2P_CONNECTION_TIMEOUT = 15
-CALL_CONNECT_TIMEOUT = 30
-CALL_RING_TIMEOUT = 30
-
-# ADB path (for file transfer tests)
-ADB_PATH = os.environ.get(
-    "ADB_PATH",
-    os.path.expanduser("~/Android/Sdk/platform-tools/adb")
-)
-
-
-def get_server_url(index: int) -> str:
-    """Get Appium server URL for given index (0-based).
-
-    When using SSH tunnels, servers are on localhost with incrementing ports.
-    Note: Appium 2.x+ uses base path '/' instead of '/wd/hub'
-    """
-    if index >= SERVER_COUNT:
-        raise ValueError(f"Server index {index} exceeds available servers ({SERVER_COUNT})")
-    port = APPIUM_PORT + index
-    return f"http://localhost:{port}"
-
-
-def get_all_servers() -> list[str]:
-    """Get all available Appium server URLs."""
-    return [get_server_url(i) for i in range(SERVER_COUNT)]
+if _platform == "android":
+    from platforms.android_config import *  # noqa: F401,F403
+elif _platform == "linux":
+    from platforms.linux_config import *  # noqa: F401,F403
+elif _platform == "windows":
+    from platforms.windows_config import *  # noqa: F401,F403
+else:
+    raise ValueError(f"Unknown platform: {_platform}")
