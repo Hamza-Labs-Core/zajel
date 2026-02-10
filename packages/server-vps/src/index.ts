@@ -291,12 +291,10 @@ export async function createZajelServer(
     discoveredPeers = await bootstrap.getServers();
     if (discoveredPeers.length > 0) {
       console.log(`[Zajel] Discovered ${discoveredPeers.length} peers from bootstrap server`);
-      // Add discovered peers to federation config for initial bootstrap
-      for (const peer of discoveredPeers) {
-        if (!federationConfig.bootstrap.nodes.includes(peer.endpoint)) {
-          federationConfig.bootstrap.nodes.push(peer.endpoint);
-        }
-      }
+      // Peers will be added to membership + ring via addDiscoveredPeer after
+      // federation starts. We no longer push into bootstrap.nodes because
+      // federation.start() → bootstrap() would try to WebSocket-connect to
+      // each endpoint, blocking startup when peers aren't ready yet.
     }
   } catch (error) {
     console.warn('[Zajel] Bootstrap registration failed, continuing without:', error);
