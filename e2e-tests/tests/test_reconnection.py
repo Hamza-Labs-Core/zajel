@@ -15,6 +15,7 @@ from config import P2P_CONNECTION_TIMEOUT
 
 @pytest.mark.reconnection
 @pytest.mark.slow
+@pytest.mark.android
 class TestReconnection:
     """Test suite for meeting point reconnection."""
 

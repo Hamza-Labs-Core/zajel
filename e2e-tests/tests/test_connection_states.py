@@ -15,6 +15,7 @@ from config import P2P_CONNECTION_TIMEOUT
 
 
 @pytest.mark.connection
+@pytest.mark.android
 class TestConnectionStates:
     """Test suite for connection state transitions and edge cases."""
 
