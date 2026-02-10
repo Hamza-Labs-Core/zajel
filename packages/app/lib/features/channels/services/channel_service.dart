@@ -191,11 +191,22 @@ class ChannelService {
     return chunks;
   }
 
+  /// Maximum reassembled message size (50 MB) to prevent memory exhaustion
+  /// from malicious chunk counts or sizes.
+  static const int maxMessageSize = 50 * 1024 * 1024;
+
   /// Reassemble chunks into the original content.
   ///
   /// All chunks must belong to the same message (same sequence number),
   /// all chunks must be present, and they are assembled in order of
   /// [chunkIndex].
+  ///
+  /// **Important**: Callers MUST verify each chunk's signature via
+  /// [ChannelCryptoService.verifyChunkSignature] before passing them here.
+  /// This method performs structural validation only (sequence, indices,
+  /// completeness). Signature verification is the caller's responsibility
+  /// because it requires access to the manifest's authorized key list,
+  /// which is outside this method's scope.
   ///
   /// Returns the combined encrypted bytes. Call [ChannelCryptoService.decryptPayload]
   /// to obtain the original [ChunkPayload].
@@ -240,9 +251,13 @@ class ChannelService {
       }
     }
 
-    // Combine encrypted payloads
+    // Combine encrypted payloads with size safety check
     final totalSize =
         sorted.fold<int>(0, (sum, c) => sum + c.encryptedPayload.length);
+    if (totalSize > maxMessageSize) {
+      throw ChannelServiceException(
+          'Cannot reassemble: total size $totalSize exceeds maximum $maxMessageSize bytes');
+    }
     final combined = Uint8List(totalSize);
     var offset = 0;
     for (final chunk in sorted) {

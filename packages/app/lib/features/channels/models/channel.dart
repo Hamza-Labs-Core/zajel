@@ -17,7 +17,9 @@ class AdminKey extends Equatable {
   /// The admin's Ed25519 public key, base64-encoded.
   final String key;
 
-  /// An encrypted label for this admin (e.g., display name).
+  /// A plaintext label for this admin (e.g., display name).
+  /// Note: The manifest itself is only readable by channel members who hold
+  /// the decryption key, so individual field encryption is not needed here.
   final String label;
 
   const AdminKey({required this.key, required this.label});
@@ -70,10 +72,11 @@ class ChannelManifest extends Equatable {
   /// Fingerprint of the owner's Ed25519 public key (channel identity).
   final String channelId;
 
-  /// Encrypted channel name (only subscribers with the decryption key can read).
+  /// Channel name. The manifest is distributed only to subscribers who hold
+  /// the decryption key, so field-level encryption is not applied here.
   final String name;
 
-  /// Encrypted channel description.
+  /// Channel description (plaintext within the signed manifest).
   final String description;
 
   /// Owner's Ed25519 public key, base64-encoded.
