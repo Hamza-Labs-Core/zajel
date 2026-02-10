@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/providers/app_providers.dart';
+import '../../shared/widgets/warning_box.dart';
 
 /// First-launch onboarding screen with a 4-step swipeable tutorial.
 class OnboardingScreen extends ConsumerStatefulWidget {
@@ -193,46 +194,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 24),
-          Builder(builder: (context) {
-            final isDark = Theme.of(context).brightness == Brightness.dark;
-            final warningBg = isDark
-                ? Colors.orange.shade900.withValues(alpha: 0.2)
-                : Colors.orange.shade50;
-            final warningBorder = isDark
-                ? Colors.orange.shade700.withValues(alpha: 0.4)
-                : Colors.orange.shade200;
-            final warningFg =
-                isDark ? Colors.orange.shade300 : Colors.orange.shade900;
-            final warningIcon =
-                isDark ? Colors.orange.shade400 : Colors.orange.shade800;
-
-            return Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: warningBg,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: warningBorder),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(Icons.warning_amber, color: warningIcon, size: 20),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'If you uninstall this app, your identity is permanently '
-                      'lost. There is no recovery mechanism. All your contacts '
-                      'will need to re-pair with you.',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: warningFg,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }),
+          const WarningBox(
+            body: 'If you uninstall this app, your identity is permanently '
+                'lost. There is no recovery mechanism. All your contacts '
+                'will need to re-pair with you.',
+          ),
         ],
       ),
     );

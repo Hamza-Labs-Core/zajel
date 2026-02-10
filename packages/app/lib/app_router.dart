@@ -30,8 +30,11 @@ final appRouter = GoRouter(
   navigatorKey: rootNavigatorKey,
   initialLocation: '/',
   redirect: (context, state) {
-    // Only redirect the home route; skip provider reads for all other routes
+    // Only redirect the home route; skip provider reads for all other routes.
     if (state.matchedLocation != '/') return null;
+    // Safe to read synchronously: sharedPreferencesProvider is overridden with
+    // an already-resolved value in main.dart before MaterialApp builds, so
+    // hasSeenOnboardingProvider (which derives from it) is always available.
     final container = ProviderScope.containerOf(context);
     final seen = container.read(hasSeenOnboardingProvider);
     if (!seen) return '/onboarding';

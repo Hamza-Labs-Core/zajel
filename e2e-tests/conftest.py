@@ -14,7 +14,13 @@ import asyncio
 import os
 import subprocess
 import threading
+import time as _time
 import pytest
+
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.common.exceptions import NoSuchElementException
 
 from config import SIGNALING_URL
 
@@ -296,9 +302,6 @@ class AppHelper:
 
     def _dismiss_onboarding(self):
         """Dismiss the onboarding screen if present (first launch after pm clear)."""
-        import time as _time
-        from selenium.webdriver.common.by import By
-
         try:
             skip_btn = self.driver.find_element(
                 By.XPATH,
@@ -309,8 +312,6 @@ class AppHelper:
             skip_btn.click()
             _time.sleep(2)
             # Re-wait for the actual home screen after onboarding dismissal
-            from selenium.webdriver.support.ui import WebDriverWait
-            from selenium.webdriver.support import expected_conditions as EC
             home_screen_xpath = (
                 "//*[@package='com.zajel.zajel' and "
                 "(contains(@text, 'Code:') or contains(@content-desc, 'Code:') or "
