@@ -251,10 +251,13 @@ export class FederationManager extends EventEmitter {
       metadata: entry.metadata,
     });
 
-    // Try to connect via transport
-    this.transport.connect(entry).catch((error) => {
-      console.warn(`[Federation] Failed to connect to discovered peer ${peer.serverId}:`, error);
-    });
+    // Note: we intentionally do NOT initiate a transport connection here.
+    // Adding the peer to membership + ring is sufficient for routing.
+    // The actual WebSocket connection will be established when:
+    // 1. The peer connects to us (incoming), or
+    // 2. The gossip protocol's periodic sync triggers a connection
+    // Eagerly connecting causes issues: double /federation path, reconnect
+    // loops blocking shutdown, and test hangs.
   }
 
   /**
@@ -328,9 +331,8 @@ export class FederationManager extends EventEmitter {
    */
   private async connectToBootstrap(endpoint: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const federationUrl = this.getFederationUrl(endpoint);
-      console.log(`[Federation] Connecting to bootstrap at ${federationUrl}`);
-      const ws = new WsWebSocket(federationUrl);
+      console.log(`[Federation] Connecting to bootstrap at ${endpoint}`);
+      const ws = new WsWebSocket(endpoint);
 
       const timeout = setTimeout(() => {
         ws.close();
