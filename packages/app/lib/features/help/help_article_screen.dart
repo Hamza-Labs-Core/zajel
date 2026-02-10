@@ -82,20 +82,27 @@ class HelpArticleScreen extends ConsumerWidget {
 
   Widget _buildArticleSection(BuildContext context, HelpSection section) {
     if (section.isWarning) {
+      final isDark = Theme.of(context).brightness == Brightness.dark;
+      final warningBg =
+          isDark ? Colors.orange.shade900.withValues(alpha: 0.2) : Colors.orange.shade50;
+      final warningBorder =
+          isDark ? Colors.orange.shade700.withValues(alpha: 0.4) : Colors.orange.shade200;
+      final warningFg = isDark ? Colors.orange.shade300 : Colors.orange.shade900;
+      final warningIcon = isDark ? Colors.orange.shade400 : Colors.orange.shade800;
+
       return Padding(
         padding: const EdgeInsets.only(bottom: 20),
         child: Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: Colors.orange.shade50,
+            color: warningBg,
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.orange.shade200),
+            border: Border.all(color: warningBorder),
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.warning_amber,
-                  color: Colors.orange.shade800, size: 20),
+              Icon(Icons.warning_amber, color: warningIcon, size: 20),
               const SizedBox(width: 8),
               Expanded(
                 child: Column(
@@ -106,7 +113,7 @@ class HelpArticleScreen extends ConsumerWidget {
                         section.header!,
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
-                          color: Colors.orange.shade900,
+                          color: warningFg,
                         ),
                       ),
                       const SizedBox(height: 4),
@@ -115,7 +122,7 @@ class HelpArticleScreen extends ConsumerWidget {
                       section.body,
                       style: TextStyle(
                         fontSize: 14,
-                        color: Colors.orange.shade900,
+                        color: warningFg,
                       ),
                     ),
                   ],

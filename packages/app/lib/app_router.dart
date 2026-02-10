@@ -30,9 +30,11 @@ final appRouter = GoRouter(
   navigatorKey: rootNavigatorKey,
   initialLocation: '/',
   redirect: (context, state) {
+    // Only redirect the home route; skip provider reads for all other routes
+    if (state.matchedLocation != '/') return null;
     final container = ProviderScope.containerOf(context);
     final seen = container.read(hasSeenOnboardingProvider);
-    if (!seen && state.matchedLocation == '/') return '/onboarding';
+    if (!seen) return '/onboarding';
     return null;
   },
   routes: [

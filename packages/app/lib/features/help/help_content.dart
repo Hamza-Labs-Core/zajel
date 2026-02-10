@@ -354,7 +354,7 @@ class HelpContent {
   static HelpArticle? findArticle(String id) {
     try {
       return articles.firstWhere((article) => article.id == id);
-    } catch (_) {
+    } on StateError {
       return null;
     }
   }
