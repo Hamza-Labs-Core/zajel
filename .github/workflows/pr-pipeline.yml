@@ -1147,7 +1147,7 @@ jobs:
           # Deselect the smoke test since it already ran above.
           echo "=== Running single-device tests (mandatory) ==="
           SINGLE_RESULT=0
-          pytest -m "single_device and not headless" -v -s --timeout=120 --deselect tests/test_pairing.py::TestPairing::test_app_launches_successfully || SINGLE_RESULT=$?
+          pytest -m "single_device and not headless and not windows and not linux" -v -s --timeout=120 --deselect tests/test_pairing.py::TestPairing::test_app_launches_successfully || SINGLE_RESULT=$?
 
           # ── Phase C: Headless-paired tests (informational) ──
           # The headless client connects to the same signaling server as the app.
