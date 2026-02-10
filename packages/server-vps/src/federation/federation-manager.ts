@@ -58,6 +58,7 @@ export class FederationManager extends EventEmitter {
   private bootstrapAttempts = 0;
   private bootstrapTimer: NodeJS.Timeout | null = null;
   private isShutdown = false;
+  private suppressTransportConnect = false;
 
   constructor(
     identity: ServerIdentity,
@@ -239,10 +240,19 @@ export class FederationManager extends EventEmitter {
       metadata: { region: peer.region },
     };
 
-    // Add to gossip membership
-    this.gossip.getMembership().upsert(entry);
+    // Suppress transport.connect() triggered by the member-join event chain.
+    // membership.upsert() → member-join → setupGossipEvents handler would
+    // call transport.connect(), but we don't want that here — the peer will
+    // connect to us (incoming) or gossip periodic sync will trigger it later.
+    this.suppressTransportConnect = true;
+    try {
+      // Add to gossip membership (triggers member-join → ring.addNode)
+      this.gossip.getMembership().upsert(entry);
+    } finally {
+      this.suppressTransportConnect = false;
+    }
 
-    // Add to ring
+    // Ensure ring has the node (member-join handler also adds, but be safe)
     this.ring.addNode({
       serverId: entry.serverId,
       nodeId: entry.nodeId,
@@ -250,14 +260,6 @@ export class FederationManager extends EventEmitter {
       status: 'alive',
       metadata: entry.metadata,
     });
-
-    // Note: we intentionally do NOT initiate a transport connection here.
-    // Adding the peer to membership + ring is sufficient for routing.
-    // The actual WebSocket connection will be established when:
-    // 1. The peer connects to us (incoming), or
-    // 2. The gossip protocol's periodic sync triggers a connection
-    // Eagerly connecting causes issues: double /federation path, reconnect
-    // loops blocking shutdown, and test hangs.
   }
 
   /**
@@ -407,10 +409,13 @@ export class FederationManager extends EventEmitter {
         metadata: entry.metadata,
       });
 
-      // Try to connect
-      this.transport.connect(entry).catch(() => {
-        // Will retry later
-      });
+      // Try to connect (unless suppressed by addDiscoveredPeer which handles
+      // peers from bootstrap — those connect lazily via incoming or gossip sync)
+      if (!this.suppressTransportConnect) {
+        this.transport.connect(entry).catch(() => {
+          // Will retry later
+        });
+      }
 
       this.emit('member-join', entry);
     });
