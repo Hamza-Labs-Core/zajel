@@ -1019,6 +1019,42 @@ jobs:
           echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
           echo "Resolved SIGNALING_URL=${URL:-<empty>}"
 
+      - name: Setup TURN relay (coturn)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq coturn
+          HOST_IP=$(hostname -I | awk '{print $1}')
+          echo "Host IP for TURN: $HOST_IP"
+
+          sudo tee /etc/turnserver.conf > /dev/null <<CONF
+          listening-ip=0.0.0.0
+          listening-port=3478
+          relay-ip=$HOST_IP
+          external-ip=$HOST_IP
+          min-port=49152
+          max-port=49252
+          realm=zajel-ci
+          user=test:test
+          lt-cred-mech
+          no-tls
+          no-dtls
+          no-cli
+          fingerprint
+          log-file=/tmp/coturn.log
+          CONF
+
+          sudo turnserver -c /etc/turnserver.conf &
+          sleep 2
+
+          if ss -tlnp | grep -q ':3478'; then
+            echo "coturn running on port 3478"
+          else
+            echo "ERROR: coturn failed to start"; cat /tmp/coturn.log; exit 1
+          fi
+
+          echo "TURN_URL=turn:${HOST_IP}:3478" >> "$GITHUB_ENV"
+          echo "TURN_USER=test" >> "$GITHUB_ENV"
+          echo "TURN_PASS=test" >> "$GITHUB_ENV"
+
       - name: Build E2E APK
         working-directory: packages/app
         run: |
@@ -1027,7 +1063,10 @@ jobs:
             --dart-define=ENV=qa \
             --dart-define=E2E_TEST=true \
             --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
-            --dart-define=SIGNALING_URL=${{ env.SIGNALING_URL }}
+            --dart-define=SIGNALING_URL=${{ env.SIGNALING_URL }} \
+            --dart-define=TURN_URL=${{ env.TURN_URL }} \
+            --dart-define=TURN_USER=${{ env.TURN_USER }} \
+            --dart-define=TURN_PASS=${{ env.TURN_PASS }}
 
       - name: Free up disk space
         run: |
@@ -1096,6 +1135,9 @@ jobs:
           APPIUM_SERVER_COUNT: "2"
           E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-artifacts/e2e
           SIGNALING_URL: ${{ env.SIGNALING_URL }}
+          TURN_URL: ${{ env.TURN_URL }}
+          TURN_USER: ${{ env.TURN_USER }}
+          TURN_PASS: ${{ env.TURN_PASS }}
         working-directory: ${{ github.workspace }}/e2e-tests
         run: |
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
@@ -1149,18 +1191,11 @@ jobs:
           SINGLE_RESULT=0
           pytest -m "single_device and not headless" -v -s --timeout=120 --deselect tests/test_pairing.py::TestPairing::test_app_launches_successfully || SINGLE_RESULT=$?
 
-          # ── Phase C: Headless-paired tests (informational) ──
-          # The headless client connects to the same signaling server as the app.
-          # These tests need WebRTC between the emulator (10.0.2.x virtual network)
-          # and the host — which requires a TURN relay not yet configured on CI.
-          # Run them for visibility but don't gate the pipeline on them.
+          # ── Phase C: Headless-paired tests (mandatory with TURN relay) ──
           HEADLESS_RESULT=0
           if [ -n "$SIGNALING_URL" ]; then
-            echo "=== Running headless-paired tests (informational) ==="
+            echo "=== Running headless-paired tests ==="
             pytest -m "headless and single_device" -v -s --timeout=300 || HEADLESS_RESULT=$?
-            if [ $HEADLESS_RESULT -ne 0 ]; then
-              echo "::warning::Headless-paired tests failed (expected — WebRTC between emulator and host needs TURN relay)"
-            fi
           else
             echo "=== Skipping headless tests (SIGNALING_URL not set) ==="
           fi
@@ -1176,13 +1211,10 @@ jobs:
             echo "=== Skipping signaling tests (SIGNALING_URL not set) ==="
           fi
 
-          # ── Phase E: Multi-device pairing probe (informational) ──
-          # P2P between emulators on CI requires TURN relay which isn't
-          # configured yet. Run one pairing test as a connectivity probe
-          # but don't fail the pipeline on it.
-          echo "=== Running pairing probe (informational) ==="
-          pytest tests/test_pairing.py::TestPairing::test_two_devices_can_pair -v -s --timeout=300 || true
-          echo "Note: Multi-device tests are informational until TURN relay is configured for CI."
+          # ── Phase E: Multi-device pairing test (mandatory with TURN relay) ──
+          PAIRING_RESULT=0
+          echo "=== Running two-device pairing test ==="
+          pytest tests/test_pairing.py::TestPairing::test_two_devices_can_pair -v -s --timeout=300 || PAIRING_RESULT=$?
 
           # Cleanup Appium
           kill $APPIUM1_PID $APPIUM2_PID 2>/dev/null || true
@@ -1195,6 +1227,14 @@ jobs:
           fi
           if [ $PROTOCOL_RESULT -ne 0 ]; then
             echo "FAILED: Signaling protocol tests"
+            FAILED=1
+          fi
+          if [ $HEADLESS_RESULT -ne 0 ]; then
+            echo "FAILED: Headless-paired tests"
+            FAILED=1
+          fi
+          if [ $PAIRING_RESULT -ne 0 ]; then
+            echo "FAILED: Multi-device pairing"
             FAILED=1
           fi
           if [ $FAILED -ne 0 ]; then
@@ -1212,6 +1252,7 @@ jobs:
           timeout 10 adb -s emulator-5554 logcat -d > test-artifacts/logcat-emu1.txt 2>&1 || true
           timeout 10 adb -s emulator-5556 logcat -d > test-artifacts/logcat-emu2.txt 2>&1 || true
           cp /tmp/appium*.log test-artifacts/ 2>/dev/null || true
+          cat /tmp/coturn.log >> test-artifacts/coturn.log 2>/dev/null || true
           # Collect E2E failure artifacts (screenshots, page sources)
           cp ${{ github.workspace }}/test-artifacts/e2e/* test-artifacts/ 2>/dev/null || true
 

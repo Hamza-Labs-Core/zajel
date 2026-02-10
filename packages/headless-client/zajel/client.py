@@ -105,6 +105,7 @@ class ZajelHeadlessClient:
         media_dir: str = "./test_media",
         receive_dir: str = "./received_files",
         db_path: str = "zajel_headless.db",
+        ice_servers: Optional[list] = None,
     ):
         self.signaling_url = signaling_url
         self.name = name
@@ -118,10 +119,19 @@ class ZajelHeadlessClient:
             format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         )
 
+        # Convert ice_servers dicts to RTCIceServer objects if provided
+        rtc_ice_servers = None
+        if ice_servers:
+            from aiortc import RTCIceServer
+            rtc_ice_servers = [
+                RTCIceServer(**s) if isinstance(s, dict) else s
+                for s in ice_servers
+            ]
+
         # Core services
         self._crypto = CryptoService()
         self._signaling = SignalingClient(signaling_url)
-        self._webrtc = WebRTCService()
+        self._webrtc = WebRTCService(ice_servers=rtc_ice_servers)
         self._storage = PeerStorage(db_path)
         self._events = EventEmitter()
 

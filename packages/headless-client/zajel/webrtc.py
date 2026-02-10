@@ -90,6 +90,11 @@ class WebRTCService:
         Returns:
             The created RTCPeerConnection.
         """
+        if self._force_relay:
+            logger.info(
+                "force_relay=True but aiortc does not support iceTransportPolicy; "
+                "TURN relay candidates will be used as fallback when direct candidates fail"
+            )
         config = RTCConfiguration(iceServers=self._ice_servers)
         self._pc = RTCPeerConnection(configuration=config)
 

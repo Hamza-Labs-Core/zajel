@@ -1100,11 +1100,23 @@ def headless_bob():
     if not SIGNALING_URL:
         pytest.skip("SIGNALING_URL not set — headless tests require a signaling server")
 
+    turn_url = os.environ.get("TURN_URL", "")
+    turn_user = os.environ.get("TURN_USER", "")
+    turn_pass = os.environ.get("TURN_PASS", "")
+
+    ice_servers = None
+    if turn_url:
+        ice_servers = [
+            {"urls": "stun:stun.l.google.com:19302"},
+            {"urls": turn_url, "username": turn_user, "credential": turn_pass},
+        ]
+
     bob = HeadlessBob(
         signaling_url=SIGNALING_URL,
         name="HeadlessBob",
         auto_accept_pairs=True,
         log_level="DEBUG",
+        ice_servers=ice_servers,
     )
     bob.connect()
     yield bob
