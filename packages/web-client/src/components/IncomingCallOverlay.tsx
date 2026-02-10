@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback } from 'preact/hooks';
+import { notifyIncomingCall } from '../lib/notifications';
 
 interface IncomingCallOverlayProps {
   callerName: string;
@@ -22,10 +23,11 @@ export function IncomingCallOverlay({
   const dialogRef = useRef<HTMLDivElement>(null);
   const acceptButtonRef = useRef<HTMLButtonElement>(null);
 
-  // Focus the accept button when the dialog opens
+  // Focus the accept button when the dialog opens and notify
   useEffect(() => {
     acceptButtonRef.current?.focus();
-  }, []);
+    notifyIncomingCall(callerName, withVideo);
+  }, [callerName, withVideo]);
 
   // Handle Escape key to reject
   useEffect(() => {

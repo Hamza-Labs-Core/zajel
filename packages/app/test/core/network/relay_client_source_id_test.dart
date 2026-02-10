@@ -79,8 +79,7 @@ void main() {
         client.registerSourceId('peer1', 'peer1_source_xyz');
 
         expect(client.getSourceId('peer1'), equals('peer1_source_xyz'));
-        expect(
-            client.getPeerIdBySourceId('peer1_source_xyz'), equals('peer1'));
+        expect(client.getPeerIdBySourceId('peer1_source_xyz'), equals('peer1'));
       });
 
       test('should update existing source ID mapping', () {
@@ -151,8 +150,7 @@ void main() {
         client.handlePeerHandshake('peer1', handshake);
 
         expect(client.getSourceId('peer1'), equals('peer1_source_xyz'));
-        expect(
-            client.getPeerIdBySourceId('peer1_source_xyz'), equals('peer1'));
+        expect(client.getPeerIdBySourceId('peer1_source_xyz'), equals('peer1'));
       });
 
       test('should handle handshake without sourceId', () {

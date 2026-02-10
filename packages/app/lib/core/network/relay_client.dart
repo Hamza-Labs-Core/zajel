@@ -82,8 +82,7 @@ class RelayClient {
   int get maxCapacity => _maxCapacity;
 
   /// Whether we're at capacity.
-  bool get isAtCapacity =>
-      _maxCapacity > 0 && _currentLoad >= _maxCapacity;
+  bool get isAtCapacity => _maxCapacity > 0 && _currentLoad >= _maxCapacity;
 
   /// Available capacity.
   int get availableCapacity =>
@@ -119,7 +118,8 @@ class RelayClient {
       try {
         await _connectToRelay(relay);
       } catch (e) {
-        logger.error('RelayClient', 'Failed to connect to relay ${relay.peerId}', e);
+        logger.error(
+            'RelayClient', 'Failed to connect to relay ${relay.peerId}', e);
         _stateController.add(RelayStateEvent(
           relayId: relay.peerId,
           state: RelayConnectionState.failed,
@@ -215,8 +215,7 @@ class RelayClient {
     // Find the target peer
     final targetPeerId = _sourceIdToPeerId[request.targetSourceId];
 
-    if (targetPeerId == null ||
-        !_relayConnections.containsKey(targetPeerId)) {
+    if (targetPeerId == null || !_relayConnections.containsKey(targetPeerId)) {
       // Target not connected to us
       await _sendIntroductionError(
         fromPeerId,
@@ -294,8 +293,7 @@ class RelayClient {
   List<String> getAllRegisteredPeers() => _peerIdToSourceId.keys.toList();
 
   /// Get all registered source IDs.
-  List<String> getAllRegisteredSourceIds() =>
-      _sourceIdToPeerId.keys.toList();
+  List<String> getAllRegisteredSourceIds() => _sourceIdToPeerId.keys.toList();
 
   /// Clear all source ID mappings.
   void clearAllSourceIdMappings() {
@@ -304,8 +302,7 @@ class RelayClient {
   }
 
   /// Export source ID mappings for persistence.
-  Map<String, String> exportSourceIdMappings() =>
-      Map.from(_peerIdToSourceId);
+  Map<String, String> exportSourceIdMappings() => Map.from(_peerIdToSourceId);
 
   /// Import source ID mappings from persistence.
   void importSourceIdMappings(Map<String, String> mappings) {
@@ -388,8 +385,7 @@ class RelayClient {
           handlePeerHandshake(peerId, msg);
           break;
         case 'introduction_request':
-          handleIntroductionRequest(
-              peerId, IntroductionRequest.fromJson(msg));
+          handleIntroductionRequest(peerId, IntroductionRequest.fromJson(msg));
           break;
         case 'introduction_forward':
           handleIntroductionResponse(

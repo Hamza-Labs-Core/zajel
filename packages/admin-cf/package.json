@@ -9,6 +9,7 @@
     "deploy": "wrangler deploy",
     "tail": "wrangler tail",
     "test": "vitest run",
+    "test:e2e": "vitest run tests/e2e/",
     "test:watch": "vitest",
     "build:dashboard": "vite build",
     "dev:dashboard": "vite"
