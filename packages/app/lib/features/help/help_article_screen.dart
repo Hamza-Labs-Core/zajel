@@ -1,17 +1,16 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../shared/widgets/warning_box.dart';
 import 'help_content.dart';
 
 /// Screen that displays a single help article with rich text content.
-class HelpArticleScreen extends ConsumerWidget {
+class HelpArticleScreen extends StatelessWidget {
   final String articleId;
 
   const HelpArticleScreen({super.key, required this.articleId});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final article = HelpContent.findArticle(articleId);
 
     if (article == null) {
