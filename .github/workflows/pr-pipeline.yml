@@ -996,6 +996,16 @@ jobs:
           pip install -r e2e-tests/requirements.txt
           pip install -e packages/headless-client
 
+      - name: Resolve signaling URL
+        run: |
+          URL="${{ vars.VPS_QA_WS_URL }}"
+          if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
+            FIRST_IP=$(echo "${{ vars.QA_VPS_IP }}" | cut -d',' -f1 | tr -d ' ')
+            URL="ws://${FIRST_IP}:9001"
+          fi
+          echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
+          echo "Resolved SIGNALING_URL=$URL"
+
       - name: Build E2E APK
         working-directory: packages/app
         run: |
@@ -1004,7 +1014,7 @@ jobs:
             --dart-define=ENV=qa \
             --dart-define=E2E_TEST=true \
             --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
-            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || (vars.QA_VPS_IP && format('ws://{0}:9001', vars.QA_VPS_IP)) || '' }}
+            --dart-define=SIGNALING_URL=${{ env.SIGNALING_URL }}
 
       - name: Free up disk space
         run: |
@@ -1072,7 +1082,7 @@ jobs:
           ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
           APPIUM_SERVER_COUNT: "2"
           E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-artifacts/e2e
-          SIGNALING_URL: ${{ vars.VPS_QA_WS_URL || (vars.QA_VPS_IP && format('ws://{0}:9001', vars.QA_VPS_IP)) || '' }}
+          SIGNALING_URL: ${{ env.SIGNALING_URL }}
         working-directory: ${{ github.workspace }}/e2e-tests
         run: |
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
@@ -1420,11 +1430,21 @@ jobs:
           kill $APP_PID 2>/dev/null || true
           wait $APP_PID 2>/dev/null || true
 
+      - name: Resolve signaling URL
+        run: |
+          URL="${{ vars.VPS_QA_WS_URL }}"
+          if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
+            FIRST_IP=$(echo "${{ vars.QA_VPS_IP }}" | cut -d',' -f1 | tr -d ' ')
+            URL="ws://${FIRST_IP}:9001"
+          fi
+          echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
+          echo "Resolved SIGNALING_URL=$URL"
+
       - name: Run Linux E2E tests
         env:
           CI: 'true'
           ZAJEL_APP_PATH: ${{ github.workspace }}/linux-app/zajel
-          SIGNALING_URL: ${{ vars.VPS_QA_WS_URL || (vars.QA_VPS_IP && format('ws://{0}:9001', vars.QA_VPS_IP)) || '' }}
+          SIGNALING_URL: ${{ env.SIGNALING_URL }}
         run: |
           set +e
 
@@ -1501,11 +1521,22 @@ jobs:
           pip install -r e2e-tests-windows\requirements.txt
           pip install -e packages\headless-client
 
+      - name: Resolve signaling URL
+        shell: bash
+        run: |
+          URL="${{ vars.VPS_QA_WS_URL }}"
+          if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
+            FIRST_IP=$(echo "${{ vars.QA_VPS_IP }}" | cut -d',' -f1 | tr -d ' ')
+            URL="ws://${FIRST_IP}:9001"
+          fi
+          echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
+          echo "Resolved SIGNALING_URL=$URL"
+
       - name: Run Windows E2E tests
         timeout-minutes: 20
         env:
           ZAJEL_APP_PATH: ${{ github.workspace }}\windows-app\zajel.exe
-          SIGNALING_URL: ${{ vars.VPS_QA_WS_URL || (vars.QA_VPS_IP && format('ws://{0}:9001', vars.QA_VPS_IP)) || '' }}
+          SIGNALING_URL: ${{ env.SIGNALING_URL }}
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
