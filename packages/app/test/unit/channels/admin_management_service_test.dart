@@ -7,9 +7,7 @@ import 'package:zajel/features/channels/models/chunk.dart';
 import 'package:zajel/features/channels/services/admin_management_service.dart';
 import 'package:zajel/features/channels/services/channel_crypto_service.dart';
 import 'package:zajel/features/channels/services/channel_service.dart';
-import 'package:zajel/features/channels/services/channel_storage_service.dart';
 
-import '../../mocks/mocks.dart';
 import 'channel_service_test.dart';
 
 void main() {
@@ -298,8 +296,7 @@ void main() {
 
     test('isAuthorizedAdmin returns true for appointed admin', () {
       expect(
-        adminService.isAuthorizedAdmin(
-            ownerChannel.manifest, adminPublicKey),
+        adminService.isAuthorizedAdmin(ownerChannel.manifest, adminPublicKey),
         isTrue,
       );
     });
@@ -314,8 +311,7 @@ void main() {
 
     test('isAuthorizedAdmin returns false for unknown key', () {
       expect(
-        adminService.isAuthorizedAdmin(
-            ownerChannel.manifest, 'unknown-key'),
+        adminService.isAuthorizedAdmin(ownerChannel.manifest, 'unknown-key'),
         isFalse,
       );
     });
@@ -338,8 +334,7 @@ void main() {
 
     test('isAuthorizedPublisher returns false for random key', () {
       expect(
-        adminService.isAuthorizedPublisher(
-            ownerChannel.manifest, 'random-key'),
+        adminService.isAuthorizedPublisher(ownerChannel.manifest, 'random-key'),
         isFalse,
       );
     });
@@ -556,8 +551,7 @@ void main() {
       );
     });
 
-    test('rotateEncryptionKeyForRemoval generates new key and epoch',
-        () async {
+    test('rotateEncryptionKeyForRemoval generates new key and epoch', () async {
       final oldEpoch = ownerChannel.manifest.keyEpoch;
       final oldEncKey = ownerChannel.encryptionKeyPublic;
 
@@ -569,7 +563,8 @@ void main() {
       expect(updated.encryptionKeyPublic, isNot(oldEncKey));
       expect(updated.manifest.currentEncryptKey, updated.encryptionKeyPublic);
       expect(updated.encryptionKeyPrivate, isNotNull);
-      expect(updated.encryptionKeyPrivate, isNot(ownerChannel.encryptionKeyPrivate));
+      expect(updated.encryptionKeyPrivate,
+          isNot(ownerChannel.encryptionKeyPrivate));
 
       final isValid = await cryptoService.verifyManifest(updated.manifest);
       expect(isValid, isTrue);
@@ -818,8 +813,7 @@ void main() {
           chunk: chunk,
           manifest: channelAfterRemoval.manifest,
           trustedOwnerKey: channelAfterRemoval.manifest.ownerKey,
-          encryptionPrivateKeyBase64:
-              channelAfterRemoval.encryptionKeyPrivate!,
+          encryptionPrivateKeyBase64: channelAfterRemoval.encryptionKeyPrivate!,
         ),
         throwsA(isA<ChannelCryptoException>().having(
           (e) => e.message,

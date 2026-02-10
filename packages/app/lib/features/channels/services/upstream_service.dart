@@ -7,7 +7,6 @@ import 'package:uuid/uuid.dart';
 
 import '../models/channel.dart';
 import '../models/upstream_message.dart';
-import 'channel_crypto_service.dart';
 
 /// Callback type for sending messages over WebSocket.
 typedef WebSocketSender = void Function(Map<String, dynamic> message);
@@ -23,7 +22,6 @@ typedef UpstreamMessageHandler = void Function(UpstreamMessage message);
 /// - VPS routes to owner only
 /// - Neither party sees the other's IP
 class UpstreamService {
-  final ChannelCryptoService _cryptoService;
   final _uuid = const Uuid();
   final X25519 _x25519 = X25519();
   final Chacha20 _chacha20 = Chacha20.poly1305Aead();
@@ -41,9 +39,7 @@ class UpstreamService {
   /// WebSocket sender function (set when connected).
   WebSocketSender? _sender;
 
-  UpstreamService({
-    required ChannelCryptoService cryptoService,
-  }) : _cryptoService = cryptoService;
+  UpstreamService();
 
   /// Set the WebSocket sender for outgoing messages.
   void setSender(WebSocketSender sender) {
@@ -171,7 +167,8 @@ class UpstreamService {
     final ephemeralPublicKey = await ephemeralKeyPair.extractPublicKey();
 
     // Derive a shared secret with the owner's encryption public key
-    final ownerPublicKeyBytes = base64Decode(channel.manifest.currentEncryptKey);
+    final ownerPublicKeyBytes =
+        base64Decode(channel.manifest.currentEncryptKey);
     final ownerPublicKey = SimplePublicKey(
       ownerPublicKeyBytes,
       type: KeyPairType.x25519,
@@ -349,8 +346,8 @@ class UpstreamService {
       if (payload.replyTo == null) continue;
 
       final parentId = payload.replyTo!;
-      final existing = threads[parentId] ??
-          ReplyThread(parentMessageId: parentId);
+      final existing =
+          threads[parentId] ?? ReplyThread(parentMessageId: parentId);
       threads[parentId] = existing.addReply(payload);
     }
 

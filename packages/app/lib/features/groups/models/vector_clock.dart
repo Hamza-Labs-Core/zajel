@@ -13,8 +13,7 @@ class VectorClock extends Equatable {
   /// Each entry represents the highest sequence number seen from that device.
   final Map<String, int> _clock;
 
-  const VectorClock([Map<String, int>? clock])
-      : _clock = clock ?? const {};
+  const VectorClock([Map<String, int>? clock]) : _clock = clock ?? const {};
 
   /// Create a vector clock from a map.
   factory VectorClock.fromMap(Map<String, int> map) {

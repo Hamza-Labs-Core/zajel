@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zajel/features/channels/services/channel_crypto_service.dart';
 import 'package:zajel/features/channels/services/routing_hash_service.dart';
@@ -46,8 +44,7 @@ void main() {
       expect(hash1, hash2);
     });
 
-    test('same secret, same hour produce same hash (hourly epoch)',
-        () async {
+    test('same secret, same hour produce same hash (hourly epoch)', () async {
       final time1 = DateTime.utc(2026, 2, 10, 12, 0, 0);
       final time2 = DateTime.utc(2026, 2, 10, 12, 30, 0);
       final time3 = DateTime.utc(2026, 2, 10, 12, 59, 59);
@@ -316,12 +313,14 @@ void main() {
       );
 
       expect(range.length, 4); // 12, 13, 14, 15
-      expect(range.first,
+      expect(
+          range.first,
           routingHashService.getCurrentEpochNumber(
             epochDuration: RoutingHashEpochDuration.hourly,
             now: from,
           ));
-      expect(range.last,
+      expect(
+          range.last,
           routingHashService.getCurrentEpochNumber(
             epochDuration: RoutingHashEpochDuration.hourly,
             now: to,
@@ -340,8 +339,7 @@ void main() {
       expect(range.length, 1);
     });
 
-    test('getEpochRange works for daily epochs spanning multiple days',
-        () {
+    test('getEpochRange works for daily epochs spanning multiple days', () {
       final from = DateTime.utc(2026, 2, 10);
       final to = DateTime.utc(2026, 2, 13);
 
@@ -462,8 +460,8 @@ void main() {
       routingHashService.addNode('https://vps1.example.com');
 
       expect(routingHashService.knownNodes, hasLength(1));
-      expect(routingHashService.knownNodes.first.url,
-          'https://vps1.example.com');
+      expect(
+          routingHashService.knownNodes.first.url, 'https://vps1.example.com');
     });
 
     test('addNode ignores duplicate URLs', () {
@@ -479,16 +477,16 @@ void main() {
       routingHashService.removeNode('https://vps1.example.com');
 
       expect(routingHashService.knownNodes, hasLength(1));
-      expect(routingHashService.knownNodes.first.url,
-          'https://vps2.example.com');
+      expect(
+          routingHashService.knownNodes.first.url, 'https://vps2.example.com');
     });
 
     test('knownNodes returns unmodifiable list', () {
       routingHashService.addNode('https://vps1.example.com');
 
       expect(
-        () => routingHashService.knownNodes.add(
-            VpsNodeHealth(url: 'https://hack.example.com')),
+        () => routingHashService.knownNodes
+            .add(VpsNodeHealth(url: 'https://hack.example.com')),
         throwsA(isA<UnsupportedError>()),
       );
     });

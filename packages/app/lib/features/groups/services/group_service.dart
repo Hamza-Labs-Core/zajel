@@ -109,8 +109,7 @@ class GroupService {
     }
 
     if (group.memberCount >= maxMembers) {
-      throw GroupServiceException(
-          'Group is full: maximum $maxMembers members');
+      throw GroupServiceException('Group is full: maximum $maxMembers members');
     }
 
     // Check for duplicate member
@@ -120,7 +119,8 @@ class GroupService {
     }
 
     // Store sender key
-    _cryptoService.setSenderKey(groupId, newMember.deviceId, newMemberSenderKey);
+    _cryptoService.setSenderKey(
+        groupId, newMember.deviceId, newMemberSenderKey);
     await _storageService.saveSenderKey(
         groupId, newMember.deviceId, newMemberSenderKey);
 

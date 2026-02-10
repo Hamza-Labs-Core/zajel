@@ -75,8 +75,7 @@ final channelSyncServiceProvider = Provider<ChannelSyncService>((ref) {
 
 /// Provider for the upstream service (handles subscriber -> owner messaging).
 final upstreamServiceProvider = Provider<UpstreamService>((ref) {
-  final cryptoService = ref.watch(channelCryptoServiceProvider);
-  return UpstreamService(cryptoService: cryptoService);
+  return UpstreamService();
 });
 
 /// Provider for the poll service (poll creation, voting, and tallying).

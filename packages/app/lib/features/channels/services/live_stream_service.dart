@@ -135,8 +135,7 @@ class LiveStreamService {
     required Uint8List data,
     required Channel channel,
   }) async {
-    if (_activeStream == null ||
-        _activeStream!.state != LiveStreamState.live) {
+    if (_activeStream == null || _activeStream!.state != LiveStreamState.live) {
       throw LiveStreamServiceException('No active live stream');
     }
     if (channel.encryptionKeyPrivate == null) {
@@ -151,9 +150,8 @@ class LiveStreamService {
     }
 
     final frameIndex = _activeStream!.frameCount;
-    final timestampMs = DateTime.now()
-        .difference(_activeStream!.startedAt)
-        .inMilliseconds;
+    final timestampMs =
+        DateTime.now().difference(_activeStream!.startedAt).inMilliseconds;
 
     // Encrypt the frame data using the channel's content key
     final payload = ChunkPayload(
@@ -208,8 +206,7 @@ class LiveStreamService {
   ///
   /// Sends a stream-end message and updates the metadata.
   LiveStreamMetadata endStream() {
-    if (_activeStream == null ||
-        _activeStream!.state != LiveStreamState.live) {
+    if (_activeStream == null || _activeStream!.state != LiveStreamState.live) {
       throw LiveStreamServiceException('No active live stream to end');
     }
 
@@ -317,8 +314,7 @@ class LiveStreamService {
     const framesPerChunk = 50;
 
     for (var i = 0; i < _recordedFrames.length; i += framesPerChunk) {
-      final end =
-          (i + framesPerChunk).clamp(0, _recordedFrames.length);
+      final end = (i + framesPerChunk).clamp(0, _recordedFrames.length);
       final batch = _recordedFrames.sublist(i, end);
 
       // Serialize the batch of frames

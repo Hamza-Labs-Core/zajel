@@ -176,8 +176,7 @@ class GroupStorageService {
     final db = _requireDb();
     final rows = await db.query(
       _messagesTable,
-      where:
-          'group_id = ? AND author_device_id = ? AND sequence_number = ?',
+      where: 'group_id = ? AND author_device_id = ? AND sequence_number = ?',
       whereArgs: [groupId, authorDeviceId, sequenceNumber],
       limit: 1,
     );

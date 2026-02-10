@@ -117,8 +117,8 @@ class RoutingHashService {
 
   /// History of fetch results per routing hash, for censorship detection.
   /// Maps routing_hash -> list of (vps_url, FetchResult) pairs.
-  final Map<String, List<({String vpsUrl, FetchResult result})>>
-      _fetchHistory = {};
+  final Map<String, List<({String vpsUrl, FetchResult result})>> _fetchHistory =
+      {};
 
   // ---------------------------------------------------------------------------
   // Routing hash derivation
@@ -258,8 +258,8 @@ class RoutingHashService {
 
     if (blockingNodes.isEmpty) {
       // Check for general network issues
-      final allNetworkErrors = results.every(
-          (r) => r.result == FetchResult.networkError);
+      final allNetworkErrors =
+          results.every((r) => r.result == FetchResult.networkError);
       if (allNetworkErrors && results.length >= 2) {
         return const CensorshipDetectionResult(
           isCensored: false,
@@ -288,8 +288,7 @@ class RoutingHashService {
     return CensorshipDetectionResult(
       isCensored: true,
       type: CensorshipType.routingHashBlocked,
-      description:
-          'Routing hash appears blocked by ${blockingNodes.first}',
+      description: 'Routing hash appears blocked by ${blockingNodes.first}',
     );
   }
 
@@ -323,9 +322,7 @@ class RoutingHashService {
   VpsNodeHealth? getBestNode() {
     if (_knownNodes.isEmpty) return null;
 
-    final available = _knownNodes
-        .where((n) => !n.suspectedBlocking)
-        .toList();
+    final available = _knownNodes.where((n) => !n.suspectedBlocking).toList();
 
     if (available.isEmpty) {
       // All nodes are suspected of blocking; try the least-bad one
@@ -353,14 +350,10 @@ class RoutingHashService {
   List<VpsNodeHealth> getNodeFallbackOrder() {
     if (_knownNodes.isEmpty) return [];
 
-    final notBlocking = _knownNodes
-        .where((n) => !n.suspectedBlocking)
-        .toList()
+    final notBlocking = _knownNodes.where((n) => !n.suspectedBlocking).toList()
       ..sort((a, b) => b.successRate.compareTo(a.successRate));
 
-    final blocking = _knownNodes
-        .where((n) => n.suspectedBlocking)
-        .toList()
+    final blocking = _knownNodes.where((n) => n.suspectedBlocking).toList()
       ..sort((a, b) => b.successRate.compareTo(a.successRate));
 
     return [...notBlocking, ...blocking];
@@ -387,8 +380,7 @@ class RoutingHashService {
   // Internal helpers
   // ---------------------------------------------------------------------------
 
-  String _computeEpochString(
-      DateTime time, RoutingHashEpochDuration duration) {
+  String _computeEpochString(DateTime time, RoutingHashEpochDuration duration) {
     final epochNumber = _getEpochNumber(time, duration);
     return 'epoch:${duration.name}:$epochNumber';
   }

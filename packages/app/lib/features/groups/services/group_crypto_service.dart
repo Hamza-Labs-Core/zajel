@@ -17,14 +17,9 @@ import 'package:cryptography/cryptography.dart';
 /// new sender keys and redistribute them.
 class GroupCryptoService {
   final Chacha20 _chacha20 = Chacha20.poly1305Aead();
-  late final Hkdf _hkdf;
 
   /// In-memory cache of sender keys: {groupId: {deviceId: senderKey}}
   final Map<String, Map<String, SecretKey>> _senderKeys = {};
-
-  GroupCryptoService() {
-    _hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
-  }
 
   // ---------------------------------------------------------------------------
   // Sender key generation

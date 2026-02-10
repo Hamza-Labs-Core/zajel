@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import '../models/chunk.dart';
 import 'channel_service.dart';

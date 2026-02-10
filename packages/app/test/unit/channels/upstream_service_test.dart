@@ -23,7 +23,7 @@ void main() {
       cryptoService: cryptoService,
       storageService: storageService,
     );
-    upstreamService = UpstreamService(cryptoService: cryptoService);
+    upstreamService = UpstreamService();
   });
 
   group('UpstreamPayload', () {

@@ -1,6 +1,3 @@
-import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zajel/features/groups/models/group.dart';
 import 'package:zajel/features/groups/models/group_message.dart';
@@ -98,7 +95,6 @@ void main() {
 
   group('Member management', () {
     late Group group;
-    late String aliceSenderKey;
 
     setUp(() async {
       final result = await groupService.createGroup(
@@ -108,7 +104,6 @@ void main() {
         selfPublicKey: 'pk_alice',
       );
       group = result.group;
-      aliceSenderKey = result.senderKey;
     });
 
     test('addMember adds member and stores sender key', () async {
@@ -237,8 +232,7 @@ void main() {
       );
 
       expect(updated.members, hasLength(1));
-      expect(
-          updated.members.any((m) => m.deviceId == 'device_B'), isFalse);
+      expect(updated.members.any((m) => m.deviceId == 'device_B'), isFalse);
       expect(cryptoService.hasSenderKey(group.id, 'device_B'), isFalse);
     });
 
@@ -271,8 +265,7 @@ void main() {
     });
 
     test('rotateOwnKey generates new key and stores it', () async {
-      final newKey =
-          await groupService.rotateOwnKey(group.id, 'device_A');
+      final newKey = await groupService.rotateOwnKey(group.id, 'device_A');
 
       expect(newKey, isNotEmpty);
       expect(cryptoService.hasSenderKey(group.id, 'device_A'), isTrue);
@@ -311,8 +304,7 @@ void main() {
       group = result.group;
     });
 
-    test('sendMessage encrypts, stores, and returns message + bytes',
-        () async {
+    test('sendMessage encrypts, stores, and returns message + bytes', () async {
       final result = await groupService.sendMessage(
         groupId: group.id,
         selfDeviceId: 'device_A',
@@ -327,8 +319,7 @@ void main() {
       expect(result.encryptedBytes, isNotEmpty);
 
       // Verify stored locally
-      final stored =
-          await storageService.getMessage(group.id, 'device_A', 1);
+      final stored = await storageService.getMessage(group.id, 'device_A', 1);
       expect(stored, isNotNull);
     });
 
@@ -654,8 +645,7 @@ void main() {
       await groupService.deleteGroup(result.group.id);
 
       expect(await storageService.getGroup(result.group.id), isNull);
-      expect(
-          cryptoService.getSenderKeyDeviceIds(result.group.id), isEmpty);
+      expect(cryptoService.getSenderKeyDeviceIds(result.group.id), isEmpty);
     });
 
     test('leaveGroup removes group and keys', () async {
@@ -873,8 +863,7 @@ void main() {
       );
 
       // Alice rotates her sender key
-      final newAliceKey =
-          await aliceService.rotateOwnKey(groupId, 'alice');
+      final newAliceKey = await aliceService.rotateOwnKey(groupId, 'alice');
       expect(newAliceKey, isNot(createResult.senderKey));
 
       // Alice sends a message with the new key

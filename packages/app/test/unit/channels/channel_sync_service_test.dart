@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -496,9 +495,8 @@ void main() {
         async.elapse(const Duration(minutes: 6));
 
         // Should have triggered at least one sync
-        final announceMessages = sentMessages
-            .where((m) => m['type'] == 'chunk_announce')
-            .toList();
+        final announceMessages =
+            sentMessages.where((m) => m['type'] == 'chunk_announce').toList();
         expect(announceMessages, isNotEmpty);
 
         controller.close();
@@ -520,10 +518,8 @@ void main() {
 
       // Step 2: Receive the chunk data from the server
       String? receivedId;
-      Map<String, dynamic>? receivedData;
       syncService.onChunkReceived = (id, data) {
         receivedId = id;
-        receivedData = data;
       };
 
       messageController.add({
@@ -545,9 +541,8 @@ void main() {
       // announceChunk to seed the swarm.
       syncService.announceChunk(createTestChunk());
 
-      final announceMessages = sentMessages
-          .where((m) => m['type'] == 'chunk_announce')
-          .toList();
+      final announceMessages =
+          sentMessages.where((m) => m['type'] == 'chunk_announce').toList();
       expect(announceMessages, hasLength(1));
       expect(syncService.announcedChunks, contains('ch_001'));
     });

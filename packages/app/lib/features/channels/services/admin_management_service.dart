@@ -40,8 +40,7 @@ class AdminManagementService {
     _ensureOwner(channel);
 
     if (adminPublicKey == channel.manifest.ownerKey) {
-      throw AdminManagementException(
-          'Cannot appoint the owner as an admin');
+      throw AdminManagementException('Cannot appoint the owner as an admin');
     }
 
     if (channel.manifest.adminKeys.any((a) => a.key == adminPublicKey)) {
@@ -134,7 +133,8 @@ class AdminManagementService {
   /// Validate that a given public key is authorized to publish content
   /// (either the owner or an admin).
   bool isAuthorizedPublisher(ChannelManifest manifest, String publicKey) {
-    return publicKey == manifest.ownerKey || isAuthorizedAdmin(manifest, publicKey);
+    return publicKey == manifest.ownerKey ||
+        isAuthorizedAdmin(manifest, publicKey);
   }
 
   // ---------------------------------------------------------------------------

@@ -35,7 +35,6 @@ void main() {
   group('Key rotation on admin removal', () {
     late Channel ownerChannel;
     late String admin1PublicKey;
-    late String admin1PrivateKey;
     late String admin2PublicKey;
     late String admin2PrivateKey;
 
@@ -46,7 +45,6 @@ void main() {
 
       final admin1Keys = await cryptoService.generateSigningKeyPair();
       admin1PublicKey = admin1Keys.publicKey;
-      admin1PrivateKey = admin1Keys.privateKey;
 
       final admin2Keys = await cryptoService.generateSigningKeyPair();
       admin2PublicKey = admin2Keys.publicKey;
@@ -78,8 +76,7 @@ void main() {
 
       // Admin 2 is still in the manifest
       expect(channelAfterRemoval.manifest.adminKeys, hasLength(1));
-      expect(channelAfterRemoval.manifest.adminKeys.first.key,
-          admin2PublicKey);
+      expect(channelAfterRemoval.manifest.adminKeys.first.key, admin2PublicKey);
 
       // Admin 2 can still publish content that passes verification
       final payload = ChunkPayload(
@@ -114,8 +111,7 @@ void main() {
         chunk: chunk,
         manifest: channelAfterRemoval.manifest,
         trustedOwnerKey: channelAfterRemoval.manifest.ownerKey,
-        encryptionPrivateKeyBase64:
-            channelAfterRemoval.encryptionKeyPrivate!,
+        encryptionPrivateKeyBase64: channelAfterRemoval.encryptionKeyPrivate!,
       );
 
       expect(utf8.decode(decrypted.payload), 'Admin 2 still here');
@@ -246,22 +242,16 @@ void main() {
       );
 
       // Each can be decrypted with its own key+epoch
-      final dec1 = await cryptoService.decryptPayload(
-          enc1,
-          epoch1Channel.encryptionKeyPrivate!,
-          epoch1Channel.manifest.keyEpoch);
+      final dec1 = await cryptoService.decryptPayload(enc1,
+          epoch1Channel.encryptionKeyPrivate!, epoch1Channel.manifest.keyEpoch);
       expect(utf8.decode(dec1.payload), 'Epoch 1');
 
-      final dec2 = await cryptoService.decryptPayload(
-          enc2,
-          epoch2Channel.encryptionKeyPrivate!,
-          epoch2Channel.manifest.keyEpoch);
+      final dec2 = await cryptoService.decryptPayload(enc2,
+          epoch2Channel.encryptionKeyPrivate!, epoch2Channel.manifest.keyEpoch);
       expect(utf8.decode(dec2.payload), 'Epoch 2');
 
-      final dec3 = await cryptoService.decryptPayload(
-          enc3,
-          epoch3Channel.encryptionKeyPrivate!,
-          epoch3Channel.manifest.keyEpoch);
+      final dec3 = await cryptoService.decryptPayload(enc3,
+          epoch3Channel.encryptionKeyPrivate!, epoch3Channel.manifest.keyEpoch);
       expect(utf8.decode(dec3.payload), 'Epoch 3');
 
       // Cross-epoch decryption fails
@@ -323,8 +313,7 @@ void main() {
           now: time,
         );
         hashes.add(hash);
-        current =
-            await channelService.rotateEncryptionKey(channel: current);
+        current = await channelService.rotateEncryptionKey(channel: current);
       }
 
       // All routing hashes should be unique
@@ -386,8 +375,7 @@ void main() {
         chunk: chunk,
         manifest: currentChannel.manifest,
         trustedOwnerKey: currentChannel.manifest.ownerKey,
-        encryptionPrivateKeyBase64:
-            currentChannel.encryptionKeyPrivate!,
+        encryptionPrivateKeyBase64: currentChannel.encryptionKeyPrivate!,
       );
       expect(utf8.decode(decrypted.payload), 'Admin content');
 
@@ -437,8 +425,7 @@ void main() {
           chunk: rejectedChunk,
           manifest: currentChannel.manifest,
           trustedOwnerKey: currentChannel.manifest.ownerKey,
-          encryptionPrivateKeyBase64:
-              currentChannel.encryptionKeyPrivate!,
+          encryptionPrivateKeyBase64: currentChannel.encryptionKeyPrivate!,
         ),
         throwsA(isA<ChannelCryptoException>().having(
           (e) => e.message,

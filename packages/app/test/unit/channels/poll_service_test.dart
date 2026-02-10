@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zajel/features/channels/models/channel.dart';
@@ -26,7 +25,7 @@ void main() {
       cryptoService: cryptoService,
       storageService: storageService,
     );
-    upstreamService = UpstreamService(cryptoService: cryptoService);
+    upstreamService = UpstreamService();
     pollService = PollService(
       channelService: channelService,
       upstreamService: upstreamService,

@@ -288,8 +288,7 @@ void main() {
           await syncService.getMessagesForSync('group1', remoteClock);
 
       expect(messages, hasLength(2)); // A:2, A:3
-      expect(
-          messages.every((m) => m.authorDeviceId == 'deviceA'), isTrue);
+      expect(messages.every((m) => m.authorDeviceId == 'deviceA'), isTrue);
     });
   });
 
@@ -308,8 +307,7 @@ void main() {
       expect(wasNew, isTrue);
 
       // Verify stored
-      final stored =
-          await storageService.getMessage('group1', 'deviceA', 1);
+      final stored = await storageService.getMessage('group1', 'deviceA', 1);
       expect(stored, isNotNull);
       expect(stored!.content, 'Hello');
 

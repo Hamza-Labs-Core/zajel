@@ -115,8 +115,7 @@ class PollResults extends Equatable {
 
   Map<String, dynamic> toJson() => {
         'poll_id': pollId,
-        'vote_counts':
-            voteCounts.map((k, v) => MapEntry(k.toString(), v)),
+        'vote_counts': voteCounts.map((k, v) => MapEntry(k.toString(), v)),
         'total_votes': totalVotes,
         'is_final': isFinal,
         'tallied_at': talliedAt.toIso8601String(),
