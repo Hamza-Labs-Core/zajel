@@ -44,28 +44,6 @@ jobs:
           CI: true
           LOG_LEVEL: error
 
-  e2e-tests:
-    name: E2E Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run E2E tests
-        run: npm test --workspace=@zajel/server-vps -- tests/integration/
-        env:
-          CI: true
-          LOG_LEVEL: error
-
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest

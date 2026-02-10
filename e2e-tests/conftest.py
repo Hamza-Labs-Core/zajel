@@ -120,8 +120,8 @@ def create_driver(server_index: int, device_name: str = "emulator"):
             [ADB_PATH, "-s", udid, "shell", "pm", "clear", PACKAGE_NAME],
             capture_output=True, timeout=15
         )
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Warning: Failed to clear app data: {e}")
 
     for perm in [
         "android.permission.CAMERA",
