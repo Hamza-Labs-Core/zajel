@@ -77,6 +77,25 @@ void main() {
 
       expect(id1, isNot(id2));
     });
+
+    test('derivePublicKeyFromPrivate returns correct public key', () async {
+      final keys = await cryptoService.generateSigningKeyPair();
+      final derivedPubKey =
+          await cryptoService.derivePublicKeyFromPrivate(keys.privateKey);
+
+      expect(derivedPubKey, keys.publicKey);
+    });
+
+    test('derivePublicKeyFromPrivate rejects invalid base64', () async {
+      expect(
+        () => cryptoService.derivePublicKeyFromPrivate('not!valid!base64!!!'),
+        throwsA(isA<ChannelCryptoException>().having(
+          (e) => e.message,
+          'message',
+          contains('Invalid base64'),
+        )),
+      );
+    });
   });
 
   group('Manifest signing and verification', () {
@@ -136,6 +155,25 @@ void main() {
         description: '',
         ownerKey: ownerPublicKey,
         currentEncryptKey: encryptionPublicKey,
+      );
+
+      final isValid = await cryptoService.verifyManifest(manifest);
+      expect(isValid, isFalse);
+    });
+
+    test(
+        'verifyManifest returns false for empty signature without timing shortcut',
+        () async {
+      // This tests that an empty signature goes through the full verification
+      // path rather than short-circuiting, avoiding timing side-channels.
+      final channelId = await cryptoService.deriveChannelId(ownerPublicKey);
+      final manifest = ChannelManifest(
+        channelId: channelId,
+        name: 'Test Channel',
+        description: '',
+        ownerKey: ownerPublicKey,
+        currentEncryptKey: encryptionPublicKey,
+        signature: '', // Explicitly empty
       );
 
       final isValid = await cryptoService.verifyManifest(manifest);

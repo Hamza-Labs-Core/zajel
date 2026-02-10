@@ -130,7 +130,7 @@ class ChannelService {
   /// Split content into fixed-size chunks, encrypt, and sign each one.
   ///
   /// [payload] is the content to publish.
-  /// [channel] must be an owned channel with private keys.
+  /// [channel] must be an owned or admin channel with private keys.
   /// [sequence] is the channel-level sequence number for this message.
   /// [routingHash] is the current epoch's routing hash.
   ///
@@ -145,13 +145,23 @@ class ChannelService {
       throw ChannelServiceException(
           'Cannot publish: no encryption private key');
     }
-    if (channel.ownerSigningKeyPrivate == null &&
-        channel.role == ChannelRole.owner) {
-      throw ChannelServiceException('Cannot publish: no signing private key');
+
+    // Determine which signing key to use based on role
+    final signingKey = channel.signingKeyPrivate;
+    if (signingKey == null) {
+      throw ChannelServiceException(
+          'Cannot publish: no signing private key for role ${channel.role.name}');
     }
 
-    // Determine which signing key to use
-    final signingKey = channel.ownerSigningKeyPrivate!;
+    // Determine the author's public key for the chunk envelope
+    final String authorPubkey;
+    if (channel.role == ChannelRole.owner) {
+      authorPubkey = channel.manifest.ownerKey;
+    } else {
+      // For admins, derive the public key from the private key
+      authorPubkey =
+          await _cryptoService.derivePublicKeyFromPrivate(signingKey);
+    }
 
     // Encrypt the payload
     final encryptedBytes = await _cryptoService.encryptPayload(
@@ -174,14 +184,14 @@ class ChannelService {
 
       final chunk = Chunk(
         chunkId:
-            'ch_${_uuid.v4().substring(0, 8)}_${i.toString().padLeft(3, '0')}',
+            'ch_${_uuid.v4().replaceAll('-', '').substring(0, 16)}_${i.toString().padLeft(3, '0')}',
         routingHash: routingHash,
         sequence: sequence,
         chunkIndex: i,
         totalChunks: totalChunks,
         size: chunkData.length,
         signature: signature,
-        authorPubkey: channel.manifest.ownerKey,
+        authorPubkey: authorPubkey,
         encryptedPayload: Uint8List.fromList(chunkData),
       );
 
@@ -195,6 +205,12 @@ class ChannelService {
   /// from malicious chunk counts or sizes.
   static const int maxMessageSize = 50 * 1024 * 1024;
 
+  /// Maximum size for a single chunk payload (2x the expected chunk size).
+  ///
+  /// Any chunk larger than this is rejected as malformed. Legitimate chunks
+  /// should never exceed [chunkSize] except for minor overhead.
+  static const int maxChunkPayloadSize = chunkSize * 2;
+
   /// Reassemble chunks into the original content.
   ///
   /// All chunks must belong to the same message (same sequence number),
@@ -203,10 +219,8 @@ class ChannelService {
   ///
   /// **Important**: Callers MUST verify each chunk's signature via
   /// [ChannelCryptoService.verifyChunkSignature] before passing them here.
-  /// This method performs structural validation only (sequence, indices,
-  /// completeness). Signature verification is the caller's responsibility
-  /// because it requires access to the manifest's authorized key list,
-  /// which is outside this method's scope.
+  /// For a convenience wrapper that enforces signature verification, use
+  /// [verifyAndReassembleChunks].
   ///
   /// Returns the combined encrypted bytes. Call [ChannelCryptoService.decryptPayload]
   /// to obtain the original [ChunkPayload].
@@ -239,6 +253,15 @@ class ChannelService {
           'Cannot reassemble: expected $totalChunks chunks, got ${chunks.length}');
     }
 
+    // Per-chunk size validation: reject any chunk larger than maxChunkPayloadSize
+    for (final chunk in chunks) {
+      if (chunk.encryptedPayload.length > maxChunkPayloadSize) {
+        throw ChannelServiceException(
+            'Cannot reassemble: chunk ${chunk.chunkIndex} size '
+            '${chunk.encryptedPayload.length} exceeds maximum $maxChunkPayloadSize bytes');
+      }
+    }
+
     // Sort by chunk index
     final sorted = List<Chunk>.from(chunks)
       ..sort((a, b) => a.chunkIndex.compareTo(b.chunkIndex));
@@ -251,13 +274,23 @@ class ChannelService {
       }
     }
 
-    // Combine encrypted payloads with size safety check
-    final totalSize =
-        sorted.fold<int>(0, (sum, c) => sum + c.encryptedPayload.length);
-    if (totalSize > maxMessageSize) {
-      throw ChannelServiceException(
-          'Cannot reassemble: total size $totalSize exceeds maximum $maxMessageSize bytes');
+    // Combine encrypted payloads with size safety check.
+    // Use checked addition to prevent integer overflow from malicious sizes.
+    var totalSize = 0;
+    for (final chunk in sorted) {
+      final newTotal = totalSize + chunk.encryptedPayload.length;
+      if (newTotal < totalSize) {
+        // Integer overflow
+        throw ChannelServiceException(
+            'Cannot reassemble: total size overflow detected');
+      }
+      totalSize = newTotal;
+      if (totalSize > maxMessageSize) {
+        throw ChannelServiceException(
+            'Cannot reassemble: total size $totalSize exceeds maximum $maxMessageSize bytes');
+      }
     }
+
     final combined = Uint8List(totalSize);
     var offset = 0;
     for (final chunk in sorted) {
@@ -266,6 +299,40 @@ class ChannelService {
     }
 
     return combined;
+  }
+
+  /// Verify chunk signatures and reassemble into the original encrypted bytes.
+  ///
+  /// This is a convenience wrapper around [reassembleChunks] that enforces
+  /// signature verification before reassembly. Each chunk's signature is
+  /// verified against the author's public key listed in [authorizedKeys].
+  ///
+  /// [chunks] - the chunks to verify and reassemble.
+  /// [authorizedKeys] - set of base64-encoded Ed25519 public keys that are
+  ///   authorized to publish (owner key + admin keys from the manifest).
+  ///
+  /// Throws [ChannelServiceException] if any chunk has an invalid signature
+  /// or an unauthorized author.
+  Future<Uint8List> verifyAndReassembleChunks({
+    required List<Chunk> chunks,
+    required Set<String> authorizedKeys,
+  }) async {
+    for (final chunk in chunks) {
+      // Check that the author is authorized
+      if (!authorizedKeys.contains(chunk.authorPubkey)) {
+        throw ChannelServiceException(
+            'Cannot reassemble: chunk ${chunk.chunkIndex} author is not authorized');
+      }
+
+      // Verify the signature
+      final isValid = await _cryptoService.verifyChunkSignature(chunk);
+      if (!isValid) {
+        throw ChannelServiceException(
+            'Cannot reassemble: chunk ${chunk.chunkIndex} has an invalid signature');
+      }
+    }
+
+    return reassembleChunks(chunks);
   }
 
   // ---------------------------------------------------------------------------

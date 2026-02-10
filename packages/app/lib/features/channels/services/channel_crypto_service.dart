@@ -74,6 +74,21 @@ class ChannelCryptoService {
     return truncated.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 
+  /// Derive the Ed25519 public key from a private key seed.
+  ///
+  /// Returns the base64-encoded public key.
+  Future<String> derivePublicKeyFromPrivate(String privateKeyBase64) async {
+    final Uint8List privateKeyBytes;
+    try {
+      privateKeyBytes = base64Decode(privateKeyBase64);
+    } on FormatException {
+      throw ChannelCryptoException('Invalid base64 encoding for private key');
+    }
+    final keyPair = await _ed25519.newKeyPairFromSeed(privateKeyBytes);
+    final publicKey = await keyPair.extractPublicKey();
+    return base64Encode(publicKey.bytes);
+  }
+
   // ---------------------------------------------------------------------------
   // Manifest signing & verification
   // ---------------------------------------------------------------------------
@@ -107,11 +122,9 @@ class ChannelCryptoService {
   /// Verify a manifest's signature against the owner's public key.
   ///
   /// Returns true if the signature is valid. Always performs the full
-  /// verification path to avoid timing side-channels, except when the
-  /// signature is obviously absent (empty string).
+  /// verification path to avoid timing side-channels even for empty
+  /// or malformed signatures.
   Future<bool> verifyManifest(ChannelManifest manifest) async {
-    if (manifest.signature.isEmpty) return false;
-
     try {
       final signable = manifest.toSignableJson();
       final signableBytes = Uint8List.fromList(utf8.encode(signable));
@@ -119,9 +132,18 @@ class ChannelCryptoService {
       final Uint8List signatureBytes;
       final Uint8List publicKeyBytes;
       try {
+        // For empty signature, base64Decode returns empty bytes, which will
+        // fail verification below. This avoids an early return that could
+        // leak timing information about the signature field.
         signatureBytes = base64Decode(manifest.signature);
         publicKeyBytes = base64Decode(manifest.ownerKey);
       } on FormatException {
+        return false;
+      }
+
+      // Empty or wrong-length signatures will fail Ed25519 verification
+      // rather than short-circuiting, avoiding timing side-channels.
+      if (signatureBytes.isEmpty || publicKeyBytes.isEmpty) {
         return false;
       }
 

@@ -185,6 +185,92 @@ void main() {
       expect(channel.ownerSigningKeyPrivate, isNull);
       expect(channel.encryptionKeyPrivate, isNull);
     });
+
+    test('signingKeyPrivate returns ownerSigningKeyPrivate for owner', () {
+      const manifest = ChannelManifest(
+        channelId: 'ch_own',
+        name: 'Owner Channel',
+        description: '',
+        ownerKey: 'owner_pub',
+        currentEncryptKey: 'enc',
+      );
+
+      final channel = Channel(
+        id: 'ch_own',
+        role: ChannelRole.owner,
+        manifest: manifest,
+        ownerSigningKeyPrivate: 'owner_priv_key',
+        encryptionKeyPublic: 'enc',
+        createdAt: DateTime.utc(2026, 2, 10),
+      );
+
+      expect(channel.signingKeyPrivate, 'owner_priv_key');
+    });
+
+    test('signingKeyPrivate returns adminSigningKeyPrivate for admin', () {
+      const manifest = ChannelManifest(
+        channelId: 'ch_adm',
+        name: 'Admin Channel',
+        description: '',
+        ownerKey: 'owner_pub',
+        adminKeys: [AdminKey(key: 'admin_pub', label: 'Admin')],
+        currentEncryptKey: 'enc',
+      );
+
+      final channel = Channel(
+        id: 'ch_adm',
+        role: ChannelRole.admin,
+        manifest: manifest,
+        adminSigningKeyPrivate: 'admin_priv_key',
+        encryptionKeyPublic: 'enc',
+        createdAt: DateTime.utc(2026, 2, 10),
+      );
+
+      expect(channel.signingKeyPrivate, 'admin_priv_key');
+    });
+
+    test('signingKeyPrivate returns null for subscriber', () {
+      const manifest = ChannelManifest(
+        channelId: 'ch_sub',
+        name: 'Sub Channel',
+        description: '',
+        ownerKey: 'owner_pub',
+        currentEncryptKey: 'enc',
+      );
+
+      final channel = Channel(
+        id: 'ch_sub',
+        role: ChannelRole.subscriber,
+        manifest: manifest,
+        encryptionKeyPublic: 'enc',
+        createdAt: DateTime.utc(2026, 2, 10),
+      );
+
+      expect(channel.signingKeyPrivate, isNull);
+    });
+
+    test('admin channel preserves adminSigningKeyPrivate in copyWith', () {
+      const manifest = ChannelManifest(
+        channelId: 'ch_adm',
+        name: 'Admin Channel',
+        description: '',
+        ownerKey: 'owner_pub',
+        currentEncryptKey: 'enc',
+      );
+
+      final channel = Channel(
+        id: 'ch_adm',
+        role: ChannelRole.admin,
+        manifest: manifest,
+        adminSigningKeyPrivate: 'admin_priv',
+        encryptionKeyPublic: 'enc',
+        createdAt: DateTime.utc(2026, 2, 10),
+      );
+
+      final copy = channel.copyWith(encryptionKeyPublic: 'new_enc');
+      expect(copy.adminSigningKeyPrivate, 'admin_priv');
+      expect(copy.encryptionKeyPublic, 'new_enc');
+    });
   });
 
   group('ContentType', () {

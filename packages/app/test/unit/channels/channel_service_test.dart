@@ -431,6 +431,274 @@ void main() {
         )),
       );
     });
+
+    test('chunk IDs have at least 16 chars of entropy', () async {
+      final payload = ChunkPayload(
+        type: ContentType.text,
+        payload: Uint8List.fromList(utf8.encode('Entropy test')),
+        timestamp: DateTime.utc(2026, 2, 10),
+      );
+
+      final chunks = await channelService.splitIntoChunks(
+        payload: payload,
+        channel: channel,
+        sequence: 1,
+        routingHash: 'rh_test',
+      );
+
+      // Chunk ID format: ch_<16 hex chars>_<index>
+      // Extract the random part between ch_ and _000
+      final chunkId = chunks.first.chunkId;
+      expect(chunkId, startsWith('ch_'));
+      final parts = chunkId.split('_');
+      // parts[0] = 'ch', parts[1] = 16-char hex, parts[2] = index
+      expect(parts[1].length, 16,
+          reason: 'Random part of chunk ID should be 16 characters');
+    });
+
+    test('reassemble rejects oversized individual chunks', () {
+      final oversizedPayload =
+          Uint8List(ChannelService.maxChunkPayloadSize + 1);
+
+      final chunks = [
+        Chunk(
+          chunkId: 'ch_test_000',
+          routingHash: 'rh_test',
+          sequence: 1,
+          chunkIndex: 0,
+          totalChunks: 1,
+          size: oversizedPayload.length,
+          signature: 'sig',
+          authorPubkey: 'pub',
+          encryptedPayload: oversizedPayload,
+        ),
+      ];
+
+      expect(
+        () => channelService.reassembleChunks(chunks),
+        throwsA(isA<ChannelServiceException>().having(
+          (e) => e.message,
+          'message',
+          contains('exceeds maximum'),
+        )),
+      );
+    });
+
+    test('subscriber cannot publish (no signing key)', () async {
+      final subscription = await channelService.subscribe(
+        manifest: channel.manifest,
+        encryptionPrivateKey: channel.encryptionKeyPrivate!,
+      );
+
+      final payload = ChunkPayload(
+        type: ContentType.text,
+        payload: Uint8List.fromList(utf8.encode('test')),
+        timestamp: DateTime.utc(2026, 2, 10),
+      );
+
+      expect(
+        () => channelService.splitIntoChunks(
+          payload: payload,
+          channel: subscription,
+          sequence: 1,
+          routingHash: 'rh_test',
+        ),
+        throwsA(isA<ChannelServiceException>().having(
+          (e) => e.message,
+          'message',
+          contains('no signing private key'),
+        )),
+      );
+    });
+  });
+
+  group('Admin publishing', () {
+    late Channel ownerChannel;
+    late ({String publicKey, String privateKey}) adminKeys;
+
+    setUp(() async {
+      ownerChannel = await channelService.createChannel(name: 'Admin Pub Test');
+      adminKeys = await cryptoService.generateSigningKeyPair();
+
+      // Add the admin to the channel manifest
+      ownerChannel = await channelService.addAdmin(
+        channel: ownerChannel,
+        adminPublicKey: adminKeys.publicKey,
+        adminLabel: 'Test Admin',
+      );
+    });
+
+    test('admin can split content into signed chunks', () async {
+      // Create an admin channel object (as the admin would have it)
+      final adminChannel = Channel(
+        id: ownerChannel.id,
+        role: ChannelRole.admin,
+        manifest: ownerChannel.manifest,
+        adminSigningKeyPrivate: adminKeys.privateKey,
+        encryptionKeyPrivate: ownerChannel.encryptionKeyPrivate,
+        encryptionKeyPublic: ownerChannel.encryptionKeyPublic,
+        createdAt: DateTime.now(),
+      );
+
+      final payload = ChunkPayload(
+        type: ContentType.text,
+        payload: Uint8List.fromList(utf8.encode('Admin published this')),
+        timestamp: DateTime.utc(2026, 2, 10),
+      );
+
+      final chunks = await channelService.splitIntoChunks(
+        payload: payload,
+        channel: adminChannel,
+        sequence: 1,
+        routingHash: 'rh_test',
+      );
+
+      expect(chunks, hasLength(1));
+      expect(chunks.first.authorPubkey, adminKeys.publicKey);
+
+      // Verify the chunk signature
+      final isValid = await cryptoService.verifyChunkSignature(chunks.first);
+      expect(isValid, isTrue);
+    });
+
+    test('admin chunks can be reassembled and decrypted', () async {
+      final adminChannel = Channel(
+        id: ownerChannel.id,
+        role: ChannelRole.admin,
+        manifest: ownerChannel.manifest,
+        adminSigningKeyPrivate: adminKeys.privateKey,
+        encryptionKeyPrivate: ownerChannel.encryptionKeyPrivate,
+        encryptionKeyPublic: ownerChannel.encryptionKeyPublic,
+        createdAt: DateTime.now(),
+      );
+
+      final payload = ChunkPayload(
+        type: ContentType.text,
+        payload: Uint8List.fromList(utf8.encode('Admin content')),
+        timestamp: DateTime.utc(2026, 2, 10),
+      );
+
+      final chunks = await channelService.splitIntoChunks(
+        payload: payload,
+        channel: adminChannel,
+        sequence: 1,
+        routingHash: 'rh_test',
+      );
+
+      final reassembled = channelService.reassembleChunks(chunks);
+      final decrypted = await cryptoService.decryptPayload(
+        reassembled,
+        ownerChannel.encryptionKeyPrivate!,
+        ownerChannel.manifest.keyEpoch,
+      );
+
+      expect(utf8.decode(decrypted.payload), 'Admin content');
+    });
+  });
+
+  group('Verified reassembly', () {
+    late Channel channel;
+
+    setUp(() async {
+      channel = await channelService.createChannel(name: 'Verify Test');
+    });
+
+    test('verifyAndReassembleChunks passes for valid chunks', () async {
+      final payload = ChunkPayload(
+        type: ContentType.text,
+        payload: Uint8List.fromList(utf8.encode('Verified content')),
+        timestamp: DateTime.utc(2026, 2, 10),
+      );
+
+      final chunks = await channelService.splitIntoChunks(
+        payload: payload,
+        channel: channel,
+        sequence: 1,
+        routingHash: 'rh_test',
+      );
+
+      final authorizedKeys = {channel.manifest.ownerKey};
+
+      final reassembled = await channelService.verifyAndReassembleChunks(
+        chunks: chunks,
+        authorizedKeys: authorizedKeys,
+      );
+
+      final decrypted = await cryptoService.decryptPayload(
+        reassembled,
+        channel.encryptionKeyPrivate!,
+        channel.manifest.keyEpoch,
+      );
+
+      expect(utf8.decode(decrypted.payload), 'Verified content');
+    });
+
+    test('verifyAndReassembleChunks rejects unauthorized author', () async {
+      final payload = ChunkPayload(
+        type: ContentType.text,
+        payload: Uint8List.fromList(utf8.encode('test')),
+        timestamp: DateTime.utc(2026, 2, 10),
+      );
+
+      final chunks = await channelService.splitIntoChunks(
+        payload: payload,
+        channel: channel,
+        sequence: 1,
+        routingHash: 'rh_test',
+      );
+
+      // Use an empty authorized keys set
+      final authorizedKeys = <String>{};
+
+      expect(
+        () => channelService.verifyAndReassembleChunks(
+          chunks: chunks,
+          authorizedKeys: authorizedKeys,
+        ),
+        throwsA(isA<ChannelServiceException>().having(
+          (e) => e.message,
+          'message',
+          contains('not authorized'),
+        )),
+      );
+    });
+
+    test('verifyAndReassembleChunks rejects tampered chunks', () async {
+      final payload = ChunkPayload(
+        type: ContentType.text,
+        payload: Uint8List.fromList(utf8.encode('test')),
+        timestamp: DateTime.utc(2026, 2, 10),
+      );
+
+      final chunks = await channelService.splitIntoChunks(
+        payload: payload,
+        channel: channel,
+        sequence: 1,
+        routingHash: 'rh_test',
+      );
+
+      // Tamper with the payload but keep the original signature
+      final tampered = [
+        chunks.first.copyWith(
+          encryptedPayload: Uint8List.fromList(
+              List.filled(chunks.first.encryptedPayload.length, 0)),
+        ),
+      ];
+
+      final authorizedKeys = {channel.manifest.ownerKey};
+
+      expect(
+        () => channelService.verifyAndReassembleChunks(
+          chunks: tampered,
+          authorizedKeys: authorizedKeys,
+        ),
+        throwsA(isA<ChannelServiceException>().having(
+          (e) => e.message,
+          'message',
+          contains('invalid signature'),
+        )),
+      );
+    });
   });
 
   group('Manifest updates', () {

@@ -72,17 +72,23 @@ class ChannelManifest extends Equatable {
   /// Fingerprint of the owner's Ed25519 public key (channel identity).
   final String channelId;
 
-  /// Channel name. The manifest is distributed only to subscribers who hold
-  /// the decryption key, so field-level encryption is not applied here.
+  /// Channel name (plaintext within the signed manifest).
+  /// The manifest is distributed only via encrypted chunks to subscribers who
+  /// hold the decryption key, so field-level encryption is not applied here.
+  /// An attacker without the channel key cannot read the manifest at all.
   final String name;
 
   /// Channel description (plaintext within the signed manifest).
+  /// Same privacy model as [name]: readable only by key holders.
   final String description;
 
   /// Owner's Ed25519 public key, base64-encoded.
   final String ownerKey;
 
-  /// List of admin Ed25519 public keys with encrypted labels.
+  /// List of admin Ed25519 public keys with labels.
+  /// Labels are plaintext within the signed manifest. Since the manifest is
+  /// distributed only via encrypted chunks to subscribers who hold the
+  /// decryption key, field-level encryption is not needed here.
   final List<AdminKey> adminKeys;
 
   /// Current X25519 public key for content encryption, base64-encoded.
@@ -218,6 +224,10 @@ class Channel extends Equatable {
   /// Only populated when [role] == [ChannelRole.owner].
   final String? ownerSigningKeyPrivate;
 
+  /// Admin's Ed25519 signing private key, base64-encoded.
+  /// Only populated when [role] == [ChannelRole.admin].
+  final String? adminSigningKeyPrivate;
+
   /// X25519 encryption private key, base64-encoded.
   /// Only populated when [role] == [ChannelRole.owner].
   final String? encryptionKeyPrivate;
@@ -235,6 +245,7 @@ class Channel extends Equatable {
     required this.role,
     required this.manifest,
     this.ownerSigningKeyPrivate,
+    this.adminSigningKeyPrivate,
     this.encryptionKeyPrivate,
     required this.encryptionKeyPublic,
     required this.createdAt,
@@ -245,6 +256,7 @@ class Channel extends Equatable {
     ChannelRole? role,
     ChannelManifest? manifest,
     String? ownerSigningKeyPrivate,
+    String? adminSigningKeyPrivate,
     String? encryptionKeyPrivate,
     String? encryptionKeyPublic,
     DateTime? createdAt,
@@ -255,6 +267,8 @@ class Channel extends Equatable {
       manifest: manifest ?? this.manifest,
       ownerSigningKeyPrivate:
           ownerSigningKeyPrivate ?? this.ownerSigningKeyPrivate,
+      adminSigningKeyPrivate:
+          adminSigningKeyPrivate ?? this.adminSigningKeyPrivate,
       encryptionKeyPrivate: encryptionKeyPrivate ?? this.encryptionKeyPrivate,
       encryptionKeyPublic: encryptionKeyPublic ?? this.encryptionKeyPublic,
       createdAt: createdAt ?? this.createdAt,
@@ -273,6 +287,7 @@ class Channel extends Equatable {
   factory Channel.fromJson(
     Map<String, dynamic> json, {
     String? ownerSigningKeyPrivate,
+    String? adminSigningKeyPrivate,
     String? encryptionKeyPrivate,
   }) {
     return Channel(
@@ -285,6 +300,7 @@ class Channel extends Equatable {
         jsonDecode(json['manifest'] as String) as Map<String, dynamic>,
       ),
       ownerSigningKeyPrivate: ownerSigningKeyPrivate,
+      adminSigningKeyPrivate: adminSigningKeyPrivate,
       encryptionKeyPrivate: encryptionKeyPrivate,
       encryptionKeyPublic: json['encryption_key_public'] as String,
       createdAt: DateTime.parse(json['created_at'] as String),
@@ -293,4 +309,19 @@ class Channel extends Equatable {
 
   @override
   List<Object?> get props => [id, role, manifest, createdAt];
+
+  /// The signing private key to use for publishing content.
+  ///
+  /// Returns the owner's key for owners, the admin's key for admins,
+  /// or null for subscribers.
+  String? get signingKeyPrivate {
+    switch (role) {
+      case ChannelRole.owner:
+        return ownerSigningKeyPrivate;
+      case ChannelRole.admin:
+        return adminSigningKeyPrivate;
+      case ChannelRole.subscriber:
+        return null;
+    }
+  }
 }

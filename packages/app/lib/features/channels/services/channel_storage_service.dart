@@ -114,6 +114,12 @@ class ChannelStorageService {
         value: channel.ownerSigningKeyPrivate,
       );
     }
+    if (channel.adminSigningKeyPrivate != null) {
+      await _secureStorage.write(
+        key: '$_secureKeyPrefix${channel.id}_admin_signing_private',
+        value: channel.adminSigningKeyPrivate,
+      );
+    }
     if (channel.encryptionKeyPrivate != null) {
       await _secureStorage.write(
         key: '$_secureKeyPrefix${channel.id}_encryption_private',
@@ -139,6 +145,9 @@ class ChannelStorageService {
     final signingKey = await _secureStorage.read(
       key: '$_secureKeyPrefix${channelId}_signing_private',
     );
+    final adminSigningKey = await _secureStorage.read(
+      key: '$_secureKeyPrefix${channelId}_admin_signing_private',
+    );
     final encryptionKey = await _secureStorage.read(
       key: '$_secureKeyPrefix${channelId}_encryption_private',
     );
@@ -146,6 +155,7 @@ class ChannelStorageService {
     return Channel.fromJson(
       rows.first,
       ownerSigningKeyPrivate: signingKey,
+      adminSigningKeyPrivate: adminSigningKey,
       encryptionKeyPrivate: encryptionKey,
     );
   }
@@ -163,12 +173,16 @@ class ChannelStorageService {
       final signingKey = await _secureStorage.read(
         key: '$_secureKeyPrefix${id}_signing_private',
       );
+      final adminSigningKey = await _secureStorage.read(
+        key: '$_secureKeyPrefix${id}_admin_signing_private',
+      );
       final encryptionKey = await _secureStorage.read(
         key: '$_secureKeyPrefix${id}_encryption_private',
       );
       channels.add(Channel.fromJson(
         row,
         ownerSigningKeyPrivate: signingKey,
+        adminSigningKeyPrivate: adminSigningKey,
         encryptionKeyPrivate: encryptionKey,
       ));
     }
@@ -187,6 +201,8 @@ class ChannelStorageService {
 
     await _secureStorage.delete(
         key: '$_secureKeyPrefix${channelId}_signing_private');
+    await _secureStorage.delete(
+        key: '$_secureKeyPrefix${channelId}_admin_signing_private');
     await _secureStorage.delete(
         key: '$_secureKeyPrefix${channelId}_encryption_private');
   }
