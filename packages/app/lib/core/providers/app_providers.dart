@@ -66,6 +66,12 @@ class ThemeModeNotifier extends StateNotifier<ThemeMode> {
   }
 }
 
+/// Provider for whether the user has seen the onboarding tutorial.
+final hasSeenOnboardingProvider = StateProvider<bool>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return prefs.getBool('hasSeenOnboarding') ?? false;
+});
+
 /// Provider for the user's display name.
 final displayNameProvider = StateProvider<String>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
