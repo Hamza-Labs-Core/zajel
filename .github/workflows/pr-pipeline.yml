@@ -1025,6 +1025,10 @@ jobs:
           HOST_IP=$(hostname -I | awk '{print $1}')
           echo "Host IP for TURN: $HOST_IP"
 
+          # Generate random credentials per CI run to avoid hardcoded secrets
+          TURN_USER="ci-$(openssl rand -hex 4)"
+          TURN_PASS="$(openssl rand -hex 16)"
+
           sudo tee /etc/turnserver.conf > /dev/null <<CONF
           listening-ip=0.0.0.0
           listening-port=3478
@@ -1033,7 +1037,7 @@ jobs:
           min-port=49152
           max-port=49252
           realm=zajel-ci
-          user=test:test
+          user=${TURN_USER}:${TURN_PASS}
           lt-cred-mech
           no-tls
           no-dtls
@@ -1052,8 +1056,8 @@ jobs:
           fi
 
           echo "TURN_URL=turn:${HOST_IP}:3478" >> "$GITHUB_ENV"
-          echo "TURN_USER=test" >> "$GITHUB_ENV"
-          echo "TURN_PASS=test" >> "$GITHUB_ENV"
+          echo "TURN_USER=${TURN_USER}" >> "$GITHUB_ENV"
+          echo "TURN_PASS=${TURN_PASS}" >> "$GITHUB_ENV"
 
       - name: Build E2E APK
         working-directory: packages/app

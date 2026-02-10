@@ -52,6 +52,12 @@ class WebRTCService:
     ):
         self._ice_servers = ice_servers or DEFAULT_ICE_SERVERS
         self._force_relay = force_relay
+
+        # Log configured ICE servers (URLs only, not credentials)
+        for server in self._ice_servers:
+            urls = server.urls if isinstance(server.urls, list) else [server.urls]
+            logger.info("ICE server configured: %s", ", ".join(urls))
+
         self._pc: Optional[RTCPeerConnection] = None
         self._channels = DataChannelPair()
         self._relay = MediaRelay()

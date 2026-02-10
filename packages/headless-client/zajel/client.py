@@ -123,10 +123,18 @@ class ZajelHeadlessClient:
         rtc_ice_servers = None
         if ice_servers:
             from aiortc import RTCIceServer
-            rtc_ice_servers = [
-                RTCIceServer(**s) if isinstance(s, dict) else s
-                for s in ice_servers
-            ]
+            rtc_ice_servers = []
+            for i, s in enumerate(ice_servers):
+                try:
+                    if isinstance(s, dict):
+                        rtc_ice_servers.append(RTCIceServer(**s))
+                    else:
+                        rtc_ice_servers.append(s)
+                except (TypeError, ValueError) as e:
+                    logger.warning(
+                        "Skipping invalid ICE server entry at index %d: %s (error: %s)",
+                        i, s, e,
+                    )
 
         # Core services
         self._crypto = CryptoService()
