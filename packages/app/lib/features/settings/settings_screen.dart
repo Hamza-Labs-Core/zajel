@@ -218,7 +218,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ListTile(
                 leading: const Icon(Icons.help_outline),
                 title: const Text('How Zajel Works'),
-                subtitle: const Text('Learn about P2P messaging and encryption'),
+                subtitle:
+                    const Text('Learn about P2P messaging and encryption'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => context.push('/help'),
               ),

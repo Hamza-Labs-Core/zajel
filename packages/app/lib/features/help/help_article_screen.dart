@@ -94,7 +94,8 @@ class HelpArticleScreen extends ConsumerWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.warning_amber, color: Colors.orange.shade800, size: 20),
+              Icon(Icons.warning_amber,
+                  color: Colors.orange.shade800, size: 20),
               const SizedBox(width: 8),
               Expanded(
                 child: Column(

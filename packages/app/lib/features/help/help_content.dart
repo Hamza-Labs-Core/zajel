@@ -122,8 +122,7 @@ class HelpContent {
       sections: [
         HelpSection(
           header: 'Pairing Codes',
-          body:
-              'When your app connects to a signaling server, it receives a '
+          body: 'When your app connects to a signaling server, it receives a '
               'temporary 6-character pairing code. This code changes every time '
               'you reconnect. It is not a permanent address. Share your code with '
               'someone you want to connect with, or enter their code to initiate '
@@ -155,8 +154,7 @@ class HelpContent {
         ),
         HelpSection(
           header: 'Web Client Linking',
-          body:
-              'You can link a web browser to your mobile device for secure '
+          body: 'You can link a web browser to your mobile device for secure '
               'messaging from your computer. The web client runs in your browser '
               'and communicates through your mobile device. It cannot independently '
               'hold an identity.',
@@ -171,8 +169,7 @@ class HelpContent {
       sections: [
         HelpSection(
           header: 'Always-On Encryption',
-          body:
-              'All messages in Zajel are encrypted with ChaCha20-Poly1305, a '
+          body: 'All messages in Zajel are encrypted with ChaCha20-Poly1305, a '
               'modern authenticated encryption cipher. Encryption is always on '
               'and cannot be disabled. Every message is encrypted before it '
               'leaves your device and can only be decrypted by the intended '
@@ -180,8 +177,7 @@ class HelpContent {
         ),
         HelpSection(
           header: 'Key Exchange',
-          body:
-              'Before two devices can communicate securely, they perform an '
+          body: 'Before two devices can communicate securely, they perform an '
               'X25519 key exchange (Elliptic Curve Diffie-Hellman). This creates '
               'a shared secret that only the two devices know. This shared secret '
               'is used to derive encryption keys for the session.',
@@ -222,15 +218,13 @@ class HelpContent {
         ),
         HelpSection(
           header: 'File Transfers',
-          body:
-              'File transfers go directly between devices over the encrypted '
+          body: 'File transfers go directly between devices over the encrypted '
               'peer-to-peer connection. Files are saved to your device\'s local '
               'storage. No files are stored on any server.',
         ),
         HelpSection(
           header: 'No Cloud Backup',
-          body:
-              'Zajel does not offer cloud backup of any kind. Your messages, '
+          body: 'Zajel does not offer cloud backup of any kind. Your messages, '
               'contacts, and identity exist only on your device. This is by '
               'design: it ensures that your data remains under your control '
               'and cannot be accessed by third parties.',
@@ -294,8 +288,7 @@ class HelpContent {
         ),
         HelpSection(
           header: 'Web (Linked Client)',
-          body:
-              'The web client runs in your browser and must be linked to a '
+          body: 'The web client runs in your browser and must be linked to a '
               'native app instance. It cannot independently hold an identity. '
               'The web client\'s capabilities are limited by the browser\'s '
               'WebRTC implementation.',
@@ -310,8 +303,7 @@ class HelpContent {
       sections: [
         HelpSection(
           header: '"Offline" Status',
-          body:
-              'This means the signaling server is unreachable. Check your '
+          body: 'This means the signaling server is unreachable. Check your '
               'internet connection. The app automatically retries with '
               'exponential backoff (3s, 6s, 12s, 24s, 48s). If the problem '
               'persists, try switching networks or check if a firewall is '
@@ -334,16 +326,14 @@ class HelpContent {
         ),
         HelpSection(
           header: 'Messages Not Delivering',
-          body:
-              'The recipient must be online to receive messages. There is no '
+          body: 'The recipient must be online to receive messages. There is no '
               'offline message queue. If your contact shows as "Connected" but '
               'messages are not being delivered, try disconnecting and '
               'reconnecting.',
         ),
         HelpSection(
           header: 'Lost Identity After Reinstall',
-          body:
-              'This is expected behavior. Uninstalling the app destroys your '
+          body: 'This is expected behavior. Uninstalling the app destroys your '
               'identity keypair. You will need to re-pair with all contacts '
               'using new pairing codes. There is no way to recover a lost '
               'identity.',
