@@ -1299,6 +1299,7 @@ jobs:
           # gnome-keyring-daemon to create its control socket.
           sudo mkdir -p /run/user/$(id -u)/keyring
           sudo chown -R $(id -u):$(id -g) /run/user/$(id -u)
+          chmod 0700 /run/user/$(id -u)/keyring
           export XDG_RUNTIME_DIR=/run/user/$(id -u)
           echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> $GITHUB_ENV
 
