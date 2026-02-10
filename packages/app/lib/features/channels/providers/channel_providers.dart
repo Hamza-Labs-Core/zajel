@@ -4,6 +4,10 @@ import '../models/channel.dart';
 import '../services/channel_crypto_service.dart';
 import '../services/channel_service.dart';
 import '../services/channel_storage_service.dart';
+import '../services/channel_sync_service.dart';
+import '../services/upstream_service.dart';
+import '../services/poll_service.dart';
+import '../services/live_stream_service.dart';
 
 /// Provider for the channel crypto service (stateless, no initialization needed).
 final channelCryptoServiceProvider = Provider<ChannelCryptoService>((ref) {
@@ -55,4 +59,42 @@ final ownedChannelsProvider = FutureProvider<List<Channel>>((ref) async {
 final subscribedChannelsProvider = FutureProvider<List<Channel>>((ref) async {
   final channels = await ref.watch(channelsProvider.future);
   return channels.where((c) => c.role == ChannelRole.subscriber).toList();
+});
+
+/// Provider for the channel sync service.
+///
+/// Must be overridden in [ProviderScope] with actual WebSocket send function
+/// and peer ID. This is because the sync service depends on the signaling
+/// client which is initialized at runtime.
+final channelSyncServiceProvider = Provider<ChannelSyncService>((ref) {
+  throw UnimplementedError(
+    'channelSyncServiceProvider must be overridden with actual '
+    'WebSocket send function and peer ID',
+  );
+});
+
+/// Provider for the upstream service (handles subscriber -> owner messaging).
+final upstreamServiceProvider = Provider<UpstreamService>((ref) {
+  final cryptoService = ref.watch(channelCryptoServiceProvider);
+  return UpstreamService(cryptoService: cryptoService);
+});
+
+/// Provider for the poll service (poll creation, voting, and tallying).
+final pollServiceProvider = Provider<PollService>((ref) {
+  final channelService = ref.watch(channelServiceProvider);
+  final upstreamService = ref.watch(upstreamServiceProvider);
+  return PollService(
+    channelService: channelService,
+    upstreamService: upstreamService,
+  );
+});
+
+/// Provider for the live stream service.
+final liveStreamServiceProvider = Provider<LiveStreamService>((ref) {
+  final cryptoService = ref.watch(channelCryptoServiceProvider);
+  final channelService = ref.watch(channelServiceProvider);
+  return LiveStreamService(
+    cryptoService: cryptoService,
+    channelService: channelService,
+  );
 });
