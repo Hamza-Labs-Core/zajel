@@ -65,11 +65,28 @@ class ChunkPayload extends Equatable {
   }
 
   /// Deserialize from decrypted bytes.
+  ///
+  /// Throws [FormatException] if the bytes cannot be decoded as valid JSON
+  /// or if the payload field contains invalid base64.
   factory ChunkPayload.fromBytes(Uint8List bytes) {
-    final json = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+    final Map<String, dynamic> json;
+    try {
+      json = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+    } catch (e) {
+      throw FormatException('Invalid chunk payload format: $e');
+    }
+
+    final Uint8List payloadBytes;
+    try {
+      payloadBytes = base64Decode(json['payload'] as String);
+    } on FormatException {
+      throw const FormatException(
+          'Invalid base64 in chunk payload content');
+    }
+
     return ChunkPayload(
       type: ContentType.fromString(json['type'] as String),
-      payload: base64Decode(json['payload'] as String),
+      payload: payloadBytes,
       metadata: (json['metadata'] as Map<String, dynamic>?) ?? {},
       replyTo: json['reply_to'] as String?,
       author: json['author'] as String?,
@@ -148,17 +165,27 @@ class Chunk extends Equatable {
         'encrypted_payload': base64Encode(encryptedPayload),
       };
 
-  factory Chunk.fromJson(Map<String, dynamic> json) => Chunk(
-        chunkId: json['chunk_id'] as String,
-        routingHash: json['routing_hash'] as String,
-        sequence: json['sequence'] as int,
-        chunkIndex: json['chunk_index'] as int,
-        totalChunks: json['total_chunks'] as int,
-        size: json['size'] as int,
-        signature: json['signature'] as String,
-        authorPubkey: json['author_pubkey'] as String,
-        encryptedPayload: base64Decode(json['encrypted_payload'] as String),
-      );
+  factory Chunk.fromJson(Map<String, dynamic> json) {
+    final encryptedPayloadBase64 = json['encrypted_payload'] as String;
+    final Uint8List encryptedPayload;
+    try {
+      encryptedPayload = base64Decode(encryptedPayloadBase64);
+    } on FormatException {
+      throw FormatException(
+          'Invalid base64 in encrypted_payload for chunk ${json['chunk_id']}');
+    }
+    return Chunk(
+      chunkId: json['chunk_id'] as String,
+      routingHash: json['routing_hash'] as String,
+      sequence: json['sequence'] as int,
+      chunkIndex: json['chunk_index'] as int,
+      totalChunks: json['total_chunks'] as int,
+      size: json['size'] as int,
+      signature: json['signature'] as String,
+      authorPubkey: json['author_pubkey'] as String,
+      encryptedPayload: encryptedPayload,
+    );
+  }
 
   Chunk copyWith({
     String? chunkId,

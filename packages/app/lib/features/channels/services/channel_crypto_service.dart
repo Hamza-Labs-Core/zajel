@@ -56,13 +56,21 @@ class ChannelCryptoService {
 
   /// Derive a channel ID (fingerprint) from an Ed25519 public key.
   ///
-  /// Uses SHA-256 of the public key bytes, truncated to 16 bytes,
-  /// hex-encoded for a compact but unique identifier.
+  /// Uses SHA-256 of the public key bytes, truncated to 16 bytes (128 bits),
+  /// hex-encoded for a compact identifier. At 128 bits the birthday-bound
+  /// collision probability is ~2^-64, negligible for any realistic channel count.
   Future<String> deriveChannelId(String publicKeyBase64) async {
-    final publicKeyBytes = base64Decode(publicKeyBase64);
+    final Uint8List publicKeyBytes;
+    try {
+      publicKeyBytes = base64Decode(publicKeyBase64);
+    } on FormatException {
+      throw ChannelCryptoException(
+          'Invalid base64 encoding for public key');
+    }
     final hashAlgo = Sha256();
     final hash = await hashAlgo.hash(publicKeyBytes);
     // Use first 16 bytes (128 bits) of the hash — collision-resistant enough
+    // for any practical number of channels (birthday bound ~2^64).
     final truncated = hash.bytes.sublist(0, 16);
     return truncated.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
@@ -80,7 +88,14 @@ class ChannelCryptoService {
   ) async {
     final signable = manifest.toSignableJson();
     final signableBytes = Uint8List.fromList(utf8.encode(signable));
-    final privateKeyBytes = base64Decode(ownerPrivateKeyBase64);
+
+    final Uint8List privateKeyBytes;
+    try {
+      privateKeyBytes = base64Decode(ownerPrivateKeyBase64);
+    } on FormatException {
+      throw ChannelCryptoException(
+          'Invalid base64 encoding for owner private key');
+    }
 
     final keyPair = await _ed25519.newKeyPairFromSeed(privateKeyBytes);
     final signature = await _ed25519.sign(signableBytes, keyPair: keyPair);
@@ -92,15 +107,24 @@ class ChannelCryptoService {
 
   /// Verify a manifest's signature against the owner's public key.
   ///
-  /// Returns true if the signature is valid.
+  /// Returns true if the signature is valid. Always performs the full
+  /// verification path to avoid timing side-channels, except when the
+  /// signature is obviously absent (empty string).
   Future<bool> verifyManifest(ChannelManifest manifest) async {
     if (manifest.signature.isEmpty) return false;
 
     try {
       final signable = manifest.toSignableJson();
       final signableBytes = Uint8List.fromList(utf8.encode(signable));
-      final signatureBytes = base64Decode(manifest.signature);
-      final publicKeyBytes = base64Decode(manifest.ownerKey);
+
+      final Uint8List signatureBytes;
+      final Uint8List publicKeyBytes;
+      try {
+        signatureBytes = base64Decode(manifest.signature);
+        publicKeyBytes = base64Decode(manifest.ownerKey);
+      } on FormatException {
+        return false;
+      }
 
       final publicKey =
           SimplePublicKey(publicKeyBytes, type: KeyPairType.ed25519);
@@ -125,7 +149,13 @@ class ChannelCryptoService {
     String encryptionPrivateKeyBase64,
     int keyEpoch,
   ) async {
-    final privateKeyBytes = base64Decode(encryptionPrivateKeyBase64);
+    final Uint8List privateKeyBytes;
+    try {
+      privateKeyBytes = base64Decode(encryptionPrivateKeyBase64);
+    } on FormatException {
+      throw ChannelCryptoException(
+          'Invalid base64 encoding for encryption private key');
+    }
     return _hkdf.deriveKey(
       secretKey: SecretKey(privateKeyBytes),
       info: utf8.encode('zajel_channel_content_epoch_$keyEpoch'),
@@ -193,6 +223,9 @@ class ChannelCryptoService {
       final plaintextBytes =
           await _chacha20.decrypt(secretBox, secretKey: contentKey);
       return ChunkPayload.fromBytes(Uint8List.fromList(plaintextBytes));
+    } on SecretBoxAuthenticationError {
+      throw ChannelCryptoException(
+          'MAC verification failed: payload has been tampered with or wrong key');
     } catch (e) {
       throw ChannelCryptoException('Failed to decrypt payload: $e');
     }
@@ -209,17 +242,32 @@ class ChannelCryptoService {
     Uint8List encryptedPayload,
     String authorPrivateKeyBase64,
   ) async {
-    final privateKeyBytes = base64Decode(authorPrivateKeyBase64);
+    final Uint8List privateKeyBytes;
+    try {
+      privateKeyBytes = base64Decode(authorPrivateKeyBase64);
+    } on FormatException {
+      throw ChannelCryptoException(
+          'Invalid base64 encoding for author private key');
+    }
     final keyPair = await _ed25519.newKeyPairFromSeed(privateKeyBytes);
     final signature = await _ed25519.sign(encryptedPayload, keyPair: keyPair);
     return base64Encode(signature.bytes);
   }
 
   /// Verify a chunk's signature against the author's public key.
+  ///
+  /// Returns false for any malformed input (invalid base64, wrong key size, etc.)
+  /// rather than throwing, since verification failure is a normal control path.
   Future<bool> verifyChunkSignature(Chunk chunk) async {
     try {
-      final signatureBytes = base64Decode(chunk.signature);
-      final publicKeyBytes = base64Decode(chunk.authorPubkey);
+      final Uint8List signatureBytes;
+      final Uint8List publicKeyBytes;
+      try {
+        signatureBytes = base64Decode(chunk.signature);
+        publicKeyBytes = base64Decode(chunk.authorPubkey);
+      } on FormatException {
+        return false;
+      }
 
       final publicKey =
           SimplePublicKey(publicKeyBytes, type: KeyPairType.ed25519);

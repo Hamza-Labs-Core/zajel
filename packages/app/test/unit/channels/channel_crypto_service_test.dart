@@ -331,6 +331,32 @@ void main() {
       expect(decrypted.timestamp, DateTime.utc(2026, 2, 10, 14, 30));
     });
 
+    test('decryption with tampered ciphertext reports MAC failure', () async {
+      final payload = ChunkPayload(
+        type: ContentType.text,
+        payload: Uint8List.fromList(utf8.encode('Tamper test')),
+        timestamp: DateTime.utc(2026, 2, 10),
+      );
+
+      final encrypted = await cryptoService.encryptPayload(
+        payload,
+        encryptionPrivateKey,
+        1,
+      );
+
+      // Tamper with the ciphertext portion (after nonce, before MAC)
+      encrypted[15] ^= 0xFF;
+
+      expect(
+        () => cryptoService.decryptPayload(encrypted, encryptionPrivateKey, 1),
+        throwsA(isA<ChannelCryptoException>().having(
+          (e) => e.message,
+          'message',
+          contains('MAC verification failed'),
+        )),
+      );
+    });
+
     test('decryption of truncated ciphertext fails', () async {
       expect(
         () => cryptoService.decryptPayload(

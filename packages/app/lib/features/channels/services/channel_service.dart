@@ -12,7 +12,11 @@ import 'channel_storage_service.dart';
 /// Orchestrates [ChannelCryptoService] for cryptographic operations and
 /// [ChannelStorageService] for persistence.
 class ChannelService {
-  /// Fixed chunk size for splitting content (64KB).
+  /// Fixed chunk size for splitting encrypted content into relay-friendly pieces.
+  ///
+  /// 64KB balances efficiency (fewer chunks per message) with relay-ability
+  /// (fits within WebRTC data channel message limits and VPS memory budgets).
+  /// This value must match across all clients for correct reassembly.
   static const int chunkSize = 64 * 1024;
 
   final ChannelCryptoService _cryptoService;
@@ -212,6 +216,13 @@ class ChannelService {
       throw ChannelServiceException(
           'Cannot reassemble: chunks report different total counts');
     }
+    // Deduplicate by chunk index to prevent replay/duplication attacks
+    final uniqueIndices = chunks.map((c) => c.chunkIndex).toSet();
+    if (uniqueIndices.length != chunks.length) {
+      throw ChannelServiceException(
+          'Cannot reassemble: duplicate chunk indices detected');
+    }
+
     if (chunks.length != totalChunks) {
       throw ChannelServiceException(
           'Cannot reassemble: expected $totalChunks chunks, got ${chunks.length}');

@@ -374,6 +374,33 @@ void main() {
       );
     });
 
+    test('reassemble rejects duplicate chunk indices', () async {
+      final payload = ChunkPayload(
+        type: ContentType.text,
+        payload: Uint8List.fromList(utf8.encode('test')),
+        timestamp: DateTime.utc(2026, 2, 10),
+      );
+
+      final chunks = await channelService.splitIntoChunks(
+        payload: payload,
+        channel: channel,
+        sequence: 1,
+        routingHash: 'rh_test',
+      );
+
+      // Duplicate the first chunk to simulate a replay attack
+      final duplicated = [chunks.first, chunks.first.copyWith(chunkId: 'ch_dup')];
+
+      expect(
+        () => channelService.reassembleChunks(duplicated),
+        throwsA(isA<ChannelServiceException>().having(
+          (e) => e.message,
+          'message',
+          contains('duplicate'),
+        )),
+      );
+    });
+
     test('reassemble rejects incomplete chunk set', () async {
       final largeData = Uint8List(ChannelService.chunkSize * 2 + 100);
       final payload = ChunkPayload(
