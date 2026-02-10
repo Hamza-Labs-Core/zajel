@@ -78,7 +78,8 @@ class ChunkPayload extends Equatable {
   }
 
   @override
-  List<Object?> get props => [type, payload, metadata, replyTo, author, timestamp];
+  List<Object?> get props =>
+      [type, payload, metadata, replyTo, author, timestamp];
 }
 
 /// A chunk — the atomic unit of content that flows through the VPS relay.

@@ -8,11 +8,13 @@ import 'package:zajel/features/channels/models/chunk.dart';
 void main() {
   group('ChannelRole', () {
     test('has all expected values', () {
-      expect(ChannelRole.values, containsAll([
-        ChannelRole.owner,
-        ChannelRole.admin,
-        ChannelRole.subscriber,
-      ]));
+      expect(
+          ChannelRole.values,
+          containsAll([
+            ChannelRole.owner,
+            ChannelRole.admin,
+            ChannelRole.subscriber,
+          ]));
     });
   });
 

@@ -104,7 +104,8 @@ void main() {
         keyEpoch: 1,
       );
 
-      final signed = await cryptoService.signManifest(manifest, ownerPrivateKey);
+      final signed =
+          await cryptoService.signManifest(manifest, ownerPrivateKey);
 
       expect(signed.signature, isNotEmpty);
       expect(() => base64Decode(signed.signature), returnsNormally);
@@ -121,7 +122,8 @@ void main() {
         keyEpoch: 1,
       );
 
-      final signed = await cryptoService.signManifest(manifest, ownerPrivateKey);
+      final signed =
+          await cryptoService.signManifest(manifest, ownerPrivateKey);
       final isValid = await cryptoService.verifyManifest(signed);
 
       expect(isValid, isTrue);
@@ -150,7 +152,8 @@ void main() {
         currentEncryptKey: encryptionPublicKey,
       );
 
-      final signed = await cryptoService.signManifest(manifest, ownerPrivateKey);
+      final signed =
+          await cryptoService.signManifest(manifest, ownerPrivateKey);
 
       // Tamper with the name
       final tampered = signed.copyWith(name: 'Tampered Name');
@@ -172,7 +175,8 @@ void main() {
       );
 
       // Sign with the real owner key
-      final signed = await cryptoService.signManifest(manifest, ownerPrivateKey);
+      final signed =
+          await cryptoService.signManifest(manifest, ownerPrivateKey);
 
       // Replace owner_key with a different key (but keep the original signature)
       final swapped = signed.copyWith(ownerKey: otherKeys.publicKey);
@@ -196,7 +200,8 @@ void main() {
         rules: const ChannelRules(repliesEnabled: false, pollsEnabled: true),
       );
 
-      final signed = await cryptoService.signManifest(manifest, ownerPrivateKey);
+      final signed =
+          await cryptoService.signManifest(manifest, ownerPrivateKey);
       final isValid = await cryptoService.verifyManifest(signed);
 
       expect(isValid, isTrue);
@@ -291,8 +296,7 @@ void main() {
       );
 
       expect(
-        () => cryptoService.decryptPayload(
-            encrypted, otherKeys.privateKey, 1),
+        () => cryptoService.decryptPayload(encrypted, otherKeys.privateKey, 1),
         throwsA(isA<ChannelCryptoException>()),
       );
     });
@@ -451,11 +455,12 @@ void main() {
         currentEncryptKey: encryptionPublicKey,
         keyEpoch: 1,
       );
-      signedManifest = await cryptoService.signManifest(manifest, ownerPrivateKey);
+      signedManifest =
+          await cryptoService.signManifest(manifest, ownerPrivateKey);
     });
 
     /// Helper to create a valid signed chunk with encrypted payload.
-    Future<Chunk> _createValidChunk() async {
+    Future<Chunk> createValidChunk() async {
       final payload = ChunkPayload(
         type: ContentType.text,
         payload: Uint8List.fromList(utf8.encode('Verified message')),
@@ -468,7 +473,8 @@ void main() {
         signedManifest.keyEpoch,
       );
 
-      final signature = await cryptoService.signChunk(encrypted, ownerPrivateKey);
+      final signature =
+          await cryptoService.signChunk(encrypted, ownerPrivateKey);
 
       return Chunk(
         chunkId: 'ch_valid_000',
@@ -484,7 +490,7 @@ void main() {
     }
 
     test('all 5 steps pass for a valid chunk from the owner', () async {
-      final chunk = await _createValidChunk();
+      final chunk = await createValidChunk();
 
       final decrypted = await cryptoService.verifyAndDecryptChunk(
         chunk: chunk,
@@ -498,11 +504,41 @@ void main() {
     });
 
     test('step 1 fails: invalid chunk signature', () async {
-      final chunk = await _createValidChunk();
+      final chunk = await createValidChunk();
       // Tamper with the payload after signing
       final tampered = chunk.copyWith(
-        encryptedPayload: Uint8List.fromList([0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+        encryptedPayload: Uint8List.fromList([
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]),
       );
 
       expect(
@@ -614,7 +650,7 @@ void main() {
     });
 
     test('step 3 fails: manifest signature is invalid', () async {
-      final chunk = await _createValidChunk();
+      final chunk = await createValidChunk();
 
       // Tamper with the manifest (change name but keep old signature)
       final tamperedManifest = signedManifest.copyWith(name: 'Tampered');
@@ -635,7 +671,7 @@ void main() {
     });
 
     test('step 4 fails: owner key does not match trusted key', () async {
-      final chunk = await _createValidChunk();
+      final chunk = await createValidChunk();
       final otherKeys = await cryptoService.generateSigningKeyPair();
 
       expect(
@@ -654,7 +690,7 @@ void main() {
     });
 
     test('step 5 fails: wrong decryption key', () async {
-      final chunk = await _createValidChunk();
+      final chunk = await createValidChunk();
       final otherEncKeys = await cryptoService.generateEncryptionKeyPair();
 
       expect(

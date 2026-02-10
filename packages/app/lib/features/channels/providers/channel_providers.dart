@@ -1,7 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/channel.dart';
-import '../models/chunk.dart';
 import '../services/channel_crypto_service.dart';
 import '../services/channel_service.dart';
 import '../services/channel_storage_service.dart';

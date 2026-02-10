@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io' show Platform;
 import 'dart:typed_data';
 
@@ -6,7 +5,6 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../models/channel.dart';
@@ -112,13 +110,13 @@ class ChannelStorageService {
     // Store private keys in secure storage (only if present)
     if (channel.ownerSigningKeyPrivate != null) {
       await _secureStorage.write(
-        key: '${_secureKeyPrefix}${channel.id}_signing_private',
+        key: '$_secureKeyPrefix${channel.id}_signing_private',
         value: channel.ownerSigningKeyPrivate,
       );
     }
     if (channel.encryptionKeyPrivate != null) {
       await _secureStorage.write(
-        key: '${_secureKeyPrefix}${channel.id}_encryption_private',
+        key: '$_secureKeyPrefix${channel.id}_encryption_private',
         value: channel.encryptionKeyPrivate,
       );
     }
@@ -139,10 +137,10 @@ class ChannelStorageService {
     if (rows.isEmpty) return null;
 
     final signingKey = await _secureStorage.read(
-      key: '${_secureKeyPrefix}${channelId}_signing_private',
+      key: '$_secureKeyPrefix${channelId}_signing_private',
     );
     final encryptionKey = await _secureStorage.read(
-      key: '${_secureKeyPrefix}${channelId}_encryption_private',
+      key: '$_secureKeyPrefix${channelId}_encryption_private',
     );
 
     return Channel.fromJson(
@@ -163,10 +161,10 @@ class ChannelStorageService {
     for (final row in rows) {
       final id = row['id'] as String;
       final signingKey = await _secureStorage.read(
-        key: '${_secureKeyPrefix}${id}_signing_private',
+        key: '$_secureKeyPrefix${id}_signing_private',
       );
       final encryptionKey = await _secureStorage.read(
-        key: '${_secureKeyPrefix}${id}_encryption_private',
+        key: '$_secureKeyPrefix${id}_encryption_private',
       );
       channels.add(Channel.fromJson(
         row,
@@ -184,13 +182,13 @@ class ChannelStorageService {
     if (db == null) return;
 
     await db.delete(_channelsTable, where: 'id = ?', whereArgs: [channelId]);
-    await db.delete(_chunksTable,
-        where: 'channel_id = ?', whereArgs: [channelId]);
+    await db
+        .delete(_chunksTable, where: 'channel_id = ?', whereArgs: [channelId]);
 
     await _secureStorage.delete(
-        key: '${_secureKeyPrefix}${channelId}_signing_private');
+        key: '$_secureKeyPrefix${channelId}_signing_private');
     await _secureStorage.delete(
-        key: '${_secureKeyPrefix}${channelId}_encryption_private');
+        key: '$_secureKeyPrefix${channelId}_encryption_private');
   }
 
   // ---------------------------------------------------------------------------
@@ -316,7 +314,8 @@ class ChannelStorageService {
       size: row['size'] as int,
       signature: row['signature'] as String,
       authorPubkey: row['author_pubkey'] as String,
-      encryptedPayload: Uint8List.fromList(row['encrypted_payload'] as List<int>),
+      encryptedPayload:
+          Uint8List.fromList(row['encrypted_payload'] as List<int>),
     );
   }
 }

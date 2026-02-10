@@ -64,9 +64,7 @@ class ChannelCryptoService {
     final hash = await hashAlgo.hash(publicKeyBytes);
     // Use first 16 bytes (128 bits) of the hash — collision-resistant enough
     final truncated = hash.bytes.sublist(0, 16);
-    return truncated
-        .map((b) => b.toRadixString(16).padLeft(2, '0'))
-        .join();
+    return truncated.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 
   // ---------------------------------------------------------------------------
@@ -187,8 +185,7 @@ class ChannelCryptoService {
     final nonce = encryptedBytes.sublist(0, nonceLength);
     final cipherText =
         encryptedBytes.sublist(nonceLength, encryptedBytes.length - macLength);
-    final mac =
-        Mac(encryptedBytes.sublist(encryptedBytes.length - macLength));
+    final mac = Mac(encryptedBytes.sublist(encryptedBytes.length - macLength));
 
     final secretBox = SecretBox(cipherText, nonce: nonce, mac: mac);
 
@@ -261,8 +258,7 @@ class ChannelCryptoService {
     // Step 1: Check signature on chunk against author_pubkey
     final signatureValid = await verifyChunkSignature(chunk);
     if (!signatureValid) {
-      throw ChannelCryptoException(
-          'Step 1 failed: chunk signature is invalid');
+      throw ChannelCryptoException('Step 1 failed: chunk signature is invalid');
     }
 
     // Step 2: Check author_pubkey is in channel manifest (owner or admin)

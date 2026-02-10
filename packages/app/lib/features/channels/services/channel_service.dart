@@ -102,7 +102,8 @@ class ChannelService {
     // Verify the manifest signature before storing
     final isValid = await _cryptoService.verifyManifest(manifest);
     if (!isValid) {
-      throw ChannelServiceException('Cannot subscribe: manifest signature is invalid');
+      throw ChannelServiceException(
+          'Cannot subscribe: manifest signature is invalid');
     }
 
     final channel = Channel(
@@ -168,7 +169,8 @@ class ChannelService {
       final signature = await _cryptoService.signChunk(chunkData, signingKey);
 
       final chunk = Chunk(
-        chunkId: 'ch_${_uuid.v4().substring(0, 8)}_${i.toString().padLeft(3, '0')}',
+        chunkId:
+            'ch_${_uuid.v4().substring(0, 8)}_${i.toString().padLeft(3, '0')}',
         routingHash: routingHash,
         sequence: sequence,
         chunkIndex: i,
@@ -351,8 +353,7 @@ class ChannelService {
   }
 
   /// Get chunks for a specific message (by sequence number).
-  Future<List<Chunk>> getChunksForMessage(
-          String channelId, int sequence) =>
+  Future<List<Chunk>> getChunksForMessage(String channelId, int sequence) =>
       _storageService.getChunksBySequence(channelId, sequence);
 
   /// Delete a channel and all its data.
@@ -365,7 +366,8 @@ class ChannelService {
 
   void _ensureOwner(Channel channel) {
     if (channel.role != ChannelRole.owner) {
-      throw ChannelServiceException('Only the channel owner can perform this operation');
+      throw ChannelServiceException(
+          'Only the channel owner can perform this operation');
     }
     if (channel.ownerSigningKeyPrivate == null) {
       throw ChannelServiceException('Owner signing key not available');

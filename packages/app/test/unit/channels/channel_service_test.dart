@@ -104,7 +104,8 @@ void main() {
   });
 
   group('Channel creation', () {
-    test('createChannel generates keys, signs manifest, and persists', () async {
+    test('createChannel generates keys, signs manifest, and persists',
+        () async {
       final channel = await channelService.createChannel(
         name: 'My Channel',
         description: 'A test channel',
@@ -183,8 +184,7 @@ void main() {
     });
 
     test('subscribe rejects invalid manifest signature', () async {
-      final tamperedManifest =
-          ownerChannel.manifest.copyWith(name: 'Tampered');
+      final tamperedManifest = ownerChannel.manifest.copyWith(name: 'Tampered');
 
       expect(
         () => channelService.subscribe(
@@ -265,7 +265,8 @@ void main() {
       // Verify all chunks are signed
       for (final chunk in chunks) {
         final isValid = await cryptoService.verifyChunkSignature(chunk);
-        expect(isValid, isTrue, reason: 'Chunk ${chunk.chunkIndex} signature invalid');
+        expect(isValid, isTrue,
+            reason: 'Chunk ${chunk.chunkIndex} signature invalid');
       }
     });
 
@@ -446,11 +447,13 @@ void main() {
       expect(isValid, isTrue);
     });
 
-    test('rotateEncryptionKey generates new key and increments epoch', () async {
+    test('rotateEncryptionKey generates new key and increments epoch',
+        () async {
       final originalKey = channel.encryptionKeyPublic;
       final originalEpoch = channel.manifest.keyEpoch;
 
-      final updated = await channelService.rotateEncryptionKey(channel: channel);
+      final updated =
+          await channelService.rotateEncryptionKey(channel: channel);
 
       expect(updated.encryptionKeyPublic, isNot(originalKey));
       expect(updated.manifest.keyEpoch, originalEpoch + 1);
@@ -463,7 +466,8 @@ void main() {
     test('rotateEncryptionKey means old key cannot decrypt new content',
         () async {
       final oldKey = channel.encryptionKeyPrivate!;
-      final updated = await channelService.rotateEncryptionKey(channel: channel);
+      final updated =
+          await channelService.rotateEncryptionKey(channel: channel);
 
       // Encrypt with the new key
       final payload = ChunkPayload(
