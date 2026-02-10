@@ -52,7 +52,8 @@ void main() {
         final tomorrow = DateTime.utc(2024, 1, 16);
 
         final pointsToday = service.deriveDailyPointsForDate(keyA, keyB, today);
-        final pointsTomorrow = service.deriveDailyPointsForDate(keyA, keyB, tomorrow);
+        final pointsTomorrow =
+            service.deriveDailyPointsForDate(keyA, keyB, tomorrow);
 
         // Today's "today" point should equal tomorrow's "yesterday" point
         expect(pointsToday[1], equals(pointsTomorrow[0]));
@@ -165,8 +166,10 @@ void main() {
       // Just after midnight
       final afterMidnight = DateTime.utc(2024, 1, 16, 0, 1);
 
-      final pointsBefore = service.deriveDailyPointsForDate(keyA, keyB, beforeMidnight);
-      final pointsAfter = service.deriveDailyPointsForDate(keyA, keyB, afterMidnight);
+      final pointsBefore =
+          service.deriveDailyPointsForDate(keyA, keyB, beforeMidnight);
+      final pointsAfter =
+          service.deriveDailyPointsForDate(keyA, keyB, afterMidnight);
 
       // Should have overlap (Jan 15's tomorrow = Jan 16's today)
       expect(pointsBefore[2], equals(pointsAfter[1]));
@@ -229,8 +232,10 @@ void main() {
       // 00:00 on Jan 16
       final afterMidnight = DateTime.utc(2024, 1, 16, 0, 0);
 
-      final tokensBefore = service.deriveHourlyTokensForTime(secret, beforeMidnight);
-      final tokensAfter = service.deriveHourlyTokensForTime(secret, afterMidnight);
+      final tokensBefore =
+          service.deriveHourlyTokensForTime(secret, beforeMidnight);
+      final tokensAfter =
+          service.deriveHourlyTokensForTime(secret, afterMidnight);
 
       // Before's "next" should equal after's "current"
       expect(tokensBefore[2], equals(tokensAfter[1]));

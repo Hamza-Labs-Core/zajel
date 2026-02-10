@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
 import type { ConnectionState } from './lib/protocol';
 import { logger } from './lib/logger';
+import { registerServiceWorker, requestPermission } from './lib/notifications';
 
 import { useCrypto, useSignaling, useWebRTC, useFileTransfer, useMessages } from './hooks';
 
@@ -32,6 +33,11 @@ export function App() {
   useEffect(() => {
     peerCodeRef.current = peerCode;
   }, [peerCode]);
+
+  // Register service worker and request notification permission
+  useEffect(() => {
+    registerServiceWorker().then(() => requestPermission());
+  }, []);
 
   // Initialize crypto hook
   const crypto = useCrypto();

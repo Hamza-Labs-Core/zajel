@@ -48,7 +48,8 @@ class RendezvousService {
   /// sent to the signaling server.
   ///
   /// Throws [PeerNotFoundException] if the peer is not in trusted storage.
-  Future<RendezvousRegistration> createRegistrationForPeer(String peerId) async {
+  Future<RendezvousRegistration> createRegistrationForPeer(
+      String peerId) async {
     // Get keys
     final myPubkey = await _cryptoService.getPublicKeyBytes();
     final theirPubkey = await _trustedPeersStorage.getPublicKeyBytes(peerId);
@@ -58,7 +59,8 @@ class RendezvousService {
     }
 
     // Derive meeting points
-    final dailyPoints = _meetingPointService.deriveDailyPoints(myPubkey, theirPubkey);
+    final dailyPoints =
+        _meetingPointService.deriveDailyPoints(myPubkey, theirPubkey);
 
     // Derive hourly tokens (if we have shared secret)
     final sharedSecret = await _cryptoService.getSessionKeyBytes(peerId);
@@ -81,7 +83,8 @@ class RendezvousService {
   ///
   /// Returns a map of peer IDs to their registrations.
   /// Peers that fail are silently skipped (logged but not thrown).
-  Future<Map<String, RendezvousRegistration>> createRegistrationsForAllPeers() async {
+  Future<Map<String, RendezvousRegistration>>
+      createRegistrationsForAllPeers() async {
     final peerIds = await _trustedPeersStorage.getAllPeerIds();
     final registrations = <String, RendezvousRegistration>{};
 
@@ -91,7 +94,8 @@ class RendezvousService {
       } catch (e) {
         // Log error but continue with other peers
         // In production, this should use a proper logger
-        logger.error('RendezvousService', 'Failed to create registration for $peerId', e);
+        logger.error('RendezvousService',
+            'Failed to create registration for $peerId', e);
       }
     }
 
@@ -127,13 +131,15 @@ class RendezvousService {
   /// Decrypt a dead drop payload from a peer.
   ///
   /// Throws [DeadDropDecryptionException] if decryption fails.
-  Future<ConnectionInfo> decryptDeadDrop(String encrypted, String peerId) async {
+  Future<ConnectionInfo> decryptDeadDrop(
+      String encrypted, String peerId) async {
     try {
       final plaintext = await _cryptoService.decryptFromPeer(peerId, encrypted);
       final json = jsonDecode(plaintext) as Map<String, dynamic>;
       return ConnectionInfo.fromJson(json);
     } catch (e) {
-      throw DeadDropDecryptionException('Failed to decrypt dead drop from $peerId: $e');
+      throw DeadDropDecryptionException(
+          'Failed to decrypt dead drop from $peerId: $e');
     }
   }
 
@@ -155,7 +161,8 @@ class RendezvousService {
   Future<void> handleDeadDrop(DeadDrop drop) async {
     final peerId = drop.peerId;
     if (peerId == null) {
-      throw DeadDropDecryptionException('Cannot handle dead drop without peer ID');
+      throw DeadDropDecryptionException(
+          'Cannot handle dead drop without peer ID');
     }
 
     final connectionInfo = await decryptDeadDrop(drop.encryptedPayload, peerId);
@@ -178,10 +185,12 @@ class RendezvousService {
   /// Process a rendezvous result from the signaling server.
   ///
   /// Prioritizes live matches over dead drops.
-  Future<void> processRendezvousResult(String peerId, RendezvousResult result) async {
+  Future<void> processRendezvousResult(
+      String peerId, RendezvousResult result) async {
     if (!result.success) {
       // Log the error but don't throw
-      logger.error('RendezvousService', 'Rendezvous failed for $peerId: ${result.error}');
+      logger.error('RendezvousService',
+          'Rendezvous failed for $peerId: ${result.error}');
       return;
     }
 
@@ -196,9 +205,8 @@ class RendezvousService {
     if (result.deadDrops.isNotEmpty) {
       final drop = result.deadDrops.first;
       // Ensure the peer ID is set
-      final dropWithPeerId = drop.peerId != null
-          ? drop
-          : drop.copyWith(peerId: peerId);
+      final dropWithPeerId =
+          drop.peerId != null ? drop : drop.copyWith(peerId: peerId);
       await handleDeadDrop(dropWithPeerId);
     }
   }
@@ -216,7 +224,8 @@ class RendezvousService {
       if (theirPubkey == null) continue;
 
       // Check if the meeting point matches this peer's daily points
-      final dailyPoints = _meetingPointService.deriveDailyPoints(myPubkey, theirPubkey);
+      final dailyPoints =
+          _meetingPointService.deriveDailyPoints(myPubkey, theirPubkey);
       if (dailyPoints.contains(meetingPoint)) {
         return peerId;
       }
@@ -224,7 +233,8 @@ class RendezvousService {
       // Check hourly tokens if we have a shared secret
       final sharedSecret = await _cryptoService.getSessionKeyBytes(peerId);
       if (sharedSecret != null) {
-        final hourlyTokens = _meetingPointService.deriveHourlyTokens(sharedSecret);
+        final hourlyTokens =
+            _meetingPointService.deriveHourlyTokens(sharedSecret);
         if (hourlyTokens.contains(meetingPoint)) {
           return peerId;
         }

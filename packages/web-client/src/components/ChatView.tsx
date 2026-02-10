@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'preact/hooks';
 import type { ChatMessage } from '../lib/protocol';
+import { EmojiPicker } from './EmojiPicker';
 import { FingerprintDisplay } from './FingerprintDisplay';
+import { notifyMessage } from '../lib/notifications';
 
 interface ChatViewProps {
   peerCode: string;
@@ -27,6 +29,7 @@ export function ChatView({
 }: ChatViewProps) {
   const [input, setInput] = useState('');
   const [showFingerprint, setShowFingerprint] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [lastAnnouncedMessageId, setLastAnnouncedMessageId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -37,15 +40,16 @@ export function ChatView({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Track new messages for screen reader announcement
+  // Track new messages for screen reader announcement and notifications
   useEffect(() => {
     if (messages.length > 0) {
       const lastMessage = messages[messages.length - 1];
       if (lastMessage.id !== lastAnnouncedMessageId && lastMessage.sender === 'peer') {
         setLastAnnouncedMessageId(lastMessage.id);
+        notifyMessage(peerCode, lastMessage.content);
       }
     }
-  }, [messages, lastAnnouncedMessageId]);
+  }, [messages, lastAnnouncedMessageId, peerCode]);
 
   const handleSubmit = (e: Event) => {
     e.preventDefault();
@@ -198,6 +202,17 @@ export function ChatView({
         )}
       </div>
 
+      {/* Emoji picker (positioned above form) */}
+      {showEmojiPicker && (
+        <EmojiPicker
+          onSelect={(emoji) => {
+            setInput((prev) => prev + emoji);
+            inputRef.current?.focus();
+          }}
+          onClose={() => setShowEmojiPicker(false)}
+        />
+      )}
+
       <form
         class="chat-input"
         onSubmit={handleSubmit}
@@ -206,6 +221,15 @@ export function ChatView({
         <label htmlFor={inputId} class="sr-only">
           Type a message to {peerCode}
         </label>
+        <button
+          type="button"
+          class="btn btn-secondary emoji-toggle-btn"
+          onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+          aria-label={showEmojiPicker ? 'Close emoji picker' : 'Open emoji picker'}
+          title="Emoji"
+        >
+          😀
+        </button>
         <input
           ref={inputRef}
           id={inputId}
