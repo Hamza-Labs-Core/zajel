@@ -61,7 +61,7 @@ jobs:
         run: npm ci
 
       - name: Run E2E tests
-        run: npm test --workspace=@zajel/server-vps -- tests/e2e/
+        run: npm test --workspace=@zajel/server-vps -- tests/integration/
         env:
           CI: true
           LOG_LEVEL: error
