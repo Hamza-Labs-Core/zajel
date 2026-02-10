@@ -291,6 +291,40 @@ class AppHelper:
                 print("=== END PAGE SOURCE ===")
                 raise
 
+        # Dismiss onboarding screen if present (first launch after pm clear)
+        self._dismiss_onboarding()
+
+    def _dismiss_onboarding(self):
+        """Dismiss the onboarding screen if present (first launch after pm clear)."""
+        import time as _time
+        from selenium.webdriver.common.by import By
+
+        try:
+            skip_btn = self.driver.find_element(
+                By.XPATH,
+                "//*[@package='com.zajel.zajel' and "
+                "(contains(@text, 'Skip') or contains(@content-desc, 'Skip'))]"
+            )
+            print("[wait_for_app_ready] Onboarding screen detected, tapping Skip")
+            skip_btn.click()
+            _time.sleep(2)
+            # Re-wait for the actual home screen after onboarding dismissal
+            from selenium.webdriver.support.ui import WebDriverWait
+            from selenium.webdriver.support import expected_conditions as EC
+            home_screen_xpath = (
+                "//*[@package='com.zajel.zajel' and "
+                "(contains(@text, 'Code:') or contains(@content-desc, 'Code:') or "
+                "contains(@text, 'Online') or contains(@content-desc, 'Online') or "
+                "contains(@text, 'Connecting') or contains(@content-desc, 'Connecting') or "
+                "contains(@text, 'Offline') or contains(@content-desc, 'Offline'))]"
+            )
+            WebDriverWait(self.driver, 15).until(
+                EC.presence_of_element_located((By.XPATH, home_screen_xpath))
+            )
+            print("[wait_for_app_ready] Home screen confirmed after onboarding dismissal")
+        except Exception:
+            pass  # No onboarding screen — already on home
+
     def _find(self, text, timeout=10, partial=True):
         """Find an element by text, checking @text, @content-desc, and @tooltip-text.
 
