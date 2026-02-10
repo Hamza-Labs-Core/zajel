@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/providers/app_providers.dart';
 import '../models/group.dart';
 import '../models/group_message.dart';
 import '../services/group_connection_service.dart';
@@ -7,6 +8,7 @@ import '../services/group_crypto_service.dart';
 import '../services/group_service.dart';
 import '../services/group_storage_service.dart';
 import '../services/group_sync_service.dart';
+import '../services/webrtc_p2p_adapter.dart';
 
 /// Provider for the group crypto service (stateless, no initialization needed).
 final groupCryptoServiceProvider = Provider<GroupCryptoService>((ref) {
@@ -42,21 +44,17 @@ final groupServiceProvider = Provider<GroupService>((ref) {
 
 /// Provider for the P2P connection adapter.
 ///
-/// This must be overridden at the app level to provide a real adapter
-/// that bridges to [ConnectionManager] and [WebRTCService].
-///
-/// Example:
-/// ```dart
-/// final p2pConnectionAdapterProvider = Provider<P2PConnectionAdapter>((ref) {
-///   final connectionManager = ref.watch(connectionManagerProvider);
-///   return ConnectionManagerAdapter(connectionManager);
-/// });
-/// ```
+/// Bridges the abstract [P2PConnectionAdapter] interface to the real
+/// [ConnectionManager] and [WebRTCService] via [WebRtcP2PAdapter].
 final p2pConnectionAdapterProvider = Provider<P2PConnectionAdapter>((ref) {
-  throw UnimplementedError(
-    'p2pConnectionAdapterProvider must be overridden with a real '
-    'P2PConnectionAdapter that bridges to the WebRTC layer.',
+  final connectionManager = ref.watch(connectionManagerProvider);
+  final webrtcService = ref.watch(webrtcServiceProvider);
+  final adapter = WebRtcP2PAdapter(
+    connectionManager: connectionManager,
+    webrtcService: webrtcService,
   );
+  ref.onDispose(() => adapter.dispose());
+  return adapter;
 });
 
 /// Provider for the group connection service (mesh WebRTC connections).

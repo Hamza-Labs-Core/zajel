@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../../../core/logging/logger_service.dart';
 import '../models/chunk.dart';
 import 'channel_service.dart';
 import 'channel_storage_service.dart';
@@ -91,8 +92,13 @@ class ChannelSyncService {
 
     _messageSubscription = messageStream.listen(
       _handleServerMessage,
-      onError: (error) {
-        // Silently handle stream errors -- reconnection is handled elsewhere
+      onError: (error, stackTrace) {
+        logger.error(
+          'ChannelSyncService',
+          'Message stream error — reconnection is handled elsewhere',
+          error,
+          stackTrace is StackTrace ? stackTrace : null,
+        );
       },
     );
 
@@ -201,6 +207,27 @@ class ChannelSyncService {
     }
   }
 
+  /// Request a chunk by its routing hash, sequence, and chunk index.
+  ///
+  /// Use this when the actual chunk ID is unknown (e.g., requesting
+  /// a missing chunk that was never stored locally). The server matches
+  /// by routing metadata instead of chunk ID.
+  void requestChunkByMeta({
+    required String routingHash,
+    required int sequence,
+    required int chunkIndex,
+  }) {
+    final requestKey = '${routingHash}_seq${sequence}_idx$chunkIndex';
+    _pendingRequests.add(requestKey);
+    _sendMessage({
+      'type': 'chunk_request_meta',
+      'peerId': peerId,
+      'routingHash': routingHash,
+      'sequence': sequence,
+      'chunkIndex': chunkIndex,
+    });
+  }
+
   // ---------------------------------------------------------------------------
   // Chunk push (respond to server pull requests)
   // ---------------------------------------------------------------------------
@@ -280,7 +307,7 @@ class ChannelSyncService {
   /// Handle a chunk_pull request from the server.
   ///
   /// The server wants us to upload a chunk because another subscriber needs it.
-  void _handleChunkPull(Map<String, dynamic> message) async {
+  Future<void> _handleChunkPull(Map<String, dynamic> message) async {
     final chunkId = message['chunkId'] as String?;
     if (chunkId == null) return;
 

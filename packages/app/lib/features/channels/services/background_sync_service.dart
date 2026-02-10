@@ -203,9 +203,9 @@ class BackgroundSyncService {
 
     _log(
         'registerAndroid',
-        'WorkManager periodic task registered '
-            '(interval: ${minimumInterval.inMinutes}min)');
-    return true;
+        'Android WorkManager not available — workmanager package '
+            'is not installed. Use startPeriodicSync() for foreground sync.');
+    return false;
   }
 
   /// Cancel the Android WorkManager periodic task.
@@ -247,8 +247,11 @@ class BackgroundSyncService {
     //   existingWorkPolicy: ExistingWorkPolicy.keep,
     // );
 
-    _log('registerIos', 'Background App Refresh registered');
-    return true;
+    _log(
+        'registerIos',
+        'iOS Background App Refresh not available — workmanager package '
+            'is not installed. Use startPeriodicSync() for foreground sync.');
+    return false;
   }
 
   /// Cancel iOS Background App Refresh.
@@ -447,6 +450,10 @@ class BackgroundSyncService {
   }
 
   /// Request a specific missing chunk from the relay server.
+  ///
+  /// Uses routing hash + sequence + chunk index metadata rather than
+  /// fabricating a chunk ID, since the actual chunk IDs are UUIDs that
+  /// we cannot derive without having the chunk itself.
   void _requestMissingChunk(
     String channelId,
     int sequence,
@@ -459,10 +466,11 @@ class BackgroundSyncService {
       return;
     }
 
-    // Construct a chunk ID pattern to request
-    // The server will match by routing hash + chunk metadata
-    final chunkIdPattern = 'ch_${channelId}_seq${sequence}_idx$chunkIndex';
-    _channelSyncService!.requestChunk(chunkIdPattern);
+    _channelSyncService!.requestChunkByMeta(
+      routingHash: routingHash,
+      sequence: sequence,
+      chunkIndex: chunkIndex,
+    );
   }
 
   // ---------------------------------------------------------------------------
