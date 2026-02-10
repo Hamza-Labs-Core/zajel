@@ -1000,11 +1000,24 @@ jobs:
         run: |
           URL="${{ vars.VPS_QA_WS_URL }}"
           if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
-            FIRST_IP=$(echo "${{ vars.QA_VPS_IP }}" | cut -d',' -f1 | tr -d ' ')
-            URL="ws://${FIRST_IP}:9001"
+            IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
+            for ip in "${IPS[@]}"; do
+              ip=$(echo "$ip" | tr -d ' ')
+              echo "Probing VPS at $ip:9001..."
+              if timeout 10 curl -sf "http://${ip}:9001/health" >/dev/null 2>&1; then
+                URL="ws://${ip}:9001"
+                echo "Reachable and healthy: $ip:9001"
+                break
+              else
+                echo "Not reachable: $ip:9001"
+              fi
+            done
+            if [ -z "$URL" ]; then
+              echo "::warning::No VPS signaling server reachable — protocol tests will be skipped"
+            fi
           fi
           echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
-          echo "Resolved SIGNALING_URL=$URL"
+          echo "Resolved SIGNALING_URL=${URL:-<empty>}"
 
       - name: Build E2E APK
         working-directory: packages/app
@@ -1434,11 +1447,24 @@ jobs:
         run: |
           URL="${{ vars.VPS_QA_WS_URL }}"
           if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
-            FIRST_IP=$(echo "${{ vars.QA_VPS_IP }}" | cut -d',' -f1 | tr -d ' ')
-            URL="ws://${FIRST_IP}:9001"
+            IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
+            for ip in "${IPS[@]}"; do
+              ip=$(echo "$ip" | tr -d ' ')
+              echo "Probing VPS at $ip:9001..."
+              if timeout 10 curl -sf "http://${ip}:9001/health" >/dev/null 2>&1; then
+                URL="ws://${ip}:9001"
+                echo "Reachable and healthy: $ip:9001"
+                break
+              else
+                echo "Not reachable: $ip:9001"
+              fi
+            done
+            if [ -z "$URL" ]; then
+              echo "::warning::No VPS signaling server reachable — protocol tests will be skipped"
+            fi
           fi
           echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
-          echo "Resolved SIGNALING_URL=$URL"
+          echo "Resolved SIGNALING_URL=${URL:-<empty>}"
 
       - name: Run Linux E2E tests
         env:
