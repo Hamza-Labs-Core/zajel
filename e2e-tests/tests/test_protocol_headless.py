@@ -58,11 +58,14 @@ class TestProtocolHeadless:
 
                 assert len(alice_code) == 6
 
-                # Bob pairs with Alice (Alice auto-accepts)
-                peer = await bob.pair_with(alice_code)
+                # Both sides must establish WebRTC concurrently
+                alice_peer, bob_peer = await asyncio.gather(
+                    alice.wait_for_pair(timeout=30),
+                    bob.pair_with(alice_code),
+                )
 
-                assert peer is not None
-                assert peer.peer_id == alice_code
+                assert bob_peer is not None
+                assert bob_peer.peer_id == alice_code
 
         run(_test())
 
@@ -79,13 +82,13 @@ class TestProtocolHeadless:
                 alice_code = await alice.connect()
                 await bob.connect()
 
-                peer = await bob.pair_with(alice_code)
-
-                # Wait for Alice's key exchange to complete
-                await asyncio.sleep(2)
+                _, bob_peer = await asyncio.gather(
+                    alice.wait_for_pair(timeout=30),
+                    bob.pair_with(alice_code),
+                )
 
                 # Bob sends a message
-                await bob.send_text(peer.peer_id, "Hello from Bob!")
+                await bob.send_text(bob_peer.peer_id, "Hello from Bob!")
 
                 # Alice receives it
                 msg = await alice.receive_message(timeout=10)
@@ -107,16 +110,18 @@ class TestProtocolHeadless:
                 alice_code = await alice.connect()
                 await bob.connect()
 
-                peer = await bob.pair_with(alice_code)
-                await asyncio.sleep(2)
+                alice_peer, bob_peer = await asyncio.gather(
+                    alice.wait_for_pair(timeout=30),
+                    bob.pair_with(alice_code),
+                )
 
                 # Bob → Alice
-                await bob.send_text(peer.peer_id, "Ping")
+                await bob.send_text(bob_peer.peer_id, "Ping")
                 msg1 = await alice.receive_message(timeout=10)
                 assert msg1.content == "Ping"
 
                 # Alice → Bob
-                await alice.send_text(msg1.peer_id, "Pong")
+                await alice.send_text(alice_peer.peer_id, "Pong")
                 msg2 = await bob.receive_message(timeout=10)
                 assert msg2.content == "Pong"
 
@@ -135,12 +140,14 @@ class TestProtocolHeadless:
                 alice_code = await alice.connect()
                 await bob.connect()
 
-                peer = await bob.pair_with(alice_code)
-                await asyncio.sleep(2)
+                _, bob_peer = await asyncio.gather(
+                    alice.wait_for_pair(timeout=30),
+                    bob.pair_with(alice_code),
+                )
 
                 # Send 10 messages
                 for i in range(10):
-                    await bob.send_text(peer.peer_id, f"Message {i}")
+                    await bob.send_text(bob_peer.peer_id, f"Message {i}")
 
                 # Receive all 10
                 received = []
@@ -166,8 +173,10 @@ class TestProtocolHeadless:
                 alice_code = await alice.connect()
                 await bob.connect()
 
-                peer = await bob.pair_with(alice_code)
-                await asyncio.sleep(2)
+                _, bob_peer = await asyncio.gather(
+                    alice.wait_for_pair(timeout=30),
+                    bob.pair_with(alice_code),
+                )
 
                 test_strings = [
                     "Hello, World!",
@@ -178,7 +187,7 @@ class TestProtocolHeadless:
                 ]
 
                 for text in test_strings:
-                    await bob.send_text(peer.peer_id, text)
+                    await bob.send_text(bob_peer.peer_id, text)
                     msg = await alice.receive_message(timeout=10)
                     assert msg.content == text, f"Failed for: {text}"
 
@@ -198,8 +207,10 @@ class TestProtocolHeadless:
                 alice_code = await alice.connect()
                 await bob.connect()
 
-                peer = await bob.pair_with(alice_code)
-                await asyncio.sleep(2)
+                _, bob_peer = await asyncio.gather(
+                    alice.wait_for_pair(timeout=30),
+                    bob.pair_with(alice_code),
+                )
 
                 # Create a test file with random data
                 test_data = os.urandom(10_000)
@@ -212,7 +223,7 @@ class TestProtocolHeadless:
                     test_path = f.name
 
                 try:
-                    await bob.send_file(peer.peer_id, test_path)
+                    await bob.send_file(bob_peer.peer_id, test_path)
                     result = await alice.receive_file(timeout=30)
 
                     assert result is not None
@@ -236,10 +247,12 @@ class TestProtocolHeadless:
                 alice_code = await alice.connect()
                 await bob.connect()
 
-                peer = await bob.pair_with(alice_code)
-                await asyncio.sleep(2)
+                _, bob_peer = await asyncio.gather(
+                    alice.wait_for_pair(timeout=30),
+                    bob.pair_with(alice_code),
+                )
 
-                await bob.send_text(peer.peer_id, "")
+                await bob.send_text(bob_peer.peer_id, "")
                 msg = await alice.receive_message(timeout=10)
                 assert msg.content == ""
 
