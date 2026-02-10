@@ -1035,7 +1035,7 @@ jobs:
           relay-ip=$HOST_IP
           external-ip=$HOST_IP
           min-port=49152
-          max-port=49252
+          max-port=50152
           realm=zajel-ci
           user=${TURN_USER}:${TURN_PASS}
           lt-cred-mech
@@ -1047,13 +1047,20 @@ jobs:
           CONF
 
           sudo turnserver -c /etc/turnserver.conf &
-          sleep 2
 
-          if ss -tlnp | grep -q ':3478'; then
-            echo "coturn running on port 3478"
-          else
-            echo "ERROR: coturn failed to start"; cat /tmp/coturn.log; exit 1
-          fi
+          # Wait for coturn to start listening (retry loop instead of fixed sleep)
+          for i in $(seq 1 10); do
+            if ss -tlnp | grep -q ':3478'; then
+              echo "coturn running on port 3478 (ready after ${i}s)"
+              break
+            fi
+            if [ "$i" -eq 10 ]; then
+              echo "ERROR: coturn failed to start within 10s"
+              cat /tmp/coturn.log
+              exit 1
+            fi
+            sleep 1
+          done
 
           echo "TURN_URL=turn:${HOST_IP}:3478" >> "$GITHUB_ENV"
           echo "TURN_USER=${TURN_USER}" >> "$GITHUB_ENV"

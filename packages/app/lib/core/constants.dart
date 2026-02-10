@@ -60,7 +60,11 @@ class SignalingConstants {
 class WebRTCConstants {
   WebRTCConstants._();
 
-  /// Default STUN servers for NAT traversal
+  /// Default STUN servers for NAT traversal.
+  /// NOTE: The primary STUN URL (stun.l.google.com:19302) is also defined in:
+  ///   - packages/headless-client/zajel/webrtc.py (DEFAULT_ICE_SERVERS)
+  ///   - e2e-tests/conftest.py (headless_bob fixture)
+  /// Keep all three in sync when changing.
   static const List<Map<String, dynamic>> defaultIceServers = [
     {'urls': 'stun:stun.l.google.com:19302'},
     {'urls': 'stun:stun1.l.google.com:19302'},

@@ -27,6 +27,10 @@ from .protocol import MESSAGE_CHANNEL_LABEL, FILE_CHANNEL_LABEL
 
 logger = logging.getLogger("zajel.webrtc")
 
+# NOTE: This STUN URL is also defined in:
+#   - e2e-tests/conftest.py (headless_bob fixture)
+#   - packages/app/lib/core/constants.dart (defaultIceServers)
+# Keep all three in sync when changing.
 DEFAULT_ICE_SERVERS = [
     RTCIceServer(urls=["stun:stun.l.google.com:19302"]),
 ]

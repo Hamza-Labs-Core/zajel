@@ -1106,6 +1106,10 @@ def headless_bob():
 
     ice_servers = None
     if turn_url:
+        # NOTE: This STUN URL is also defined in:
+        #   - packages/headless-client/zajel/webrtc.py (DEFAULT_ICE_SERVERS)
+        #   - packages/app/lib/core/constants.dart (defaultIceServers)
+        # Keep all three in sync when changing.
         ice_servers = [
             {"urls": "stun:stun.l.google.com:19302"},
             {"urls": turn_url, "username": turn_user, "credential": turn_pass},

@@ -105,7 +105,7 @@ class ZajelHeadlessClient:
         media_dir: str = "./test_media",
         receive_dir: str = "./received_files",
         db_path: str = "zajel_headless.db",
-        ice_servers: Optional[list] = None,
+        ice_servers: Optional[list[dict[str, Any]]] = None,
     ):
         self.signaling_url = signaling_url
         self.name = name
