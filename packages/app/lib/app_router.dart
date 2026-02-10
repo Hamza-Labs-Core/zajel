@@ -1,16 +1,21 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'features/chat/chat_screen.dart';
 import 'features/connection/connect_screen.dart';
 import 'features/contacts/contact_detail_screen.dart';
 import 'features/contacts/contacts_screen.dart';
+import 'features/help/help_article_screen.dart';
+import 'features/help/help_screen.dart';
 import 'features/home/home_screen.dart';
 import 'features/home/main_layout.dart';
+import 'features/onboarding/onboarding_screen.dart';
 import 'features/settings/blocked_peers_screen.dart';
 import 'features/settings/media_settings_screen.dart';
 import 'features/settings/notification_settings_screen.dart';
 import 'features/settings/settings_screen.dart';
+import 'core/providers/app_providers.dart';
 
 /// Root navigator key for showing dialogs from anywhere in the app.
 final rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -24,6 +29,14 @@ final _shellNavigatorKey = GlobalKey<NavigatorState>();
 final appRouter = GoRouter(
   navigatorKey: rootNavigatorKey,
   initialLocation: '/',
+  redirect: (context, state) {
+    // Only redirect the home route; skip provider reads for all other routes
+    if (state.matchedLocation != '/') return null;
+    final container = ProviderScope.containerOf(context);
+    final seen = container.read(hasSeenOnboardingProvider);
+    if (!seen) return '/onboarding';
+    return null;
+  },
   routes: [
     ShellRoute(
       navigatorKey: _shellNavigatorKey,
@@ -72,6 +85,21 @@ final appRouter = GoRouter(
         final peerId = state.pathParameters['peerId']!;
         return ContactDetailScreen(peerId: peerId);
       },
+    ),
+    GoRoute(
+      path: '/help',
+      builder: (context, state) => const HelpScreen(),
+    ),
+    GoRoute(
+      path: '/help/:articleId',
+      builder: (context, state) {
+        final articleId = state.pathParameters['articleId']!;
+        return HelpArticleScreen(articleId: articleId);
+      },
+    ),
+    GoRoute(
+      path: '/onboarding',
+      builder: (context, state) => const OnboardingScreen(),
     ),
   ],
   errorBuilder: (context, state) => Scaffold(
