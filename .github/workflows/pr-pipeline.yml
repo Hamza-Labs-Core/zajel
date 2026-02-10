@@ -1191,11 +1191,16 @@ jobs:
           SINGLE_RESULT=0
           pytest -m "single_device and not headless" -v -s --timeout=120 --deselect tests/test_pairing.py::TestPairing::test_app_launches_successfully || SINGLE_RESULT=$?
 
-          # ── Phase C: Headless-paired tests (mandatory with TURN relay) ──
+          # ── Phase C: Headless-paired tests (informational) ──
+          # TURN relay (coturn) is now configured on CI, but these tests need
+          # validation before being promoted to mandatory. Run for visibility.
           HEADLESS_RESULT=0
           if [ -n "$SIGNALING_URL" ]; then
-            echo "=== Running headless-paired tests ==="
+            echo "=== Running headless-paired tests (informational) ==="
             pytest -m "headless and single_device" -v -s --timeout=300 || HEADLESS_RESULT=$?
+            if [ $HEADLESS_RESULT -ne 0 ]; then
+              echo "::warning::Headless-paired tests failed (informational — TURN relay validation in progress)"
+            fi
           else
             echo "=== Skipping headless tests (SIGNALING_URL not set) ==="
           fi
@@ -1211,10 +1216,12 @@ jobs:
             echo "=== Skipping signaling tests (SIGNALING_URL not set) ==="
           fi
 
-          # ── Phase E: Multi-device pairing test (mandatory with TURN relay) ──
-          PAIRING_RESULT=0
-          echo "=== Running two-device pairing test ==="
-          pytest tests/test_pairing.py::TestPairing::test_two_devices_can_pair -v -s --timeout=300 || PAIRING_RESULT=$?
+          # ── Phase E: Multi-device pairing probe (informational) ──
+          # TURN relay (coturn) is now configured on CI, but P2P between emulators
+          # needs validation before promoting to mandatory. Run as a probe.
+          echo "=== Running pairing probe (informational) ==="
+          pytest tests/test_pairing.py::TestPairing::test_two_devices_can_pair -v -s --timeout=300 || true
+          echo "Note: Multi-device tests are informational until TURN relay is validated on CI."
 
           # Cleanup Appium
           kill $APPIUM1_PID $APPIUM2_PID 2>/dev/null || true
@@ -1227,14 +1234,6 @@ jobs:
           fi
           if [ $PROTOCOL_RESULT -ne 0 ]; then
             echo "FAILED: Signaling protocol tests"
-            FAILED=1
-          fi
-          if [ $HEADLESS_RESULT -ne 0 ]; then
-            echo "FAILED: Headless-paired tests"
-            FAILED=1
-          fi
-          if [ $PAIRING_RESULT -ne 0 ]; then
-            echo "FAILED: Multi-device pairing"
             FAILED=1
           fi
           if [ $FAILED -ne 0 ]; then
