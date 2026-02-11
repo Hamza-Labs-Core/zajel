@@ -14,7 +14,13 @@ import asyncio
 import os
 import subprocess
 import threading
+import time as _time
 import pytest
+
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.common.exceptions import NoSuchElementException
 
 from config import SIGNALING_URL
 
@@ -290,6 +296,35 @@ class AppHelper:
                     print(f"Failed to get page source: {e}")
                 print("=== END PAGE SOURCE ===")
                 raise
+
+        # Dismiss onboarding screen if present (first launch after pm clear)
+        self._dismiss_onboarding()
+
+    def _dismiss_onboarding(self):
+        """Dismiss the onboarding screen if present (first launch after pm clear)."""
+        try:
+            skip_btn = self.driver.find_element(
+                By.XPATH,
+                "//*[@package='com.zajel.zajel' and "
+                "(contains(@text, 'Skip') or contains(@content-desc, 'Skip'))]"
+            )
+            print("[wait_for_app_ready] Onboarding screen detected, tapping Skip")
+            skip_btn.click()
+            _time.sleep(2)
+            # Re-wait for the actual home screen after onboarding dismissal
+            home_screen_xpath = (
+                "//*[@package='com.zajel.zajel' and "
+                "(contains(@text, 'Code:') or contains(@content-desc, 'Code:') or "
+                "contains(@text, 'Online') or contains(@content-desc, 'Online') or "
+                "contains(@text, 'Connecting') or contains(@content-desc, 'Connecting') or "
+                "contains(@text, 'Offline') or contains(@content-desc, 'Offline'))]"
+            )
+            WebDriverWait(self.driver, 15).until(
+                EC.presence_of_element_located((By.XPATH, home_screen_xpath))
+            )
+            print("[wait_for_app_ready] Home screen confirmed after onboarding dismissal")
+        except Exception:
+            pass  # No onboarding screen — already on home
 
     def _find(self, text, timeout=10, partial=True):
         """Find an element by text, checking @text, @content-desc, and @tooltip-text.

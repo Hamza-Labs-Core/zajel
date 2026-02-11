@@ -210,6 +210,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ],
           ),
+          const SizedBox(height: 24),
+          _buildSection(
+            context,
+            title: 'Help & Info',
+            children: [
+              ListTile(
+                leading: const Icon(Icons.help_outline),
+                title: const Text('How Zajel Works'),
+                subtitle:
+                    const Text('Learn about P2P messaging and encryption'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push('/help'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.build),
+                title: const Text('Troubleshooting'),
+                subtitle: const Text('Solutions for common issues'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push('/help/troubleshooting'),
+              ),
+            ],
+          ),
           const SizedBox(height: 32),
           Center(
             child: TextButton.icon(
@@ -431,8 +453,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Regenerate Keys?'),
         content: const Text(
-          'This will create new encryption keys and disconnect all peers. '
-          'You will need to reconnect to everyone. Continue?',
+          'This will create a new identity. All existing peers will no longer '
+          'recognize you and connections will be severed. You will need to '
+          're-pair with everyone. Your contacts will no longer be able to '
+          'reach you at your current identity. Continue?',
         ),
         actions: [
           TextButton(
@@ -480,8 +504,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Clear All Data?'),
         content: const Text(
-          'This will delete all messages, contacts, and keys. '
-          'This action cannot be undone. Continue?',
+          'This will permanently destroy your identity, all messages, contacts, '
+          'and encryption keys. Your contacts will no longer be able to reach '
+          'you. You will need to re-pair with everyone. This action cannot be '
+          'undone.',
         ),
         actions: [
           TextButton(
