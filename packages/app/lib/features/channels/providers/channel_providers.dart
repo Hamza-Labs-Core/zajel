@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/providers/app_providers.dart';
 import '../models/channel.dart';
+import '../services/admin_management_service.dart';
 import '../services/background_sync_service.dart';
 import '../services/channel_crypto_service.dart';
 import '../services/channel_service.dart';
@@ -31,6 +32,18 @@ final channelServiceProvider = Provider<ChannelService>((ref) {
   final cryptoService = ref.watch(channelCryptoServiceProvider);
   final storageService = ref.watch(channelStorageServiceProvider);
   return ChannelService(
+    cryptoService: cryptoService,
+    storageService: storageService,
+  );
+});
+
+/// Provider for the admin management service.
+///
+/// Provides admin permission management, channel rules, and encryption key rotation.
+final adminManagementServiceProvider = Provider<AdminManagementService>((ref) {
+  final cryptoService = ref.watch(channelCryptoServiceProvider);
+  final storageService = ref.watch(channelStorageServiceProvider);
+  return AdminManagementService(
     cryptoService: cryptoService,
     storageService: storageService,
   );
