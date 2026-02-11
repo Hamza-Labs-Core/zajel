@@ -7,6 +7,7 @@ import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import 'package:workmanager/workmanager.dart';
 
 import 'app_router.dart';
 import 'core/config/environment.dart';
@@ -20,10 +21,25 @@ import 'core/providers/app_providers.dart';
 import 'features/call/call_screen.dart';
 import 'features/call/incoming_call_dialog.dart';
 import 'features/channels/providers/channel_providers.dart';
+import 'features/channels/services/background_sync_service.dart';
 import 'features/groups/providers/group_providers.dart';
 import 'shared/theme/app_theme.dart';
 
 const bool _isE2eTest = bool.fromEnvironment('E2E_TEST');
+
+/// Top-level callback dispatcher for WorkManager background tasks.
+///
+/// This function is invoked by the platform in a separate isolate (Android)
+/// or background session (iOS). It must be a top-level function.
+@pragma('vm:entry-point')
+void callbackDispatcher() {
+  Workmanager().executeTask((taskName, inputData) async {
+    if (taskName == BackgroundSyncService.backgroundTaskName) {
+      return await backgroundSyncCallback();
+    }
+    return true;
+  });
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -31,6 +47,11 @@ void main() async {
   // Force semantics tree so UiAutomator2/AT-SPI/UIA can see widgets in E2E tests
   if (_isE2eTest) {
     SemanticsBinding.instance.ensureSemantics();
+  }
+
+  // Initialize WorkManager for mobile background sync
+  if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+    await Workmanager().initialize(callbackDispatcher, isInDebugMode: false);
   }
 
   // Initialize logger first

@@ -14,9 +14,10 @@ import { DistributedRendezvous, type PartialResult } from '../registry/distribut
 import type { DeadDropResult, LiveMatchResult } from '../registry/rendezvous-registry.js';
 import { logger } from '../utils/logger.js';
 
-import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING } from '../constants.js';
+import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING, ATTESTATION } from '../constants.js';
 import { ChunkRelay } from './chunk-relay.js';
 import type { Storage } from '../storage/interface.js';
+import { AttestationManager, type AttestationConfig } from '../attestation/attestation-manager.js';
 
 export interface ClientHandlerConfig {
   heartbeatInterval: number;   // Expected heartbeat interval from clients
@@ -228,6 +229,19 @@ interface ChunkPushMessage {
   data: string; // base64-encoded chunk data
 }
 
+// Attestation messages
+interface AttestRequestMessage {
+  type: 'attest_request';
+  build_token: string;
+  device_id: string;
+}
+
+interface AttestResponseMessage {
+  type: 'attest_response';
+  nonce: string;
+  responses: Array<{ region_index: number; hmac: string }>;
+}
+
 // Pending pair request tracking
 interface PendingPairRequest {
   requesterCode: string;
@@ -285,7 +299,9 @@ type ClientMessage =
   | ChannelOwnerRegisterMessage
   | ChunkAnnounceMessage
   | ChunkRequestMessage
-  | ChunkPushMessage;
+  | ChunkPushMessage
+  | AttestRequestMessage
+  | AttestResponseMessage;
 
 export class ClientHandler extends EventEmitter {
   private identity: ServerIdentity;
@@ -361,6 +377,11 @@ export class ClientHandler extends EventEmitter {
   // Upstream rate limit: max messages per window
   private static readonly MAX_UPSTREAM_PER_WINDOW = 30;
 
+  // Attestation manager (optional - only initialized when attestation config is provided)
+  private attestationManager: AttestationManager | null = null;
+  // WebSocket -> attestation connection ID mapping
+  private wsToConnectionId: Map<WebSocket, string> = new Map();
+
   constructor(
     identity: ServerIdentity,
     endpoint: string,
@@ -368,7 +389,8 @@ export class ClientHandler extends EventEmitter {
     relayRegistry: RelayRegistry,
     distributedRendezvous: DistributedRendezvous,
     metadata: ServerMetadata = {},
-    storage?: Storage
+    storage?: Storage,
+    attestationConfig?: AttestationConfig
   ) {
     super();
     this.identity = identity;
@@ -387,6 +409,11 @@ export class ClientHandler extends EventEmitter {
       this.chunkRelay = new ChunkRelay(storage);
       this.chunkRelay.setSendCallback((peerId, message) => this.notifyClient(peerId, message));
       this.chunkRelay.startCleanup();
+    }
+
+    // Initialize attestation manager if config is provided
+    if (attestationConfig) {
+      this.attestationManager = new AttestationManager(attestationConfig);
     }
 
     // Forward match notifications to clients
@@ -439,6 +466,16 @@ export class ClientHandler extends EventEmitter {
       endpoint: this.endpoint,
       region: this.metadata.region || null,
     });
+
+    // Create attestation session if attestation is configured
+    if (this.attestationManager) {
+      const connectionId = this.attestationManager.createSession();
+      this.wsToConnectionId.set(ws, connectionId);
+
+      // Send server identity proof (Phase 4: Server Identity)
+      const identityProof = this.attestationManager.generateServerIdentityProof();
+      this.send(ws, identityProof);
+    }
   }
 
   /**
@@ -627,16 +664,19 @@ export class ClientHandler extends EventEmitter {
           this.handleChannelOwnerRegister(ws, message as ChannelOwnerRegisterMessage);
           break;
 
-        // Chunk relay messages
+        // Chunk relay messages (attestation-gated)
         case 'chunk_announce':
+          if (!this.checkAttestation(ws)) return;
           await this.handleChunkAnnounce(ws, message as ChunkAnnounceMessage);
           break;
 
         case 'chunk_request':
+          if (!this.checkAttestation(ws)) return;
           await this.handleChunkRequest(ws, message as ChunkRequestMessage);
           break;
 
         case 'chunk_push':
+          if (!this.checkAttestation(ws)) return;
           await this.handleChunkPush(ws, message as ChunkPushMessage);
           break;
 
@@ -658,6 +698,15 @@ export class ClientHandler extends EventEmitter {
 
         case 'heartbeat':
           this.handleHeartbeat(ws, message);
+          break;
+
+        // Attestation messages
+        case 'attest_request':
+          await this.handleAttestRequest(ws, message as AttestRequestMessage);
+          break;
+
+        case 'attest_response':
+          await this.handleAttestResponse(ws, message as AttestResponseMessage);
           break;
 
         default:
@@ -1915,6 +1964,139 @@ export class ClientHandler extends EventEmitter {
   }
 
   // ---------------------------------------------------------------------------
+  // Attestation handlers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Check if the client is attested or within grace period.
+   * If not, send an error and return false.
+   * If attestation is not configured, always returns true.
+   */
+  private checkAttestation(ws: WebSocket): boolean {
+    if (!this.attestationManager) return true;
+
+    const connectionId = this.wsToConnectionId.get(ws);
+    if (!connectionId) return true; // No attestation session = not tracked
+
+    if (this.attestationManager.isAllowed(connectionId)) {
+      return true;
+    }
+
+    // Client is not attested and grace period expired
+    this.send(ws, {
+      type: 'error',
+      code: ATTESTATION.ERROR_CODE_NOT_ATTESTED,
+      message: 'Attestation required',
+    });
+    return false;
+  }
+
+  /**
+   * Handle attest_request: Client sends build_token and device_id.
+   * VPS forwards to bootstrap's POST /attest/challenge.
+   */
+  private async handleAttestRequest(ws: WebSocket, message: AttestRequestMessage): Promise<void> {
+    if (!this.attestationManager) {
+      this.sendError(ws, 'Attestation not configured');
+      return;
+    }
+
+    const { build_token, device_id } = message;
+
+    if (!build_token) {
+      this.sendError(ws, 'Missing required field: build_token');
+      return;
+    }
+
+    if (!device_id) {
+      this.sendError(ws, 'Missing required field: device_id');
+      return;
+    }
+
+    const connectionId = this.wsToConnectionId.get(ws);
+    if (!connectionId) {
+      this.sendError(ws, 'No attestation session');
+      return;
+    }
+
+    const challenge = await this.attestationManager.requestChallenge(
+      connectionId,
+      build_token,
+      device_id
+    );
+
+    if (!challenge) {
+      this.send(ws, {
+        type: 'attest_error',
+        message: 'Failed to get attestation challenge from bootstrap',
+      });
+      return;
+    }
+
+    this.send(ws, {
+      type: 'attest_challenge',
+      nonce: challenge.nonce,
+      regions: challenge.regions,
+    });
+  }
+
+  /**
+   * Handle attest_response: Client sends HMAC responses for the challenge.
+   * VPS forwards to bootstrap's POST /attest/verify.
+   */
+  private async handleAttestResponse(ws: WebSocket, message: AttestResponseMessage): Promise<void> {
+    if (!this.attestationManager) {
+      this.sendError(ws, 'Attestation not configured');
+      return;
+    }
+
+    const { nonce, responses } = message;
+
+    if (!nonce) {
+      this.sendError(ws, 'Missing required field: nonce');
+      return;
+    }
+
+    if (!responses || !Array.isArray(responses) || responses.length === 0) {
+      this.sendError(ws, 'Missing or empty responses array');
+      return;
+    }
+
+    const connectionId = this.wsToConnectionId.get(ws);
+    if (!connectionId) {
+      this.sendError(ws, 'No attestation session');
+      return;
+    }
+
+    const result = await this.attestationManager.verifyAttestation(
+      connectionId,
+      nonce,
+      responses
+    );
+
+    if (result.valid) {
+      this.send(ws, {
+        type: 'attest_success',
+        session_token: result.session_token || null,
+      });
+    } else {
+      this.send(ws, {
+        type: 'attest_failed',
+        message: 'Attestation verification failed',
+      });
+      // Disconnect client after attestation failure
+      ws.close(ATTESTATION.WS_CLOSE_CODE_ATTESTATION_FAILED, 'Attestation failed');
+    }
+  }
+
+  /**
+   * Get the attestation manager (for testing or external access).
+   */
+  getAttestationManager(): AttestationManager | null {
+    return this.attestationManager;
+  }
+
+  // ---------------------------------------------------------------------------
   // Chunk relay handlers
   // ---------------------------------------------------------------------------
 
@@ -2066,6 +2248,13 @@ export class ClientHandler extends EventEmitter {
    * Handle WebSocket disconnect
    */
   async handleDisconnect(ws: WebSocket): Promise<void> {
+    // Clean up attestation session
+    const connectionId = this.wsToConnectionId.get(ws);
+    if (connectionId && this.attestationManager) {
+      this.attestationManager.removeSession(connectionId);
+    }
+    this.wsToConnectionId.delete(ws);
+
     // Clean up rate limiting tracking
     this.wsRateLimits.delete(ws);
     this.wsPairRequestRateLimits.delete(ws);
@@ -2356,6 +2545,12 @@ export class ClientHandler extends EventEmitter {
     if (this.chunkRelay) {
       this.chunkRelay.shutdown();
     }
+
+    // Shutdown attestation manager
+    if (this.attestationManager) {
+      this.attestationManager.shutdown();
+    }
+    this.wsToConnectionId.clear();
 
     // Close all relay clients
     for (const [peerId, client] of this.clients) {

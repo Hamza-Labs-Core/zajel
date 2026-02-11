@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:workmanager/workmanager.dart';
 
 import '../models/channel.dart';
 import 'channel_storage_service.dart';
@@ -184,34 +185,27 @@ class BackgroundSyncService {
   /// The actual execution time depends on battery optimization, Doze mode,
   /// and other system constraints.
   Future<bool> _registerAndroidWorkManager() async {
-    // WorkManager integration point.
-    //
-    // When the `workmanager` package is added to pubspec.yaml, uncomment:
-    //
-    // await Workmanager().registerPeriodicTask(
-    //   backgroundTaskName,
-    //   backgroundTaskName,
-    //   frequency: minimumInterval,
-    //   constraints: Constraints(
-    //     networkType: NetworkType.connected,
-    //     requiresBatteryNotLow: true,
-    //   ),
-    //   existingWorkPolicy: ExistingWorkPolicy.keep,
-    //   backoffPolicy: BackoffPolicy.exponential,
-    //   initialDelay: const Duration(minutes: 1),
-    // );
+    await Workmanager().registerPeriodicTask(
+      backgroundTaskName,
+      backgroundTaskName,
+      frequency: minimumInterval,
+      constraints: Constraints(
+        networkType: NetworkType.connected,
+        requiresBatteryNotLow: true,
+      ),
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
+      backoffPolicy: BackoffPolicy.exponential,
+      initialDelay: const Duration(minutes: 1),
+    );
 
-    _log(
-        'registerAndroid',
-        'Android WorkManager not available — workmanager package '
-            'is not installed. Use startPeriodicSync() for foreground sync.');
-    return false;
+    _log('registerAndroid',
+        'Android WorkManager periodic task registered (interval: 15min)');
+    return true;
   }
 
   /// Cancel the Android WorkManager periodic task.
   Future<void> _cancelAndroidWorkManager() async {
-    // When workmanager package is added:
-    // await Workmanager().cancelByUniqueName(backgroundTaskName);
+    await Workmanager().cancelByUniqueName(backgroundTaskName);
     _log('cancelAndroid', 'WorkManager task cancelled');
   }
 
@@ -233,31 +227,24 @@ class BackgroundSyncService {
   /// </array>
   /// ```
   Future<bool> _registerIosBackgroundAppRefresh() async {
-    // iOS BGTaskScheduler integration point.
-    //
-    // When the `workmanager` package is added to pubspec.yaml, uncomment:
-    //
-    // await Workmanager().registerPeriodicTask(
-    //   backgroundTaskName,
-    //   backgroundTaskName,
-    //   frequency: minimumInterval,
-    //   constraints: Constraints(
-    //     networkType: NetworkType.connected,
-    //   ),
-    //   existingWorkPolicy: ExistingWorkPolicy.keep,
-    // );
+    await Workmanager().registerPeriodicTask(
+      backgroundTaskName,
+      backgroundTaskName,
+      frequency: minimumInterval,
+      constraints: Constraints(
+        networkType: NetworkType.connected,
+      ),
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
+    );
 
-    _log(
-        'registerIos',
-        'iOS Background App Refresh not available — workmanager package '
-            'is not installed. Use startPeriodicSync() for foreground sync.');
-    return false;
+    _log('registerIos',
+        'iOS Background App Refresh registered (interval: 15min)');
+    return true;
   }
 
   /// Cancel iOS Background App Refresh.
   Future<void> _cancelIosBackgroundAppRefresh() async {
-    // When workmanager package is added:
-    // await Workmanager().cancelByUniqueName(backgroundTaskName);
+    await Workmanager().cancelByUniqueName(backgroundTaskName);
     _log('cancelIos', 'Background App Refresh cancelled');
   }
 
