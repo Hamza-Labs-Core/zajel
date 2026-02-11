@@ -86,6 +86,13 @@ final notificationSettingsProvider =
   return NotificationSettingsNotifier(prefs);
 });
 
+/// Provider for auto-delete messages setting.
+/// When enabled, messages older than 24 hours are deleted on app startup.
+final autoDeleteMessagesProvider = StateProvider<bool>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return prefs.getBool('autoDeleteMessages') ?? false;
+});
+
 /// Provider for crypto service.
 final cryptoServiceProvider = Provider<CryptoService>((ref) {
   return CryptoService();
