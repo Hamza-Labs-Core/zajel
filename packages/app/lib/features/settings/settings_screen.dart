@@ -8,6 +8,8 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/logging/logger_service.dart';
 import '../../core/providers/app_providers.dart';
+import '../channels/providers/channel_providers.dart';
+import '../groups/providers/group_providers.dart';
 
 /// Settings screen for app configuration.
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -93,7 +95,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ListTile(
                 leading: const Icon(Icons.lock),
                 title: const Text('End-to-End Encryption'),
-                subtitle: const Text('Always enabled'),
+                subtitle: const Text(
+                  'X25519 + ChaCha20-Poly1305 — always on, cannot be disabled',
+                ),
                 trailing: Icon(
                   Icons.check_circle,
                   color: Colors.green.shade700,
@@ -103,23 +107,43 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 leading: const Icon(Icons.refresh),
                 title: const Text('Regenerate Keys'),
                 subtitle: const Text(
-                  'Create new encryption keys (disconnects all peers)',
+                  'Creates a new identity — all peers must re-pair with you',
                 ),
                 onTap: () => _showRegenerateKeysDialog(context),
               ),
               SwitchListTile(
                 secondary: const Icon(Icons.delete_sweep),
                 title: const Text('Auto-delete Messages'),
-                subtitle: const Text('Delete messages after 24 hours'),
-                value: false, // TODO: Implement
-                onChanged: (value) {
-                  // TODO: Implement auto-delete
+                subtitle: const Text(
+                  'Removes messages older than 24 hours each time the app starts',
+                ),
+                value: ref.watch(autoDeleteMessagesProvider),
+                onChanged: (value) async {
+                  ref.read(autoDeleteMessagesProvider.notifier).state = value;
+                  final prefs = ref.read(sharedPreferencesProvider);
+                  await prefs.setBool('autoDeleteMessages', value);
+                  if (value) {
+                    final storage = ref.read(messageStorageProvider);
+                    final cutoff =
+                        DateTime.now().subtract(const Duration(hours: 24));
+                    final deleted =
+                        await storage.deleteMessagesOlderThan(cutoff);
+                    if (mounted && deleted > 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Deleted $deleted old messages'),
+                        ),
+                      );
+                    }
+                  }
                 },
               ),
               ListTile(
                 leading: const Icon(Icons.block),
                 title: const Text('Blocked Users'),
-                subtitle: const Text('Manage blocked peers'),
+                subtitle: const Text(
+                  'Blocked by public key — cannot bypass by changing codes',
+                ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => context.push('/settings/blocked'),
               ),
@@ -146,7 +170,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ListTile(
                 leading: const Icon(Icons.dns),
                 title: const Text('Bootstrap Server'),
-                subtitle: Text(ref.watch(bootstrapServerUrlProvider)),
+                subtitle: Text(
+                  'Discovers relay servers — ${ref.watch(bootstrapServerUrlProvider)}',
+                ),
                 onTap: () => _showBootstrapUrlDialog(context),
               ),
             ],
@@ -159,9 +185,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ListTile(
                 leading: const Icon(Icons.description),
                 title: const Text('Export Logs'),
-                subtitle: Text(
-                  logger.logDirectoryPath ?? 'Logs not initialized',
-                  overflow: TextOverflow.ellipsis,
+                subtitle: const Text(
+                  'Share log files for troubleshooting — no messages included',
                 ),
                 trailing: const Icon(Icons.share),
                 onTap: () => _exportLogs(context),
@@ -176,7 +201,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ListTile(
                 leading: const Icon(Icons.delete_outline),
                 title: const Text('Clear Logs'),
-                subtitle: const Text('Delete all log files'),
+                subtitle: const Text('Permanently delete all log files'),
                 onTap: () => _showClearLogsDialog(context),
               ),
             ],
@@ -387,7 +412,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       leading: const Icon(Icons.cloud_done),
       title: const Text('Connected Server'),
       subtitle: Text(
-        '${selectedServer.region} - ${selectedServer.endpoint}',
+        'Relay for signaling and pairing — ${selectedServer.region}',
         overflow: TextOverflow.ellipsis,
       ),
     );
@@ -527,12 +552,35 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
 
     if (confirmed == true) {
+      // Clear message storage
+      final messageStorage = ref.read(messageStorageProvider);
+      await messageStorage.deleteAllMessages();
+
+      // Clear channel storage
+      final channelService = ref.read(channelServiceProvider);
+      final channels = await channelService.getAllChannels();
+      for (final channel in channels) {
+        await channelService.deleteChannel(channel.id);
+      }
+
+      // Clear group storage
+      final groupService = ref.read(groupServiceProvider);
+      final groups = await groupService.getAllGroups();
+      for (final group in groups) {
+        await groupService.deleteGroup(group.id);
+      }
+
+      // Clear crypto sessions and regenerate keys
       final cryptoService = ref.read(cryptoServiceProvider);
       await cryptoService.clearAllSessions();
       await cryptoService.regenerateIdentityKeys();
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.clear();
+
+      // Refresh providers
+      ref.invalidate(channelsProvider);
+      ref.invalidate(groupsProvider);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

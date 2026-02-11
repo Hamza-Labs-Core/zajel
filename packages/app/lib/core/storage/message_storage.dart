@@ -160,6 +160,19 @@ class MessageStorage {
     );
   }
 
+  /// Delete messages older than [cutoff].
+  /// Returns the number of deleted rows.
+  Future<int> deleteMessagesOlderThan(DateTime cutoff) async {
+    final db = _db;
+    if (db == null) return 0;
+
+    return db.delete(
+      _tableName,
+      where: 'timestamp < ?',
+      whereArgs: [cutoff.toIso8601String()],
+    );
+  }
+
   /// Delete all messages.
   Future<void> deleteAllMessages() async {
     final db = _db;

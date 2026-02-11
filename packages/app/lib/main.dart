@@ -125,6 +125,15 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       final messageStorage = ref.read(messageStorageProvider);
       await messageStorage.initialize();
 
+      // Auto-delete old messages on startup if the setting is enabled
+      if (ref.read(autoDeleteMessagesProvider)) {
+        final cutoff = DateTime.now().subtract(const Duration(hours: 24));
+        final deleted = await messageStorage.deleteMessagesOlderThan(cutoff);
+        if (deleted > 0) {
+          logger.info('ZajelApp', 'Auto-deleted $deleted messages older than 24h');
+        }
+      }
+
       logger.info('ZajelApp', 'Initializing channel storage...');
       final channelStorage = ref.read(channelStorageServiceProvider);
       await channelStorage.initialize();
