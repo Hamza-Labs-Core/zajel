@@ -1675,6 +1675,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:

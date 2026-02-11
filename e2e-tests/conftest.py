@@ -11,12 +11,15 @@ Provides fixtures for:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import subprocess
 import threading
 import pytest
 
 from config import SIGNALING_URL
+
+logger = logging.getLogger(__name__)
 
 try:
     from appium import webdriver
@@ -89,7 +92,7 @@ def create_driver(server_index: int, device_name: str = "emulator") -> webdriver
             [ADB_PATH, "-s", udid, "shell", "pm", "clear", PACKAGE_NAME],
             capture_output=True, timeout=15
         )
-    except Exception:
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
         pass  # App may not be installed yet on first run
 
     # Re-grant runtime permissions that pm clear revoked.
@@ -106,7 +109,7 @@ def create_driver(server_index: int, device_name: str = "emulator") -> webdriver
                 [ADB_PATH, "-s", udid, "shell", "pm", "grant", PACKAGE_NAME, perm],
                 capture_output=True, timeout=10
             )
-        except Exception:
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
             pass
 
     options = UiAutomator2Options()
@@ -1084,8 +1087,8 @@ class HeadlessBob:
     def disconnect(self):
         try:
             self._run(self._client.disconnect(), timeout=10)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Disconnect failed: %s", e)
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join(timeout=5)
 
