@@ -177,8 +177,8 @@ class TestChannels:
         helper._find("Compose Bar Channel", timeout=10).click()
         time.sleep(2)
 
-        # The compose bar hint text should be visible or the publish button
-        helper._find("Publish", timeout=10)
+        # The Publish button should be visible (exact match to avoid "Publish content..." text)
+        helper._find("Publish", timeout=10, partial=False)
 
     @pytest.mark.single_device
     def test_publish_message_to_channel(self, alice, app_helper):
@@ -205,8 +205,8 @@ class TestChannels:
         # Type in the compose bar and publish
         _type_in_compose_bar(helper, "Hello from the channel owner!")
 
-        # Tap publish button
-        helper._find("Publish", timeout=10).click()
+        # Tap publish button (exact match to avoid hitting "Publish content..." text)
+        helper._find("Publish", timeout=10, partial=False).click()
         time.sleep(3)
 
         # Verify the publish snackbar appeared (indicates success)
