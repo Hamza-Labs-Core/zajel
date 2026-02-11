@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'models/channel.dart';
 import 'models/chunk.dart';
 import 'providers/channel_providers.dart';
+import 'services/channel_link_service.dart';
 
 /// Screen showing details for a single channel.
 ///
@@ -276,7 +277,14 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
   }
 
   void _showShareDialog(BuildContext context, Channel channel) {
-    final channelLink = 'zajel://channel/Ed25519:${channel.manifest.ownerKey}';
+    String? channelLink;
+    String? error;
+
+    try {
+      channelLink = ChannelLinkService.encode(channel);
+    } catch (e) {
+      error = e.toString();
+    }
 
     showDialog(
       context: context,
@@ -286,43 +294,48 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Share this link with people who want to subscribe:',
-              style: TextStyle(fontSize: 13),
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(8),
+            if (error != null)
+              Text('Cannot generate invite: $error',
+                  style: const TextStyle(color: Colors.red))
+            else ...[
+              const Text(
+                'Share this invite link. It contains everything '
+                'needed to subscribe (manifest + decryption key).',
+                style: TextStyle(fontSize: 13),
               ),
-              child: SelectableText(
-                channelLink,
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 12,
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                constraints: const BoxConstraints(maxHeight: 120),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    channelLink!,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                    ),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'Subscribers will also need the decryption key, '
-              'which should be shared separately via a secure channel.',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
-            ),
+            ],
           ],
         ),
         actions: [
-          TextButton(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: channelLink));
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Link copied to clipboard')),
-              );
-            },
-            child: const Text('Copy Link'),
-          ),
+          if (channelLink != null)
+            TextButton(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: channelLink!));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                      content: Text('Invite link copied to clipboard')),
+                );
+              },
+              child: const Text('Copy'),
+            ),
           FilledButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Done'),

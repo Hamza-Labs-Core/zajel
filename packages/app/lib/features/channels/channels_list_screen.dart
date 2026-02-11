@@ -1,11 +1,10 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'models/channel.dart';
 import 'providers/channel_providers.dart';
+import 'services/channel_link_service.dart';
 
 /// Screen showing the list of all channels (owned + subscribed).
 class ChannelsListScreen extends ConsumerWidget {
@@ -166,47 +165,20 @@ class ChannelsListScreen extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
   ) async {
-    final manifestController = TextEditingController();
-    final keyController = TextEditingController();
+    final linkController = TextEditingController();
 
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Subscribe to Channel'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Paste the channel manifest JSON shared by the owner.',
-                style: TextStyle(fontSize: 13),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: manifestController,
-                decoration: const InputDecoration(
-                  labelText: 'Channel Manifest (JSON)',
-                  hintText: '{"channel_id": "...", ...}',
-                  border: OutlineInputBorder(),
-                ),
-                maxLines: 4,
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Paste the decryption key (shared separately).',
-                style: TextStyle(fontSize: 13),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: keyController,
-                decoration: const InputDecoration(
-                  labelText: 'Decryption Key (base64)',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ],
+        content: TextField(
+          controller: linkController,
+          decoration: const InputDecoration(
+            labelText: 'Channel invite link',
+            hintText: 'zajel://channel/...',
+            border: OutlineInputBorder(),
           ),
+          maxLines: 4,
         ),
         actions: [
           TextButton(
@@ -221,32 +193,28 @@ class ChannelsListScreen extends ConsumerWidget {
       ),
     );
 
-    if (result == true &&
-        manifestController.text.trim().isNotEmpty &&
-        keyController.text.trim().isNotEmpty) {
+    if (result == true && linkController.text.trim().isNotEmpty) {
       try {
-        final manifestJson =
-            jsonDecode(manifestController.text.trim()) as Map<String, dynamic>;
-        final manifest = ChannelManifest.fromJson(manifestJson);
+        final decoded = ChannelLinkService.decode(linkController.text);
 
         final channelService = ref.read(channelServiceProvider);
         await channelService.subscribe(
-          manifest: manifest,
-          encryptionPrivateKey: keyController.text.trim(),
+          manifest: decoded.manifest,
+          encryptionPrivateKey: decoded.encryptionKey,
         );
         ref.invalidate(channelsProvider);
 
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Subscribed to "${manifest.name}"'),
+              content: Text('Subscribed to "${decoded.manifest.name}"'),
             ),
           );
         }
       } on FormatException {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Invalid manifest JSON format')),
+            const SnackBar(content: Text('Invalid channel invite link')),
           );
         }
       } catch (e) {
@@ -258,7 +226,6 @@ class ChannelsListScreen extends ConsumerWidget {
       }
     }
 
-    manifestController.dispose();
-    keyController.dispose();
+    linkController.dispose();
   }
 }
