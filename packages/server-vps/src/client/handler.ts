@@ -2042,6 +2042,11 @@ export class ClientHandler extends EventEmitter {
 
     const result = await this.chunkRelay.handlePush(peerId, chunkId, channelId, data);
 
+    if (result.error) {
+      this.sendError(ws, result.error);
+      return;
+    }
+
     this.send(ws, {
       type: 'chunk_push_ack',
       chunkId,

@@ -41,26 +41,54 @@ class ChannelRules extends Equatable {
   final bool pollsEnabled;
   final int maxUpstreamSize;
 
+  /// Content types allowed in this channel (e.g., ["text"], ["text", "file"]).
+  /// Defaults to ["text"] so existing channels are automatically text-only.
+  final List<String> allowedTypes;
+
   const ChannelRules({
     this.repliesEnabled = true,
     this.pollsEnabled = true,
     this.maxUpstreamSize = 4096,
+    this.allowedTypes = const ['text'],
   });
+
+  /// Check whether a given content type string is allowed by these rules.
+  bool isContentTypeAllowed(String type) => allowedTypes.contains(type);
+
+  ChannelRules copyWith({
+    bool? repliesEnabled,
+    bool? pollsEnabled,
+    int? maxUpstreamSize,
+    List<String>? allowedTypes,
+  }) {
+    return ChannelRules(
+      repliesEnabled: repliesEnabled ?? this.repliesEnabled,
+      pollsEnabled: pollsEnabled ?? this.pollsEnabled,
+      maxUpstreamSize: maxUpstreamSize ?? this.maxUpstreamSize,
+      allowedTypes: allowedTypes ?? this.allowedTypes,
+    );
+  }
 
   Map<String, dynamic> toJson() => {
         'replies_enabled': repliesEnabled,
         'polls_enabled': pollsEnabled,
         'max_upstream_size': maxUpstreamSize,
+        'allowed_types': allowedTypes,
       };
 
   factory ChannelRules.fromJson(Map<String, dynamic> json) => ChannelRules(
         repliesEnabled: json['replies_enabled'] as bool? ?? true,
         pollsEnabled: json['polls_enabled'] as bool? ?? true,
         maxUpstreamSize: json['max_upstream_size'] as int? ?? 4096,
+        allowedTypes: (json['allowed_types'] as List<dynamic>?)
+                ?.map((e) => e as String)
+                .toList() ??
+            const ['text'],
       );
 
   @override
-  List<Object?> get props => [repliesEnabled, pollsEnabled, maxUpstreamSize];
+  List<Object?> get props =>
+      [repliesEnabled, pollsEnabled, maxUpstreamSize, allowedTypes];
 }
 
 /// The signed channel manifest, broadcast as a chunk to all subscribers.

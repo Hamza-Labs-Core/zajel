@@ -372,6 +372,56 @@ describe('WebSocketHandler - Chunk Messages', () => {
       expect(error).toBeDefined();
     });
 
+    it('should reject chunk push with payload exceeding 4096 bytes', () => {
+      const { handler, chunkIndex, wsConnections } = createTestHandler();
+      const ws = registerPeer(handler, wsConnections, 'owner1');
+
+      // Create a payload that exceeds 4096 bytes when JSON-serialized
+      const largePayload = 'x'.repeat(4097);
+      const chunkData = { payload: largePayload };
+
+      handler.handleMessage(ws, JSON.stringify({
+        type: 'chunk_push',
+        peerId: 'owner1',
+        chunkId: 'ch_001',
+        data: chunkData,
+      }));
+
+      const error = ws.getMessagesOfType('error')[0];
+      expect(error).toBeDefined();
+      expect(error.message).toContain('Chunk payload too large');
+      expect(error.message).toContain('4096');
+
+      // Verify chunk was NOT cached
+      expect(chunkIndex.isChunkCached('ch_001')).toBe(false);
+    });
+
+    it('should accept chunk push with payload exactly at 4096 bytes', () => {
+      const { handler, chunkIndex, wsConnections } = createTestHandler();
+      const ws = registerPeer(handler, wsConnections, 'owner1');
+
+      // Create a payload that is exactly 4096 bytes when JSON-serialized
+      // JSON.stringify({p:"..."}) => {"p":"<filler>"} = 8 chars of overhead
+      const filler = 'a'.repeat(4096 - 8);
+      const chunkData = { p: filler };
+      // Verify our math: JSON.stringify(chunkData).length should be exactly 4096
+      expect(JSON.stringify(chunkData).length).toBe(4096);
+
+      handler.handleMessage(ws, JSON.stringify({
+        type: 'chunk_push',
+        peerId: 'owner1',
+        chunkId: 'ch_exact',
+        data: chunkData,
+      }));
+
+      const ack = ws.getMessagesOfType('chunk_push_ack')[0];
+      expect(ack).toBeDefined();
+      expect(ack.chunkId).toBe('ch_exact');
+
+      // Verify chunk was cached
+      expect(chunkIndex.isChunkCached('ch_exact')).toBe(true);
+    });
+
     it('should handle push for chunk with no pending requests', () => {
       const { handler, chunkIndex, wsConnections } = createTestHandler();
       const ws = registerPeer(handler, wsConnections, 'owner1');

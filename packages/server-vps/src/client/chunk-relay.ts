@@ -30,6 +30,9 @@ const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 /** Stale pending request threshold: 2 minutes */
 const PENDING_REQUEST_TTL_MS = 2 * 60 * 1000;
 
+/** Maximum chunk payload size in bytes (4KB) */
+const MAX_TEXT_CHUNK_PAYLOAD = 4096;
+
 export interface ChunkAnnouncement {
   chunkId: string;
   channelId: string;
@@ -248,9 +251,18 @@ export class ChunkRelay {
     chunkId: string,
     channelId: string,
     data: string // base64-encoded chunk data
-  ): Promise<{ cached: boolean; servedCount: number }> {
-    // 1. Cache the chunk
+  ): Promise<{ cached: boolean; servedCount: number; error?: string }> {
+    // 1. Validate payload size
     const buffer = Buffer.from(data, 'base64');
+    if (buffer.length > MAX_TEXT_CHUNK_PAYLOAD) {
+      return {
+        cached: false,
+        servedCount: 0,
+        error: `Chunk payload too large: ${buffer.length} bytes exceeds ${MAX_TEXT_CHUNK_PAYLOAD} byte limit`,
+      };
+    }
+
+    // 2. Cache the chunk
     await this.storage.cacheChunk(chunkId, channelId, buffer);
 
     // Enforce LRU cap
@@ -383,4 +395,4 @@ export class ChunkRelay {
 }
 
 // Export constants for testing
-export { CACHE_TTL_MS, SOURCE_TTL_MS, MAX_CACHE_ENTRIES, CLEANUP_INTERVAL_MS, PENDING_REQUEST_TTL_MS };
+export { CACHE_TTL_MS, SOURCE_TTL_MS, MAX_CACHE_ENTRIES, CLEANUP_INTERVAL_MS, PENDING_REQUEST_TTL_MS, MAX_TEXT_CHUNK_PAYLOAD };

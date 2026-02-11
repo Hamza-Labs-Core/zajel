@@ -217,6 +217,17 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
     _messageController.clear();
 
     try {
+      // Verify the content type is allowed by channel rules
+      if (!channel.manifest.rules.isContentTypeAllowed(ContentType.text.name)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content: Text('Text content is not allowed in this channel')),
+          );
+        }
+        return;
+      }
+
       final channelService = ref.read(channelServiceProvider);
       final routingService = ref.read(routingHashServiceProvider);
       final syncService = ref.read(channelSyncServiceProvider);
@@ -389,6 +400,8 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
             _ruleRow('Polls', channel.manifest.rules.pollsEnabled),
             _infoRow('Max upstream',
                 '${channel.manifest.rules.maxUpstreamSize} bytes'),
+            _infoRow('Allowed types',
+                channel.manifest.rules.allowedTypes.join(', ')),
             if (channel.manifest.adminKeys.isNotEmpty) ...[
               const Divider(height: 32),
               Text(

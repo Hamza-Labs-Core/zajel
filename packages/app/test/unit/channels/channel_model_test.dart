@@ -36,6 +36,7 @@ void main() {
       expect(rules.repliesEnabled, isTrue);
       expect(rules.pollsEnabled, isTrue);
       expect(rules.maxUpstreamSize, 4096);
+      expect(rules.allowedTypes, ['text']);
     });
 
     test('toJson and fromJson roundtrip', () {
@@ -43,11 +44,55 @@ void main() {
         repliesEnabled: false,
         pollsEnabled: true,
         maxUpstreamSize: 8192,
+        allowedTypes: ['text', 'file'],
       );
       final json = rules.toJson();
       final restored = ChannelRules.fromJson(json);
 
       expect(restored, rules);
+      expect(restored.allowedTypes, ['text', 'file']);
+    });
+
+    test('fromJson defaults allowedTypes to ["text"] when missing', () {
+      final rules = ChannelRules.fromJson({
+        'replies_enabled': true,
+        'polls_enabled': true,
+        'max_upstream_size': 4096,
+      });
+      expect(rules.allowedTypes, ['text']);
+    });
+
+    test('isContentTypeAllowed returns true for allowed types', () {
+      const rules = ChannelRules(allowedTypes: ['text', 'file']);
+      expect(rules.isContentTypeAllowed('text'), isTrue);
+      expect(rules.isContentTypeAllowed('file'), isTrue);
+    });
+
+    test('isContentTypeAllowed returns false for disallowed types', () {
+      const rules = ChannelRules(allowedTypes: ['text']);
+      expect(rules.isContentTypeAllowed('file'), isFalse);
+      expect(rules.isContentTypeAllowed('audio'), isFalse);
+      expect(rules.isContentTypeAllowed('video'), isFalse);
+    });
+
+    test('isContentTypeAllowed with default rules only allows text', () {
+      const rules = ChannelRules();
+      expect(rules.isContentTypeAllowed('text'), isTrue);
+      expect(rules.isContentTypeAllowed('file'), isFalse);
+      expect(rules.isContentTypeAllowed('poll'), isFalse);
+    });
+
+    test('copyWith preserves allowedTypes', () {
+      const rules = ChannelRules(allowedTypes: ['text', 'audio']);
+      final copy = rules.copyWith(repliesEnabled: false);
+      expect(copy.allowedTypes, ['text', 'audio']);
+      expect(copy.repliesEnabled, isFalse);
+    });
+
+    test('copyWith overrides allowedTypes', () {
+      const rules = ChannelRules(allowedTypes: ['text']);
+      final copy = rules.copyWith(allowedTypes: ['text', 'file', 'video']);
+      expect(copy.allowedTypes, ['text', 'file', 'video']);
     });
   });
 

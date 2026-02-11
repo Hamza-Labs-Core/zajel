@@ -5,6 +5,9 @@
  * Routes messages to appropriate registries and manages peer connections.
  */
 
+/** Maximum chunk payload size in bytes (4KB) */
+const MAX_TEXT_CHUNK_PAYLOAD = 4096;
+
 export class WebSocketHandler {
   /**
    * Create a WebSocket handler
@@ -351,6 +354,13 @@ export class WebSocketHandler {
 
     if (!chunkId || !data) {
       this.sendError(ws, 'Missing required fields: chunkId, data');
+      return;
+    }
+
+    // Validate chunk payload size
+    const payloadSize = JSON.stringify(data).length;
+    if (payloadSize > MAX_TEXT_CHUNK_PAYLOAD) {
+      this.sendError(ws, `Chunk payload too large: ${payloadSize} bytes exceeds ${MAX_TEXT_CHUNK_PAYLOAD} byte limit`);
       return;
     }
 

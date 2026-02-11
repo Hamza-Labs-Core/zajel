@@ -336,6 +336,25 @@ class ChannelService {
   }
 
   // ---------------------------------------------------------------------------
+  // Content type validation
+  // ---------------------------------------------------------------------------
+
+  /// Validate that a decrypted chunk payload's content type is allowed by the
+  /// channel's rules.
+  ///
+  /// Call this after decrypting a received chunk to enforce the channel's
+  /// allowedTypes policy on the subscriber side.
+  ///
+  /// Throws [ChannelServiceException] if the content type is not allowed.
+  void validateContentType(ChunkPayload payload, ChannelRules rules) {
+    if (!rules.isContentTypeAllowed(payload.type.name)) {
+      throw ChannelServiceException(
+          'Content type "${payload.type.name}" is not allowed by channel rules. '
+          'Allowed types: ${rules.allowedTypes.join(", ")}');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Manifest updates
   // ---------------------------------------------------------------------------
 

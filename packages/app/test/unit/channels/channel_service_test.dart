@@ -808,6 +808,100 @@ void main() {
     });
   });
 
+  group('Content type validation', () {
+    test('validateContentType passes for allowed type', () {
+      const rules = ChannelRules(allowedTypes: ['text']);
+      final payload = ChunkPayload(
+        type: ContentType.text,
+        payload: Uint8List.fromList(utf8.encode('Hello')),
+        timestamp: DateTime.utc(2026, 2, 10),
+      );
+
+      // Should not throw
+      channelService.validateContentType(payload, rules);
+    });
+
+    test('validateContentType throws for disallowed type', () {
+      const rules = ChannelRules(allowedTypes: ['text']);
+      final payload = ChunkPayload(
+        type: ContentType.file,
+        payload: Uint8List.fromList([1, 2, 3]),
+        timestamp: DateTime.utc(2026, 2, 10),
+      );
+
+      expect(
+        () => channelService.validateContentType(payload, rules),
+        throwsA(isA<ChannelServiceException>().having(
+          (e) => e.message,
+          'message',
+          contains('not allowed'),
+        )),
+      );
+    });
+
+    test('validateContentType passes with multiple allowed types', () {
+      const rules = ChannelRules(allowedTypes: ['text', 'file', 'audio']);
+      final payloads = [
+        ChunkPayload(
+          type: ContentType.text,
+          payload: Uint8List.fromList(utf8.encode('Hello')),
+          timestamp: DateTime.utc(2026, 2, 10),
+        ),
+        ChunkPayload(
+          type: ContentType.file,
+          payload: Uint8List.fromList([1, 2, 3]),
+          timestamp: DateTime.utc(2026, 2, 10),
+        ),
+        ChunkPayload(
+          type: ContentType.audio,
+          payload: Uint8List.fromList([4, 5, 6]),
+          timestamp: DateTime.utc(2026, 2, 10),
+        ),
+      ];
+
+      for (final payload in payloads) {
+        // Should not throw for any of these
+        channelService.validateContentType(payload, rules);
+      }
+    });
+
+    test('validateContentType rejects video when only text is allowed', () {
+      const rules = ChannelRules(); // defaults to ['text']
+      final payload = ChunkPayload(
+        type: ContentType.video,
+        payload: Uint8List.fromList([1, 2, 3]),
+        timestamp: DateTime.utc(2026, 2, 10),
+      );
+
+      expect(
+        () => channelService.validateContentType(payload, rules),
+        throwsA(isA<ChannelServiceException>().having(
+          (e) => e.message,
+          'message',
+          allOf(contains('video'), contains('not allowed')),
+        )),
+      );
+    });
+
+    test('validateContentType error message includes allowed types', () {
+      const rules = ChannelRules(allowedTypes: ['text', 'file']);
+      final payload = ChunkPayload(
+        type: ContentType.poll,
+        payload: Uint8List.fromList([1]),
+        timestamp: DateTime.utc(2026, 2, 10),
+      );
+
+      expect(
+        () => channelService.validateContentType(payload, rules),
+        throwsA(isA<ChannelServiceException>().having(
+          (e) => e.message,
+          'message',
+          allOf(contains('text'), contains('file')),
+        )),
+      );
+    });
+  });
+
   group('Storage delegation', () {
     test('getAllChannels returns all created channels', () async {
       await channelService.createChannel(name: 'Channel 1');

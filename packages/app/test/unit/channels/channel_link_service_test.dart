@@ -107,6 +107,31 @@ void main() {
       expect(decoded.manifest.rules.maxUpstreamSize, 8192);
     });
 
+    test('decode preserves allowedTypes in rules', () {
+      final manifestWithTypes = testManifest.copyWith(
+        rules: const ChannelRules(
+          allowedTypes: ['text', 'file', 'audio'],
+        ),
+      );
+      final channelWithTypes = testChannel.copyWith(
+        manifest: manifestWithTypes,
+      );
+
+      final link = ChannelLinkService.encode(channelWithTypes);
+      final decoded = ChannelLinkService.decode(link);
+
+      expect(decoded.manifest.rules.allowedTypes, ['text', 'file', 'audio']);
+    });
+
+    test('decode defaults allowedTypes to ["text"] for old links', () {
+      // Simulate an old link that has no allowed_types in rules
+      final link = ChannelLinkService.encode(testChannel);
+      final decoded = ChannelLinkService.decode(link);
+
+      // Default rules have allowedTypes = ['text']
+      expect(decoded.manifest.rules.allowedTypes, ['text']);
+    });
+
     test('decode throws FormatException on invalid base64', () {
       expect(
         () => ChannelLinkService.decode('zajel://channel/!!!invalid!!!'),
