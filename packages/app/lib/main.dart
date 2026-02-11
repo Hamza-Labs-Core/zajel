@@ -19,6 +19,8 @@ import 'core/notifications/call_foreground_service.dart';
 import 'core/providers/app_providers.dart';
 import 'features/call/call_screen.dart';
 import 'features/call/incoming_call_dialog.dart';
+import 'features/channels/providers/channel_providers.dart';
+import 'features/groups/providers/group_providers.dart';
 import 'shared/theme/app_theme.dart';
 
 const bool _isE2eTest = bool.fromEnvironment('E2E_TEST');
@@ -122,6 +124,14 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       logger.info('ZajelApp', 'Initializing message storage...');
       final messageStorage = ref.read(messageStorageProvider);
       await messageStorage.initialize();
+
+      logger.info('ZajelApp', 'Initializing channel storage...');
+      final channelStorage = ref.read(channelStorageServiceProvider);
+      await channelStorage.initialize();
+
+      logger.info('ZajelApp', 'Initializing group storage...');
+      final groupStorage = ref.read(groupStorageServiceProvider);
+      await groupStorage.initialize();
 
       // Load peer aliases from TrustedPeersStorage
       final trustedPeers = ref.read(trustedPeersStorageProvider);
