@@ -27,6 +27,10 @@ from .protocol import MESSAGE_CHANNEL_LABEL, FILE_CHANNEL_LABEL
 
 logger = logging.getLogger("zajel.webrtc")
 
+# NOTE: This STUN URL is also defined in:
+#   - e2e-tests/conftest.py (headless_bob fixture)
+#   - packages/app/lib/core/constants.dart (defaultIceServers)
+# Keep all three in sync when changing.
 DEFAULT_ICE_SERVERS = [
     RTCIceServer(urls=["stun:stun.l.google.com:19302"]),
 ]
@@ -52,6 +56,12 @@ class WebRTCService:
     ):
         self._ice_servers = ice_servers or DEFAULT_ICE_SERVERS
         self._force_relay = force_relay
+
+        # Log configured ICE servers (URLs only, not credentials)
+        for server in self._ice_servers:
+            urls = server.urls if isinstance(server.urls, list) else [server.urls]
+            logger.info("ICE server configured: %s", ", ".join(urls))
+
         self._pc: Optional[RTCPeerConnection] = None
         self._channels = DataChannelPair()
         self._relay = MediaRelay()
@@ -90,6 +100,11 @@ class WebRTCService:
         Returns:
             The created RTCPeerConnection.
         """
+        if self._force_relay:
+            logger.info(
+                "force_relay=True but aiortc does not support iceTransportPolicy; "
+                "TURN relay candidates will be used as fallback when direct candidates fail"
+            )
         config = RTCConfiguration(iceServers=self._ice_servers)
         self._pc = RTCPeerConnection(configuration=config)
 
