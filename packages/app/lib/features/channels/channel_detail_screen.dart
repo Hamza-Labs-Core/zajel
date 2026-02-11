@@ -42,8 +42,7 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
         title: channelAsync.when(
           loading: () => const Text('Channel'),
           error: (_, __) => const Text('Channel'),
-          data: (channel) =>
-              Text(channel?.manifest.name ?? 'Unknown Channel'),
+          data: (channel) => Text(channel?.manifest.name ?? 'Unknown Channel'),
         ),
         actions: [
           channelAsync.when(
@@ -98,9 +97,7 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
                         Icon(
                           canPublish ? Icons.campaign : Icons.rss_feed,
                           size: 64,
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onSurfaceVariant,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
                         const SizedBox(height: 16),
                         Text(
@@ -121,8 +118,7 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Chip(
-                              label:
-                                  Text(channel.role.name.toUpperCase()),
+                              label: Text(channel.role.name.toUpperCase()),
                               backgroundColor: Theme.of(context)
                                   .colorScheme
                                   .primaryContainer,
@@ -130,8 +126,7 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
                             const SizedBox(width: 8),
                             Text(
                               'Key epoch: ${channel.manifest.keyEpoch}',
-                              style:
-                                  Theme.of(context).textTheme.bodySmall,
+                              style: Theme.of(context).textTheme.bodySmall,
                             ),
                           ],
                         ),
@@ -227,8 +222,7 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
       final storageService = ref.read(channelStorageServiceProvider);
 
       // Get next sequence number
-      final latestSequence =
-          await storageService.getLatestSequence(channel.id);
+      final latestSequence = await storageService.getLatestSequence(channel.id);
       final sequence = latestSequence + 1;
 
       // Derive routing hash for current epoch
@@ -282,8 +276,7 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
   }
 
   void _showShareDialog(BuildContext context, Channel channel) {
-    final channelLink =
-        'zajel://channel/Ed25519:${channel.manifest.ownerKey}';
+    final channelLink = 'zajel://channel/Ed25519:${channel.manifest.ownerKey}';
 
     showDialog(
       context: context,
@@ -379,10 +372,8 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 8),
-            _ruleRow('Replies',
-                channel.manifest.rules.repliesEnabled),
-            _ruleRow(
-                'Polls', channel.manifest.rules.pollsEnabled),
+            _ruleRow('Replies', channel.manifest.rules.repliesEnabled),
+            _ruleRow('Polls', channel.manifest.rules.pollsEnabled),
             _infoRow('Max upstream',
                 '${channel.manifest.rules.maxUpstreamSize} bytes'),
             if (channel.manifest.adminKeys.isNotEmpty) ...[
@@ -395,8 +386,7 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
               ...channel.manifest.adminKeys.map(
                 (admin) => ListTile(
                   dense: true,
-                  leading: const Icon(
-                      Icons.admin_panel_settings, size: 20),
+                  leading: const Icon(Icons.admin_panel_settings, size: 20),
                   title: Text(admin.label),
                   subtitle: Text(
                     admin.key.length > 16

@@ -130,7 +130,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
         final cutoff = DateTime.now().subtract(const Duration(hours: 24));
         final deleted = await messageStorage.deleteMessagesOlderThan(cutoff);
         if (deleted > 0) {
-          logger.info('ZajelApp', 'Auto-deleted $deleted messages older than 24h');
+          logger.info(
+              'ZajelApp', 'Auto-deleted $deleted messages older than 24h');
         }
       }
 

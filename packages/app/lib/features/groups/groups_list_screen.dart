@@ -62,8 +62,7 @@ class GroupsListScreen extends ConsumerWidget {
                   child: Text(
                     group.name.isNotEmpty ? group.name[0].toUpperCase() : '?',
                     style: TextStyle(
-                      color:
-                          Theme.of(context).colorScheme.onPrimaryContainer,
+                      color: Theme.of(context).colorScheme.onPrimaryContainer,
                     ),
                   ),
                 ),

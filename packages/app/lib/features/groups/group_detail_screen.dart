@@ -245,11 +245,9 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
 
     peersAsync.whenData((peers) async {
       // Filter out peers already in the group and peers without public keys
-      final groupDeviceIds =
-          group.members.map((m) => m.deviceId).toSet();
+      final groupDeviceIds = group.members.map((m) => m.deviceId).toSet();
       final availablePeers = peers
-          .where((p) =>
-              p.publicKey != null && !groupDeviceIds.contains(p.id))
+          .where((p) => p.publicKey != null && !groupDeviceIds.contains(p.id))
           .toList();
 
       if (availablePeers.isEmpty) {
@@ -318,8 +316,7 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content:
-                    Text('${selectedPeer.displayName} added to group'),
+                content: Text('${selectedPeer.displayName} added to group'),
               ),
             );
           }
