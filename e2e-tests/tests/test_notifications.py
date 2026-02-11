@@ -2,7 +2,7 @@
 
 import time
 import pytest
-from conftest import AppHelper
+from platforms.android_helper import AppHelper
 from config import APP_LAUNCH_TIMEOUT
 
 

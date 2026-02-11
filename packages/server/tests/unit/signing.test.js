@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { hexToBytes, importSigningKey, signPayload } from '../src/crypto/signing.js';
-import { ServerRegistryDO } from '../src/durable-objects/server-registry-do.js';
-import worker from '../src/index.js';
+import { hexToBytes, importSigningKey, signPayload } from '../../src/crypto/signing.js';
+import { ServerRegistryDO } from '../../src/durable-objects/server-registry-do.js';
+import worker from '../../src/index.js';
 
 // --- Signing utility tests ---
 

@@ -1,6 +1,15 @@
+# Android (Appium + UiAutomator2)
 Appium-Python-Client>=3.0.0
+selenium>=4.0.0
+
+# Linux (AT-SPI via dogtail) -- install only on Linux
+# dogtail>=0.9.11
+
+# Windows (UIA via pywinauto) -- install only on Windows
+# pywinauto>=0.6.8
+
+# Common
 pytest>=7.0.0
 pytest-timeout>=2.0.0
 pytest-xdist>=3.0.0
-selenium>=4.0.0
 # zajel-headless-client: installed separately via pip install -e packages/headless-client
