@@ -37,7 +37,8 @@ class WarningBox extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.warning_amber, color: warningIcon, size: 20, semanticLabel: 'Warning'),
+          Icon(Icons.warning_amber,
+              color: warningIcon, size: 20, semanticLabel: 'Warning'),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
