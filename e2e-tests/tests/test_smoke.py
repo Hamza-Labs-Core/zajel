@@ -1,8 +1,10 @@
 """
-Smoke tests for the Zajel Flutter Windows app.
+Smoke tests for the Zajel Flutter desktop app (Windows/Linux).
 
 Verifies that the app launches, displays the home screen, and basic
 UI elements are visible. These tests run without a signaling server.
+
+On Android, use test_pairing.py::TestPairing::test_app_launches_successfully instead.
 """
 
 import pytest
@@ -10,6 +12,7 @@ import pytest
 
 @pytest.mark.smoke
 @pytest.mark.single_device
+@pytest.mark.windows
 class TestSmoke:
     """Basic smoke tests — does the app even launch?"""
 

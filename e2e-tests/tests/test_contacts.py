@@ -2,7 +2,7 @@
 
 import time
 import pytest
-from conftest import AppHelper
+from platforms.android_helper import AppHelper
 from config import P2P_CONNECTION_TIMEOUT, APP_LAUNCH_TIMEOUT
 
 PACKAGE_NAME = "com.zajel.zajel"

@@ -1200,7 +1200,7 @@ jobs:
           # Deselect the smoke test since it already ran above.
           echo "=== Running single-device tests (mandatory) ==="
           SINGLE_RESULT=0
-          pytest -m "single_device and not headless" -v -s --timeout=120 --deselect tests/test_pairing.py::TestPairing::test_app_launches_successfully || SINGLE_RESULT=$?
+          pytest -m "single_device and not headless and not windows and not linux" -v -s --timeout=120 --deselect tests/test_pairing.py::TestPairing::test_app_launches_successfully || SINGLE_RESULT=$?
 
           # ── Phase C: Headless-paired tests (informational) ──
           # TURN relay (coturn) is now configured on CI, but these tests need
@@ -1520,6 +1520,7 @@ jobs:
           CI: 'true'
           ZAJEL_APP_PATH: ${{ github.workspace }}/linux-app/zajel
           SIGNALING_URL: ${{ env.SIGNALING_URL }}
+          ZAJEL_TEST_PLATFORM: linux
         run: |
           set +e
 
@@ -1527,7 +1528,7 @@ jobs:
           # Flutter AT-SPI doesn't respond to D-Bus queries in headless Xvfb.
           # Run a quick smoke test as a probe; don't fail the job on it.
           echo "=== AT-SPI smoke test (informational) ==="
-          cd ${{ github.workspace }}/e2e-tests-linux
+          cd ${{ github.workspace }}/e2e-tests
           timeout 180 python3 -m pytest tests/test_pairing.py -v -s --timeout=120 -k "smoke or test_app" || true
 
           # ── Part 2: Signaling tests (no WebRTC needed) ──
@@ -1557,7 +1558,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-linux-test-artifacts
-          path: e2e-tests-linux/test-artifacts/
+          path: e2e-tests/test-artifacts/
           retention-days: 3
           if-no-files-found: ignore
 
@@ -1590,7 +1591,7 @@ jobs:
 
       - name: Install E2E dependencies
         run: |
-          pip install -r e2e-tests-windows\requirements.txt
+          pip install pywinauto>=0.6.8 pytest>=8.0 pytest-timeout>=2.3
           pip install -e packages\headless-client
 
       - name: Resolve signaling URL
@@ -1609,6 +1610,7 @@ jobs:
         env:
           ZAJEL_APP_PATH: ${{ github.workspace }}\windows-app\zajel.exe
           SIGNALING_URL: ${{ env.SIGNALING_URL }}
+          ZAJEL_TEST_PLATFORM: windows
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
@@ -1617,7 +1619,7 @@ jobs:
           # Flutter ANGLE/DirectX rendering fails on CI (black screen).
           # Run smoke test as a probe; don't fail the job on it.
           Write-Host "=== UIA smoke test (informational) ==="
-          Set-Location "${{ github.workspace }}\e2e-tests-windows"
+          Set-Location "${{ github.workspace }}\e2e-tests"
           pytest tests\test_smoke.py -v -s --timeout=120
           $smokeResult = $LASTEXITCODE
           if ($smokeResult -ne 0) {
@@ -1649,7 +1651,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-windows-test-artifacts
-          path: e2e-tests-windows/test-artifacts/
+          path: e2e-tests/test-artifacts/
           retention-days: 3
           if-no-files-found: ignore
 

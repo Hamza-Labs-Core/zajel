@@ -25,7 +25,7 @@ try:
 except ImportError:
     DOGTAIL_AVAILABLE = False
 
-from config import APP_LAUNCH_TIMEOUT, ELEMENT_WAIT_TIMEOUT
+from platforms.linux_config import APP_LAUNCH_TIMEOUT, ELEMENT_WAIT_TIMEOUT
 
 
 class LinuxAppHelper:
