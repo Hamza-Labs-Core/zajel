@@ -93,7 +93,7 @@ def headless_bob():
     relay-ip=$HOST_IP
     external-ip=$HOST_IP
     min-port=49152
-    max-port=49252
+    max-port=50152
     realm=zajel-ci
     user=test:test
     lt-cred-mech

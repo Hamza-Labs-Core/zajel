@@ -105,6 +105,7 @@ class ZajelHeadlessClient:
         media_dir: str = "./test_media",
         receive_dir: str = "./received_files",
         db_path: str = "zajel_headless.db",
+        ice_servers: Optional[list[dict[str, Any]]] = None,
     ):
         self.signaling_url = signaling_url
         self.name = name
@@ -118,10 +119,75 @@ class ZajelHeadlessClient:
             format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         )
 
+        # Convert ice_servers dicts to RTCIceServer objects if provided
+        rtc_ice_servers = None
+        if ice_servers:
+            from aiortc import RTCIceServer
+            rtc_ice_servers = []
+            skipped_count = 0
+            input_had_turn = False
+            converted_turn_count = 0
+            for i, s in enumerate(ice_servers):
+                # Detect whether this entry contains TURN/TURNS URLs
+                entry_urls = []
+                if isinstance(s, dict):
+                    urls_value = s.get("urls") or s.get("url") or []
+                    if isinstance(urls_value, str):
+                        entry_urls = [urls_value]
+                    elif isinstance(urls_value, list):
+                        entry_urls = urls_value
+                entry_is_turn = any(
+                    u.startswith("turn:") or u.startswith("turns:")
+                    for u in entry_urls
+                )
+                if entry_is_turn:
+                    input_had_turn = True
+
+                try:
+                    if isinstance(s, dict):
+                        rtc_ice_servers.append(RTCIceServer(**s))
+                    else:
+                        rtc_ice_servers.append(s)
+                    if entry_is_turn:
+                        converted_turn_count += 1
+                except (TypeError, ValueError) as e:
+                    skipped_count += 1
+                    logger.warning(
+                        "Skipping invalid ICE server entry at index %d: %s (error: %s)",
+                        i, s, e,
+                    )
+
+            # Summary log after conversion
+            total_input = len(ice_servers)
+            success_count = len(rtc_ice_servers)
+            logger.info(
+                "ICE server conversion: %d/%d servers added successfully, %d skipped",
+                success_count, total_input, skipped_count,
+            )
+
+            # If user provided servers but ALL failed to convert, this is an error
+            if success_count == 0:
+                logger.error(
+                    "All %d provided ICE server(s) failed to convert. "
+                    "WebRTC will fall back to STUN-only, which may cause "
+                    "connectivity failures behind NAT. Check your ICE server "
+                    "configuration.",
+                    total_input,
+                )
+
+            # If TURN servers were expected but none made it through, raise
+            if input_had_turn and converted_turn_count == 0:
+                raise ValueError(
+                    "TURN servers were provided in ice_servers configuration but "
+                    "none converted successfully. Without TURN relay, peers behind "
+                    "symmetric NAT will be unable to connect. Fix the TURN server "
+                    "entries and retry."
+                )
+
         # Core services
         self._crypto = CryptoService()
         self._signaling = SignalingClient(signaling_url)
-        self._webrtc = WebRTCService()
+        self._webrtc = WebRTCService(ice_servers=rtc_ice_servers)
         self._storage = PeerStorage(db_path)
         self._events = EventEmitter()
 

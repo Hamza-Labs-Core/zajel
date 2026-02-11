@@ -17,6 +17,7 @@ Provides fixtures for:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shutil
 import subprocess
@@ -63,6 +64,7 @@ elif PLATFORM == "windows":
 else:
     SIGNALING_URL = os.environ.get("SIGNALING_URL", "")
 
+logger = logging.getLogger(__name__)
 
 ARTIFACTS_DIR = os.environ.get("E2E_ARTIFACTS_DIR", "/tmp/e2e-artifacts")
 PACKAGE_NAME = "com.zajel.zajel"
@@ -120,7 +122,7 @@ def create_driver(server_index: int, device_name: str = "emulator"):
             [ADB_PATH, "-s", udid, "shell", "pm", "clear", PACKAGE_NAME],
             capture_output=True, timeout=15
         )
-    except Exception as e:
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
         print(f"Warning: Failed to clear app data: {e}")
 
     for perm in [
@@ -135,7 +137,7 @@ def create_driver(server_index: int, device_name: str = "emulator"):
                 [ADB_PATH, "-s", udid, "shell", "pm", "grant", PACKAGE_NAME, perm],
                 capture_output=True, timeout=10
             )
-        except Exception:
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
             pass
 
     options = UiAutomator2Options()
@@ -357,8 +359,8 @@ class HeadlessBob:
     def disconnect(self):
         try:
             self._run(self._client.disconnect(), timeout=10)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Disconnect failed: %s", e)
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join(timeout=5)
 
@@ -373,11 +375,27 @@ def headless_bob():
     if not SIGNALING_URL:
         pytest.skip("SIGNALING_URL not set -- headless tests require a signaling server")
 
+    turn_url = os.environ.get("TURN_URL", "")
+    turn_user = os.environ.get("TURN_USER", "")
+    turn_pass = os.environ.get("TURN_PASS", "")
+
+    ice_servers = None
+    if turn_url:
+        # NOTE: This STUN URL is also defined in:
+        #   - packages/headless-client/zajel/webrtc.py (DEFAULT_ICE_SERVERS)
+        #   - packages/app/lib/core/constants.dart (defaultIceServers)
+        # Keep all three in sync when changing.
+        ice_servers = [
+            {"urls": "stun:stun.l.google.com:19302"},
+            {"urls": turn_url, "username": turn_user, "credential": turn_pass},
+        ]
+
     bob = HeadlessBob(
         signaling_url=SIGNALING_URL,
         name="HeadlessBob",
         auto_accept_pairs=True,
         log_level="DEBUG",
+        ice_servers=ice_servers,
     )
     bob.connect()
     yield bob
