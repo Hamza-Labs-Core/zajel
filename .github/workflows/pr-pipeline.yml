@@ -895,10 +895,10 @@ jobs:
             PUBLIC_IP=$(curl -sf http://checkip.amazonaws.com || curl -sf http://ifconfig.me || echo "localhost")
             cat > start-qa.sh << EOF
             #!/bin/bash
-            export ZAJEL_PORT=9001
+            export ZAJEL_PORT=80
             export ZAJEL_KEY_PATH=./data-qa/server.key
             export ZAJEL_DB_PATH=./data-qa/zajel.db
-            export ZAJEL_PUBLIC_ENDPOINT=ws://${PUBLIC_IP}:9001
+            export ZAJEL_PUBLIC_ENDPOINT=ws://${PUBLIC_IP}
             export ZAJEL_REGION=qa
             export ZAJEL_BOOTSTRAP_URL=${BOOTSTRAP_URL}
             export NODE_ENV=qa
@@ -920,7 +920,7 @@ jobs:
             # Health check
             sleep 5
             for i in {1..6}; do
-              if curl -sf http://localhost:9001/health | grep -q "healthy"; then
+              if curl -sf http://localhost:80/health | grep -q "healthy"; then
                 echo "Server healthy"
                 exit 0
               fi
@@ -1003,13 +1003,13 @@ jobs:
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
-              echo "Probing VPS at $ip:9001..."
-              if timeout 10 curl -sf "http://${ip}:9001/health" >/dev/null 2>&1; then
-                URL="ws://${ip}:9001"
-                echo "Reachable and healthy: $ip:9001"
+              echo "Probing VPS at $ip:80..."
+              if timeout 10 curl -sf "http://${ip}:80/health" >/dev/null 2>&1; then
+                URL="ws://${ip}:80"
+                echo "Reachable and healthy: $ip:80"
                 break
               else
-                echo "Not reachable: $ip:9001"
+                echo "Not reachable: $ip:80"
               fi
             done
             if [ -z "$URL" ]; then
@@ -1062,7 +1062,10 @@ jobs:
             sleep 1
           done
 
-          echo "TURN_URL=turn:${HOST_IP}:3478" >> "$GITHUB_ENV"
+          # Android emulator reaches the host via 10.0.2.2 (SLiRP gateway),
+          # NOT the host's LAN IP. HeadlessBob runs on the host itself.
+          echo "TURN_URL=turn:127.0.0.1:3478" >> "$GITHUB_ENV"
+          echo "TURN_URL_EMU=turn:10.0.2.2:3478" >> "$GITHUB_ENV"
           echo "TURN_USER=${TURN_USER}" >> "$GITHUB_ENV"
           echo "TURN_PASS=${TURN_PASS}" >> "$GITHUB_ENV"
 
@@ -1075,7 +1078,7 @@ jobs:
             --dart-define=E2E_TEST=true \
             --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
             --dart-define=SIGNALING_URL=${{ env.SIGNALING_URL }} \
-            --dart-define=TURN_URL=${{ env.TURN_URL }} \
+            --dart-define=TURN_URL=${{ env.TURN_URL_EMU }} \
             --dart-define=TURN_USER=${{ env.TURN_USER }} \
             --dart-define=TURN_PASS=${{ env.TURN_PASS }}
 
@@ -1499,13 +1502,13 @@ jobs:
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
-              echo "Probing VPS at $ip:9001..."
-              if timeout 10 curl -sf "http://${ip}:9001/health" >/dev/null 2>&1; then
-                URL="ws://${ip}:9001"
-                echo "Reachable and healthy: $ip:9001"
+              echo "Probing VPS at $ip:80..."
+              if timeout 10 curl -sf "http://${ip}:80/health" >/dev/null 2>&1; then
+                URL="ws://${ip}:80"
+                echo "Reachable and healthy: $ip:80"
                 break
               else
-                echo "Not reachable: $ip:9001"
+                echo "Not reachable: $ip:80"
               fi
             done
             if [ -z "$URL" ]; then
@@ -1600,7 +1603,7 @@ jobs:
           URL="${{ vars.VPS_QA_WS_URL }}"
           if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
             FIRST_IP=$(echo "${{ vars.QA_VPS_IP }}" | cut -d',' -f1 | tr -d ' ')
-            URL="ws://${FIRST_IP}:9001"
+            URL="ws://${FIRST_IP}:80"
           fi
           echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
           echo "Resolved SIGNALING_URL=$URL"

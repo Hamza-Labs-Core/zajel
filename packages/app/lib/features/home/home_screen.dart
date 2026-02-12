@@ -19,6 +19,16 @@ class HomeScreen extends ConsumerWidget {
         title: const Text('Zajel'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.rss_feed),
+            onPressed: () => context.push('/channels'),
+            tooltip: 'Channels',
+          ),
+          IconButton(
+            icon: const Icon(Icons.group),
+            onPressed: () => context.push('/groups'),
+            tooltip: 'Groups',
+          ),
+          IconButton(
             icon: const Icon(Icons.contacts),
             onPressed: () => context.push('/contacts'),
             tooltip: 'Contacts',

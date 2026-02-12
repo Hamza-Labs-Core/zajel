@@ -91,6 +91,17 @@ export function loadConfig(): ServerConfig {
       // CF Admin dashboard URL for CORS
       cfAdminUrl: process.env['ZAJEL_CF_ADMIN_URL'],
     },
+
+    attestation: {
+      // Bootstrap URL for attestation forwarding (null = attestation disabled)
+      bootstrapUrl: process.env['ZAJEL_ATTESTATION_BOOTSTRAP_URL'] || null,
+      // Ed25519 private key for VPS server identity (base64, null = generate ephemeral)
+      vpsIdentityKey: process.env['VPS_IDENTITY_KEY'] || null,
+      // Session token TTL (default: 1 hour)
+      sessionTokenTtl: envNumber('ZAJEL_ATTESTATION_TOKEN_TTL', 60 * 60 * 1000),
+      // Grace period for unattested connections (default: 30 seconds)
+      gracePeriod: envNumber('ZAJEL_ATTESTATION_GRACE_PERIOD', 30 * 1000),
+    },
   };
 }
 

@@ -6,6 +6,8 @@ Provides the high-level API for interacting with the Zajel protocol:
 - Send/receive encrypted messages
 - Make/receive voice/video calls
 - Transfer files
+- Subscribe to channels and receive content
+- Create/join groups and send/receive group messages
 - Hook into events
 """
 
@@ -17,8 +19,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional
 
+from .channels import (
+    ChannelCryptoService,
+    ChannelManifest,
+    ChannelStorage,
+    Chunk,
+    ChunkPayload,
+    SubscribedChannel,
+    decode_channel_link,
+    is_channel_link,
+)
 from .crypto import CryptoService
 from .file_transfer import FileTransferService, FileTransferProgress
+from .groups import (
+    Group,
+    GroupCryptoService,
+    GroupMember,
+    GroupMessage,
+    GroupStorage,
+)
 from .hooks import EventEmitter
 from .media.audio_source import SineWaveSource, FileAudioSource
 from .media.video_source import ColorBarSource, FileVideoSource
@@ -198,6 +217,18 @@ class ZajelHeadlessClient:
         self._file_transfer: Optional[FileTransferService] = None
         self._tasks: list[asyncio.Task] = []
         self._pairing_code: Optional[str] = None
+
+        # Channel state
+        self._channel_storage = ChannelStorage()
+        self._channel_crypto = ChannelCryptoService()
+        self._channel_content_queue: asyncio.Queue[tuple[str, ChunkPayload]] = (
+            asyncio.Queue()
+        )
+
+        # Group state
+        self._group_storage = GroupStorage()
+        self._group_crypto = GroupCryptoService()
+        self._group_message_queue: asyncio.Queue[GroupMessage] = asyncio.Queue()
 
     async def __aenter__(self) -> "ZajelHeadlessClient":
         return self
@@ -472,6 +503,362 @@ class ZajelHeadlessClient:
     async def get_trusted_peers(self) -> list[StoredPeer]:
         """Get all trusted peers."""
         return self._storage.get_all_peers()
+
+    # ── Channels ─────────────────────────────────────────────
+
+    async def subscribe_channel(self, invite_link: str) -> SubscribedChannel:
+        """Subscribe to a channel by decoding a zajel:// invite link.
+
+        Decodes the link, verifies the manifest signature, and stores
+        the channel subscription locally.
+
+        Args:
+            invite_link: A zajel://channel/<base64url> invite link.
+
+        Returns:
+            The subscribed channel.
+
+        Raises:
+            ValueError: If the link is invalid or the manifest signature
+                is not valid.
+        """
+        manifest, encryption_key = decode_channel_link(invite_link)
+
+        # Verify the manifest signature
+        if not self._channel_crypto.verify_manifest(manifest):
+            raise ValueError("Channel manifest signature is invalid")
+
+        channel = SubscribedChannel(
+            channel_id=manifest.channel_id,
+            manifest=manifest,
+            encryption_key=encryption_key,
+        )
+        self._channel_storage.save_channel(channel)
+
+        logger.info(
+            "Subscribed to channel %s (%s)",
+            manifest.name,
+            manifest.channel_id[:16],
+        )
+        return channel
+
+    async def get_subscribed_channels(self) -> list[SubscribedChannel]:
+        """Get all subscribed channels."""
+        return self._channel_storage.get_all_channels()
+
+    async def get_channel(self, channel_id: str) -> Optional[SubscribedChannel]:
+        """Get a subscribed channel by ID."""
+        return self._channel_storage.get_channel(channel_id)
+
+    async def unsubscribe_channel(self, channel_id: str) -> None:
+        """Unsubscribe from a channel."""
+        self._channel_storage.delete_channel(channel_id)
+        logger.info("Unsubscribed from channel %s", channel_id[:16])
+
+    async def receive_channel_chunk(
+        self, channel_id: str, chunk_data: dict
+    ) -> Optional[ChunkPayload]:
+        """Process an incoming chunk for a subscribed channel.
+
+        Verifies the chunk signature, checks the author is authorized,
+        stores the chunk, and if the message is complete, decrypts and
+        returns the payload.
+
+        Args:
+            channel_id: The channel ID.
+            chunk_data: The chunk data dict (from server relay).
+
+        Returns:
+            The decrypted ChunkPayload if the full message is assembled,
+            or None if still waiting for more chunks.
+        """
+        channel = self._channel_storage.get_channel(channel_id)
+        if channel is None:
+            raise RuntimeError(f"Not subscribed to channel {channel_id}")
+
+        chunk = Chunk.from_dict(chunk_data)
+
+        # Verify signature
+        if not self._channel_crypto.verify_chunk_signature(chunk):
+            logger.warning(
+                "Chunk %s has invalid signature, discarding",
+                chunk.chunk_id,
+            )
+            return None
+
+        # Verify author is in manifest (owner or admin)
+        manifest = channel.manifest
+        is_owner = chunk.author_pubkey == manifest.owner_key
+        is_admin = any(
+            a.key == chunk.author_pubkey for a in manifest.admin_keys
+        )
+        if not is_owner and not is_admin:
+            logger.warning(
+                "Chunk %s author not authorized in manifest, discarding",
+                chunk.chunk_id,
+            )
+            return None
+
+        # Store chunk
+        self._channel_storage.save_chunk(channel_id, chunk)
+
+        # Check if we have all chunks for this sequence
+        chunks = self._channel_storage.get_chunks_by_sequence(
+            channel_id, chunk.sequence
+        )
+        if len(chunks) < chunk.total_chunks:
+            return None  # Still waiting for more chunks
+
+        # Reassemble and decrypt
+        sorted_chunks = sorted(chunks, key=lambda c: c.chunk_index)
+        combined = b""
+        for c in sorted_chunks:
+            combined += c.encrypted_payload
+
+        payload = self._channel_crypto.decrypt_payload(
+            combined,
+            channel.encryption_key,
+            manifest.key_epoch,
+        )
+
+        # Emit event and queue
+        self._channel_content_queue.put_nowait((channel_id, payload))
+        await self._events.emit(
+            "channel_content", channel_id, payload
+        )
+
+        logger.info(
+            "Received channel content: %s (seq %d, type %s)",
+            manifest.name,
+            chunk.sequence,
+            payload.content_type,
+        )
+        return payload
+
+    async def receive_channel_content(
+        self, timeout: float = 30
+    ) -> tuple[str, ChunkPayload]:
+        """Wait for channel content from any subscribed channel.
+
+        Returns:
+            (channel_id, payload) tuple.
+        """
+        return await asyncio.wait_for(
+            self._channel_content_queue.get(), timeout=timeout
+        )
+
+    # ── Groups ──────────────────────────────────────────────
+
+    async def create_group(self, name: str) -> Group:
+        """Create a new group.
+
+        The client becomes the first member and generates a sender key.
+
+        Args:
+            name: The group name.
+
+        Returns:
+            The created Group.
+        """
+        group_id = str(uuid.uuid4())
+        device_id = self._pairing_code or "headless"
+
+        self_member = GroupMember(
+            device_id=device_id,
+            display_name=self.name,
+            public_key=self._crypto.public_key_base64,
+        )
+
+        group = Group(
+            id=group_id,
+            name=name,
+            self_device_id=device_id,
+            members=[self_member],
+            created_by=device_id,
+        )
+
+        # Generate our sender key
+        sender_key = self._group_crypto.generate_sender_key()
+        self._group_crypto.set_sender_key(group_id, device_id, sender_key)
+
+        self._group_storage.save_group(group)
+
+        logger.info("Created group %s (%s)", name, group_id[:8])
+        return group
+
+    async def get_groups(self) -> list[Group]:
+        """Get all groups."""
+        return self._group_storage.get_all_groups()
+
+    async def get_group(self, group_id: str) -> Optional[Group]:
+        """Get a group by ID."""
+        return self._group_storage.get_group(group_id)
+
+    async def add_group_member(
+        self,
+        group_id: str,
+        member: GroupMember,
+        sender_key: str,
+    ) -> Group:
+        """Add a member to a group.
+
+        Args:
+            group_id: The group ID.
+            member: The new member.
+            sender_key: The member's sender key (base64).
+
+        Returns:
+            The updated Group.
+        """
+        group = self._group_storage.get_group(group_id)
+        if group is None:
+            raise RuntimeError(f"Group not found: {group_id}")
+
+        if len(group.members) >= 15:
+            raise RuntimeError("Group is full (max 15 members)")
+
+        if any(m.device_id == member.device_id for m in group.members):
+            raise RuntimeError(
+                f"Member {member.device_id} already in group"
+            )
+
+        # Store sender key
+        self._group_crypto.set_sender_key(
+            group_id, member.device_id, sender_key
+        )
+
+        # Update group
+        group.members.append(member)
+        self._group_storage.save_group(group)
+
+        logger.info(
+            "Added %s to group %s",
+            member.display_name,
+            group.name,
+        )
+        return group
+
+    async def send_group_message(
+        self, group_id: str, content: str
+    ) -> GroupMessage:
+        """Send a message to a group.
+
+        Encrypts with our sender key. The caller is responsible for
+        broadcasting the encrypted bytes to connected peers.
+
+        Args:
+            group_id: The group ID.
+            content: The message text.
+
+        Returns:
+            The GroupMessage that was sent.
+        """
+        group = self._group_storage.get_group(group_id)
+        if group is None:
+            raise RuntimeError(f"Group not found: {group_id}")
+
+        device_id = group.self_device_id
+        seq = self._group_storage.get_next_sequence(group_id, device_id)
+
+        message = GroupMessage(
+            group_id=group_id,
+            author_device_id=device_id,
+            sequence_number=seq,
+            content=content,
+            is_outgoing=True,
+        )
+
+        # Encrypt with our sender key
+        plaintext_bytes = message.to_bytes()
+        encrypted = self._group_crypto.encrypt(
+            plaintext_bytes, group_id, device_id
+        )
+
+        # Store locally
+        self._group_storage.save_message(message)
+
+        # TODO: Broadcast encrypted bytes to all connected group peers
+        # via WebRTC data channels. This requires a group-aware routing
+        # layer that the current signaling/WebRTC services don't have.
+
+        logger.info(
+            "Sent group message to %s: %s", group.name, content[:50]
+        )
+        return message
+
+    async def receive_group_message(
+        self,
+        group_id: str,
+        author_device_id: str,
+        encrypted_bytes: bytes,
+    ) -> Optional[GroupMessage]:
+        """Receive and decrypt a group message.
+
+        Args:
+            group_id: The group ID.
+            author_device_id: The sender's device ID.
+            encrypted_bytes: The encrypted message bytes.
+
+        Returns:
+            The decrypted GroupMessage, or None if duplicate.
+        """
+        group = self._group_storage.get_group(group_id)
+        if group is None:
+            raise RuntimeError(f"Group not found: {group_id}")
+
+        # Decrypt with the author's sender key
+        plaintext = self._group_crypto.decrypt(
+            encrypted_bytes, group_id, author_device_id
+        )
+
+        message = GroupMessage.from_bytes(
+            plaintext, group_id=group_id, is_outgoing=False
+        )
+
+        # Check for duplicate
+        if self._group_storage.is_duplicate(group_id, message.id):
+            return None
+
+        # Verify author matches
+        if message.author_device_id != author_device_id:
+            raise RuntimeError(
+                f"Author mismatch: encrypted by {author_device_id} "
+                f"but claims to be from {message.author_device_id}"
+            )
+
+        # Store and emit
+        self._group_storage.save_message(message)
+        self._group_message_queue.put_nowait(message)
+        await self._events.emit(
+            "group_message", group_id, message
+        )
+
+        logger.info(
+            "Received group message from %s in %s",
+            author_device_id,
+            group.name,
+        )
+        return message
+
+    async def wait_for_group_message(
+        self, timeout: float = 30
+    ) -> GroupMessage:
+        """Wait for a group message from any group."""
+        return await asyncio.wait_for(
+            self._group_message_queue.get(), timeout=timeout
+        )
+
+    async def get_group_messages(
+        self, group_id: str, limit: Optional[int] = None
+    ) -> list[GroupMessage]:
+        """Get stored messages for a group."""
+        return self._group_storage.get_messages(group_id, limit=limit)
+
+    async def leave_group(self, group_id: str) -> None:
+        """Leave a group."""
+        self._group_crypto.clear_group_keys(group_id)
+        self._group_storage.delete_group(group_id)
+        logger.info("Left group %s", group_id[:8])
 
     # ── Internal ─────────────────────────────────────────────
 

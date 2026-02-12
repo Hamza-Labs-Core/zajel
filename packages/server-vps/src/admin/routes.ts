@@ -45,7 +45,9 @@ export class AdminRoutes {
         // Verify token before setting cookie
         const payload = verifyJwt(queryToken, this.config.jwtSecret);
         if (payload) {
-          setAuthCookie(res, queryToken);
+          const isSecure = req.headers['x-forwarded-proto'] === 'https'
+            || (req.connection as { encrypted?: boolean })?.encrypted === true;
+          setAuthCookie(res, queryToken, isSecure);
           // Redirect to remove token from URL
           res.writeHead(302, { Location: '/admin/' });
           res.end();
