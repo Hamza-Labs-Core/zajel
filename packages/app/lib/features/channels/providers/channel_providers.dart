@@ -1,7 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/providers/app_providers.dart';
 import '../models/channel.dart';
+import '../models/chunk.dart';
 import '../services/admin_management_service.dart';
 import '../services/background_sync_service.dart';
 import '../services/channel_crypto_service.dart';
@@ -98,6 +101,12 @@ final channelSyncServiceProvider = Provider<ChannelSyncService>((ref) {
     peerId: pairingCode ?? '',
   );
 
+  // Wire up chunk message stream from the signaling client so the
+  // sync service can react to incoming chunk_data, chunk_pull, etc.
+  if (signalingClient != null) {
+    service.start(signalingClient.chunkMessages);
+  }
+
   ref.onDispose(() => service.dispose());
   return service;
 });
@@ -152,4 +161,86 @@ final backgroundSyncServiceProvider = Provider<BackgroundSyncService>((ref) {
 
   ref.onDispose(() => service.dispose());
   return service;
+});
+
+/// Provider for the currently selected channel ID (for split-view layout).
+final selectedChannelIdProvider = StateProvider<String?>((ref) => null);
+
+/// A single displayable message decoded from channel chunks.
+class ChannelMessage {
+  final int sequence;
+  final ContentType type;
+  final String text;
+  final DateTime timestamp;
+  final String? author;
+
+  const ChannelMessage({
+    required this.sequence,
+    required this.type,
+    required this.text,
+    required this.timestamp,
+    this.author,
+  });
+}
+
+/// Provider for channel messages (decrypted chunks) for a specific channel.
+///
+/// Fetches all chunks from storage, groups by sequence, reassembles and
+/// decrypts each group into a displayable [ChannelMessage].
+/// Invalidate this provider after publishing to refresh the list.
+final channelMessagesProvider =
+    FutureProvider.family<List<ChannelMessage>, String>(
+        (ref, channelId) async {
+  final storageService = ref.watch(channelStorageServiceProvider);
+  final channelService = ref.watch(channelServiceProvider);
+  final cryptoService = ref.watch(channelCryptoServiceProvider);
+
+  // Get the channel to access the encryption key
+  final channel = await channelService.getChannel(channelId);
+  if (channel == null) return [];
+
+  final encryptionKey = channel.encryptionKeyPrivate;
+  if (encryptionKey == null) return [];
+
+  // Fetch all chunks for this channel
+  final allChunks = await storageService.getAllChunksForChannel(channelId);
+  if (allChunks.isEmpty) return [];
+
+  // Group by sequence number
+  final grouped = <int, List<Chunk>>{};
+  for (final chunk in allChunks) {
+    grouped.putIfAbsent(chunk.sequence, () => []).add(chunk);
+  }
+
+  // Decrypt each sequence group
+  final messages = <ChannelMessage>[];
+  for (final entry in grouped.entries.toList()
+    ..sort((a, b) => a.key.compareTo(b.key))) {
+    try {
+      final chunks = entry.value;
+      // Skip incomplete sequences
+      if (chunks.length != chunks.first.totalChunks) continue;
+
+      final encryptedBytes = channelService.reassembleChunks(chunks);
+      final payload = await cryptoService.decryptPayload(
+        encryptedBytes,
+        encryptionKey,
+        channel.manifest.keyEpoch,
+      );
+
+      messages.add(ChannelMessage(
+        sequence: entry.key,
+        type: payload.type,
+        text: payload.type == ContentType.text
+            ? utf8.decode(payload.payload)
+            : '[${payload.type.name}]',
+        timestamp: payload.timestamp,
+        author: payload.author,
+      ));
+    } catch (_) {
+      // Skip corrupted or unreadable messages
+    }
+  }
+
+  return messages;
 });

@@ -9,6 +9,7 @@ import '../config/environment.dart';
 import '../crypto/crypto_service.dart';
 import '../logging/logger_service.dart';
 import '../models/models.dart';
+import '../storage/message_storage.dart';
 import '../storage/trusted_peers_storage.dart';
 import 'device_link_service.dart';
 import 'meeting_point_service.dart';
@@ -149,6 +150,10 @@ class ConnectionManager {
   /// Callback to check if a public key is blocked.
   bool Function(String publicKey)? _isPublicKeyBlocked;
 
+  /// Message storage for migrating messages when a trusted peer reconnects
+  /// with a new pairing code.
+  MessageStorage? _messageStorage;
+
   ConnectionManager({
     required CryptoService cryptoService,
     required WebRTCService webrtcService,
@@ -168,6 +173,11 @@ class ConnectionManager {
   /// Update the blocked check callback (for provider updates).
   void setBlockedCheck(bool Function(String publicKey) callback) {
     _isPublicKeyBlocked = callback;
+  }
+
+  /// Set the message storage for peer migration.
+  void setMessageStorage(MessageStorage storage) {
+    _messageStorage = storage;
   }
 
   /// Stream of all known peers.
@@ -641,6 +651,67 @@ class ConnectionManager {
     }
   }
 
+  /// Migrate a trusted peer's identity when they reconnect with a new pairing code.
+  ///
+  /// When a previously-trusted peer restarts their app, they get a new ephemeral
+  /// pairing code but the same public key. This method detects that situation and:
+  /// 1. Migrates message history from the old ID to the new one
+  /// 2. Carries over the display name and alias
+  /// 3. Removes the old duplicate entry from the peers map
+  /// 4. Updates trusted peer storage with the new ID
+  Future<void> _migrateTrustedPeerIfNeeded(
+      String newPeerCode, String peerPublicKey) async {
+    try {
+      final trustedPeer =
+          await _trustedPeersStorage.getPeerByPublicKey(peerPublicKey);
+      if (trustedPeer == null || trustedPeer.id == newPeerCode) return;
+
+      final oldId = trustedPeer.id;
+      logger.info('ConnectionManager',
+          'Migrating trusted peer: $oldId → $newPeerCode (same pubkey)');
+
+      // Migrate message history to the new peer ID
+      if (_messageStorage != null) {
+        final migrated =
+            await _messageStorage!.migrateMessages(oldId, newPeerCode);
+        logger.debug('ConnectionManager',
+            'Migrated $migrated messages from $oldId to $newPeerCode');
+      }
+
+      // Carry over display name and alias to the new peer entry
+      final oldPeer = _peers[oldId];
+      if (oldPeer != null) {
+        _peers[newPeerCode] = Peer(
+          id: newPeerCode,
+          displayName: oldPeer.displayName,
+          publicKey: peerPublicKey,
+          connectionState: PeerConnectionState.connecting,
+          lastSeen: DateTime.now(),
+          isLocal: false,
+        );
+      }
+
+      // Remove old entry from peers map
+      _peers.remove(oldId);
+
+      // Update trusted peers storage: remove old, save new
+      await _trustedPeersStorage.removePeer(oldId);
+      await _trustedPeersStorage.savePeer(TrustedPeer(
+        id: newPeerCode,
+        displayName: trustedPeer.alias ?? trustedPeer.displayName,
+        publicKey: peerPublicKey,
+        trustedAt: trustedPeer.trustedAt,
+        lastSeen: DateTime.now(),
+        alias: trustedPeer.alias,
+      ));
+
+      _notifyPeersChanged();
+    } catch (e) {
+      logger.error(
+          'ConnectionManager', 'Failed to migrate trusted peer', e);
+    }
+  }
+
   void _handleSignalingMessage(SignalingMessage message) async {
     logger.debug('ConnectionManager',
         'Received signaling message: ${message.runtimeType}');
@@ -688,6 +759,10 @@ class ConnectionManager {
             isInitiator: final isInitiator
           ):
           // Pairing approved by both sides - start WebRTC connection
+          // Check if this public key belongs to an existing trusted peer
+          // with a different ID (peer reconnected with new pairing code)
+          await _migrateTrustedPeerIfNeeded(peerCode, peerPublicKey);
+
           // Update or create peer with public key for blocking support
           _peers[peerCode] = Peer(
             id: peerCode,
@@ -1098,7 +1173,7 @@ class ConnectionManager {
   void _handleLiveMatch(String matchedPeerId) {
     if (matchedPeerId.isEmpty) return;
 
-    // Skip if already connected or connecting to this peer
+    // Skip if already connected or connecting to this peer (by pairing code)
     final existingPeer = _peers[matchedPeerId];
     if (existingPeer != null &&
         (existingPeer.connectionState == PeerConnectionState.connected ||

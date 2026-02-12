@@ -283,6 +283,21 @@ class ChannelStorageService {
     return rows.map((r) => r['chunk_id'] as String).toList();
   }
 
+  /// Get all chunks for a channel, ordered by sequence then chunk_index.
+  Future<List<Chunk>> getAllChunksForChannel(String channelId) async {
+    final db = _db;
+    if (db == null) return [];
+
+    final rows = await db.query(
+      _chunksTable,
+      where: 'channel_id = ?',
+      whereArgs: [channelId],
+      orderBy: 'sequence ASC, chunk_index ASC',
+    );
+
+    return rows.map(_rowToChunk).toList();
+  }
+
   /// Delete all chunks for a specific sequence.
   Future<void> deleteChunksBySequence(String channelId, int sequence) async {
     final db = _db;

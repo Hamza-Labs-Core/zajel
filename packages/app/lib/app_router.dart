@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'features/channels/channel_detail_screen.dart';
-import 'features/channels/channels_list_screen.dart';
+import 'features/channels/channels_main_screen.dart';
 import 'features/chat/chat_screen.dart';
 import 'features/connection/connect_screen.dart';
 import 'features/contacts/contact_detail_screen.dart';
@@ -95,7 +95,7 @@ final appRouter = GoRouter(
     ),
     GoRoute(
       path: '/channels',
-      builder: (context, state) => const ChannelsListScreen(),
+      builder: (context, state) => const ChannelsMainScreen(),
     ),
     GoRoute(
       path: '/channel/:channelId',

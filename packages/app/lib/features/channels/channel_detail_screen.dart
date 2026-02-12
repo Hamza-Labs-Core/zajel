@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 
 import 'models/channel.dart';
 import 'models/chunk.dart';
@@ -12,12 +13,19 @@ import 'services/channel_link_service.dart';
 
 /// Screen showing details for a single channel.
 ///
-/// For owners/admins: shows channel info + compose bar to publish text content.
-/// For subscribers: shows channel info (content display will come with sync).
+/// For owners/admins: shows messages + compose bar to publish text content.
+/// For subscribers: shows messages as they sync from the relay.
 class ChannelDetailScreen extends ConsumerStatefulWidget {
   final String channelId;
 
-  const ChannelDetailScreen({super.key, required this.channelId});
+  /// When true, renders without its own Scaffold/AppBar (for split-view embedding).
+  final bool embedded;
+
+  const ChannelDetailScreen({
+    super.key,
+    required this.channelId,
+    this.embedded = false,
+  });
 
   @override
   ConsumerState<ChannelDetailScreen> createState() =>
@@ -26,17 +34,65 @@ class ChannelDetailScreen extends ConsumerStatefulWidget {
 
 class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
   final _messageController = TextEditingController();
+  final _scrollController = ScrollController();
   bool _publishing = false;
 
   @override
   void dispose() {
     _messageController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final channelAsync = ref.watch(channelByIdProvider(widget.channelId));
+    final messagesAsync =
+        ref.watch(channelMessagesProvider(widget.channelId));
+
+    Widget body = channelAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (error, stack) => Center(
+        child: Text('Error loading channel: $error'),
+      ),
+      data: (channel) {
+        if (channel == null) {
+          return const Center(
+            child: Text('Channel not found'),
+          );
+        }
+
+        final canPublish = channel.role == ChannelRole.owner ||
+            channel.role == ChannelRole.admin;
+
+        return Column(
+          children: [
+            // Header bar in embedded mode (no Scaffold AppBar)
+            if (widget.embedded)
+              _buildEmbeddedHeader(context, channel),
+            Expanded(
+              child: messagesAsync.when(
+                loading: () =>
+                    const Center(child: CircularProgressIndicator()),
+                error: (error, _) =>
+                    Center(child: Text('Error loading messages: $error')),
+                data: (messages) {
+                  if (messages.isEmpty) {
+                    return _buildEmptyState(context, channel, canPublish);
+                  }
+                  return _buildMessageList(context, messages);
+                },
+              ),
+            ),
+            if (canPublish) _buildComposeBar(context, channel),
+          ],
+        );
+      },
+    );
+
+    if (widget.embedded) {
+      return body;
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -71,96 +127,156 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
           ),
         ],
       ),
-      body: channelAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, stack) => Center(
-          child: Text('Error loading channel: $error'),
+      body: body,
+    );
+  }
+
+  Widget _buildEmbeddedHeader(BuildContext context, Channel channel) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        border: Border(
+          bottom: BorderSide(color: Theme.of(context).dividerColor),
         ),
-        data: (channel) {
-          if (channel == null) {
-            return const Center(
-              child: Text('Channel not found'),
-            );
-          }
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 18,
+            backgroundColor: channel.role == ChannelRole.owner
+                ? Theme.of(context).colorScheme.primaryContainer
+                : Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: Icon(
+              channel.role == ChannelRole.owner
+                  ? Icons.campaign
+                  : Icons.rss_feed,
+              size: 18,
+              color: channel.role == ChannelRole.owner
+                  ? Theme.of(context).colorScheme.onPrimaryContainer
+                  : Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  channel.manifest.name,
+                  style: Theme.of(context).textTheme.titleMedium,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  channel.role.name.toUpperCase(),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+              ],
+            ),
+          ),
+          if (channel.role == ChannelRole.owner)
+            IconButton(
+              icon: const Icon(Icons.share, size: 20),
+              tooltip: 'Share channel',
+              onPressed: () => _showShareDialog(context, channel),
+            ),
+          IconButton(
+            icon: const Icon(Icons.info_outline, size: 20),
+            tooltip: 'Channel info',
+            onPressed: () => _showInfoSheet(context, channel),
+          ),
+        ],
+      ),
+    );
+  }
 
-          final canPublish = channel.role == ChannelRole.owner ||
-              channel.role == ChannelRole.admin;
+  Widget _buildEmptyState(
+      BuildContext context, Channel channel, bool canPublish) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              canPublish ? Icons.campaign : Icons.rss_feed,
+              size: 48,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              canPublish
+                  ? 'No messages yet. Publish something!'
+                  : 'No messages yet. Content will appear as it syncs.',
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
-          return Column(
+  Widget _buildMessageList(
+      BuildContext context, List<ChannelMessage> messages) {
+    return ListView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      itemCount: messages.length,
+      itemBuilder: (context, index) {
+        final message = messages[index];
+        return _buildMessageBubble(context, message);
+      },
+    );
+  }
+
+  Widget _buildMessageBubble(BuildContext context, ChannelMessage message) {
+    final timeFormat = DateFormat('MMM d, h:mm a');
+    final theme = Theme.of(context);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Expanded(
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          canPublish ? Icons.campaign : Icons.rss_feed,
-                          size: 64,
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          channel.manifest.name,
-                          style: Theme.of(context).textTheme.headlineSmall,
-                          textAlign: TextAlign.center,
-                        ),
-                        if (channel.manifest.description.isNotEmpty) ...[
-                          const SizedBox(height: 8),
-                          Text(
-                            channel.manifest.description,
-                            style: Theme.of(context).textTheme.bodyMedium,
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                        const SizedBox(height: 16),
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Chip(
-                              label: Text(channel.role.name.toUpperCase()),
-                              backgroundColor: Theme.of(context)
-                                  .colorScheme
-                                  .primaryContainer,
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Key epoch: ${channel.manifest.keyEpoch}',
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ],
-                        ),
-                        if (canPublish) ...[
-                          const SizedBox(height: 24),
-                          Text(
-                            'Publish content using the compose bar below.',
-                            style: TextStyle(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant,
-                            ),
-                          ),
-                        ] else ...[
-                          const SizedBox(height: 24),
-                          Text(
-                            'Content will appear here as it syncs from the relay.',
-                            style: TextStyle(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
+              if (message.author != null) ...[
+                Text(
+                  message.author!,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: theme.colorScheme.primary,
                   ),
                 ),
+                const SizedBox(width: 8),
+              ],
+              Text(
+                timeFormat.format(message.timestamp),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
-              if (canPublish) _buildComposeBar(context, channel),
             ],
-          );
-        },
+          ),
+          const SizedBox(height: 2),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: SelectableText(
+              message.text,
+              style: theme.textTheme.bodyMedium,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -181,15 +297,25 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
         child: Row(
           children: [
             Expanded(
-              child: TextField(
-                controller: _messageController,
-                decoration: const InputDecoration(
-                  hintText: 'Publish to channel...',
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 8),
+              child: KeyboardListener(
+                focusNode: FocusNode(),
+                onKeyEvent: (event) {
+                  if (event is KeyDownEvent &&
+                      event.logicalKey == LogicalKeyboardKey.enter &&
+                      !HardwareKeyboard.instance.isShiftPressed) {
+                    _publish(channel);
+                  }
+                },
+                child: TextField(
+                  controller: _messageController,
+                  decoration: const InputDecoration(
+                    hintText: 'Publish to channel...',
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                  maxLines: null,
+                  textInputAction: TextInputAction.newline,
                 ),
-                maxLines: null,
-                textInputAction: TextInputAction.newline,
               ),
             ),
             IconButton(
@@ -265,15 +391,19 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
         syncService.announceChunk(chunk);
       }
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Published (${chunks.length} chunk${chunks.length > 1 ? "s" : ""})',
-            ),
-          ),
-        );
-      }
+      // Refresh the message list
+      ref.invalidate(channelMessagesProvider(widget.channelId));
+
+      // Scroll to bottom after a frame to show the new message
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollController.hasClients) {
+          _scrollController.animateTo(
+            _scrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+          );
+        }
+      });
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

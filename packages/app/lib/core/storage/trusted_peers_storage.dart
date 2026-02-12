@@ -53,6 +53,10 @@ abstract class TrustedPeersStorage {
   /// Check if a peer is trusted by their public key.
   Future<bool> isTrustedByPublicKey(String publicKey);
 
+  /// Get a trusted peer by their public key.
+  /// Returns null if no peer with this public key exists.
+  Future<TrustedPeer?> getPeerByPublicKey(String publicKey);
+
   /// Clear all trusted peers.
   Future<void> clear();
 }

@@ -231,7 +231,9 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
   final meetingPointService = ref.watch(meetingPointServiceProvider);
   final blockedNotifier = ref.watch(blockedPeersProvider.notifier);
 
-  return ConnectionManager(
+  final messageStorage = ref.watch(messageStorageProvider);
+
+  final manager = ConnectionManager(
     cryptoService: cryptoService,
     webrtcService: webrtcService,
     deviceLinkService: deviceLinkService,
@@ -239,6 +241,9 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
     meetingPointService: meetingPointService,
     isPublicKeyBlocked: blockedNotifier.isBlocked,
   );
+  manager.setMessageStorage(messageStorage);
+
+  return manager;
 });
 
 /// Provider for the list of linked devices.
