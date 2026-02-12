@@ -68,6 +68,10 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
           children: [
             // Header bar in embedded mode (no Scaffold AppBar)
             if (widget.embedded) _buildEmbeddedHeader(context, channel),
+            // Channel description + role banner
+            if (channel.manifest.description.isNotEmpty ||
+                channel.role != ChannelRole.subscriber)
+              _buildChannelBanner(context, channel),
             Expanded(
               child: messagesAsync.when(
                 loading: () => const Center(child: CircularProgressIndicator()),
@@ -183,6 +187,40 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
             icon: const Icon(Icons.info_outline, size: 20),
             tooltip: 'Channel info',
             onPressed: () => _showInfoSheet(context, channel),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChannelBanner(BuildContext context, Channel channel) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        border: Border(
+          bottom: BorderSide(color: Theme.of(context).dividerColor),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (channel.manifest.description.isNotEmpty)
+            Text(
+              channel.manifest.description,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+          if (channel.manifest.description.isNotEmpty)
+            const SizedBox(height: 4),
+          Text(
+            channel.role.name.toUpperCase(),
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
           ),
         ],
       ),
@@ -390,6 +428,12 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
 
       // Refresh the message list
       ref.invalidate(channelMessagesProvider(widget.channelId));
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Published (${chunks.length} chunk(s))')),
+        );
+      }
 
       // Scroll to bottom after a frame to show the new message
       WidgetsBinding.instance.addPostFrameCallback((_) {
