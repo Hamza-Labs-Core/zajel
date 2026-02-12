@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart' as http_testing;
 import 'package:zajel/features/attestation/models/build_token.dart';
-import 'package:zajel/features/attestation/models/session_token.dart';
 import 'package:zajel/features/attestation/services/attestation_client.dart';
 import 'package:zajel/features/attestation/services/attestation_service.dart';
 
