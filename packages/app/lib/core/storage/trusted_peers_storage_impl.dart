@@ -120,6 +120,12 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
   }
 
   @override
+  Future<List<TrustedPeer>> getAllPeersByPublicKey(String publicKey) async {
+    await _ensureInitialized();
+    return _cache.values.where((peer) => peer.publicKey == publicKey).toList();
+  }
+
+  @override
   Future<void> updateLastSeen(String peerId, DateTime timestamp) async {
     await _ensureInitialized();
     final peer = _cache[peerId];

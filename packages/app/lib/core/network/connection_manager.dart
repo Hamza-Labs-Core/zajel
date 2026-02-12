@@ -662,47 +662,53 @@ class ConnectionManager {
   Future<void> _migrateTrustedPeerIfNeeded(
       String newPeerCode, String peerPublicKey) async {
     try {
-      final trustedPeer =
-          await _trustedPeersStorage.getPeerByPublicKey(peerPublicKey);
-      if (trustedPeer == null || trustedPeer.id == newPeerCode) return;
+      final stalePeers =
+          await _trustedPeersStorage.getAllPeersByPublicKey(peerPublicKey);
 
-      final oldId = trustedPeer.id;
+      // Filter out the new peer code if it already exists
+      final toMigrate = stalePeers.where((p) => p.id != newPeerCode).toList();
+      if (toMigrate.isEmpty) return;
+
+      // Use the most recently seen entry for display name / alias
+      toMigrate.sort((a, b) =>
+          (b.lastSeen ?? b.trustedAt).compareTo(a.lastSeen ?? a.trustedAt));
+      final primary = toMigrate.first;
+
       logger.info('ConnectionManager',
-          'Migrating trusted peer: $oldId → $newPeerCode (same pubkey)');
+          'Migrating ${toMigrate.length} stale peer(s) → $newPeerCode (same pubkey)');
 
-      // Migrate message history to the new peer ID
-      if (_messageStorage != null) {
-        final migrated =
-            await _messageStorage!.migrateMessages(oldId, newPeerCode);
-        logger.debug('ConnectionManager',
-            'Migrated $migrated messages from $oldId to $newPeerCode');
+      // Migrate message history from ALL stale IDs to the new peer ID
+      for (final stale in toMigrate) {
+        if (_messageStorage != null) {
+          final migrated =
+              await _messageStorage!.migrateMessages(stale.id, newPeerCode);
+          logger.debug('ConnectionManager',
+              'Migrated $migrated messages from ${stale.id} to $newPeerCode');
+        }
+        // Remove old entry from peers map
+        _peers.remove(stale.id);
+        // Remove old entry from trusted storage
+        await _trustedPeersStorage.removePeer(stale.id);
       }
 
-      // Carry over display name and alias to the new peer entry
-      final oldPeer = _peers[oldId];
-      if (oldPeer != null) {
-        _peers[newPeerCode] = Peer(
-          id: newPeerCode,
-          displayName: oldPeer.displayName,
-          publicKey: peerPublicKey,
-          connectionState: PeerConnectionState.connecting,
-          lastSeen: DateTime.now(),
-          isLocal: false,
-        );
-      }
+      // Carry over display name and alias from the primary (most recent) entry
+      _peers[newPeerCode] = Peer(
+        id: newPeerCode,
+        displayName: primary.alias ?? primary.displayName,
+        publicKey: peerPublicKey,
+        connectionState: PeerConnectionState.connecting,
+        lastSeen: DateTime.now(),
+        isLocal: false,
+      );
 
-      // Remove old entry from peers map
-      _peers.remove(oldId);
-
-      // Update trusted peers storage: remove old, save new
-      await _trustedPeersStorage.removePeer(oldId);
+      // Save the consolidated trusted peer entry
       await _trustedPeersStorage.savePeer(TrustedPeer(
         id: newPeerCode,
-        displayName: trustedPeer.alias ?? trustedPeer.displayName,
+        displayName: primary.alias ?? primary.displayName,
         publicKey: peerPublicKey,
-        trustedAt: trustedPeer.trustedAt,
+        trustedAt: primary.trustedAt,
         lastSeen: DateTime.now(),
-        alias: trustedPeer.alias,
+        alias: primary.alias,
       ));
 
       _notifyPeersChanged();

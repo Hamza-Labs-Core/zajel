@@ -57,6 +57,10 @@ abstract class TrustedPeersStorage {
   /// Returns null if no peer with this public key exists.
   Future<TrustedPeer?> getPeerByPublicKey(String publicKey);
 
+  /// Get all trusted peers that share the given public key.
+  /// Used during migration to clean up duplicate entries.
+  Future<List<TrustedPeer>> getAllPeersByPublicKey(String publicKey);
+
   /// Clear all trusted peers.
   Future<void> clear();
 }

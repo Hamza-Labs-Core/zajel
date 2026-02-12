@@ -237,7 +237,7 @@ export async function createZajelServer(
     relayRegistry,
     distributedRendezvous,
     metadata,
-    undefined, // storage - not passed here (no chunk relay in main index)
+    storage,
     attestationConfig
   );
 

@@ -111,11 +111,16 @@ class _ChannelSidebar extends ConsumerWidget {
       children: [
         // Header
         Container(
-          padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+          padding: const EdgeInsets.fromLTRB(4, 12, 8, 12),
           child: Row(
             children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back, size: 20),
+                tooltip: 'Back',
+                onPressed: () => Navigator.of(context).maybePop(),
+              ),
               const Icon(Icons.rss_feed),
-              const SizedBox(width: 12),
+              const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   'Channels',
