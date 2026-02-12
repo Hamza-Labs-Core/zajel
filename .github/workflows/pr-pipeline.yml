@@ -623,6 +623,23 @@ jobs:
 
           ls -la release-assets/
 
+      - name: Cleanup stale draft pre-releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Removing draft pre-releases from failed CI runs..."
+          DRAFTS=$(gh release list --limit 100 --json tagName,isDraft \
+            --jq '[.[] | select(.isDraft)] | .[].tagName')
+
+          if [ -z "$DRAFTS" ]; then
+            echo "No draft releases to clean up"
+          else
+            for TAG in $DRAFTS; do
+              echo "  Deleting draft $TAG..."
+              gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+            done
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -635,16 +652,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Cleanup old pre-releases (keep latest 5)
+      - name: Cleanup old pre-releases (keep latest 3)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Fetching all pre-releases..."
-          PRERELEASES=$(gh release list --limit 100 --json tagName,isPrerelease,createdAt \
-            --jq '[.[] | select(.isPrerelease)] | sort_by(.createdAt) | reverse | .[5:] | .[].tagName')
+          PRERELEASES=$(gh release list --limit 100 --json tagName,isPrerelease,isDraft,createdAt \
+            --jq '[.[] | select(.isPrerelease and (.isDraft | not))] | sort_by(.createdAt) | reverse | .[3:] | .[].tagName')
 
           if [ -z "$PRERELEASES" ]; then
-            echo "No old pre-releases to clean up (5 or fewer exist)"
+            echo "No old pre-releases to clean up (3 or fewer exist)"
             exit 0
           fi
 
@@ -860,12 +877,13 @@ jobs:
         env:
           APP_VERSION: ${{ needs.tag-prerelease.outputs.version }}
           BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL }}
+          ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
         with:
           host: ${{ vars.QA_VPS_IP }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          envs: APP_VERSION,BOOTSTRAP_URL
+          envs: APP_VERSION,BOOTSTRAP_URL,ZAJEL_ADMIN_JWT_SECRET
           script: |
             set -e
 
@@ -895,12 +913,13 @@ jobs:
             PUBLIC_IP=$(curl -sf http://checkip.amazonaws.com || curl -sf http://ifconfig.me || echo "localhost")
             cat > start-qa.sh << EOF
             #!/bin/bash
-            export ZAJEL_PORT=9001
+            export ZAJEL_PORT=8080
             export ZAJEL_KEY_PATH=./data-qa/server.key
             export ZAJEL_DB_PATH=./data-qa/zajel.db
-            export ZAJEL_PUBLIC_ENDPOINT=ws://${PUBLIC_IP}:9001
+            export ZAJEL_PUBLIC_ENDPOINT=ws://${PUBLIC_IP}:8080
             export ZAJEL_REGION=qa
             export ZAJEL_BOOTSTRAP_URL=${BOOTSTRAP_URL}
+            export ZAJEL_ADMIN_JWT_SECRET=${ZAJEL_ADMIN_JWT_SECRET}
             export NODE_ENV=qa
             export APP_VERSION=${APP_VERSION}
             cd /opt/zajel/server-vps-qa
@@ -920,7 +939,7 @@ jobs:
             # Health check
             sleep 5
             for i in {1..6}; do
-              if curl -sf http://localhost:9001/health | grep -q "healthy"; then
+              if curl -sf http://localhost:8080/health | grep -q "healthy"; then
                 echo "Server healthy"
                 exit 0
               fi
@@ -1003,13 +1022,13 @@ jobs:
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
-              echo "Probing VPS at $ip:9001..."
-              if timeout 10 curl -sf "http://${ip}:9001/health" >/dev/null 2>&1; then
-                URL="ws://${ip}:9001"
-                echo "Reachable and healthy: $ip:9001"
+              echo "Probing VPS at $ip:8080..."
+              if timeout 10 curl -sf "http://${ip}:8080/health" >/dev/null 2>&1; then
+                URL="ws://${ip}:8080"
+                echo "Reachable and healthy: $ip:8080"
                 break
               else
-                echo "Not reachable: $ip:9001"
+                echo "Not reachable: $ip:8080"
               fi
             done
             if [ -z "$URL" ]; then
@@ -1062,7 +1081,10 @@ jobs:
             sleep 1
           done
 
-          echo "TURN_URL=turn:${HOST_IP}:3478" >> "$GITHUB_ENV"
+          # Android emulator reaches the host via 10.0.2.2 (SLiRP gateway),
+          # NOT the host's LAN IP. HeadlessBob runs on the host itself.
+          echo "TURN_URL=turn:127.0.0.1:3478" >> "$GITHUB_ENV"
+          echo "TURN_URL_EMU=turn:10.0.2.2:3478" >> "$GITHUB_ENV"
           echo "TURN_USER=${TURN_USER}" >> "$GITHUB_ENV"
           echo "TURN_PASS=${TURN_PASS}" >> "$GITHUB_ENV"
 
@@ -1075,7 +1097,7 @@ jobs:
             --dart-define=E2E_TEST=true \
             --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
             --dart-define=SIGNALING_URL=${{ env.SIGNALING_URL }} \
-            --dart-define=TURN_URL=${{ env.TURN_URL }} \
+            --dart-define=TURN_URL=${{ env.TURN_URL_EMU }} \
             --dart-define=TURN_USER=${{ env.TURN_USER }} \
             --dart-define=TURN_PASS=${{ env.TURN_PASS }}
 
@@ -1202,21 +1224,7 @@ jobs:
           SINGLE_RESULT=0
           pytest -m "single_device and not headless and not windows and not linux" -v -s --timeout=120 --deselect tests/test_pairing.py::TestPairing::test_app_launches_successfully || SINGLE_RESULT=$?
 
-          # ── Phase C: Headless-paired tests (informational) ──
-          # TURN relay (coturn) is now configured on CI, but these tests need
-          # validation before being promoted to mandatory. Run for visibility.
-          HEADLESS_RESULT=0
-          if [ -n "$SIGNALING_URL" ]; then
-            echo "=== Running headless-paired tests (informational) ==="
-            pytest -m "headless and single_device" -v -s --timeout=300 || HEADLESS_RESULT=$?
-            if [ $HEADLESS_RESULT -ne 0 ]; then
-              echo "::warning::Headless-paired tests failed (informational — TURN relay validation in progress)"
-            fi
-          else
-            echo "=== Skipping headless tests (SIGNALING_URL not set) ==="
-          fi
-
-          # ── Phase D: Signaling protocol tests (mandatory) ──
+          # ── Phase C: Signaling protocol tests (mandatory) ──
           # Two headless clients validate the signaling protocol: registration,
           # pairing handshake, rejection, and signal relay. No WebRTC/ICE needed.
           PROTOCOL_RESULT=0
@@ -1225,6 +1233,36 @@ jobs:
             pytest tests/test_signaling_headless.py -v -s --timeout=120 || PROTOCOL_RESULT=$?
           else
             echo "=== Skipping signaling tests (SIGNALING_URL not set) ==="
+          fi
+
+          # ── Gate: fail early if mandatory phases failed ──
+          FAILED=0
+          if [ $SINGLE_RESULT -ne 0 ]; then
+            echo "FAILED: Single-device tests"
+            FAILED=1
+          fi
+          if [ $PROTOCOL_RESULT -ne 0 ]; then
+            echo "FAILED: Signaling protocol tests"
+            FAILED=1
+          fi
+          if [ $FAILED -ne 0 ]; then
+            kill $APPIUM1_PID $APPIUM2_PID 2>/dev/null || true
+            exit 1
+          fi
+          echo "All mandatory E2E tests passed."
+
+          # ── Phase D: Headless-paired tests (informational) ──
+          # TURN relay (coturn) is now configured on CI, but these tests need
+          # validation before being promoted to mandatory. Run for visibility.
+          HEADLESS_RESULT=0
+          if [ -n "$SIGNALING_URL" ]; then
+            echo "=== Running headless-paired tests (informational) ==="
+            pytest -m "headless and single_device" -v -s --timeout=60 || HEADLESS_RESULT=$?
+            if [ $HEADLESS_RESULT -ne 0 ]; then
+              echo "::warning::Headless-paired tests failed (informational — TURN relay validation in progress)"
+            fi
+          else
+            echo "=== Skipping headless tests (SIGNALING_URL not set) ==="
           fi
 
           # ── Phase E: Multi-device pairing probe (informational) ──
@@ -1236,21 +1274,6 @@ jobs:
 
           # Cleanup Appium
           kill $APPIUM1_PID $APPIUM2_PID 2>/dev/null || true
-
-          # Fail if any mandatory phase failed
-          FAILED=0
-          if [ $SINGLE_RESULT -ne 0 ]; then
-            echo "FAILED: Single-device tests"
-            FAILED=1
-          fi
-          if [ $PROTOCOL_RESULT -ne 0 ]; then
-            echo "FAILED: Signaling protocol tests"
-            FAILED=1
-          fi
-          if [ $FAILED -ne 0 ]; then
-            exit 1
-          fi
-          echo "All mandatory E2E tests passed."
 
       - name: Collect logs on failure
         if: failure()
@@ -1499,13 +1522,13 @@ jobs:
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
-              echo "Probing VPS at $ip:9001..."
-              if timeout 10 curl -sf "http://${ip}:9001/health" >/dev/null 2>&1; then
-                URL="ws://${ip}:9001"
-                echo "Reachable and healthy: $ip:9001"
+              echo "Probing VPS at $ip:8080..."
+              if timeout 10 curl -sf "http://${ip}:8080/health" >/dev/null 2>&1; then
+                URL="ws://${ip}:8080"
+                echo "Reachable and healthy: $ip:8080"
                 break
               else
-                echo "Not reachable: $ip:9001"
+                echo "Not reachable: $ip:8080"
               fi
             done
             if [ -z "$URL" ]; then
@@ -1600,7 +1623,7 @@ jobs:
           URL="${{ vars.VPS_QA_WS_URL }}"
           if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
             FIRST_IP=$(echo "${{ vars.QA_VPS_IP }}" | cut -d',' -f1 | tr -d ' ')
-            URL="ws://${FIRST_IP}:9001"
+            URL="ws://${FIRST_IP}:8080"
           fi
           echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
           echo "Resolved SIGNALING_URL=$URL"
