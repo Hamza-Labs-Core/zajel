@@ -33,8 +33,8 @@ export interface ServerLog {
   data?: unknown;
 }
 
-// Port allocator to avoid conflicts — wide range to reduce collision with parallel CI jobs
-let nextPort = 30000 + Math.floor(Math.random() * 20000);
+// Port allocator to avoid conflicts
+let nextPort = 30000 + Math.floor(Math.random() * 5000);
 const allocatedPorts = new Set<number>();
 
 function allocatePort(): number {
