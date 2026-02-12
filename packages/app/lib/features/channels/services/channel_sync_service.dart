@@ -151,6 +151,7 @@ class ChannelSyncService {
       _sendMessage({
         'type': 'chunk_announce',
         'peerId': peerId,
+        'channelId': channelId,
         'chunks': announcements,
       });
     }
@@ -168,9 +169,10 @@ class ChannelSyncService {
   ///
   /// Used for swarm seeding: after a subscriber downloads a chunk, they
   /// announce it so other subscribers can pull from them too.
-  void announceChunk(Chunk chunk) {
+  /// [channelId] is included so the VPS can notify other subscribers.
+  void announceChunk(Chunk chunk, {String? channelId}) {
     _announcedChunks.add(chunk.chunkId);
-    _sendMessage({
+    final message = <String, dynamic>{
       'type': 'chunk_announce',
       'peerId': peerId,
       'chunks': [
@@ -179,7 +181,11 @@ class ChannelSyncService {
           'routingHash': chunk.routingHash,
         },
       ],
-    });
+    };
+    if (channelId != null) {
+      message['channelId'] = channelId;
+    }
+    _sendMessage(message);
   }
 
   // ---------------------------------------------------------------------------
@@ -191,12 +197,13 @@ class ChannelSyncService {
   /// The server will check its cache first, then find an online peer source
   /// and relay the chunk data. If no source is available immediately,
   /// the server will notify us when the chunk becomes available.
-  void requestChunk(String chunkId) {
+  void requestChunk(String chunkId, {String? channelId}) {
     _pendingRequests.add(chunkId);
     _sendMessage({
       'type': 'chunk_request',
       'peerId': peerId,
       'chunkId': chunkId,
+      if (channelId != null) 'channelId': channelId,
     });
   }
 
@@ -294,14 +301,31 @@ class ChannelSyncService {
   /// Handle incoming chunk data from the server.
   void _handleChunkData(Map<String, dynamic> message) {
     final chunkId = message['chunkId'] as String?;
-    final data = message['data'] as Map<String, dynamic>?;
+    final data = message['data'];
+    final channelId = message['channelId'] as String?;
 
     if (chunkId == null || data == null) return;
 
     _pendingRequests.remove(chunkId);
 
+    // data may be a Map (relay path) or a String (cache path, base64-encoded JSON).
+    Map<String, dynamic>? chunkData;
+    if (data is Map<String, dynamic>) {
+      chunkData = data;
+    } else if (data is String) {
+      // Ignore cache-served base64 data that isn't valid chunk JSON
+      return;
+    } else {
+      return;
+    }
+
+    // Include channelId so the callback can store the chunk
+    if (channelId != null) {
+      chunkData['_channelId'] = channelId;
+    }
+
     // Notify the caller so they can verify, decrypt, and store the chunk
-    onChunkReceived?.call(chunkId, data);
+    onChunkReceived?.call(chunkId, chunkData);
   }
 
   /// Handle a chunk_pull request from the server.
@@ -317,15 +341,32 @@ class ChannelSyncService {
     }
   }
 
-  /// Handle chunk_available notification: a previously unavailable chunk
-  /// is now available on the server.
+  /// Handle chunk_available notification.
+  ///
+  /// Two forms:
+  /// 1. Single chunk (re-availability): `{chunkId: "..."}`
+  /// 2. Broadcast (new chunks announced): `{channelId: "...", chunkIds: [...]}`
   void _handleChunkAvailable(Map<String, dynamic> message) {
+    final channelId = message['channelId'] as String?;
+
+    // Broadcast form: new chunks announced for a channel we subscribe to.
+    final chunkIds = message['chunkIds'] as List<dynamic>?;
+    if (chunkIds != null && channelId != null) {
+      for (final id in chunkIds) {
+        final chunkId = id as String;
+        if (!_announcedChunks.contains(chunkId)) {
+          requestChunk(chunkId, channelId: channelId);
+        }
+      }
+      return;
+    }
+
+    // Single-chunk form: a previously unavailable chunk is now available.
     final chunkId = message['chunkId'] as String?;
     if (chunkId == null) return;
 
     onChunkAvailable?.call(chunkId);
 
-    // Automatically re-request the chunk
     if (_pendingRequests.contains(chunkId)) {
       requestChunk(chunkId);
     }

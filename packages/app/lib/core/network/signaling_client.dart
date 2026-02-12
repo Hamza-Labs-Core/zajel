@@ -703,8 +703,16 @@ class SignalingClient {
         case 'chunk_not_found':
         case 'chunk_announce_ack':
         case 'chunk_push_ack':
+        case 'chunk_error':
+        case 'chunk_pulling':
           _logger.debug('SignalingClient', 'Chunk message: $type');
           _chunkMessageController.add(json);
+          break;
+
+        // Channel registration acknowledgements
+        case 'channel-owner-registered':
+        case 'channel-subscribed':
+          _logger.debug('SignalingClient', 'Channel registration: $type');
           break;
 
         case 'pong':

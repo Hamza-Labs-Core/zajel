@@ -35,7 +35,7 @@ const MAX_TEXT_CHUNK_PAYLOAD = 4096;
 
 export interface ChunkAnnouncement {
   chunkId: string;
-  channelId: string;
+  routingHash?: string;
 }
 
 export interface PendingChunkRequest {
@@ -194,7 +194,7 @@ export class ChunkRelay {
     if (cached) {
       // Serve from cache immediately
       this.sendToWs(ws, {
-        type: 'chunk_response',
+        type: 'chunk_data',
         chunkId,
         channelId: cached.channelId,
         data: cached.data.toString('base64'),
@@ -278,7 +278,7 @@ export class ChunkRelay {
     let servedCount = 0;
     for (const request of pending) {
       const sent = this.sendToWs(request.ws, {
-        type: 'chunk_response',
+        type: 'chunk_data',
         chunkId,
         channelId,
         data,

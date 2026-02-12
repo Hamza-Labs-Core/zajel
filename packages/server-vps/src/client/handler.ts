@@ -213,7 +213,8 @@ interface ChannelOwnerRegisterMessage {
 interface ChunkAnnounceMessage {
   type: 'chunk_announce';
   peerId: string;
-  chunks: Array<{ chunkId: string; channelId: string }>;
+  channelId?: string;
+  chunks: Array<{ chunkId: string; routingHash?: string }>;
 }
 
 interface ChunkRequestMessage {
@@ -2109,7 +2110,7 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
-    const { peerId, chunks } = message;
+    const { peerId, channelId, chunks } = message;
 
     if (!peerId) {
       this.sendError(ws, 'Missing required field: peerId');
@@ -2138,6 +2139,24 @@ export class ClientHandler extends EventEmitter {
       type: 'chunk_announce_ack',
       registered: result.registered,
     });
+
+    // Notify channel subscribers about new chunks so they can request them.
+    if (channelId) {
+      const subscribers = this.channelSubscribers.get(channelId);
+      if (subscribers) {
+        const chunkIds = chunks.map(c => c.chunkId);
+        const notification = {
+          type: 'chunk_available',
+          channelId,
+          chunkIds,
+        };
+        for (const subWs of subscribers) {
+          if (subWs !== ws && subWs.readyState === subWs.OPEN) {
+            this.send(subWs, notification);
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -2186,7 +2205,7 @@ export class ClientHandler extends EventEmitter {
         chunkId,
       });
     }
-    // If result.served is true, chunk_response was already sent by the relay
+    // If result.served is true, chunk_data was already sent by the relay
   }
 
   /**

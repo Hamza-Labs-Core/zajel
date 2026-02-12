@@ -101,15 +101,63 @@ final channelSyncServiceProvider = Provider<ChannelSyncService>((ref) {
     peerId: pairingCode ?? '',
   );
 
+  // Wire up chunk received callback: parse, store, and re-announce for seeding.
+  service.onChunkReceived = (chunkId, data) async {
+    try {
+      final channelId = data.remove('_channelId') as String?;
+      if (channelId == null) return;
+
+      final chunk = Chunk.fromJson(data);
+      await storageService.saveChunk(channelId, chunk);
+
+      // Re-announce so we become a seeder for this chunk
+      service.announceChunk(chunk, channelId: channelId);
+
+      // Invalidate the messages provider so UI refreshes
+      ref.invalidate(channelMessagesProvider(channelId));
+    } catch (_) {
+      // Skip malformed chunks — don't crash the sync loop
+    }
+  };
+
   // Wire up chunk message stream from the signaling client so the
   // sync service can react to incoming chunk_data, chunk_pull, etc.
   if (signalingClient != null) {
     service.start(signalingClient.chunkMessages);
+
+    // Register owned and subscribed channels with the VPS so it can
+    // route chunk announcements and upstream messages to us.
+    _registerChannelsWithVps(storageService, sendMessage);
   }
 
   ref.onDispose(() => service.dispose());
   return service;
 });
+
+/// Send channel-owner-register / channel-subscribe for all local channels.
+Future<void> _registerChannelsWithVps(
+  ChannelStorageService storageService,
+  void Function(Map<String, dynamic>) sendMessage,
+) async {
+  try {
+    final channels = await storageService.getAllChannels();
+    for (final channel in channels) {
+      if (channel.role == ChannelRole.owner) {
+        sendMessage({
+          'type': 'channel-owner-register',
+          'channelId': channel.id,
+        });
+      } else {
+        sendMessage({
+          'type': 'channel-subscribe',
+          'channelId': channel.id,
+        });
+      }
+    }
+  } catch (_) {
+    // Non-fatal: registration will be retried on next reconnect
+  }
+}
 
 /// Provider for the upstream service (handles subscriber -> owner messaging).
 final upstreamServiceProvider = Provider<UpstreamService>((ref) {

@@ -264,7 +264,7 @@ describe('Chunk Request - Cache Hit', () => {
       channelId: 'ch_1',
     }));
 
-    const response = peerWs.getMessagesByType('chunk_response');
+    const response = peerWs.getMessagesByType('chunk_data');
     expect(response.length).toBe(1);
     expect(response[0].chunkId).toBe('chunk-cached');
     expect(response[0].source).toBe('cache');
@@ -456,14 +456,14 @@ describe('Chunk Push - Cache and Fan Out', () => {
       data: chunkData,
     }));
 
-    // Both requesters should receive chunk_response
-    const r1Response = requester1Ws.getMessagesByType('chunk_response');
+    // Both requesters should receive chunk_data
+    const r1Response = requester1Ws.getMessagesByType('chunk_data');
     expect(r1Response.length).toBe(1);
     expect(r1Response[0].chunkId).toBe('chunk-push-test');
     expect(r1Response[0].data).toBe(chunkData);
     expect(r1Response[0].source).toBe('relay');
 
-    const r2Response = requester2Ws.getMessagesByType('chunk_response');
+    const r2Response = requester2Ws.getMessagesByType('chunk_data');
     expect(r2Response.length).toBe(1);
     expect(r2Response[0].chunkId).toBe('chunk-push-test');
     expect(r2Response[0].data).toBe(chunkData);
@@ -604,8 +604,8 @@ describe('ChunkRelay - Standalone Unit Tests', () => {
       expect(result.pulling).toBe(false);
       expect(result.error).toBeUndefined();
 
-      // WebSocket should have received chunk_response
-      const response = ws.getMessagesByType('chunk_response');
+      // WebSocket should have received chunk_data
+      const response = ws.getMessagesByType('chunk_data');
       expect(response.length).toBe(1);
       expect(response[0].chunkId).toBe('c1');
       expect(response[0].source).toBe('cache');
@@ -710,9 +710,9 @@ describe('ChunkRelay - Standalone Unit Tests', () => {
 
       expect(result.servedCount).toBe(2);
 
-      // Both should have received chunk_response
-      expect(ws1.getMessagesByType('chunk_response').length).toBe(1);
-      expect(ws2.getMessagesByType('chunk_response').length).toBe(1);
+      // Both should have received chunk_data
+      expect(ws1.getMessagesByType('chunk_data').length).toBe(1);
+      expect(ws2.getMessagesByType('chunk_data').length).toBe(1);
     });
 
     it('should register pushing peer as source', async () => {

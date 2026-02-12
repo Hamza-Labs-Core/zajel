@@ -623,6 +623,23 @@ jobs:
 
           ls -la release-assets/
 
+      - name: Cleanup stale draft pre-releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Removing draft pre-releases from failed CI runs..."
+          DRAFTS=$(gh release list --limit 100 --json tagName,isDraft \
+            --jq '[.[] | select(.isDraft)] | .[].tagName')
+
+          if [ -z "$DRAFTS" ]; then
+            echo "No draft releases to clean up"
+          else
+            for TAG in $DRAFTS; do
+              echo "  Deleting draft $TAG..."
+              gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+            done
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -635,16 +652,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Cleanup old pre-releases (keep latest 5)
+      - name: Cleanup old pre-releases (keep latest 3)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Fetching all pre-releases..."
-          PRERELEASES=$(gh release list --limit 100 --json tagName,isPrerelease,createdAt \
-            --jq '[.[] | select(.isPrerelease)] | sort_by(.createdAt) | reverse | .[5:] | .[].tagName')
+          PRERELEASES=$(gh release list --limit 100 --json tagName,isPrerelease,isDraft,createdAt \
+            --jq '[.[] | select(.isPrerelease and (.isDraft | not))] | sort_by(.createdAt) | reverse | .[3:] | .[].tagName')
 
           if [ -z "$PRERELEASES" ]; then
-            echo "No old pre-releases to clean up (5 or fewer exist)"
+            echo "No old pre-releases to clean up (3 or fewer exist)"
             exit 0
           fi
 
@@ -1205,21 +1222,7 @@ jobs:
           SINGLE_RESULT=0
           pytest -m "single_device and not headless and not windows and not linux" -v -s --timeout=120 --deselect tests/test_pairing.py::TestPairing::test_app_launches_successfully || SINGLE_RESULT=$?
 
-          # ── Phase C: Headless-paired tests (informational) ──
-          # TURN relay (coturn) is now configured on CI, but these tests need
-          # validation before being promoted to mandatory. Run for visibility.
-          HEADLESS_RESULT=0
-          if [ -n "$SIGNALING_URL" ]; then
-            echo "=== Running headless-paired tests (informational) ==="
-            pytest -m "headless and single_device" -v -s --timeout=300 || HEADLESS_RESULT=$?
-            if [ $HEADLESS_RESULT -ne 0 ]; then
-              echo "::warning::Headless-paired tests failed (informational — TURN relay validation in progress)"
-            fi
-          else
-            echo "=== Skipping headless tests (SIGNALING_URL not set) ==="
-          fi
-
-          # ── Phase D: Signaling protocol tests (mandatory) ──
+          # ── Phase C: Signaling protocol tests (mandatory) ──
           # Two headless clients validate the signaling protocol: registration,
           # pairing handshake, rejection, and signal relay. No WebRTC/ICE needed.
           PROTOCOL_RESULT=0
@@ -1245,6 +1248,20 @@ jobs:
             exit 1
           fi
           echo "All mandatory E2E tests passed."
+
+          # ── Phase D: Headless-paired tests (informational) ──
+          # TURN relay (coturn) is now configured on CI, but these tests need
+          # validation before being promoted to mandatory. Run for visibility.
+          HEADLESS_RESULT=0
+          if [ -n "$SIGNALING_URL" ]; then
+            echo "=== Running headless-paired tests (informational) ==="
+            pytest -m "headless and single_device" -v -s --timeout=60 || HEADLESS_RESULT=$?
+            if [ $HEADLESS_RESULT -ne 0 ]; then
+              echo "::warning::Headless-paired tests failed (informational — TURN relay validation in progress)"
+            fi
+          else
+            echo "=== Skipping headless tests (SIGNALING_URL not set) ==="
+          fi
 
           # ── Phase E: Multi-device pairing probe (informational) ──
           # TURN relay (coturn) is now configured on CI, but P2P between emulators
