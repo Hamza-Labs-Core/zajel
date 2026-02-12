@@ -1062,7 +1062,10 @@ jobs:
             sleep 1
           done
 
-          echo "TURN_URL=turn:${HOST_IP}:3478" >> "$GITHUB_ENV"
+          # Android emulator reaches the host via 10.0.2.2 (SLiRP gateway),
+          # NOT the host's LAN IP. HeadlessBob runs on the host itself.
+          echo "TURN_URL=turn:127.0.0.1:3478" >> "$GITHUB_ENV"
+          echo "TURN_URL_EMU=turn:10.0.2.2:3478" >> "$GITHUB_ENV"
           echo "TURN_USER=${TURN_USER}" >> "$GITHUB_ENV"
           echo "TURN_PASS=${TURN_PASS}" >> "$GITHUB_ENV"
 
@@ -1075,7 +1078,7 @@ jobs:
             --dart-define=E2E_TEST=true \
             --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
             --dart-define=SIGNALING_URL=${{ env.SIGNALING_URL }} \
-            --dart-define=TURN_URL=${{ env.TURN_URL }} \
+            --dart-define=TURN_URL=${{ env.TURN_URL_EMU }} \
             --dart-define=TURN_USER=${{ env.TURN_USER }} \
             --dart-define=TURN_PASS=${{ env.TURN_PASS }}
 

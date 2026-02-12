@@ -222,13 +222,23 @@ export async function createZajelServer(
     maxConnectionsPerPeer: config.client.maxConnectionsPerPeer,
   };
 
+  // Build attestation config if attestation settings are present
+  const attestationConfig = config.attestation ? {
+    bootstrapUrl: config.attestation.bootstrapUrl,
+    vpsIdentityKey: config.attestation.vpsIdentityKey,
+    sessionTokenTtl: config.attestation.sessionTokenTtl,
+    gracePeriod: config.attestation.gracePeriod,
+  } : undefined;
+
   const clientHandler = new ClientHandler(
     identity,
     config.network.publicEndpoint,
     clientHandlerConfig,
     relayRegistry,
     distributedRendezvous,
-    metadata
+    metadata,
+    undefined, // storage - not passed here (no chunk relay in main index)
+    attestationConfig
   );
 
   // Set the reference for HTTP handler (used by /metrics endpoint)

@@ -356,6 +356,73 @@ class HeadlessBob:
             self._client.receive_file(timeout=timeout), timeout=timeout + 10
         )
 
+    # ── Channel methods ──────────────────────────────────────
+
+    def subscribe_channel(self, invite_link: str):
+        return self._run(self._client.subscribe_channel(invite_link))
+
+    def get_subscribed_channels(self):
+        return self._run(self._client.get_subscribed_channels())
+
+    def get_channel(self, channel_id: str):
+        return self._run(self._client.get_channel(channel_id))
+
+    def unsubscribe_channel(self, channel_id: str):
+        self._run(self._client.unsubscribe_channel(channel_id))
+
+    def receive_channel_chunk(self, channel_id: str, chunk_data: dict):
+        return self._run(
+            self._client.receive_channel_chunk(channel_id, chunk_data)
+        )
+
+    def receive_channel_content(self, timeout=30):
+        return self._run(
+            self._client.receive_channel_content(timeout=timeout),
+            timeout=timeout + 10,
+        )
+
+    # ── Group methods ────────────────────────────────────────
+
+    def create_group(self, name: str):
+        return self._run(self._client.create_group(name))
+
+    def get_groups(self):
+        return self._run(self._client.get_groups())
+
+    def get_group(self, group_id: str):
+        return self._run(self._client.get_group(group_id))
+
+    def add_group_member(self, group_id, member, sender_key):
+        return self._run(
+            self._client.add_group_member(group_id, member, sender_key)
+        )
+
+    def send_group_message(self, group_id: str, content: str):
+        return self._run(
+            self._client.send_group_message(group_id, content)
+        )
+
+    def receive_group_message(self, group_id, author_device_id, encrypted_bytes):
+        return self._run(
+            self._client.receive_group_message(
+                group_id, author_device_id, encrypted_bytes
+            )
+        )
+
+    def wait_for_group_message(self, timeout=30):
+        return self._run(
+            self._client.wait_for_group_message(timeout=timeout),
+            timeout=timeout + 10,
+        )
+
+    def get_group_messages(self, group_id: str, limit=None):
+        return self._run(
+            self._client.get_group_messages(group_id, limit=limit)
+        )
+
+    def leave_group(self, group_id: str):
+        self._run(self._client.leave_group(group_id))
+
     def disconnect(self):
         try:
             self._run(self._client.disconnect(), timeout=10)
