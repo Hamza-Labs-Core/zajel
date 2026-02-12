@@ -189,8 +189,7 @@ class ChannelMessage {
 /// decrypts each group into a displayable [ChannelMessage].
 /// Invalidate this provider after publishing to refresh the list.
 final channelMessagesProvider =
-    FutureProvider.family<List<ChannelMessage>, String>(
-        (ref, channelId) async {
+    FutureProvider.family<List<ChannelMessage>, String>((ref, channelId) async {
   final storageService = ref.watch(channelStorageServiceProvider);
   final channelService = ref.watch(channelServiceProvider);
   final cryptoService = ref.watch(channelCryptoServiceProvider);

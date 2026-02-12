@@ -47,8 +47,7 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final channelAsync = ref.watch(channelByIdProvider(widget.channelId));
-    final messagesAsync =
-        ref.watch(channelMessagesProvider(widget.channelId));
+    final messagesAsync = ref.watch(channelMessagesProvider(widget.channelId));
 
     Widget body = channelAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -68,12 +67,10 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
         return Column(
           children: [
             // Header bar in embedded mode (no Scaffold AppBar)
-            if (widget.embedded)
-              _buildEmbeddedHeader(context, channel),
+            if (widget.embedded) _buildEmbeddedHeader(context, channel),
             Expanded(
               child: messagesAsync.when(
-                loading: () =>
-                    const Center(child: CircularProgressIndicator()),
+                loading: () => const Center(child: CircularProgressIndicator()),
                 error: (error, _) =>
                     Center(child: Text('Error loading messages: $error')),
                 data: (messages) {

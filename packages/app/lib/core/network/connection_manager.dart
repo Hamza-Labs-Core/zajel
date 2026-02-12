@@ -707,8 +707,7 @@ class ConnectionManager {
 
       _notifyPeersChanged();
     } catch (e) {
-      logger.error(
-          'ConnectionManager', 'Failed to migrate trusted peer', e);
+      logger.error('ConnectionManager', 'Failed to migrate trusted peer', e);
     }
   }
 

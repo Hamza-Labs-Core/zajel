@@ -125,8 +125,8 @@ class _ChannelSidebar extends ConsumerWidget {
               IconButton(
                 icon: const Icon(Icons.add_link, size: 20),
                 tooltip: 'Subscribe to channel',
-                onPressed: () => ChannelsListScreen.showSubscribeDialog(
-                    context, ref),
+                onPressed: () =>
+                    ChannelsListScreen.showSubscribeDialog(context, ref),
               ),
             ],
           ),

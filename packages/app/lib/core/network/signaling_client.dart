@@ -693,8 +693,7 @@ class SignalingClient {
           break;
 
         case 'server_identity':
-          _logger.debug('SignalingClient',
-              'Server identity proof received');
+          _logger.debug('SignalingClient', 'Server identity proof received');
           break;
 
         // Chunk relay messages — forward to ChannelSyncService stream
