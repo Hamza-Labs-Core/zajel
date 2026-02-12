@@ -86,6 +86,13 @@ final notificationSettingsProvider =
   return NotificationSettingsNotifier(prefs);
 });
 
+/// Provider for auto-delete messages setting.
+/// When enabled, messages older than 24 hours are deleted on app startup.
+final autoDeleteMessagesProvider = StateProvider<bool>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return prefs.getBool('autoDeleteMessages') ?? false;
+});
+
 /// Provider for crypto service.
 final cryptoServiceProvider = Provider<CryptoService>((ref) {
   return CryptoService();
@@ -224,7 +231,9 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
   final meetingPointService = ref.watch(meetingPointServiceProvider);
   final blockedNotifier = ref.watch(blockedPeersProvider.notifier);
 
-  return ConnectionManager(
+  final messageStorage = ref.watch(messageStorageProvider);
+
+  final manager = ConnectionManager(
     cryptoService: cryptoService,
     webrtcService: webrtcService,
     deviceLinkService: deviceLinkService,
@@ -232,6 +241,9 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
     meetingPointService: meetingPointService,
     isPublicKeyBlocked: blockedNotifier.isBlocked,
   );
+  manager.setMessageStorage(messageStorage);
+
+  return manager;
 });
 
 /// Provider for the list of linked devices.

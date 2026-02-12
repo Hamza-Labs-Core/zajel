@@ -16,6 +16,12 @@ class DiscoveredServer {
   final int registeredAt;
   final int lastSeen;
 
+  /// Ed25519 identity key for mutual attestation.
+  ///
+  /// Used to verify the server's identity on WebSocket connection.
+  /// Null if the server hasn't registered an identity key yet.
+  final String? identityKey;
+
   const DiscoveredServer({
     required this.serverId,
     required this.endpoint,
@@ -23,6 +29,7 @@ class DiscoveredServer {
     required this.region,
     required this.registeredAt,
     required this.lastSeen,
+    this.identityKey,
   });
 
   factory DiscoveredServer.fromJson(Map<String, dynamic> json) {
@@ -33,6 +40,7 @@ class DiscoveredServer {
       region: json['region'] as String? ?? 'unknown',
       registeredAt: json['registeredAt'] as int? ?? 0,
       lastSeen: json['lastSeen'] as int? ?? 0,
+      identityKey: json['identityKey'] as String?,
     );
   }
 
