@@ -129,7 +129,8 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
                                   Padding(
                                     padding: const EdgeInsets.only(bottom: 4),
                                     child: Text(
-                                      _resolveAuthorName(group, msg.authorDeviceId),
+                                      _resolveAuthorName(
+                                          group, msg.authorDeviceId),
                                       style: TextStyle(
                                         fontSize: 12,
                                         fontWeight: FontWeight.bold,
@@ -376,7 +377,9 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
                       leading: CircleAvatar(
                         backgroundColor: isSelf
                             ? Theme.of(context).colorScheme.primaryContainer
-                            : Theme.of(context).colorScheme.surfaceContainerHighest,
+                            : Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHighest,
                         child: Icon(
                           isSelf ? Icons.person : Icons.person_outline,
                           color: isSelf
