@@ -5,6 +5,7 @@ import '../models/group.dart';
 import '../models/group_message.dart';
 import '../services/group_connection_service.dart';
 import '../services/group_crypto_service.dart';
+import '../services/group_invitation_service.dart';
 import '../services/group_service.dart';
 import '../services/group_storage_service.dart';
 import '../services/group_sync_service.dart';
@@ -63,6 +64,36 @@ final p2pConnectionAdapterProvider = Provider<P2PConnectionAdapter>((ref) {
 final groupConnectionServiceProvider = Provider<GroupConnectionService>((ref) {
   final adapter = ref.watch(p2pConnectionAdapterProvider);
   final service = GroupConnectionService(adapter: adapter);
+  ref.onDispose(() => service.dispose());
+  return service;
+});
+
+/// Provider for the group invitation service.
+///
+/// Handles sending and receiving group invitations over existing 1:1
+/// WebRTC data channels. Starts listening automatically.
+final groupInvitationServiceProvider = Provider<GroupInvitationService>((ref) {
+  final connectionManager = ref.watch(connectionManagerProvider);
+  final groupService = ref.watch(groupServiceProvider);
+  final cryptoService = ref.watch(groupCryptoServiceProvider);
+  final pairingCode = ref.watch(pairingCodeProvider) ?? '';
+
+  final service = GroupInvitationService(
+    connectionManager: connectionManager,
+    groupService: groupService,
+    cryptoService: cryptoService,
+    selfDeviceId: pairingCode,
+  );
+
+  // Wire up the callback: when a group invitation is received and accepted,
+  // refresh the groups list so the UI picks it up.
+  service.onGroupJoined = (group) {
+    ref.invalidate(groupsProvider);
+  };
+
+  // Start listening for incoming invitations
+  service.start();
+
   ref.onDispose(() => service.dispose());
   return service;
 });

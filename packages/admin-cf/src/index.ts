@@ -598,6 +598,18 @@ function serveDashboard(): Response {
           state.token = data.data.token;
           state.user = data.data.user;
           localStorage.setItem('zajel_admin_token', state.token);
+
+          // Check if we should redirect back to a VPS dashboard
+          const params = new URLSearchParams(window.location.search);
+          const redirectUrl = params.get('redirect');
+          if (redirectUrl) {
+            // Redirect back to VPS with token
+            const url = new URL(redirectUrl);
+            url.searchParams.set('token', state.token);
+            window.location.href = url.toString();
+            return;
+          }
+
           await loadData();
           render();
         } else {

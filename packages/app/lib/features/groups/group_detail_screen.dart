@@ -129,7 +129,7 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
                                   Padding(
                                     padding: const EdgeInsets.only(bottom: 4),
                                     child: Text(
-                                      msg.authorDeviceId,
+                                      _resolveAuthorName(group, msg.authorDeviceId),
                                       style: TextStyle(
                                         fontSize: 12,
                                         fontWeight: FontWeight.bold,
@@ -240,6 +240,12 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
     }
   }
 
+  String _resolveAuthorName(Group group, String deviceId) {
+    final member = group.members.where((m) => m.deviceId == deviceId);
+    if (member.isNotEmpty) return member.first.displayName;
+    return deviceId.length > 8 ? '${deviceId.substring(0, 8)}...' : deviceId;
+  }
+
   Future<void> _showAddMemberDialog(BuildContext context, Group group) async {
     final peersAsync = ref.read(visiblePeersProvider);
 
@@ -298,9 +304,10 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
         try {
           final groupService = ref.read(groupServiceProvider);
           final cryptoService = ref.read(groupCryptoServiceProvider);
+          final invitationService = ref.read(groupInvitationServiceProvider);
           final senderKey = await cryptoService.generateSenderKey();
 
-          await groupService.addMember(
+          final updatedGroup = await groupService.addMember(
             groupId: widget.groupId,
             newMember: GroupMember(
               deviceId: selectedPeer.id,
@@ -311,12 +318,19 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
             newMemberSenderKey: senderKey,
           );
 
+          // Send the invitation over the 1:1 P2P channel
+          await invitationService.sendInvitation(
+            targetPeerId: selectedPeer.id,
+            group: updatedGroup,
+            inviteeSenderKey: senderKey,
+          );
+
           ref.invalidate(groupByIdProvider(widget.groupId));
 
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('${selectedPeer.displayName} added to group'),
+                content: Text('Invitation sent to ${selectedPeer.displayName}'),
               ),
             );
           }
@@ -334,34 +348,62 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
   void _showMembersSheet(BuildContext context, Group group) {
     showModalBottomSheet(
       context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                'Members (${group.memberCount})',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            ),
-            ...group.members.map<Widget>(
-              (member) => ListTile(
-                leading: Icon(
-                  member.deviceId == group.selfDeviceId
-                      ? Icons.person
-                      : Icons.person_outline,
-                ),
-                title: Text(member.displayName),
-                subtitle: Text(
-                  member.deviceId == group.selfDeviceId
-                      ? 'You'
-                      : member.deviceId,
+      isScrollControlled: true,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.4,
+        minChildSize: 0.25,
+        maxChildSize: 0.75,
+        expand: false,
+        builder: (context, scrollController) => SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  'Members (${group.memberCount})',
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
-            ),
-            const SizedBox(height: 8),
-          ],
+              const Divider(height: 1),
+              Expanded(
+                child: ListView.builder(
+                  controller: scrollController,
+                  itemCount: group.members.length,
+                  itemBuilder: (context, index) {
+                    final member = group.members[index];
+                    final isSelf = member.deviceId == group.selfDeviceId;
+                    return ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: isSelf
+                            ? Theme.of(context).colorScheme.primaryContainer
+                            : Theme.of(context).colorScheme.surfaceContainerHighest,
+                        child: Icon(
+                          isSelf ? Icons.person : Icons.person_outline,
+                          color: isSelf
+                              ? Theme.of(context).colorScheme.primary
+                              : null,
+                        ),
+                      ),
+                      title: Text(
+                        member.displayName,
+                        style: isSelf
+                            ? const TextStyle(fontWeight: FontWeight.bold)
+                            : null,
+                      ),
+                      subtitle: Text(isSelf ? 'You' : 'Member'),
+                      trailing: isSelf
+                          ? null
+                          : Icon(
+                              Icons.circle,
+                              size: 10,
+                              color: Colors.green.shade400,
+                            ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

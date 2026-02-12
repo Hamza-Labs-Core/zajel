@@ -36,7 +36,8 @@ class ChannelLinkService {
   /// Throws [FormatException] if the link format is invalid.
   static ({ChannelManifest manifest, String encryptionKey}) decode(
       String link) {
-    final trimmed = link.trim();
+    // Strip all whitespace (clipboard paste on Linux can insert newlines)
+    final trimmed = link.replaceAll(RegExp(r'\s+'), '');
 
     String encoded;
     if (trimmed.startsWith(_prefix)) {

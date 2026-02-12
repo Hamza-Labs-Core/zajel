@@ -133,6 +133,30 @@ class GroupService {
     return updatedGroup;
   }
 
+  /// Accept a group invitation received from another peer.
+  ///
+  /// Creates the group locally and imports all sender keys.
+  Future<Group> acceptInvitation({
+    required Group group,
+    required Map<String, String> senderKeys,
+  }) async {
+    // Import all sender keys
+    _cryptoService.importGroupKeys(group.id, senderKeys);
+
+    // Persist group
+    await _storageService.saveGroup(group);
+
+    // Persist sender keys
+    for (final entry in senderKeys.entries) {
+      await _storageService.saveSenderKey(group.id, entry.key, entry.value);
+    }
+
+    // Initialize vector clock
+    await _storageService.saveVectorClock(group.id, const VectorClock());
+
+    return group;
+  }
+
   /// Remove a member from the group.
   ///
   /// After removal, all remaining members must rotate their sender keys

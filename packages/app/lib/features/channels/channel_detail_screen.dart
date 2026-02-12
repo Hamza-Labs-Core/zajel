@@ -499,6 +499,7 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
                     style: const TextStyle(
                       fontFamily: 'monospace',
                       fontSize: 11,
+                      color: Colors.black87,
                     ),
                   ),
                 ),

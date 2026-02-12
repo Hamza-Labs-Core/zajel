@@ -176,14 +176,14 @@ export class AdminRoutes {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-cache',
     });
-    res.end(getDashboardHtml());
+    res.end(getDashboardHtml(this.config.cfAdminUrl));
   }
 }
 
 /**
  * Dashboard HTML (inline for simplicity)
  */
-function getDashboardHtml(): string {
+function getDashboardHtml(cfAdminUrl?: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -603,6 +603,9 @@ function getDashboardHtml(): string {
   </div>
 
   <script type="module">
+    // CF Admin URL for authentication redirect
+    const CF_ADMIN_URL = ${cfAdminUrl ? `'${cfAdminUrl}'` : 'null'};
+
     // State
     let state = {
       authenticated: false,
@@ -761,12 +764,23 @@ function getDashboardHtml(): string {
     }
 
     function renderLoginRequired() {
+      if (CF_ADMIN_URL) {
+        // Redirect to CF Admin after a short delay
+        setTimeout(() => {
+          const returnUrl = encodeURIComponent(window.location.href);
+          window.location.href = CF_ADMIN_URL + '/admin/?redirect=' + returnUrl;
+        }, 1500);
+      }
+
       return \`
         <div class="login-overlay">
           <div class="login-card">
             <h2>🔐 VPS Admin Dashboard</h2>
             <p>Authentication required. Please login via the central admin dashboard.</p>
-            <p class="login-error">Redirecting to CF Admin...</p>
+            \${CF_ADMIN_URL
+              ? '<p class="login-error">Redirecting to CF Admin...</p>'
+              : '<p class="login-error">CF Admin URL not configured. Set ZAJEL_CF_ADMIN_URL on the VPS.</p>'
+            }
           </div>
         </div>
       \`;
