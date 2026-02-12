@@ -229,6 +229,7 @@ class ZajelHeadlessClient:
         self._group_storage = GroupStorage()
         self._group_crypto = GroupCryptoService()
         self._group_message_queue: asyncio.Queue[GroupMessage] = asyncio.Queue()
+        self._group_invitation_queue: asyncio.Queue[Group] = asyncio.Queue()
 
     async def __aenter__(self) -> "ZajelHeadlessClient":
         return self
@@ -269,6 +270,7 @@ class ZajelHeadlessClient:
         # Set up auto-accept if configured
         if self.auto_accept_pairs:
             self._signaling._on_pair_request = self._auto_accept_pair
+            self._signaling._on_pair_match = self._auto_establish_connection
 
         # Start WebRTC signal handler
         self._tasks.append(asyncio.create_task(self._webrtc_signal_loop()))
@@ -302,9 +304,15 @@ class ZajelHeadlessClient:
         Returns:
             The connected peer info.
         """
-        await self._signaling.pair_with(target_code, proposed_name=self.name)
-        match = await self._signaling.wait_for_pair_match(timeout=120)
-        return await self._establish_connection(match)
+        # Disable auto-establish to avoid double WebRTC setup
+        saved_callback = self._signaling._on_pair_match
+        self._signaling._on_pair_match = None
+        try:
+            await self._signaling.pair_with(target_code, proposed_name=self.name)
+            match = await self._signaling.wait_for_pair_match(timeout=120)
+            return await self._establish_connection(match)
+        finally:
+            self._signaling._on_pair_match = saved_callback
 
     async def wait_for_pair(self, timeout: float = 60) -> ConnectedPeer:
         """Wait for an incoming pair request (auto_accept_pairs must be True).
@@ -860,12 +868,122 @@ class ZajelHeadlessClient:
         self._group_storage.delete_group(group_id)
         logger.info("Left group %s", group_id[:8])
 
+    async def wait_for_group_invitation(
+        self, timeout: float = 30
+    ) -> Group:
+        """Wait for an incoming group invitation.
+
+        Returns the Group object created from the invitation payload.
+        The invitation is auto-accepted when received.
+        """
+        return await asyncio.wait_for(
+            self._group_invitation_queue.get(), timeout=timeout
+        )
+
+    def _handle_group_invitation(
+        self, from_peer_id: str, payload: str
+    ) -> None:
+        """Handle incoming group invitation (ginv: protocol).
+
+        Parses the invitation JSON, creates the group locally, imports
+        all sender keys, and stores the invitee's own sender key.
+
+        The invitation format matches the Dart GroupInvitationService:
+        {
+            "groupId": "uuid",
+            "groupName": "Family Chat",
+            "createdBy": "alice-device",
+            "createdAt": "2026-02-01T12:00:00.000Z",
+            "members": [{"device_id": "...", "display_name": "...", ...}],
+            "senderKeys": {"alice-device": "base64-key", ...},
+            "inviteeSenderKey": "base64-key",
+            "inviterDeviceId": "alice-device"
+        }
+        """
+        try:
+            data = json.loads(payload)
+
+            group_id = data["groupId"]
+            group_name = data["groupName"]
+            created_by = data["createdBy"]
+            created_at = data["createdAt"]
+            members_json = data["members"]
+            sender_keys = data["senderKeys"]
+            invitee_sender_key = data["inviteeSenderKey"]
+
+            # Check if we already have this group
+            existing = self._group_storage.get_group(group_id)
+            if existing is not None:
+                logger.info(
+                    "Already in group '%s', ignoring invitation", group_name
+                )
+                return
+
+            # Parse members from Dart-format JSON
+            from datetime import datetime
+            members = []
+            for m in members_json:
+                members.append(GroupMember(
+                    device_id=m["device_id"],
+                    display_name=m["display_name"],
+                    public_key=m["public_key"],
+                    joined_at=datetime.fromisoformat(m.get("joined_at", created_at)),
+                ))
+
+            # Create the group locally with self_device_id = our pairing code
+            group = Group(
+                id=group_id,
+                name=group_name,
+                self_device_id=self._pairing_code,
+                members=members,
+                created_at=datetime.fromisoformat(created_at),
+                created_by=created_by,
+            )
+
+            # Import all existing members' sender keys
+            for device_id, key_b64 in sender_keys.items():
+                self._group_crypto.set_sender_key(
+                    group_id, device_id, key_b64
+                )
+
+            # Set our own sender key
+            self._group_crypto.set_sender_key(
+                group_id, self._pairing_code, invitee_sender_key
+            )
+
+            # Persist group
+            self._group_storage.save_group(group)
+
+            # Queue for test assertion
+            self._group_invitation_queue.put_nowait(group)
+
+            logger.info(
+                "Accepted group invitation for '%s' from %s "
+                "(members: %d, sender keys: %d)",
+                group_name,
+                from_peer_id,
+                len(members),
+                len(sender_keys) + 1,  # +1 for invitee key
+            )
+
+        except Exception as e:
+            logger.error(
+                "Failed to handle group invitation from %s: %s",
+                from_peer_id,
+                e,
+            )
+
     # ── Internal ─────────────────────────────────────────────
 
     async def _auto_accept_pair(self, request: PairRequest) -> None:
         """Auto-accept incoming pair requests."""
         logger.info("Auto-accepting pair from %s", request.from_code)
         await self._signaling.respond_to_pair(request.from_code, accept=True)
+
+    async def _auto_establish_connection(self, match: PairMatch) -> None:
+        """Auto-establish WebRTC after pair match (called from _on_pair_match callback)."""
+        logger.info("Auto-establishing connection with %s (initiator=%s)", match.peer_code, match.is_initiator)
+        self._tasks.append(asyncio.create_task(self._establish_connection(match)))
 
     async def _establish_connection(self, match: PairMatch) -> ConnectedPeer:
         """Establish a WebRTC connection after pairing."""
@@ -874,6 +992,11 @@ class ZajelHeadlessClient:
             public_key=match.peer_public_key,
             is_initiator=match.is_initiator,
         )
+
+        # Store peer early so incoming handshake messages can find it
+        # (the app sends its handshake as soon as the data channel opens,
+        # which can arrive before we finish _establish_connection)
+        self._connected_peers[match.peer_code] = peer
 
         # Create WebRTC connection
         await self._webrtc.create_connection(match.is_initiator)
@@ -919,9 +1042,6 @@ class ZajelHeadlessClient:
         # Send handshake (key exchange)
         handshake = HandshakeMessage(public_key=self._crypto.public_key_base64)
         await self._webrtc.send_message(handshake.to_json())
-
-        # Store peer
-        self._connected_peers[match.peer_code] = peer
 
         # Initialize file transfer service
         self._file_transfer = FileTransferService(
@@ -982,6 +1102,8 @@ class ZajelHeadlessClient:
                     self._crypto.perform_key_exchange(peer_id, peer_pub_key)
                     logger.info("Key exchange completed with %s", peer_id)
                     break
+            else:
+                logger.warning("No peer found for handshake")
 
         elif msg["type"] == "encrypted_text":
             # Encrypted message — decrypt with first connected peer that has a key
@@ -989,6 +1111,14 @@ class ZajelHeadlessClient:
                 if self._crypto.has_session_key(peer_id):
                     try:
                         plaintext = self._crypto.decrypt(peer_id, msg["data"])
+
+                        # Check for group invitation prefix
+                        if plaintext.startswith("ginv:"):
+                            self._handle_group_invitation(
+                                peer_id, plaintext[5:]
+                            )
+                            break
+
                         received = ReceivedMessage(
                             peer_id=peer_id, content=plaintext
                         )

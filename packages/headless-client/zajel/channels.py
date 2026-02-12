@@ -61,12 +61,15 @@ class ChannelRules:
     replies_enabled: bool = True
     polls_enabled: bool = True
     max_upstream_size: int = 4096
+    allowed_types: list[str] = field(default_factory=lambda: ["text"])
 
     def to_dict(self) -> dict[str, Any]:
+        # Key order must match Dart's ChannelRules.toJson() exactly
         return {
             "replies_enabled": self.replies_enabled,
             "polls_enabled": self.polls_enabled,
             "max_upstream_size": self.max_upstream_size,
+            "allowed_types": self.allowed_types,
         }
 
     @staticmethod
@@ -75,6 +78,7 @@ class ChannelRules:
             replies_enabled=data.get("replies_enabled", True),
             polls_enabled=data.get("polls_enabled", True),
             max_upstream_size=data.get("max_upstream_size", 4096),
+            allowed_types=data.get("allowed_types", ["text"]),
         )
 
 

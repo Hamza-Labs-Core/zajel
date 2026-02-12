@@ -61,6 +61,10 @@ elif PLATFORM == "windows":
     from platforms.windows_config import (
         APP_PATH, SIGNALING_URL, APP_LAUNCH_TIMEOUT,
     )
+elif PLATFORM == "ios":
+    from platforms.ios_config import (
+        APP_PATH, SIGNALING_URL, APP_LAUNCH_TIMEOUT, SIMULATOR_UDID,
+    )
 else:
     SIGNALING_URL = os.environ.get("SIGNALING_URL", "")
 
@@ -316,11 +320,26 @@ class HeadlessBob:
         from zajel.client import ZajelHeadlessClient
         self._client = ZajelHeadlessClient(signaling_url=signaling_url, **kwargs)
         self.pairing_code = None
-        self.connected_peer = None
+        self._connected_peer = None
 
     def _run_loop(self):
         asyncio.set_event_loop(self._loop)
         self._loop.run_forever()
+
+    @property
+    def connected_peer(self):
+        """Return the connected peer, checking auto-accept peers if needed."""
+        if self._connected_peer is not None:
+            return self._connected_peer
+        # Auto-accept may have connected a peer without explicit pair_with()
+        peers = self._client._connected_peers
+        if peers:
+            return next(iter(peers.values()))
+        return None
+
+    @connected_peer.setter
+    def connected_peer(self, value):
+        self._connected_peer = value
 
     def _run(self, coro, timeout=120):
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
@@ -331,14 +350,21 @@ class HeadlessBob:
         return self.pairing_code
 
     def pair_with(self, code: str):
-        self.connected_peer = self._run(self._client.pair_with(code))
-        return self.connected_peer
+        self._connected_peer = self._run(self._client.pair_with(code))
+        return self._connected_peer
+
+    def pair_with_async(self, code: str):
+        """Start pairing in background, returns a Future."""
+        future = asyncio.run_coroutine_threadsafe(
+            self._client.pair_with(code), self._loop
+        )
+        return future
 
     def wait_for_pair(self, timeout=60):
-        self.connected_peer = self._run(
+        self._connected_peer = self._run(
             self._client.wait_for_pair(timeout=timeout), timeout=timeout + 10
         )
-        return self.connected_peer
+        return self._connected_peer
 
     def send_text(self, peer_id: str, text: str):
         self._run(self._client.send_text(peer_id, text))
@@ -412,6 +438,12 @@ class HeadlessBob:
     def wait_for_group_message(self, timeout=30):
         return self._run(
             self._client.wait_for_group_message(timeout=timeout),
+            timeout=timeout + 10,
+        )
+
+    def wait_for_group_invitation(self, timeout=30):
+        return self._run(
+            self._client.wait_for_group_invitation(timeout=timeout),
             timeout=timeout + 10,
         )
 
