@@ -33,8 +33,8 @@ export interface ServerLog {
   data?: unknown;
 }
 
-// Port allocator to avoid conflicts
-let nextPort = 30000 + Math.floor(Math.random() * 5000);
+// Port allocator to avoid conflicts — wide range to reduce collision with parallel CI jobs
+let nextPort = 30000 + Math.floor(Math.random() * 20000);
 const allocatedPorts = new Set<number>();
 
 function allocatePort(): number {
@@ -80,25 +80,34 @@ export class TestServerHarness extends EventEmitter {
   }
 
   /**
-   * Start the server instance
+   * Start the server instance, retrying on EADDRINUSE with a new port.
    */
   async start(): Promise<void> {
     if (this._isRunning) {
       throw new Error('Server is already running');
     }
 
-    const config = this.buildConfig();
+    const maxRetries = 3;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const config = this.buildConfig();
+      try {
+        this._startTime = Date.now();
+        this.server = await createZajelServer(config);
+        this._isRunning = true;
 
-    try {
-      this._startTime = Date.now();
-      this.server = await createZajelServer(config);
-      this._isRunning = true;
-
-      this.log('info', `Server started on port ${this._port}`);
-      this.emit('started', { port: this._port, serverId: this.server.identity.serverId });
-    } catch (error) {
-      this.log('error', `Failed to start server: ${error}`);
-      throw error;
+        this.log('info', `Server started on port ${this._port}`);
+        this.emit('started', { port: this._port, serverId: this.server.identity.serverId });
+        return;
+      } catch (error: any) {
+        if (error?.code === 'EADDRINUSE' && attempt < maxRetries) {
+          this.log('warn', `Port ${this._port} in use, retrying with new port`);
+          releasePort(this._port);
+          this._port = allocatePort();
+          continue;
+        }
+        this.log('error', `Failed to start server: ${error}`);
+        throw error;
+      }
     }
   }
 
