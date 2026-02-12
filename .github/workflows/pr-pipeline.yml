@@ -877,12 +877,13 @@ jobs:
         env:
           APP_VERSION: ${{ needs.tag-prerelease.outputs.version }}
           BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL }}
+          ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
         with:
           host: ${{ vars.QA_VPS_IP }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          envs: APP_VERSION,BOOTSTRAP_URL
+          envs: APP_VERSION,BOOTSTRAP_URL,ZAJEL_ADMIN_JWT_SECRET
           script: |
             set -e
 
@@ -912,12 +913,13 @@ jobs:
             PUBLIC_IP=$(curl -sf http://checkip.amazonaws.com || curl -sf http://ifconfig.me || echo "localhost")
             cat > start-qa.sh << EOF
             #!/bin/bash
-            export ZAJEL_PORT=80
+            export ZAJEL_PORT=8080
             export ZAJEL_KEY_PATH=./data-qa/server.key
             export ZAJEL_DB_PATH=./data-qa/zajel.db
-            export ZAJEL_PUBLIC_ENDPOINT=ws://${PUBLIC_IP}
+            export ZAJEL_PUBLIC_ENDPOINT=ws://${PUBLIC_IP}:8080
             export ZAJEL_REGION=qa
             export ZAJEL_BOOTSTRAP_URL=${BOOTSTRAP_URL}
+            export ZAJEL_ADMIN_JWT_SECRET=${ZAJEL_ADMIN_JWT_SECRET}
             export NODE_ENV=qa
             export APP_VERSION=${APP_VERSION}
             cd /opt/zajel/server-vps-qa
@@ -937,7 +939,7 @@ jobs:
             # Health check
             sleep 5
             for i in {1..6}; do
-              if curl -sf http://localhost:80/health | grep -q "healthy"; then
+              if curl -sf http://localhost:8080/health | grep -q "healthy"; then
                 echo "Server healthy"
                 exit 0
               fi
@@ -1020,13 +1022,13 @@ jobs:
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
-              echo "Probing VPS at $ip:80..."
-              if timeout 10 curl -sf "http://${ip}:80/health" >/dev/null 2>&1; then
-                URL="ws://${ip}:80"
-                echo "Reachable and healthy: $ip:80"
+              echo "Probing VPS at $ip:8080..."
+              if timeout 10 curl -sf "http://${ip}:8080/health" >/dev/null 2>&1; then
+                URL="ws://${ip}:8080"
+                echo "Reachable and healthy: $ip:8080"
                 break
               else
-                echo "Not reachable: $ip:80"
+                echo "Not reachable: $ip:8080"
               fi
             done
             if [ -z "$URL" ]; then
@@ -1520,13 +1522,13 @@ jobs:
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
-              echo "Probing VPS at $ip:80..."
-              if timeout 10 curl -sf "http://${ip}:80/health" >/dev/null 2>&1; then
-                URL="ws://${ip}:80"
-                echo "Reachable and healthy: $ip:80"
+              echo "Probing VPS at $ip:8080..."
+              if timeout 10 curl -sf "http://${ip}:8080/health" >/dev/null 2>&1; then
+                URL="ws://${ip}:8080"
+                echo "Reachable and healthy: $ip:8080"
                 break
               else
-                echo "Not reachable: $ip:80"
+                echo "Not reachable: $ip:8080"
               fi
             done
             if [ -z "$URL" ]; then
@@ -1621,7 +1623,7 @@ jobs:
           URL="${{ vars.VPS_QA_WS_URL }}"
           if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
             FIRST_IP=$(echo "${{ vars.QA_VPS_IP }}" | cut -d',' -f1 | tr -d ' ')
-            URL="ws://${FIRST_IP}:80"
+            URL="ws://${FIRST_IP}:8080"
           fi
           echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
           echo "Resolved SIGNALING_URL=$URL"
