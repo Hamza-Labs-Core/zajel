@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -46,11 +48,33 @@ class ThemeModeNotifier extends StateNotifier<ThemeMode> {
 
   static ThemeMode _load(SharedPreferences prefs) {
     final value = prefs.getString(_key);
-    return switch (value) {
+    final mode = switch (value) {
       'light' => ThemeMode.light,
       'dark' => ThemeMode.dark,
       _ => ThemeMode.system,
     };
+
+    // On Linux, the xdg-desktop-portal Settings interface is often
+    // unavailable (e.g. missing XDG_CURRENT_DESKTOP), so Flutter can't
+    // detect system dark mode. Fall back to reading gsettings directly.
+    if (mode == ThemeMode.system && Platform.isLinux) {
+      return _resolveLinuxSystemTheme();
+    }
+    return mode;
+  }
+
+  static ThemeMode _resolveLinuxSystemTheme() {
+    try {
+      final result = Process.runSync(
+        'gsettings',
+        ['get', 'org.gnome.desktop.interface', 'color-scheme'],
+      );
+      if (result.exitCode == 0) {
+        final value = (result.stdout as String).trim();
+        if (value.contains('dark')) return ThemeMode.dark;
+      }
+    } catch (_) {}
+    return ThemeMode.system;
   }
 
   Future<void> setThemeMode(ThemeMode mode) async {
