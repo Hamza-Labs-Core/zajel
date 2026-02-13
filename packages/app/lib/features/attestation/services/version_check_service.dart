@@ -103,6 +103,15 @@ class VersionCheckService {
   }
 
   /// Parse a version string into [major, minor, patch].
+  ///
+  /// Pre-release suffixes (e.g., `-beta`, `-rc1`) and build metadata (e.g., `+build123`)
+  /// are intentionally stripped for numeric version comparison. This allows "1.2.0-beta"
+  /// to be compared as if it were "1.2.0", consistent with semver ordering.
+  ///
+  /// **Note:** To block a specific pre-release build (e.g., prevent users from using
+  /// "1.2.0-beta" while allowing "1.2.0"), add the full version string including the
+  /// suffix to the [VersionPolicy.blockedVersions] list. The blockedVersions check
+  /// happens first and compares the exact string before numeric comparison.
   static List<int> _parseVersion(String version) {
     // Strip any pre-release or build metadata (e.g., "1.2.0-beta" -> "1.2.0")
     final cleanVersion = version.split('-').first.split('+').first;

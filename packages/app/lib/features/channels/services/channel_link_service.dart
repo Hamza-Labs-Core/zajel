@@ -18,7 +18,7 @@ class ChannelLinkService {
   /// Throws [ArgumentError] if the channel has no private encryption key.
   static String encode(Channel channel) {
     if (channel.encryptionKeyPrivate == null) {
-      throw ArgumentError('Channel must have encryptionKeyPrivate to share');
+      throw ArgumentError('Only channel owners can generate invite links (requires encryptionKeyPrivate)');
     }
 
     final payload = {

@@ -513,6 +513,10 @@ class ZajelHeadlessClient:
         """Get all trusted peers."""
         return self._storage.get_all_peers()
 
+    def get_connected_peers(self) -> dict:
+        """Return all connected peers."""
+        return dict(self._connected_peers)
+
     # ── Channels ─────────────────────────────────────────────
 
     async def subscribe_channel(self, invite_link: str) -> SubscribedChannel:

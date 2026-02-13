@@ -136,7 +136,6 @@ jobs:
             PUBLIC_IP=$(curl -sf http://checkip.amazonaws.com || curl -sf http://ifconfig.me || echo "localhost")
             printf '#!/bin/bash\nexport ZAJEL_PORT=80\nexport ZAJEL_KEY_PATH=./data/server.key\nexport ZAJEL_DB_PATH=./data/zajel.db\nexport ZAJEL_PUBLIC_ENDPOINT=ws://%s\nexport ZAJEL_REGION=auto\nexport ZAJEL_BOOTSTRAP_URL=https://signal.zajel.hamzalabs.dev\nexport ZAJEL_ADMIN_JWT_SECRET=%s\nexport ZAJEL_CF_ADMIN_URL=https://admin.zajel.hamzalabs.dev\ncd /opt/zajel/server-vps\nexec node dist/index.js\n' "$PUBLIC_IP" "$ZAJEL_ADMIN_JWT_SECRET" > start.sh
             chmod +x start.sh
-            cat start.sh
 
             # Stop existing if running
             pm2 delete zajel-server 2>/dev/null || true

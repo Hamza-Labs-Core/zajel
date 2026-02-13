@@ -18,16 +18,21 @@ import '../../../core/logging/logger_service.dart';
 /// NOTE: The current implementation is a stub that logs a warning.
 /// Full native platform channel implementations for Android and iOS are
 /// planned for a future iteration. Desktop platforms can use the Dart I/O
-/// approach directly (see [BinaryReaderDesktop] below), but mobile platforms
+/// approach directly (see [BinaryReaderDesktop]), but mobile platforms
 /// need Kotlin/Swift bridging code that is non-trivial to implement.
 ///
-/// To implement native binary reading for mobile:
-/// 1. Create a MethodChannel ('com.zajel.attestation/binary_reader')
-/// 2. Android (Kotlin): Use ApplicationInfo.sourceDir to get APK path,
-///    then read bytes at the requested offset/length
-/// 3. iOS (Swift): Use Bundle.main.executablePath to get the binary path,
-///    then read bytes at the requested offset/length
-/// 4. Return the bytes as a Uint8List via the platform channel
+/// To implement native binary reading for mobile, follow the [BinaryReaderDesktop]
+/// pattern:
+/// 1. Create `BinaryReaderAndroid` implementing [BinaryReader] with:
+///    - Use MethodChannel ('com.zajel.attestation/binary_reader')
+///    - Kotlin: Use ApplicationInfo.sourceDir to get APK path, read bytes at offset/length
+///    - Return bytes as Uint8List via platform channel
+/// 2. Create `BinaryReaderIos` implementing [BinaryReader] with:
+///    - Use MethodChannel ('com.zajel.attestation/binary_reader')
+///    - Swift: Use Bundle.main.executablePath to get binary path, read bytes at offset/length
+///    - Return bytes as Uint8List via platform channel
+/// 3. Update [binaryReaderProvider] in [attestation_providers.dart] to instantiate
+///    the appropriate platform class based on `Platform.isAndroid` / `Platform.isIOS`
 abstract class BinaryReader {
   /// Read a region of the app's own binary.
   ///

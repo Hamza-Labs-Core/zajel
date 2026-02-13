@@ -332,7 +332,7 @@ class HeadlessBob:
         if self._connected_peer is not None:
             return self._connected_peer
         # Auto-accept may have connected a peer without explicit pair_with()
-        peers = self._client._connected_peers
+        peers = self._client.get_connected_peers()
         if peers:
             return next(iter(peers.values()))
         return None
