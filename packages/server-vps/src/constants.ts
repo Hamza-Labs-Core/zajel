@@ -109,3 +109,24 @@ export const ENTROPY = {
   /** High risk threshold - consider extending code length */
   COLLISION_HIGH_THRESHOLD: 30000,
 } as const;
+
+// =============================================================================
+// ATTESTATION CONSTANTS
+// =============================================================================
+
+export const ATTESTATION = {
+  /** Default session token TTL: 1 hour (in ms) */
+  DEFAULT_SESSION_TOKEN_TTL: 60 * 60 * 1000,
+
+  /** Default grace period for unattested connections: 30 seconds (in ms) */
+  DEFAULT_GRACE_PERIOD: 30 * 1000,
+
+  /** Error code sent to clients when attestation is required but missing */
+  ERROR_CODE_NOT_ATTESTED: 'NOT_ATTESTED',
+
+  /** WebSocket close code for attestation failure (4001 = application error) */
+  WS_CLOSE_CODE_ATTESTATION_FAILED: 4001,
+
+  /** WebSocket close code for grace period expired */
+  WS_CLOSE_CODE_GRACE_EXPIRED: 4002,
+} as const;

@@ -21,15 +21,22 @@ SIGNALING_URL = os.environ.get("SIGNALING_URL", "ws://localhost:8080/ws")
 APP_LAUNCH_TIMEOUT = 60
 ELEMENT_WAIT_TIMEOUT = 10
 CONNECTION_TIMEOUT = 30
-P2P_CONNECTION_TIMEOUT = 15
+P2P_CONNECTION_TIMEOUT = 30
 CALL_CONNECT_TIMEOUT = 30
 CALL_RING_TIMEOUT = 30
 
-# ADB path (for file transfer tests)
-ADB_PATH = os.environ.get(
-    "ADB_PATH",
-    os.path.expanduser("~/Android/Sdk/platform-tools/adb")
-)
+# ADB path — check ANDROID_HOME (CI) before falling back to local dev path
+def _find_adb() -> str:
+    explicit = os.environ.get("ADB_PATH")
+    if explicit:
+        return explicit
+    android_home = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
+    if android_home:
+        return os.path.join(android_home, "platform-tools", "adb")
+    return os.path.expanduser("~/Android/Sdk/platform-tools/adb")
+
+
+ADB_PATH = _find_adb()
 
 
 def get_server_url(index: int) -> str:

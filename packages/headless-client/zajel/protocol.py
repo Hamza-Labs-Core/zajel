@@ -14,9 +14,9 @@ from typing import Any, Optional
 
 logger = logging.getLogger("zajel.protocol")
 
-# Data channel labels (must match Dart app)
-MESSAGE_CHANNEL_LABEL = "zajel_message"
-FILE_CHANNEL_LABEL = "zajel_file"
+# Data channel labels (must match Dart app: lib/core/constants.dart WebRTCConstants)
+MESSAGE_CHANNEL_LABEL = "messages"
+FILE_CHANNEL_LABEL = "files"
 
 # File transfer constants
 FILE_CHUNK_SIZE = 4096  # bytes

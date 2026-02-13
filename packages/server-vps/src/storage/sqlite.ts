@@ -38,12 +38,19 @@ export class SQLiteStorage implements Storage {
   async init(): Promise<void> {
     // Run migrations using Database.prototype.exec for SQL execution
     const migrationsDir = join(dirname(new URL(import.meta.url).pathname), '../../migrations');
-    const migrationFile = join(migrationsDir, '001_initial.sql');
 
-    if (existsSync(migrationFile)) {
-      const sql = readFileSync(migrationFile, 'utf-8');
-      // Note: This is better-sqlite3's exec method for SQL, not child_process exec
-      this.db.exec(sql);
+    const migrations = [
+      '001_initial.sql',
+      '002_chunk_index.sql',
+    ];
+
+    for (const migration of migrations) {
+      const migrationFile = join(migrationsDir, migration);
+      if (existsSync(migrationFile)) {
+        const sql = readFileSync(migrationFile, 'utf-8');
+        // Note: This is better-sqlite3's exec method for SQL, not child_process exec
+        this.db.exec(sql);
+      }
     }
   }
 
@@ -584,6 +591,114 @@ export class SQLiteStorage implements Storage {
     const stmt = this.db.prepare(`DELETE FROM vector_clocks WHERE key = ?`);
     const result = stmt.run(key);
     return result.changes > 0;
+  }
+
+  // Chunk Cache
+  async cacheChunk(chunkId: string, channelId: string, data: Buffer): Promise<void> {
+    const now = Date.now();
+    const stmt = this.db.prepare(`
+      INSERT INTO chunk_cache (chunk_id, channel_id, data, cached_at, last_accessed, access_count)
+      VALUES (?, ?, ?, ?, ?, 0)
+      ON CONFLICT(chunk_id) DO UPDATE SET
+        data = excluded.data,
+        channel_id = excluded.channel_id,
+        cached_at = excluded.cached_at,
+        last_accessed = excluded.last_accessed,
+        access_count = 0
+    `);
+    stmt.run(chunkId, channelId, data, now, now);
+  }
+
+  async getCachedChunk(chunkId: string): Promise<{ data: Buffer; channelId: string } | null> {
+    const stmt = this.db.prepare(`SELECT data, channel_id FROM chunk_cache WHERE chunk_id = ?`);
+    const row = stmt.get(chunkId) as { data: Buffer; channel_id: string } | undefined;
+    if (!row) return null;
+
+    // Update last_accessed and access_count
+    const updateStmt = this.db.prepare(`
+      UPDATE chunk_cache SET last_accessed = ?, access_count = access_count + 1 WHERE chunk_id = ?
+    `);
+    updateStmt.run(Date.now(), chunkId);
+
+    return { data: row.data, channelId: row.channel_id };
+  }
+
+  async deleteCachedChunk(chunkId: string): Promise<boolean> {
+    const stmt = this.db.prepare(`DELETE FROM chunk_cache WHERE chunk_id = ?`);
+    const result = stmt.run(chunkId);
+    return result.changes > 0;
+  }
+
+  async cleanupExpiredChunks(maxAgeMs: number): Promise<number> {
+    const cutoff = Date.now() - maxAgeMs;
+    const stmt = this.db.prepare(`DELETE FROM chunk_cache WHERE cached_at < ?`);
+    const result = stmt.run(cutoff);
+    return result.changes;
+  }
+
+  async evictLruChunks(maxEntries: number): Promise<number> {
+    // Count current entries
+    const countStmt = this.db.prepare(`SELECT COUNT(*) as count FROM chunk_cache`);
+    const countResult = countStmt.get() as { count: number };
+
+    if (countResult.count <= maxEntries) return 0;
+
+    const toEvict = countResult.count - maxEntries;
+    // Delete the least recently accessed entries
+    const stmt = this.db.prepare(`
+      DELETE FROM chunk_cache WHERE chunk_id IN (
+        SELECT chunk_id FROM chunk_cache ORDER BY last_accessed ASC LIMIT ?
+      )
+    `);
+    const result = stmt.run(toEvict);
+    return result.changes;
+  }
+
+  async getCachedChunkCount(): Promise<number> {
+    const stmt = this.db.prepare(`SELECT COUNT(*) as count FROM chunk_cache`);
+    const result = stmt.get() as { count: number };
+    return result.count;
+  }
+
+  // Chunk Sources
+  async saveChunkSource(chunkId: string, peerId: string): Promise<void> {
+    const now = Date.now();
+    const stmt = this.db.prepare(`
+      INSERT INTO chunk_sources (chunk_id, peer_id, announced_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(chunk_id, peer_id) DO UPDATE SET
+        announced_at = excluded.announced_at
+    `);
+    stmt.run(chunkId, peerId, now);
+  }
+
+  async getChunkSources(chunkId: string): Promise<Array<{ chunkId: string; peerId: string; announcedAt: number }>> {
+    const stmt = this.db.prepare(`SELECT chunk_id, peer_id, announced_at FROM chunk_sources WHERE chunk_id = ?`);
+    const rows = stmt.all(chunkId) as Array<{ chunk_id: string; peer_id: string; announced_at: number }>;
+    return rows.map(row => ({
+      chunkId: row.chunk_id,
+      peerId: row.peer_id,
+      announcedAt: row.announced_at,
+    }));
+  }
+
+  async deleteChunkSourcesByPeer(peerId: string): Promise<number> {
+    const stmt = this.db.prepare(`DELETE FROM chunk_sources WHERE peer_id = ?`);
+    const result = stmt.run(peerId);
+    return result.changes;
+  }
+
+  async deleteChunkSource(chunkId: string, peerId: string): Promise<boolean> {
+    const stmt = this.db.prepare(`DELETE FROM chunk_sources WHERE chunk_id = ? AND peer_id = ?`);
+    const result = stmt.run(chunkId, peerId);
+    return result.changes > 0;
+  }
+
+  async cleanupExpiredChunkSources(maxAgeMs: number): Promise<number> {
+    const cutoff = Date.now() - maxAgeMs;
+    const stmt = this.db.prepare(`DELETE FROM chunk_sources WHERE announced_at < ?`);
+    const result = stmt.run(cutoff);
+    return result.changes;
   }
 
   // Statistics
