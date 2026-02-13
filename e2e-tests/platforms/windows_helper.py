@@ -229,3 +229,145 @@ class WindowsAppHelper:
             return True
         except (TimeoutError, Exception):
             return False
+
+    # ── Channels ──────────────────────────────────────────────────
+
+    def navigate_to_channels(self):
+        """Tap 'Channels' button from home screen."""
+        self.click("Channels")
+        time.sleep(1)
+
+    def navigate_to_groups(self):
+        """Tap 'Groups' button from home screen."""
+        self.click("Groups")
+        time.sleep(1)
+
+    def create_channel(self, name, description=""):
+        """Create a channel via FAB → dialog → fill fields → tap Create."""
+        self.click("Create Channel")
+        time.sleep(1)
+
+        # Fill channel name in first Edit control
+        try:
+            edits = self.main_window.children(control_type="Edit")
+            if edits:
+                edits[0].click_input()
+                edits[0].type_keys(name, with_spaces=True)
+                if description and len(edits) > 1:
+                    edits[1].click_input()
+                    edits[1].type_keys(description, with_spaces=True)
+        except Exception:
+            self.type_text(name)
+
+        self.click("Create")
+        time.sleep(2)
+
+    def open_channel(self, name):
+        """Tap a channel in the list by name."""
+        self.click(name)
+        time.sleep(1)
+
+    def get_channel_invite_link(self):
+        """Open share dialog → extract link text → dismiss."""
+        self.click("Share channel")
+        time.sleep(2)
+
+        try:
+            link_el = self.find_by_name_contains("zajel://", timeout=10)
+            link = link_el.window_text()
+        except (TimeoutError, Exception):
+            link = ""
+
+        try:
+            self.click("Done")
+        except (TimeoutError, Exception):
+            self.press_key("{ESCAPE}")
+        time.sleep(1)
+
+        return link
+
+    def publish_channel_message(self, text):
+        """Type in publish field → tap 'Publish' button."""
+        try:
+            edit = self.main_window.child_window(control_type="Edit", found_index=0)
+            edit.click_input()
+            edit.type_keys(text, with_spaces=True)
+        except Exception:
+            self.type_text(text)
+        self.click("Publish")
+        time.sleep(2)
+
+    def has_channel_message(self, text):
+        """Check if a channel message is visible."""
+        try:
+            self.find_by_name_contains(text, timeout=5)
+            return True
+        except (TimeoutError, Exception):
+            return False
+
+    # ── Groups ────────────────────────────────────────────────────
+
+    def create_group(self, name):
+        """Create a group via FAB → dialog → fill name → tap Create."""
+        self.click("Create Group")
+        time.sleep(1)
+
+        try:
+            edit = self.main_window.child_window(control_type="Edit", found_index=0)
+            edit.click_input()
+            edit.type_keys(name, with_spaces=True)
+        except Exception:
+            self.type_text(name)
+
+        self.click("Create")
+        time.sleep(2)
+
+    def open_group(self, name):
+        """Tap a group in the list by name."""
+        self.click(name)
+        time.sleep(1)
+
+    def add_group_member(self, peer_name):
+        """Tap 'Add member' → select peer by name."""
+        self.click("Add member")
+        time.sleep(1)
+        self.click(peer_name)
+        time.sleep(2)
+
+    def send_group_message(self, text):
+        """Type in message field → tap 'Send' button."""
+        try:
+            edit = self.main_window.child_window(control_type="Edit", found_index=0)
+            edit.click_input()
+            edit.type_keys(text, with_spaces=True)
+        except Exception:
+            self.type_text(text)
+        self.click("Send")
+        time.sleep(2)
+
+    def has_group_message(self, text):
+        """Check if a group message is visible."""
+        try:
+            self.find_by_name_contains(text, timeout=5)
+            return True
+        except (TimeoutError, Exception):
+            return False
+
+    def open_members_sheet(self):
+        """Tap the members button to open the bottom sheet."""
+        self.click("members")
+        time.sleep(1)
+
+    # ── Screenshots ───────────────────────────────────────────────
+
+    def take_screenshot(self, name):
+        """Save screenshot to E2E_ARTIFACTS_DIR/{name}.png."""
+        import os
+        artifacts_dir = os.environ.get("E2E_ARTIFACTS_DIR", "/tmp/e2e-artifacts")
+        os.makedirs(artifacts_dir, exist_ok=True)
+        path = os.path.join(artifacts_dir, f"{name}.png")
+        try:
+            self.main_window.capture_as_image().save(path)
+            print(f"Screenshot saved: {path}")
+        except Exception as e:
+            print(f"Screenshot failed: {e}")

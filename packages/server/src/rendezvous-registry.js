@@ -84,6 +84,8 @@ export class RendezvousRegistry {
   registerHourlyTokens(peerId, { tokens, relayId }) {
     const now = Date.now();
     const result = { liveMatches: [] };
+    // Track matched peerIds to avoid duplicate notifications
+    const matchedPeers = new Set();
 
     for (const token of tokens) {
       if (!this.hourlyTokens.has(token)) {
@@ -92,9 +94,10 @@ export class RendezvousRegistry {
 
       const entries = this.hourlyTokens.get(token);
 
-      // Find live matches (not our own, not expired)
+      // Find live matches (not our own, not expired, not already matched)
       for (const entry of entries) {
-        if (entry.peerId !== peerId && entry.expires > now) {
+        if (entry.peerId !== peerId && entry.expires > now && !matchedPeers.has(entry.peerId)) {
+          matchedPeers.add(entry.peerId);
           result.liveMatches.push({
             peerId: entry.peerId,
             relayId: entry.relayId,
