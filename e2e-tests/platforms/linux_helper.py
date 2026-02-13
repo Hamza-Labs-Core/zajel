@@ -305,8 +305,28 @@ class LinuxAppHelper:
     # ── App lifecycle ──────────────────────────────────────────
 
     def wait_for_app_ready(self, timeout: int = APP_LAUNCH_TIMEOUT):
-        """Wait for the home screen to be visible."""
+        """Wait for the home screen to be visible, dismissing onboarding if needed."""
+        try:
+            self._find("Zajel", timeout=15)
+            return
+        except TimeoutError:
+            pass
+
+        # Try dismissing onboarding screen (first launch)
+        self._dismiss_onboarding()
+
+        # Now wait for the actual home screen
         self._find("Zajel", timeout)
+
+    def _dismiss_onboarding(self):
+        """Dismiss the onboarding screen if present (first launch)."""
+        try:
+            skip_el = self._find("Skip", timeout=5)
+            print("[wait_for_app_ready] Onboarding screen detected, clicking Skip")
+            skip_el.click()
+            time.sleep(2)
+        except (TimeoutError, Exception):
+            pass  # No onboarding screen
 
     def clear_data(self):
         """Clear all app data by removing the data directory."""

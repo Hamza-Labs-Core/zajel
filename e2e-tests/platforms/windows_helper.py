@@ -132,8 +132,29 @@ class WindowsAppHelper:
     # ── App lifecycle ──────────────────────────────────────────────
 
     def wait_for_app_ready(self, timeout: int = APP_LAUNCH_TIMEOUT):
-        """Wait for the home screen to be visible."""
+        """Wait for the home screen to be visible, dismissing onboarding if needed."""
+        try:
+            self.find_by_name("Zajel", timeout=15)
+            return
+        except TimeoutError:
+            pass
+
+        # Try dismissing onboarding screen (first launch)
+        self._dismiss_onboarding()
+
+        # Now wait for the actual home screen
         self.find_by_name("Zajel", timeout)
+
+    def _dismiss_onboarding(self):
+        """Dismiss the onboarding screen if present (first launch)."""
+        try:
+            skip = self.main_window.child_window(title="Skip", found_index=0)
+            if skip.exists(timeout=5):
+                print("[wait_for_app_ready] Onboarding screen detected, clicking Skip")
+                skip.click_input()
+                time.sleep(2)
+        except Exception:
+            pass  # No onboarding screen
 
     # ── Navigation ────────────────────────────────────────────────
 
