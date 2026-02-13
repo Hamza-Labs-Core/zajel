@@ -1,14 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import '../../../core/logging/logger_service.dart';
 import '../../../core/network/connection_manager.dart';
 import '../models/group.dart';
+import '../models/group_message.dart';
 import 'group_crypto_service.dart';
 import 'group_service.dart';
 
 /// Wire prefix for group invitations sent over 1:1 P2P channels.
 const String _invitePrefix = 'ginv:';
+
+/// Wire prefix for group message data sent over 1:1 P2P channels.
+const String _groupDataPrefix = 'grp:';
 
 /// Handles sending and receiving group invitations over existing 1:1
 /// WebRTC data channels.
@@ -27,6 +32,9 @@ class GroupInvitationService {
   /// Callback invoked when a group invitation is received and accepted.
   void Function(Group group)? onGroupJoined;
 
+  /// Callback invoked when a group message is received over a 1:1 channel.
+  void Function(String groupId, GroupMessage message)? onGroupMessageReceived;
+
   GroupInvitationService({
     required ConnectionManager connectionManager,
     required GroupService groupService,
@@ -37,12 +45,15 @@ class GroupInvitationService {
         _cryptoService = cryptoService,
         _selfDeviceId = selfDeviceId;
 
-  /// Start listening for incoming group invitations on the 1:1 message stream.
+  /// Start listening for incoming group invitations and group messages
+  /// on the 1:1 message stream.
   void start() {
     _messageSub = _connectionManager.messages.listen((event) {
       final (peerId, message) = event;
       if (message.startsWith(_invitePrefix)) {
         _handleInvitation(peerId, message.substring(_invitePrefix.length));
+      } else if (message.startsWith(_groupDataPrefix)) {
+        _handleGroupData(peerId, message.substring(_groupDataPrefix.length));
       }
     });
   }
@@ -148,6 +159,57 @@ class GroupInvitationService {
       logger.error(
         'GroupInvitationService',
         'Failed to handle group invitation from $fromPeerId',
+        e,
+        stack,
+      );
+    }
+  }
+
+  /// Handle incoming group message data from a 1:1 peer connection.
+  ///
+  /// The payload is base64-encoded encrypted bytes. We try decrypting
+  /// with each group where [fromPeerId] is a member.
+  Future<void> _handleGroupData(String fromPeerId, String payloadB64) async {
+    try {
+      final encryptedBytes = Uint8List.fromList(base64Decode(payloadB64));
+
+      // Try each group where fromPeerId is a member
+      final groups = await _groupService.getAllGroups();
+      for (final group in groups) {
+        final isMember =
+            group.members.any((m) => m.deviceId == fromPeerId);
+        if (!isMember) continue;
+
+        try {
+          final message = await _groupService.receiveMessage(
+            groupId: group.id,
+            authorDeviceId: fromPeerId,
+            encryptedBytes: encryptedBytes,
+          );
+          if (message != null) {
+            logger.info(
+              'GroupInvitationService',
+              'Received group message from $fromPeerId in "${group.name}"',
+            );
+            onGroupMessageReceived?.call(group.id, message);
+          }
+          return;
+        } catch (e) {
+          logger.debug(
+            'GroupInvitationService',
+            'Group decrypt failed for $fromPeerId in ${group.id}: $e',
+          );
+        }
+      }
+
+      logger.warning(
+        'GroupInvitationService',
+        'Could not decrypt group data from $fromPeerId',
+      );
+    } catch (e, stack) {
+      logger.error(
+        'GroupInvitationService',
+        'Failed to handle group data from $fromPeerId',
         e,
         stack,
       );

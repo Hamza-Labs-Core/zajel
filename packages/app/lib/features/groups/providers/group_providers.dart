@@ -91,7 +91,13 @@ final groupInvitationServiceProvider = Provider<GroupInvitationService>((ref) {
     ref.invalidate(groupsProvider);
   };
 
-  // Start listening for incoming invitations
+  // Wire up the callback: when a group message arrives over a 1:1 channel,
+  // refresh that group's messages so the UI picks it up.
+  service.onGroupMessageReceived = (groupId, message) {
+    ref.invalidate(groupMessagesProvider(groupId));
+  };
+
+  // Start listening for incoming invitations and group messages
   service.start();
 
   ref.onDispose(() => service.dispose());

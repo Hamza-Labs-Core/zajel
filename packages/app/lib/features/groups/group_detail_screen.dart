@@ -1,6 +1,9 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/models/peer.dart';
 import '../../core/providers/app_providers.dart';
 import 'models/group.dart';
 import 'providers/group_providers.dart';
@@ -220,11 +223,37 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
         content: text,
       );
 
-      // Broadcast encrypted bytes to connected group members
-      await connectionService.broadcastToGroup(
+      // Broadcast encrypted bytes to connected group members via mesh
+      final meshCount = await connectionService.broadcastToGroup(
         widget.groupId,
         result.encryptedBytes,
       );
+
+      // Fallback: also send via 1-on-1 direct connections for group
+      // members who are directly connected peers (e.g. HeadlessBob).
+      // This handles the case where mesh group_ connections aren't
+      // established but the member is reachable as a regular peer.
+      if (meshCount == 0) {
+        final group = await groupService.getGroup(widget.groupId);
+        if (group != null) {
+          final connectionManager = ref.read(connectionManagerProvider);
+          final directPeers = connectionManager.currentPeers
+              .where((p) => p.connectionState == PeerConnectionState.connected)
+              .map((p) => p.id)
+              .toSet();
+
+          final payload =
+              'grp:${base64Encode(result.encryptedBytes)}';
+          for (final member in group.otherMembers) {
+            if (directPeers.contains(member.deviceId)) {
+              try {
+                await connectionManager.sendMessage(
+                    member.deviceId, payload);
+              } catch (_) {}
+            }
+          }
+        }
+      }
 
       // Refresh messages
       ref.invalidate(groupMessagesProvider(widget.groupId));

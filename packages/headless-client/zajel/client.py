@@ -12,6 +12,7 @@ Provides the high-level API for interacting with the Zajel protocol:
 """
 
 import asyncio
+import base64
 import json
 import logging
 import uuid
@@ -785,12 +786,31 @@ class ZajelHeadlessClient:
         # Store locally
         self._group_storage.save_message(message)
 
-        # TODO: Broadcast encrypted bytes to all connected group peers
-        # via WebRTC data channels. This requires a group-aware routing
-        # layer that the current signaling/WebRTC services don't have.
+        # Broadcast to all connected peers who are members of this group.
+        # Uses the grp: prefix protocol matching the Flutter app's
+        # WebRtcP2PAdapter: grp:<base64(encrypted_bytes)>
+        payload = f"grp:{base64.b64encode(encrypted).decode('ascii')}"
+        sent_count = 0
+        for member in group.other_members:
+            peer_id = member.device_id
+            if peer_id in self._connected_peers and self._crypto.has_session_key(peer_id):
+                try:
+                    cipher = self._crypto.encrypt(peer_id, payload)
+                    await self._webrtc.send_message(cipher)
+                    sent_count += 1
+                    logger.debug(
+                        "Broadcast group message to %s in '%s'",
+                        peer_id, group.name,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to broadcast group message to %s: %s",
+                        peer_id, e,
+                    )
 
         logger.info(
-            "Sent group message to %s: %s", group.name, content[:50]
+            "Sent group message to '%s' (%d/%d peers): %s",
+            group.name, sent_count, len(group.other_members), content[:50],
         )
         return message
 
@@ -973,6 +993,81 @@ class ZajelHeadlessClient:
                 e,
             )
 
+    def _handle_group_data(
+        self, from_peer_id: str, payload_b64: str
+    ) -> None:
+        """Handle incoming group message data (grp: protocol).
+
+        The payload is base64-encoded encrypted bytes. We try decrypting
+        with each group where from_peer_id is a member.
+        """
+        try:
+            encrypted_bytes = base64.b64decode(payload_b64)
+        except Exception as e:
+            logger.error("Failed to decode group data from %s: %s", from_peer_id, e)
+            return
+
+        # Try each group where from_peer_id is a member
+        for group in self._group_storage.get_all_groups():
+            for member in group.members:
+                if member.device_id == from_peer_id:
+                    try:
+                        message = self._receive_group_message_sync(
+                            group, from_peer_id, encrypted_bytes
+                        )
+                        if message:
+                            logger.info(
+                                "Received group message from %s in '%s': %s",
+                                from_peer_id,
+                                group.name,
+                                message.content[:50],
+                            )
+                        return
+                    except Exception as e:
+                        logger.debug(
+                            "Group decrypt failed for %s in %s: %s",
+                            from_peer_id,
+                            group.id,
+                            e,
+                        )
+
+        logger.warning(
+            "Could not decrypt group data from %s (not a member of any group)",
+            from_peer_id,
+        )
+
+    def _receive_group_message_sync(
+        self, group: "Group", author_device_id: str, encrypted_bytes: bytes
+    ) -> Optional["GroupMessage"]:
+        """Synchronous group message receive (called from sync callback)."""
+        # Decrypt with the author's sender key
+        plaintext = self._group_crypto.decrypt(
+            encrypted_bytes, group.id, author_device_id
+        )
+
+        message = GroupMessage.from_bytes(
+            plaintext, group_id=group.id, is_outgoing=False
+        )
+
+        # Check for duplicate
+        if self._group_storage.is_duplicate(group.id, message.id):
+            return None
+
+        # Verify author matches
+        if message.author_device_id != author_device_id:
+            raise RuntimeError(
+                f"Author mismatch: encrypted by {author_device_id} "
+                f"but claims to be from {message.author_device_id}"
+            )
+
+        # Store and emit
+        self._group_storage.save_message(message)
+        self._group_message_queue.put_nowait(message)
+        asyncio.get_event_loop().create_task(
+            self._events.emit("group_message", group.id, message)
+        )
+        return message
+
     # ── Internal ─────────────────────────────────────────────
 
     async def _auto_accept_pair(self, request: PairRequest) -> None:
@@ -1116,6 +1211,13 @@ class ZajelHeadlessClient:
                         if plaintext.startswith("ginv:"):
                             self._handle_group_invitation(
                                 peer_id, plaintext[5:]
+                            )
+                            break
+
+                        # Check for group message prefix
+                        if plaintext.startswith("grp:"):
+                            self._handle_group_data(
+                                peer_id, plaintext[4:]
                             )
                             break
 
