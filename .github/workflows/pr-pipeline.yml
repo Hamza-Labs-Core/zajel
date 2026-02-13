@@ -1434,15 +1434,22 @@ jobs:
           FLUTTER_TEST_PID=$!
           echo "FLUTTER_TEST_PID=$FLUTTER_TEST_PID" >> $GITHUB_ENV
 
-          # Wait for the Shelf HTTP server to come up on port 9000
-          echo "Waiting for Shelf server on port 9000..."
-          for i in $(seq 1 60); do
+          # Wait for the Shelf HTTP server to come up on port 9000.
+          # The first build (debug mode) can take 3-5 minutes on CI.
+          echo "Waiting for Shelf server on port 9000 (up to 300s)..."
+          for i in $(seq 1 300); do
             if curl -sf http://127.0.0.1:9000/status >/dev/null 2>&1; then
               echo "Shelf server ready on port 9000 (after ${i}s)"
               break
             fi
-            if [ "$i" -eq 60 ]; then
-              echo "ERROR: Shelf server not ready after 60s"
+            # Check if the flutter process died (build failure)
+            if ! kill -0 $FLUTTER_TEST_PID 2>/dev/null; then
+              echo "ERROR: flutter test process exited unexpectedly"
+              wait $FLUTTER_TEST_PID 2>/dev/null || true
+              exit 1
+            fi
+            if [ "$i" -eq 300 ]; then
+              echo "ERROR: Shelf server not ready after 300s"
               kill $FLUTTER_TEST_PID 2>/dev/null || true
               exit 1
             fi
