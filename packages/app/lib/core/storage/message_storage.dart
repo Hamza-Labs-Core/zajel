@@ -148,6 +148,22 @@ class MessageStorage {
     return Sqflite.firstIntValue(result) ?? 0;
   }
 
+  /// Migrate all messages from one peerId to another.
+  ///
+  /// Used when a trusted peer reconnects with a new pairing code.
+  /// Moves all message history to the new ID so conversations are preserved.
+  Future<int> migrateMessages(String fromPeerId, String toPeerId) async {
+    final db = _db;
+    if (db == null) return 0;
+
+    return db.update(
+      _tableName,
+      {'peerId': toPeerId},
+      where: 'peerId = ?',
+      whereArgs: [fromPeerId],
+    );
+  }
+
   /// Delete all messages for a peer.
   Future<void> deleteMessages(String peerId) async {
     final db = _db;
@@ -157,6 +173,19 @@ class MessageStorage {
       _tableName,
       where: 'peerId = ?',
       whereArgs: [peerId],
+    );
+  }
+
+  /// Delete messages older than [cutoff].
+  /// Returns the number of deleted rows.
+  Future<int> deleteMessagesOlderThan(DateTime cutoff) async {
+    final db = _db;
+    if (db == null) return 0;
+
+    return db.delete(
+      _tableName,
+      where: 'timestamp < ?',
+      whereArgs: [cutoff.toIso8601String()],
     );
   }
 
