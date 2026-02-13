@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -46,11 +48,33 @@ class ThemeModeNotifier extends StateNotifier<ThemeMode> {
 
   static ThemeMode _load(SharedPreferences prefs) {
     final value = prefs.getString(_key);
-    return switch (value) {
+    final mode = switch (value) {
       'light' => ThemeMode.light,
       'dark' => ThemeMode.dark,
       _ => ThemeMode.system,
     };
+
+    // On Linux, the xdg-desktop-portal Settings interface is often
+    // unavailable (e.g. missing XDG_CURRENT_DESKTOP), so Flutter can't
+    // detect system dark mode. Fall back to reading gsettings directly.
+    if (mode == ThemeMode.system && Platform.isLinux) {
+      return _resolveLinuxSystemTheme();
+    }
+    return mode;
+  }
+
+  static ThemeMode _resolveLinuxSystemTheme() {
+    try {
+      final result = Process.runSync(
+        'gsettings',
+        ['get', 'org.gnome.desktop.interface', 'color-scheme'],
+      );
+      if (result.exitCode == 0) {
+        final value = (result.stdout as String).trim();
+        if (value.contains('dark')) return ThemeMode.dark;
+      }
+    } catch (_) {}
+    return ThemeMode.system;
   }
 
   Future<void> setThemeMode(ThemeMode mode) async {
@@ -84,6 +108,13 @@ final notificationSettingsProvider =
         (ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
   return NotificationSettingsNotifier(prefs);
+});
+
+/// Provider for auto-delete messages setting.
+/// When enabled, messages older than 24 hours are deleted on app startup.
+final autoDeleteMessagesProvider = StateProvider<bool>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return prefs.getBool('autoDeleteMessages') ?? false;
 });
 
 /// Provider for crypto service.
@@ -224,7 +255,9 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
   final meetingPointService = ref.watch(meetingPointServiceProvider);
   final blockedNotifier = ref.watch(blockedPeersProvider.notifier);
 
-  return ConnectionManager(
+  final messageStorage = ref.watch(messageStorageProvider);
+
+  final manager = ConnectionManager(
     cryptoService: cryptoService,
     webrtcService: webrtcService,
     deviceLinkService: deviceLinkService,
@@ -232,6 +265,9 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
     meetingPointService: meetingPointService,
     isPublicKeyBlocked: blockedNotifier.isBlocked,
   );
+  manager.setMessageStorage(messageStorage);
+
+  return manager;
 });
 
 /// Provider for the list of linked devices.

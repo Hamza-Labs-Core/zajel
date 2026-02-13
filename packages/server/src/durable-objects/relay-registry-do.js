@@ -7,6 +7,7 @@
 
 import { RelayRegistry } from '../relay-registry.js';
 import { RendezvousRegistry } from '../rendezvous-registry.js';
+import { ChunkIndex } from '../chunk-index.js';
 import { WebSocketHandler } from '../websocket-handler.js';
 
 export class RelayRegistryDO {
@@ -17,6 +18,7 @@ export class RelayRegistryDO {
     // Initialize registries
     this.relayRegistry = new RelayRegistry();
     this.rendezvousRegistry = new RendezvousRegistry();
+    this.chunkIndex = new ChunkIndex();
 
     // Map of peerId to WebSocket
     this.wsConnections = new Map();
@@ -25,6 +27,7 @@ export class RelayRegistryDO {
     this.handler = new WebSocketHandler({
       relayRegistry: this.relayRegistry,
       rendezvousRegistry: this.rendezvousRegistry,
+      chunkIndex: this.chunkIndex,
       wsConnections: this.wsConnections,
     });
 
@@ -47,6 +50,7 @@ export class RelayRegistryDO {
   async alarm() {
     // Cleanup expired entries
     this.rendezvousRegistry.cleanup();
+    this.chunkIndex.cleanup();
 
     // Schedule next cleanup
     await this.state.storage.setAlarm(Date.now() + 5 * 60 * 1000);
@@ -63,6 +67,7 @@ export class RelayRegistryDO {
       return new Response(JSON.stringify({
         relays: this.relayRegistry.getStats(),
         rendezvous: this.rendezvousRegistry.getStats(),
+        chunks: this.chunkIndex.getStats(),
         connections: this.wsConnections.size,
       }), {
         headers: { 'Content-Type': 'application/json' },
