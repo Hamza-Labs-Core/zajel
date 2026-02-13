@@ -128,8 +128,16 @@ jobs:
       - name: Install headless client
         run: pip install -e packages/headless-client[dev]
 
-      - name: Run tests
+      - name: Run unit tests
         run: pytest packages/headless-client/tests/ -v --timeout=30
+
+      - name: Run headless E2E tests (channels & groups)
+        working-directory: e2e-tests
+        run: |
+          PYTHONPATH="$PWD:$PWD/tests" pytest \
+            tests/test_channels_headless.py \
+            tests/test_groups_headless.py \
+            -v --timeout=60
 
   phase-1-tests:
     name: "✓ Phase 1: Tests"
@@ -623,6 +631,23 @@ jobs:
 
           ls -la release-assets/
 
+      - name: Cleanup stale draft pre-releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Removing draft pre-releases from failed CI runs..."
+          DRAFTS=$(gh release list --limit 100 --json tagName,isDraft \
+            --jq '[.[] | select(.isDraft)] | .[].tagName')
+
+          if [ -z "$DRAFTS" ]; then
+            echo "No draft releases to clean up"
+          else
+            for TAG in $DRAFTS; do
+              echo "  Deleting draft $TAG..."
+              gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+            done
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -635,16 +660,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Cleanup old pre-releases (keep latest 5)
+      - name: Cleanup old pre-releases (keep latest 3)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Fetching all pre-releases..."
-          PRERELEASES=$(gh release list --limit 100 --json tagName,isPrerelease,createdAt \
-            --jq '[.[] | select(.isPrerelease)] | sort_by(.createdAt) | reverse | .[5:] | .[].tagName')
+          PRERELEASES=$(gh release list --limit 100 --json tagName,isPrerelease,isDraft,createdAt \
+            --jq '[.[] | select(.isPrerelease and (.isDraft | not))] | sort_by(.createdAt) | reverse | .[3:] | .[].tagName')
 
           if [ -z "$PRERELEASES" ]; then
-            echo "No old pre-releases to clean up (5 or fewer exist)"
+            echo "No old pre-releases to clean up (3 or fewer exist)"
             exit 0
           fi
 
@@ -860,12 +885,13 @@ jobs:
         env:
           APP_VERSION: ${{ needs.tag-prerelease.outputs.version }}
           BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL }}
+          ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
         with:
           host: ${{ vars.QA_VPS_IP }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          envs: APP_VERSION,BOOTSTRAP_URL
+          envs: APP_VERSION,BOOTSTRAP_URL,ZAJEL_ADMIN_JWT_SECRET
           script: |
             set -e
 
@@ -895,12 +921,13 @@ jobs:
             PUBLIC_IP=$(curl -sf http://checkip.amazonaws.com || curl -sf http://ifconfig.me || echo "localhost")
             cat > start-qa.sh << EOF
             #!/bin/bash
-            export ZAJEL_PORT=9001
+            export ZAJEL_PORT=8080
             export ZAJEL_KEY_PATH=./data-qa/server.key
             export ZAJEL_DB_PATH=./data-qa/zajel.db
-            export ZAJEL_PUBLIC_ENDPOINT=ws://${PUBLIC_IP}:9001
+            export ZAJEL_PUBLIC_ENDPOINT=ws://${PUBLIC_IP}:8080
             export ZAJEL_REGION=qa
             export ZAJEL_BOOTSTRAP_URL=${BOOTSTRAP_URL}
+            export ZAJEL_ADMIN_JWT_SECRET=${ZAJEL_ADMIN_JWT_SECRET}
             export NODE_ENV=qa
             export APP_VERSION=${APP_VERSION}
             cd /opt/zajel/server-vps-qa
@@ -920,7 +947,7 @@ jobs:
             # Health check
             sleep 5
             for i in {1..6}; do
-              if curl -sf http://localhost:9001/health | grep -q "healthy"; then
+              if curl -sf http://localhost:8080/health | grep -q "healthy"; then
                 echo "Server healthy"
                 exit 0
               fi
@@ -1003,13 +1030,13 @@ jobs:
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
-              echo "Probing VPS at $ip:9001..."
-              if timeout 10 curl -sf "http://${ip}:9001/health" >/dev/null 2>&1; then
-                URL="ws://${ip}:9001"
-                echo "Reachable and healthy: $ip:9001"
+              echo "Probing VPS at $ip:8080..."
+              if timeout 10 curl -sf "http://${ip}:8080/health" >/dev/null 2>&1; then
+                URL="ws://${ip}:8080"
+                echo "Reachable and healthy: $ip:8080"
                 break
               else
-                echo "Not reachable: $ip:9001"
+                echo "Not reachable: $ip:8080"
               fi
             done
             if [ -z "$URL" ]; then
@@ -1062,7 +1089,10 @@ jobs:
             sleep 1
           done
 
-          echo "TURN_URL=turn:${HOST_IP}:3478" >> "$GITHUB_ENV"
+          # Android emulator reaches the host via 10.0.2.2 (SLiRP gateway),
+          # NOT the host's LAN IP. HeadlessBob runs on the host itself.
+          echo "TURN_URL=turn:127.0.0.1:3478" >> "$GITHUB_ENV"
+          echo "TURN_URL_EMU=turn:10.0.2.2:3478" >> "$GITHUB_ENV"
           echo "TURN_USER=${TURN_USER}" >> "$GITHUB_ENV"
           echo "TURN_PASS=${TURN_PASS}" >> "$GITHUB_ENV"
 
@@ -1075,7 +1105,7 @@ jobs:
             --dart-define=E2E_TEST=true \
             --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
             --dart-define=SIGNALING_URL=${{ env.SIGNALING_URL }} \
-            --dart-define=TURN_URL=${{ env.TURN_URL }} \
+            --dart-define=TURN_URL=${{ env.TURN_URL_EMU }} \
             --dart-define=TURN_USER=${{ env.TURN_USER }} \
             --dart-define=TURN_PASS=${{ env.TURN_PASS }}
 
@@ -1202,21 +1232,7 @@ jobs:
           SINGLE_RESULT=0
           pytest -m "single_device and not headless and not windows and not linux" -v -s --timeout=120 --deselect tests/test_pairing.py::TestPairing::test_app_launches_successfully || SINGLE_RESULT=$?
 
-          # ── Phase C: Headless-paired tests (informational) ──
-          # TURN relay (coturn) is now configured on CI, but these tests need
-          # validation before being promoted to mandatory. Run for visibility.
-          HEADLESS_RESULT=0
-          if [ -n "$SIGNALING_URL" ]; then
-            echo "=== Running headless-paired tests (informational) ==="
-            pytest -m "headless and single_device" -v -s --timeout=300 || HEADLESS_RESULT=$?
-            if [ $HEADLESS_RESULT -ne 0 ]; then
-              echo "::warning::Headless-paired tests failed (informational — TURN relay validation in progress)"
-            fi
-          else
-            echo "=== Skipping headless tests (SIGNALING_URL not set) ==="
-          fi
-
-          # ── Phase D: Signaling protocol tests (mandatory) ──
+          # ── Phase C: Signaling protocol tests (mandatory) ──
           # Two headless clients validate the signaling protocol: registration,
           # pairing handshake, rejection, and signal relay. No WebRTC/ICE needed.
           PROTOCOL_RESULT=0
@@ -1225,6 +1241,54 @@ jobs:
             pytest tests/test_signaling_headless.py -v -s --timeout=120 || PROTOCOL_RESULT=$?
           else
             echo "=== Skipping signaling tests (SIGNALING_URL not set) ==="
+          fi
+
+          # ── Gate: fail early if mandatory phases failed ──
+          FAILED=0
+          if [ $SINGLE_RESULT -ne 0 ]; then
+            echo "FAILED: Single-device tests"
+            FAILED=1
+          fi
+          if [ $PROTOCOL_RESULT -ne 0 ]; then
+            echo "FAILED: Signaling protocol tests"
+            FAILED=1
+          fi
+          if [ $FAILED -ne 0 ]; then
+            kill $APPIUM1_PID $APPIUM2_PID 2>/dev/null || true
+            exit 1
+          fi
+          echo "All mandatory E2E tests passed."
+
+          # ── Phase D: Headless-paired tests (informational) ──
+          # TURN relay (coturn) is now configured on CI, but these tests need
+          # validation before being promoted to mandatory. Run for visibility.
+          HEADLESS_RESULT=0
+          if [ -n "$SIGNALING_URL" ]; then
+            echo "=== Running headless-paired tests (informational) ==="
+            pytest -m "headless and single_device" \
+              --deselect tests/test_channels_headless_e2e.py \
+              --deselect tests/test_groups_headless_e2e.py \
+              -v -s --timeout=60 || HEADLESS_RESULT=$?
+            if [ $HEADLESS_RESULT -ne 0 ]; then
+              echo "::warning::Headless-paired tests failed (informational — TURN relay validation in progress)"
+            fi
+          else
+            echo "=== Skipping headless tests (SIGNALING_URL not set) ==="
+          fi
+
+          # ── Phase D2: Channel & Group cross-platform E2E (informational) ──
+          # Tests channel creation/sharing and group invitation/messaging with
+          # HeadlessBob. Depends on TURN relay for P2P and ginv: protocol.
+          CHAN_GROUP_RESULT=0
+          if [ -n "$SIGNALING_URL" ]; then
+            echo "=== Running channel & group E2E tests (informational) ==="
+            pytest tests/test_channels_headless_e2e.py tests/test_groups_headless_e2e.py \
+              -v -s --timeout=180 || CHAN_GROUP_RESULT=$?
+            if [ $CHAN_GROUP_RESULT -ne 0 ]; then
+              echo "::warning::Channel/Group E2E tests failed (informational — ginv: protocol validation in progress)"
+            fi
+          else
+            echo "=== Skipping channel/group E2E tests (SIGNALING_URL not set) ==="
           fi
 
           # ── Phase E: Multi-device pairing probe (informational) ──
@@ -1236,21 +1300,6 @@ jobs:
 
           # Cleanup Appium
           kill $APPIUM1_PID $APPIUM2_PID 2>/dev/null || true
-
-          # Fail if any mandatory phase failed
-          FAILED=0
-          if [ $SINGLE_RESULT -ne 0 ]; then
-            echo "FAILED: Single-device tests"
-            FAILED=1
-          fi
-          if [ $PROTOCOL_RESULT -ne 0 ]; then
-            echo "FAILED: Signaling protocol tests"
-            FAILED=1
-          fi
-          if [ $FAILED -ne 0 ]; then
-            exit 1
-          fi
-          echo "All mandatory E2E tests passed."
 
       - name: Collect logs on failure
         if: failure()
@@ -1285,11 +1334,11 @@ jobs:
           retention-days: 3
 
   # ============================================
-  # PHASE 5b: Linux E2E Tests (Xvfb + AT-SPI + headless client)
+  # PHASE 5b: Linux E2E Tests (Xvfb + Shelf HTTP + headless client)
   # ============================================
   e2e-linux:
     name: E2E Tests (Linux)
-    needs: [build-linux]
+    needs: [unit-tests]
     if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1298,17 +1347,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download Linux build
-        uses: actions/download-artifact@v4
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
         with:
-          name: linux-build
-          path: ./linux-artifact
-
-      - name: Extract Linux app
-        run: |
-          mkdir -p linux-app
-          tar -xzf linux-artifact/zajel-*-linux-x64.tar.gz -C linux-app
-          chmod +x linux-app/zajel
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
 
       - name: Install system dependencies
         run: |
@@ -1316,181 +1359,95 @@ jobs:
           sudo apt-get install -y \
             xvfb \
             dbus-x11 \
-            at-spi2-core \
             pulseaudio \
             libasound2-plugins \
             libegl1 \
             libgles2 \
             libgl1-mesa-dri \
             libgtk-3-0 \
-            python3-gi \
-            gir1.2-atspi-2.0 \
-            python3-dogtail \
             libsecret-1-0 \
-            gir1.2-secret-1 \
             gnome-keyring \
-            libatk-adaptor \
             libjsoncpp25 \
-            xdotool
+            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libsecret-1-dev libjsoncpp-dev
 
-      - name: Start virtual display and audio
+      - name: Start virtual display and services
         run: |
-          # Start Xvfb virtual display
+          # Start Xvfb virtual display (needed for Flutter GTK rendering)
           Xvfb :99 -screen 0 1920x1080x24 &
           sleep 2
 
-          # Start PulseAudio with null sink (no real audio device)
+          # Start PulseAudio with null sink (WebRTC ADM needs audio)
           pulseaudio --start --load="module-null-sink sink_name=NullSink" --exit-idle-time=-1 || true
           sleep 1
 
-          # Route ALSA through PulseAudio — WebRTC ADM uses ALSA by default
-          # and crashes if no ALSA device exists. This bridges ALSA→PulseAudio.
-          mkdir -p ~/.config/pulse
+          # Route ALSA through PulseAudio
           cat > ~/.asoundrc << 'ASOUNDRC'
           pcm.default pulse
           ctl.default pulse
           ASOUNDRC
 
-          # Verify PulseAudio is running and has a sink
-          pactl info || echo "WARNING: PulseAudio not responding"
-          pactl list sinks short || echo "WARNING: No PulseAudio sinks"
-
           # Start D-Bus session bus
           eval $(dbus-launch --sh-syntax)
           echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> $GITHUB_ENV
 
-          # Enable AT-SPI accessibility (required by dogtail)
-          gsettings set org.gnome.desktop.interface toolkit-accessibility true
-
-          # Start gnome-keyring — Flutter's secure_storage uses libsecret on Linux,
-          # which requires an unlocked keyring. Without proper setup, libsecret
-          # spawns gcr-prompter (a GUI unlock dialog) which blocks the GTK main
-          # loop and makes AT-SPI queries timeout ("application may be hanging").
-          #
-          # XDG_RUNTIME_DIR and its keyring subdirectory must exist for
-          # gnome-keyring-daemon to create its control socket.
+          # Start gnome-keyring (Flutter secure_storage needs libsecret)
           sudo mkdir -p /run/user/$(id -u)/keyring
           sudo chown -R $(id -u):$(id -g) /run/user/$(id -u)
           chmod 0700 /run/user/$(id -u)/keyring
           export XDG_RUNTIME_DIR=/run/user/$(id -u)
           echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> $GITHUB_ENV
 
-          # Create the keyrings data directory
           mkdir -p ~/.local/share/keyrings
-
-          # gnome-keyring-daemon 46.x: --start and --unlock are INCOMPATIBLE.
-          # Start the daemon first, then unlock with empty password.
-          # --foreground is not what we want (it blocks), but --replace ensures
-          # we replace any broken instance. Redirect stderr to see errors.
           KEYRING_OUTPUT=$(gnome-keyring-daemon --start --components=secrets 2>&1) || true
-          echo "gnome-keyring-daemon --start output: $KEYRING_OUTPUT"
           eval $(echo "$KEYRING_OUTPUT" | grep -E '^(GNOME_KEYRING|SSH_AUTH)') || true
-          echo "Parsed: GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL"
-
-          # If --start didn't set GNOME_KEYRING_CONTROL, try --replace
-          if [ -z "$GNOME_KEYRING_CONTROL" ]; then
-            echo "Trying --replace..."
-            pkill -f gnome-keyring-daemon 2>/dev/null || true
-            sleep 1
-            KEYRING_OUTPUT=$(gnome-keyring-daemon --replace --components=secrets 2>&1 &
-              sleep 2
-              cat /proc/$!/environ 2>/dev/null | tr '\0' '\n' | grep GNOME_KEYRING || true
-            ) || true
-            echo "--replace output: $KEYRING_OUTPUT"
-            eval $(echo "$KEYRING_OUTPUT" | grep -E '^GNOME_KEYRING') || true
-          fi
-
-          # Unlock the login keyring with empty password
           if [ -n "$GNOME_KEYRING_CONTROL" ]; then
-            printf '' | gnome-keyring-daemon --unlock 2>&1 || echo "Unlock returned non-zero (may be OK)"
-          else
-            echo "WARNING: GNOME_KEYRING_CONTROL still empty — keyring not initialized"
-            echo "Checking if keyring daemon is running..."
-            pgrep -a gnome-keyring || echo "No gnome-keyring-daemon found"
-            ls -la /run/user/$(id -u)/keyring/ 2>/dev/null || echo "No keyring dir contents"
+            printf '' | gnome-keyring-daemon --unlock 2>&1 || true
           fi
           echo "GNOME_KEYRING_CONTROL=${GNOME_KEYRING_CONTROL:-}" >> $GITHUB_ENV
-          echo "GNOME_KEYRING_PID=${GNOME_KEYRING_PID:-}" >> $GITHUB_ENV
 
-          # Safety net: kill gcr-prompter if it somehow still appears.
+          # Safety net: kill gcr-prompter if it appears
           (while true; do pkill -9 -f gcr-prompter 2>/dev/null; sleep 0.5; done) &
           echo "GCR_KILLER_PID=$!" >> $GITHUB_ENV
 
-          # Start AT-SPI accessibility bus.
-          # Ubuntu 24.04 moved binaries from /usr/lib/at-spi2-core/ to /usr/libexec/.
-          # Try both paths; D-Bus activation may also auto-start these.
-          ATSPI_LAUNCHER=$(command -v at-spi-bus-launcher 2>/dev/null || find /usr/libexec /usr/lib -name at-spi-bus-launcher 2>/dev/null | head -1)
-          ATSPI_REGISTRYD=$(command -v at-spi2-registryd 2>/dev/null || find /usr/libexec /usr/lib -name at-spi2-registryd 2>/dev/null | head -1)
-          if [ -n "$ATSPI_LAUNCHER" ]; then
-            echo "Starting AT-SPI bus launcher: $ATSPI_LAUNCHER"
-            $ATSPI_LAUNCHER &
-            sleep 1
-          fi
-          if [ -n "$ATSPI_REGISTRYD" ]; then
-            echo "Starting AT-SPI registryd: $ATSPI_REGISTRYD"
-            $ATSPI_REGISTRYD &
-            sleep 1
-          fi
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-      # NOTE: We use the system Python3 (not setup-python) because dogtail
-      # requires PyGObject (python3-gi) which is installed as a system package
-      # via apt. setup-python installs an isolated Python that can't see these.
       - name: Install E2E dependencies
         run: |
-          pip3 install --break-system-packages pytest pytest-timeout
-          pip3 install --break-system-packages -e packages/headless-client
+          pip install pytest pytest-timeout
+          pip install -e packages/headless-client
 
-      - name: Verify display and AT-SPI
-        timeout-minutes: 3
-        env:
-          ZAJEL_APP_PATH: ${{ github.workspace }}/linux-app/zajel
+      - name: Build Flutter integration test app
+        working-directory: packages/app
         run: |
-          echo "=== Environment ==="
-          echo "DISPLAY=$DISPLAY"
-          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS"
-          echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL"
+          flutter config --enable-linux-desktop
+          flutter create --platforms=linux . || true
+          flutter pub get
 
-          echo "=== Process check ==="
-          pgrep -a gnome-keyring || echo "WARNING: gnome-keyring-daemon not running"
-          pgrep -a gcr-prompter && echo "WARNING: gcr-prompter running" || echo "OK: no gcr-prompter"
+          # Build the integration test binary with embedded Shelf HTTP server.
+          # This uses appium_flutter_server which starts a Shelf server on port
+          # 9000 that exposes W3C WebDriver-like endpoints for widget interaction.
+          # This bypasses AT-SPI entirely — no dogtail/accessibility needed.
+          flutter test integration_test/appium_test.dart -d linux --no-pub 2>&1 &
+          FLUTTER_TEST_PID=$!
+          echo "FLUTTER_TEST_PID=$FLUTTER_TEST_PID" >> $GITHUB_ENV
 
-          echo "=== AT-SPI bus check ==="
-          timeout 10 python3 -c "
-          import gi
-          gi.require_version('Atspi', '2.0')
-          from gi.repository import Atspi
-          desktop = Atspi.get_desktop(0)
-          print(f'AT-SPI desktop children: {desktop.get_child_count()}')
-          " || echo "AT-SPI check failed"
-
-          echo "=== Quick app launch test (15s) ==="
-          GTK_MODULES=gail:atk-bridge LIBGL_ALWAYS_SOFTWARE=1 $ZAJEL_APP_PATH &
-          APP_PID=$!
-          sleep 15
-
-          echo "=== AT-SPI after app launch ==="
-          timeout 10 python3 -c "
-          import gi
-          gi.require_version('Atspi', '2.0')
-          from gi.repository import Atspi
-          desktop = Atspi.get_desktop(0)
-          count = desktop.get_child_count()
-          print(f'AT-SPI children: {count}')
-          for i in range(count):
-              try:
-                  child = desktop.get_child_at_index(i)
-                  if child:
-                      name = child.get_name()
-                      pid = child.get_process_id()
-                      role = child.get_role_name()
-                      print(f'  Child {i}: name={repr(name)} pid={pid} role={role}')
-              except Exception as e:
-                  print(f'  Child {i}: error — {e}')
-          " || echo "AT-SPI check after launch failed"
-
-          ps aux | grep -E "[z]ajel" || echo "App not running"
-          kill $APP_PID 2>/dev/null || true
-          wait $APP_PID 2>/dev/null || true
+          # Wait for the Shelf HTTP server to come up on port 9000
+          echo "Waiting for Shelf server on port 9000..."
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:9000/status >/dev/null 2>&1; then
+              echo "Shelf server ready on port 9000 (after ${i}s)"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "ERROR: Shelf server not ready after 60s"
+              kill $FLUTTER_TEST_PID 2>/dev/null || true
+              exit 1
+            fi
+            sleep 1
+          done
 
       - name: Resolve signaling URL
         run: |
@@ -1499,13 +1456,13 @@ jobs:
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
-              echo "Probing VPS at $ip:9001..."
-              if timeout 10 curl -sf "http://${ip}:9001/health" >/dev/null 2>&1; then
-                URL="ws://${ip}:9001"
-                echo "Reachable and healthy: $ip:9001"
+              echo "Probing VPS at $ip:8080..."
+              if timeout 10 curl -sf "http://${ip}:8080/health" >/dev/null 2>&1; then
+                URL="ws://${ip}:8080"
+                echo "Reachable and healthy: $ip:8080"
                 break
               else
-                echo "Not reachable: $ip:9001"
+                echo "Not reachable: $ip:8080"
               fi
             done
             if [ -z "$URL" ]; then
@@ -1518,22 +1475,20 @@ jobs:
       - name: Run Linux E2E tests
         env:
           CI: 'true'
-          ZAJEL_APP_PATH: ${{ github.workspace }}/linux-app/zajel
           SIGNALING_URL: ${{ env.SIGNALING_URL }}
           ZAJEL_TEST_PLATFORM: linux
+          E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-artifacts/e2e
         run: |
           set +e
 
-          # ── Part 1: AT-SPI GUI tests (informational) ──
-          # Flutter AT-SPI doesn't respond to D-Bus queries in headless Xvfb.
-          # Run a quick smoke test as a probe; don't fail the job on it.
-          echo "=== AT-SPI smoke test (informational) ==="
+          # ── Part 1: Shelf HTTP GUI tests (informational) ──
+          # The Flutter app is running with the Shelf HTTP server on port 9000.
+          # The LinuxAppHelper connects via HTTP to find/click/type on widgets.
+          echo "=== Shelf HTTP smoke test (informational) ==="
           cd ${{ github.workspace }}/e2e-tests
           timeout 180 python3 -m pytest tests/test_pairing.py -v -s --timeout=120 -k "smoke or test_app" || true
 
           # ── Part 2: Signaling tests (no WebRTC needed) ──
-          # Validates registration, pairing handshake, and signal relay
-          # using the SignalingClient directly. No aiortc/ICE required.
           SIGNALING_RESULT=0
           if [ -n "$SIGNALING_URL" ]; then
             echo ""
@@ -1551,14 +1506,29 @@ jobs:
           else
             echo "Linux E2E signaling tests passed."
           fi
+
+          # ── Part 3: Channel & Group E2E (informational) ──
+          if [ -n "$SIGNALING_URL" ]; then
+            echo ""
+            echo "=== Running channel & group E2E tests (informational) ==="
+            cd ${{ github.workspace }}/e2e-tests
+            python3 -m pytest tests/test_channels_headless_e2e.py tests/test_groups_headless_e2e.py \
+              -v -s --timeout=180 || true
+          fi
           exit 0
+
+      - name: Stop Flutter test app
+        if: always()
+        run: |
+          kill $FLUTTER_TEST_PID 2>/dev/null || true
+          kill $GCR_KILLER_PID 2>/dev/null || true
 
       - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-linux-test-artifacts
-          path: e2e-tests/test-artifacts/
+          path: test-artifacts/
           retention-days: 3
           if-no-files-found: ignore
 
@@ -1600,7 +1570,7 @@ jobs:
           URL="${{ vars.VPS_QA_WS_URL }}"
           if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
             FIRST_IP=$(echo "${{ vars.QA_VPS_IP }}" | cut -d',' -f1 | tr -d ' ')
-            URL="ws://${FIRST_IP}:9001"
+            URL="ws://${FIRST_IP}:8080"
           fi
           echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
           echo "Resolved SIGNALING_URL=$URL"
@@ -1643,6 +1613,17 @@ jobs:
             Write-Host "::warning::Windows E2E: Signaling tests failed"
           } else {
             Write-Host "Windows E2E signaling tests passed."
+          }
+
+          # ── Part 3: Channel & Group E2E (informational) ──
+          if ($env:SIGNALING_URL) {
+            Write-Host ""
+            Write-Host "=== Running channel & group E2E tests (informational) ==="
+            Set-Location "${{ github.workspace }}\e2e-tests"
+            pytest tests\test_channels_headless_e2e.py tests\test_groups_headless_e2e.py -v -s --timeout=180
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "::warning::Windows E2E: Channel/Group tests failed (informational)"
+            }
           }
           exit 0
 
