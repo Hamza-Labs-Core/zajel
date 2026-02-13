@@ -1643,7 +1643,10 @@ jobs:
           }
 
           # ── Part 3: Channel & Group E2E (informational) ──
-          if ($env:SIGNALING_URL) {
+          # Skip if smoke tests failed — UIA can't see Flutter elements, so these
+          # tests would each waste 60s timing out looking for the Zajel window,
+          # risking hitting the step timeout before reaching exit 0.
+          if ($env:SIGNALING_URL -and $smokeResult -eq 0) {
             Write-Host ""
             Write-Host "=== Running channel & group E2E tests (informational) ==="
             Set-Location "${{ github.workspace }}\e2e-tests"
@@ -1651,6 +1654,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) {
               Write-Host "::warning::Windows E2E: Channel/Group tests failed (informational)"
             }
+          } elseif ($smokeResult -ne 0) {
+            Write-Host "=== Skipping channel & group tests (smoke tests failed — UIA cannot see Flutter elements) ==="
           }
           exit 0
 
