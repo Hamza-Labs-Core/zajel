@@ -69,11 +69,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libsecret-1-dev libjsoncpp-dev xvfb
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
+
+      - name: Enable Linux desktop
+        run: flutter config --enable-linux-desktop
 
       - name: Install dependencies
         working-directory: packages/app
@@ -89,7 +97,7 @@ jobs:
 
       - name: Run integration tests (channels & groups)
         working-directory: packages/app
-        run: flutter test integration_test/channels_test.dart integration_test/groups_test.dart
+        run: xvfb-run flutter test -d linux integration_test/channels_test.dart integration_test/groups_test.dart
 
   server-tests:
     name: Server Tests
