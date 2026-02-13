@@ -693,6 +693,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: packages/server/package-lock.json
+
+      - name: Install dependencies
+        working-directory: packages/server
+        run: npm ci
+
       - name: Deploy signaling server
         id: deploy-signaling
         uses: cloudflare/wrangler-action@v3
@@ -734,6 +745,15 @@ jobs:
       VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Deploy admin dashboard
         id: deploy-admin
