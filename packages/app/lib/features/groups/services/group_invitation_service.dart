@@ -176,8 +176,7 @@ class GroupInvitationService {
       // Try each group where fromPeerId is a member
       final groups = await _groupService.getAllGroups();
       for (final group in groups) {
-        final isMember =
-            group.members.any((m) => m.deviceId == fromPeerId);
+        final isMember = group.members.any((m) => m.deviceId == fromPeerId);
         if (!isMember) continue;
 
         try {

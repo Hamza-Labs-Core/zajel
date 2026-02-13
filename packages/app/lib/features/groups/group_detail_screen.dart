@@ -242,13 +242,11 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
               .map((p) => p.id)
               .toSet();
 
-          final payload =
-              'grp:${base64Encode(result.encryptedBytes)}';
+          final payload = 'grp:${base64Encode(result.encryptedBytes)}';
           for (final member in group.otherMembers) {
             if (directPeers.contains(member.deviceId)) {
               try {
-                await connectionManager.sendMessage(
-                    member.deviceId, payload);
+                await connectionManager.sendMessage(member.deviceId, payload);
               } catch (_) {}
             }
           }
