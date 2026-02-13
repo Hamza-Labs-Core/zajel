@@ -114,11 +114,14 @@ jobs:
 
       - name: Start server
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
         with:
           host: ${{ vars.VPS_SERVERS }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
+          envs: ZAJEL_ADMIN_JWT_SECRET
           script: |
             set -e
             cd /opt/zajel/server-vps
@@ -131,7 +134,7 @@ jobs:
             # Create startup script with embedded env vars
             # Get public IP for the endpoint
             PUBLIC_IP=$(curl -sf http://checkip.amazonaws.com || curl -sf http://ifconfig.me || echo "localhost")
-            printf '#!/bin/bash\nexport ZAJEL_PORT=9000\nexport ZAJEL_KEY_PATH=./data/server.key\nexport ZAJEL_DB_PATH=./data/zajel.db\nexport ZAJEL_PUBLIC_ENDPOINT=ws://%s:9000\nexport ZAJEL_REGION=auto\nexport ZAJEL_BOOTSTRAP_URL=https://signal.zajel.hamzalabs.dev\ncd /opt/zajel/server-vps\nexec node dist/index.js\n' "$PUBLIC_IP" > start.sh
+            printf '#!/bin/bash\nexport ZAJEL_PORT=80\nexport ZAJEL_KEY_PATH=./data/server.key\nexport ZAJEL_DB_PATH=./data/zajel.db\nexport ZAJEL_PUBLIC_ENDPOINT=ws://%s\nexport ZAJEL_REGION=auto\nexport ZAJEL_BOOTSTRAP_URL=https://signal.zajel.hamzalabs.dev\nexport ZAJEL_ADMIN_JWT_SECRET=%s\nexport ZAJEL_CF_ADMIN_URL=https://admin.zajel.hamzalabs.dev\ncd /opt/zajel/server-vps\nexec node dist/index.js\n' "$PUBLIC_IP" "$ZAJEL_ADMIN_JWT_SECRET" > start.sh
             chmod +x start.sh
             cat start.sh
 
@@ -147,14 +150,14 @@ jobs:
             sleep 3
 
             # Check port
-            echo "=== Checking port 9000 ==="
-            netstat -tlnp 2>/dev/null | grep 9000 || ss -tlnp | grep 9000 || echo "Port 9000 not listening"
+            echo "=== Checking port 80 ==="
+            netstat -tlnp 2>/dev/null | grep :80 || ss -tlnp | grep :80 || echo "Port 80 not listening"
             echo "=========================="
 
             # Wait for server to be ready
             echo "Waiting for server to start..."
             for i in {1..6}; do
-              if curl -sf http://localhost:9000/health; then
+              if curl -sf http://localhost:80/health; then
                 echo "Health check passed!"
                 pm2 logs zajel-server --lines 20 --nostream || true
                 exit 0

@@ -1,20 +1,25 @@
 /**
  * Zajel Bootstrap Server - Cloudflare Worker
  *
- * A simple server registry that helps VPS servers discover each other.
- * This is the ONLY purpose of the CF Worker - all client functionality
- * is handled by the federated VPS servers.
+ * A server registry and attestation authority for the Zajel infrastructure.
  *
  * Endpoints:
  * - POST /servers - Register a VPS server
  * - GET /servers - List all active VPS servers
  * - DELETE /servers/:id - Unregister a server
  * - POST /servers/heartbeat - Keep-alive for registered servers
+ * - POST /attest/register - Register a device with a build token
+ * - POST /attest/upload-reference - CI uploads reference binary metadata
+ * - POST /attest/challenge - Request an attestation challenge
+ * - POST /attest/verify - Verify attestation challenge responses
+ * - GET /attest/versions - Get version policy
+ * - POST /attest/versions - Update version policy (admin)
  */
 
 import { importSigningKey, signPayload } from './crypto/signing.js';
 
 export { ServerRegistryDO } from './durable-objects/server-registry-do.js';
+export { AttestationRegistryDO } from './durable-objects/attestation-registry-do.js';
 
 export default {
   async fetch(request, env) {
@@ -23,8 +28,8 @@ export default {
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-      'Access-Control-Expose-Headers': 'X-Bootstrap-Signature',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Expose-Headers': 'X-Bootstrap-Signature, X-Attestation-Token',
     };
 
     // Handle CORS preflight
@@ -54,14 +59,20 @@ export default {
       return new Response(
         JSON.stringify({
           name: 'Zajel Bootstrap Server',
-          version: '3.0.0',
-          description: 'VPS server discovery service',
+          version: '4.0.0',
+          description: 'VPS server discovery and attestation service',
           endpoints: {
             health: 'GET /health',
             listServers: 'GET /servers',
             registerServer: 'POST /servers',
             unregisterServer: 'DELETE /servers/:serverId',
             heartbeat: 'POST /servers/heartbeat',
+            attestRegister: 'POST /attest/register',
+            attestUploadReference: 'POST /attest/upload-reference',
+            attestChallenge: 'POST /attest/challenge',
+            attestVerify: 'POST /attest/verify',
+            attestVersions: 'GET /attest/versions',
+            attestSetVersions: 'POST /attest/versions',
           },
         }),
         {
@@ -107,6 +118,13 @@ export default {
     if (url.pathname.startsWith('/servers')) {
       const id = env.SERVER_REGISTRY.idFromName('global');
       const stub = env.SERVER_REGISTRY.get(id);
+      return stub.fetch(request);
+    }
+
+    // All /attest/* routes go to the AttestationRegistry Durable Object
+    if (url.pathname.startsWith('/attest')) {
+      const id = env.ATTESTATION_REGISTRY.idFromName('global');
+      const stub = env.ATTESTATION_REGISTRY.get(id);
       return stub.fetch(request);
     }
 
