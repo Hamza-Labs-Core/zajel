@@ -948,6 +948,7 @@ jobs:
             export ZAJEL_REGION=qa
             export ZAJEL_BOOTSTRAP_URL=${BOOTSTRAP_URL}
             export ZAJEL_ADMIN_JWT_SECRET=${ZAJEL_ADMIN_JWT_SECRET}
+            export ZAJEL_CF_ADMIN_URL=https://admin.zajel.qa.hamzalabs.dev
             export NODE_ENV=qa
             export APP_VERSION=${APP_VERSION}
             cd /opt/zajel/server-vps-qa

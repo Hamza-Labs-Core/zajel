@@ -372,12 +372,12 @@ describe('WebSocketHandler - Chunk Messages', () => {
       expect(error).toBeDefined();
     });
 
-    it('should reject chunk push with payload exceeding 4096 bytes', () => {
+    it('should reject chunk push with payload exceeding 64KB', () => {
       const { handler, chunkIndex, wsConnections } = createTestHandler();
       const ws = registerPeer(handler, wsConnections, 'owner1');
 
-      // Create a payload that exceeds 4096 bytes when JSON-serialized
-      const largePayload = 'x'.repeat(4097);
+      // Create a payload that exceeds 64KB when JSON-serialized
+      const largePayload = 'x'.repeat(64 * 1024 + 1);
       const chunkData = { payload: largePayload };
 
       handler.handleMessage(ws, JSON.stringify({
@@ -390,22 +390,22 @@ describe('WebSocketHandler - Chunk Messages', () => {
       const error = ws.getMessagesOfType('error')[0];
       expect(error).toBeDefined();
       expect(error.message).toContain('Chunk payload too large');
-      expect(error.message).toContain('4096');
+      expect(error.message).toContain(`${64 * 1024}`);
 
       // Verify chunk was NOT cached
       expect(chunkIndex.isChunkCached('ch_001')).toBe(false);
     });
 
-    it('should accept chunk push with payload exactly at 4096 bytes', () => {
+    it('should accept chunk push with payload exactly at 64KB', () => {
       const { handler, chunkIndex, wsConnections } = createTestHandler();
       const ws = registerPeer(handler, wsConnections, 'owner1');
 
-      // Create a payload that is exactly 4096 bytes when JSON-serialized
+      // Create a payload that is exactly 64KB when JSON-serialized
       // JSON.stringify({p:"..."}) => {"p":"<filler>"} = 8 chars of overhead
-      const filler = 'a'.repeat(4096 - 8);
+      const filler = 'a'.repeat(64 * 1024 - 8);
       const chunkData = { p: filler };
-      // Verify our math: JSON.stringify(chunkData).length should be exactly 4096
-      expect(JSON.stringify(chunkData).length).toBe(4096);
+      // Verify our math: JSON.stringify(chunkData).length should be exactly 64KB
+      expect(JSON.stringify(chunkData).length).toBe(64 * 1024);
 
       handler.handleMessage(ws, JSON.stringify({
         type: 'chunk_push',

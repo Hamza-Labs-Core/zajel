@@ -5,8 +5,8 @@
  * Routes messages to appropriate registries and manages peer connections.
  */
 
-/** Maximum chunk payload size in bytes (4KB) */
-const MAX_TEXT_CHUNK_PAYLOAD = 4096;
+/** Maximum chunk payload size in bytes (64KB — matches Flutter app's chunkSize) */
+const MAX_TEXT_CHUNK_PAYLOAD = 64 * 1024;
 
 export class WebSocketHandler {
   /**

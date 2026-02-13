@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import '../../../core/logging/logger_service.dart';
 import '../models/chunk.dart';
@@ -251,6 +252,7 @@ class ChannelSyncService {
       'type': 'chunk_push',
       'peerId': peerId,
       'chunkId': chunkId,
+      'channelId': channelId,
       'data': chunk.toJson(),
     });
   }
@@ -308,13 +310,22 @@ class ChannelSyncService {
 
     _pendingRequests.remove(chunkId);
 
-    // data may be a Map (relay path) or a String (cache path, base64-encoded JSON).
+    // data may be a Map (relay path) or a JSON String (cache path).
     Map<String, dynamic>? chunkData;
     if (data is Map<String, dynamic>) {
       chunkData = data;
     } else if (data is String) {
-      // Ignore cache-served base64 data that isn't valid chunk JSON
-      return;
+      // Cache-served data arrives as a JSON string — parse it
+      try {
+        final decoded = jsonDecode(data);
+        if (decoded is Map<String, dynamic>) {
+          chunkData = decoded;
+        } else {
+          return;
+        }
+      } catch (_) {
+        return;
+      }
     } else {
       return;
     }

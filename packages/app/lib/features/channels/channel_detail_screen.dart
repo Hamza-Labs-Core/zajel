@@ -423,7 +423,7 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
 
       // Announce chunks to relay for distribution
       for (final chunk in chunks) {
-        syncService.announceChunk(chunk);
+        syncService.announceChunk(chunk, channelId: channel.id);
       }
 
       // Refresh the message list

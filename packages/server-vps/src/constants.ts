@@ -10,8 +10,8 @@
 // =============================================================================
 
 export const WEBSOCKET = {
-  /** Maximum message size (64KB) - matches WebSocket server config */
-  MAX_MESSAGE_SIZE: 64 * 1024,
+  /** Maximum message size (256KB) — must be larger than MAX_TEXT_CHUNK_PAYLOAD (64KB) to accommodate JSON framing */
+  MAX_MESSAGE_SIZE: 256 * 1024,
 } as const;
 
 // =============================================================================

@@ -30,8 +30,8 @@ const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 /** Stale pending request threshold: 2 minutes */
 const PENDING_REQUEST_TTL_MS = 2 * 60 * 1000;
 
-/** Maximum chunk payload size in bytes (4KB) */
-const MAX_TEXT_CHUNK_PAYLOAD = 4096;
+/** Maximum chunk payload size in bytes (64KB — matches Flutter app's chunkSize) */
+const MAX_TEXT_CHUNK_PAYLOAD = 64 * 1024;
 
 export interface ChunkAnnouncement {
   chunkId: string;
@@ -192,12 +192,19 @@ export class ChunkRelay {
     // 1. Check cache first
     const cached = await this.storage.getCachedChunk(chunkId);
     if (cached) {
-      // Serve from cache immediately
+      // Serve from cache: parse stored JSON back to object so clients
+      // receive the same format as a relay-served chunk.
+      let cachedData: object | string;
+      try {
+        cachedData = JSON.parse(cached.data.toString('utf-8'));
+      } catch {
+        cachedData = cached.data.toString('base64'); // Legacy fallback
+      }
       this.sendToWs(ws, {
         type: 'chunk_data',
         chunkId,
         channelId: cached.channelId,
-        data: cached.data.toString('base64'),
+        data: cachedData,
         source: 'cache',
       });
       return { served: true, pulling: false };
@@ -250,19 +257,20 @@ export class ChunkRelay {
     peerId: string,
     chunkId: string,
     channelId: string,
-    data: string // base64-encoded chunk data
+    data: string | object // JSON object (from client) or string (legacy)
   ): Promise<{ cached: boolean; servedCount: number; error?: string }> {
-    // 1. Validate payload size
-    const buffer = Buffer.from(data, 'base64');
-    if (buffer.length > MAX_TEXT_CHUNK_PAYLOAD) {
+    // 1. Normalize to JSON string for size validation and caching
+    const dataStr = typeof data === 'string' ? data : JSON.stringify(data);
+    if (dataStr.length > MAX_TEXT_CHUNK_PAYLOAD) {
       return {
         cached: false,
         servedCount: 0,
-        error: `Chunk payload too large: ${buffer.length} bytes exceeds ${MAX_TEXT_CHUNK_PAYLOAD} byte limit`,
+        error: `Chunk payload too large: ${dataStr.length} bytes exceeds ${MAX_TEXT_CHUNK_PAYLOAD} byte limit`,
       };
     }
 
-    // 2. Cache the chunk
+    // 2. Cache the chunk as UTF-8 JSON string
+    const buffer = Buffer.from(dataStr, 'utf-8');
     await this.storage.cacheChunk(chunkId, channelId, buffer);
 
     // Enforce LRU cap
@@ -271,7 +279,7 @@ export class ChunkRelay {
     // Also register the pushing peer as a source
     await this.storage.saveChunkSource(chunkId, peerId);
 
-    // 2. Fan out to pending requesters
+    // 3. Fan out to pending requesters — forward original data object
     const pending = this.pendingRequests.get(chunkId) || [];
     this.pendingRequests.delete(chunkId);
 
@@ -287,7 +295,7 @@ export class ChunkRelay {
       if (sent) servedCount++;
     }
 
-    // 3. Clear active pull
+    // 4. Clear active pull
     this.activePulls.delete(chunkId);
 
     return { cached: true, servedCount };

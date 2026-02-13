@@ -268,7 +268,8 @@ describe('Chunk Request - Cache Hit', () => {
     expect(response.length).toBe(1);
     expect(response[0].chunkId).toBe('chunk-cached');
     expect(response[0].source).toBe('cache');
-    expect(response[0].data).toBe(chunkData.toString('base64'));
+    // Cache stores UTF-8 JSON; handleRequest parses it back to an object
+    expect(response[0].data).toEqual({ content: 'hello' });
   });
 
   it('should reject request with missing chunkId', async () => {
@@ -427,7 +428,8 @@ describe('Chunk Push - Cache and Fan Out', () => {
     // Verify it's in the cache
     const cached = await storage.getCachedChunk('chunk-push-test');
     expect(cached).not.toBeNull();
-    expect(cached!.data.toString('base64')).toBe(chunkData);
+    // Data is now stored as UTF-8 JSON string
+    expect(cached!.data.toString('utf-8')).toBe(chunkData);
   });
 
   it('should fan out to pending requesters when chunk is pushed', async () => {
@@ -498,37 +500,35 @@ describe('Chunk Push - Cache and Fan Out', () => {
     expect(lastMsg.message).toContain('chunkId');
   });
 
-  it('should reject push with payload exceeding 4096 bytes', async () => {
-    const largeBuffer = Buffer.alloc(4097, 0x41);
-    const data = largeBuffer.toString('base64');
+  it('should reject push with payload exceeding 64KB', async () => {
+    const largePayload = 'x'.repeat(64 * 1024 + 1);
 
     await handler.handleMessage(sourceWs as any, JSON.stringify({
       type: 'chunk_push',
       chunkId: 'chunk-too-large',
       channelId: 'ch_1',
-      data,
+      data: largePayload,
     }));
 
     const lastMsg = sourceWs.getLastMessage();
     expect(lastMsg.type).toBe('error');
     expect(lastMsg.message).toContain('Chunk payload too large');
-    expect(lastMsg.message).toContain('4096');
+    expect(lastMsg.message).toContain(`${64 * 1024}`);
   });
 
-  it('should accept push with payload exactly at 4096 bytes', async () => {
-    const exactBuffer = Buffer.alloc(4096, 0x42);
-    const data = exactBuffer.toString('base64');
+  it('should accept push with JSON object data', async () => {
+    const chunkData = { chunk_id: 'chunk-obj', encrypted_payload: 'AQID', sequence: 1 };
 
     await handler.handleMessage(sourceWs as any, JSON.stringify({
       type: 'chunk_push',
-      chunkId: 'chunk-exact-limit',
+      chunkId: 'chunk-obj',
       channelId: 'ch_1',
-      data,
+      data: chunkData,
     }));
 
     const ack = sourceWs.getMessagesByType('chunk_push_ack');
     expect(ack.length).toBe(1);
-    expect(ack[0].chunkId).toBe('chunk-exact-limit');
+    expect(ack[0].chunkId).toBe('chunk-obj');
     expect(ack[0].cached).toBe(true);
   });
 });
@@ -676,16 +676,17 @@ describe('ChunkRelay - Standalone Unit Tests', () => {
   });
 
   describe('handlePush', () => {
-    it('should cache the chunk', async () => {
+    it('should cache the chunk as UTF-8 JSON', async () => {
       const data = Buffer.from('pushed-data').toString('base64');
 
       const result = await relay.handlePush('peer-source', 'c1', 'ch1', data);
 
       expect(result.cached).toBe(true);
 
+      // Data is now stored as a UTF-8 JSON string (the original string value)
       const cached = await storage.getCachedChunk('c1');
       expect(cached).not.toBeNull();
-      expect(cached!.data.toString('base64')).toBe(data);
+      expect(cached!.data.toString('utf-8')).toBe(data);
     });
 
     it('should fan out to pending requesters', async () => {
@@ -723,38 +724,58 @@ describe('ChunkRelay - Standalone Unit Tests', () => {
       expect(sources.some(s => s.peerId === 'peer-pusher')).toBe(true);
     });
 
-    it('should reject chunk push with payload exceeding 4096 bytes', async () => {
-      // Create a buffer that exceeds 4096 bytes
-      const largeBuffer = Buffer.alloc(4097, 0x41); // 4097 bytes of 'A'
-      const data = largeBuffer.toString('base64');
+    it('should reject chunk push with payload exceeding 64KB', async () => {
+      // Create a string that exceeds 64KB
+      const largePayload = 'x'.repeat(64 * 1024 + 1);
 
-      const result = await relay.handlePush('peer-source', 'c1', 'ch1', data);
+      const result = await relay.handlePush('peer-source', 'c1', 'ch1', largePayload);
 
       expect(result.cached).toBe(false);
       expect(result.servedCount).toBe(0);
       expect(result.error).toBeDefined();
       expect(result.error).toContain('Chunk payload too large');
-      expect(result.error).toContain('4096');
+      expect(result.error).toContain(`${64 * 1024}`);
 
       // Verify chunk was NOT cached
       const cached = await storage.getCachedChunk('c1');
       expect(cached).toBeNull();
     });
 
-    it('should accept chunk push with payload exactly at 4096 bytes', async () => {
-      // Create a buffer that is exactly 4096 bytes
-      const exactBuffer = Buffer.alloc(4096, 0x42); // 4096 bytes of 'B'
-      const data = exactBuffer.toString('base64');
+    it('should accept push with JSON object data and cache as UTF-8', async () => {
+      const chunkData = { chunk_id: 'c1', encrypted_payload: 'AQID', sequence: 1 };
 
-      const result = await relay.handlePush('peer-source', 'c1', 'ch1', data);
+      const result = await relay.handlePush('peer-source', 'c1', 'ch1', chunkData);
 
       expect(result.cached).toBe(true);
       expect(result.error).toBeUndefined();
 
-      // Verify chunk was cached
+      // Verify chunk was cached as UTF-8 JSON
       const cached = await storage.getCachedChunk('c1');
       expect(cached).not.toBeNull();
-      expect(cached!.data.length).toBe(4096);
+      const parsed = JSON.parse(cached!.data.toString('utf-8'));
+      expect(parsed.chunk_id).toBe('c1');
+    });
+
+    it('should serve cached JSON object data as parsed object on cache-hit', async () => {
+      const chunkData = { chunk_id: 'c1', encrypted_payload: 'AQID' };
+
+      // Push to cache
+      await relay.handlePush('peer-source', 'c1', 'ch1', chunkData);
+
+      // Request should get a cache-hit with parsed JSON object
+      const requesterWs = new MockWebSocket();
+      relay.registerPeer('peer-requester', requesterWs as any);
+      relay.setSendCallback(() => true);
+
+      const result = await relay.handleRequest('peer-requester', requesterWs as any, 'c1', 'ch1');
+
+      expect(result.served).toBe(true);
+      expect(result.pulling).toBe(false);
+
+      const msgs = requesterWs.getMessagesByType('chunk_data');
+      expect(msgs.length).toBe(1);
+      expect(msgs[0].data).toEqual(chunkData);
+      expect(msgs[0].source).toBe('cache');
     });
   });
 

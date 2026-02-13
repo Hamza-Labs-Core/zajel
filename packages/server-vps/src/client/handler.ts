@@ -227,7 +227,7 @@ interface ChunkPushMessage {
   type: 'chunk_push';
   chunkId: string;
   channelId: string;
-  data: string; // base64-encoded chunk data
+  data: string | Record<string, unknown>; // JSON object (from client) or string (legacy)
 }
 
 // Attestation messages

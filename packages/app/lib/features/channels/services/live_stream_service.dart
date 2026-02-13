@@ -376,7 +376,7 @@ class LiveStreamService {
 
     // Announce each chunk to the sync service so we become a seeder
     for (final chunk in vodChunks) {
-      syncService.announceChunk(chunk);
+      syncService.announceChunk(chunk, channelId: channelId);
     }
 
     _logger.debug(

@@ -21,9 +21,30 @@ class GroupDetailScreen extends ConsumerStatefulWidget {
 class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
   final _messageController = TextEditingController();
   bool _sending = false;
+  bool _groupActivated = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _activateGroupConnection();
+  }
+
+  Future<void> _activateGroupConnection() async {
+    final groupService = ref.read(groupServiceProvider);
+    final group = await groupService.getGroup(widget.groupId);
+    if (group != null && mounted) {
+      final connectionService = ref.read(groupConnectionServiceProvider);
+      await connectionService.activateGroup(group);
+      _groupActivated = true;
+    }
+  }
 
   @override
   void dispose() {
+    if (_groupActivated) {
+      final connectionService = ref.read(groupConnectionServiceProvider);
+      connectionService.deactivateGroup(widget.groupId);
+    }
     _messageController.dispose();
     super.dispose();
   }

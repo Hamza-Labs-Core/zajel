@@ -333,6 +333,12 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
 
       // Register meeting points for trusted peer reconnection
       await connectionManager.reconnectTrustedPeers();
+
+      // Initialize channel sync and group services now that signaling is connected.
+      // These providers are lazy — reading them triggers creation and starts
+      // listening for incoming messages (channel chunks, group invitations, etc.).
+      ref.read(channelSyncServiceProvider);
+      ref.read(groupInvitationServiceProvider);
     } catch (e, stack) {
       logger.error('ZajelApp', 'Failed to auto-connect to signaling', e, stack);
       ref.read(signalingDisplayStateProvider.notifier).state =

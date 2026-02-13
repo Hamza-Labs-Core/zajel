@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -302,6 +303,7 @@ void main() {
       expect(msg['type'], 'chunk_push');
       expect(msg['peerId'], 'test_peer');
       expect(msg['chunkId'], 'ch_001');
+      expect(msg['channelId'], 'channel_001');
       expect(msg['data'], isA<Map<String, dynamic>>());
     });
 
@@ -376,6 +378,53 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       expect(syncService.pendingRequests, isNot(contains('ch_001')));
+    });
+
+    test('chunk_data with JSON string data (cache path) is parsed', () async {
+      String? receivedChunkId;
+      Map<String, dynamic>? receivedData;
+
+      syncService.onChunkReceived = (chunkId, data) {
+        receivedChunkId = chunkId;
+        receivedData = data;
+      };
+
+      syncService.requestChunk('ch_001');
+
+      // Simulate cache-served data: data is a JSON string, not a Map
+      messageController.add({
+        'type': 'chunk_data',
+        'chunkId': 'ch_001',
+        'data': jsonEncode({'chunk_id': 'ch_001', 'payload': 'cached'}),
+        'source': 'cache',
+      });
+
+      await Future<void>.delayed(Duration.zero);
+
+      expect(receivedChunkId, 'ch_001');
+      expect(receivedData, isNotNull);
+      expect(receivedData!['chunk_id'], 'ch_001');
+      expect(receivedData!['payload'], 'cached');
+    });
+
+    test('chunk_data with invalid JSON string is silently dropped', () async {
+      bool callbackInvoked = false;
+      syncService.onChunkReceived = (_, __) {
+        callbackInvoked = true;
+      };
+
+      syncService.requestChunk('ch_001');
+
+      messageController.add({
+        'type': 'chunk_data',
+        'chunkId': 'ch_001',
+        'data': 'not-valid-json{{{',
+        'source': 'cache',
+      });
+
+      await Future<void>.delayed(Duration.zero);
+
+      expect(callbackInvoked, isFalse);
     });
 
     test('chunk_pull triggers pushChunk for known chunks', () async {
