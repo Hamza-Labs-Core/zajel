@@ -308,6 +308,7 @@ class LinuxAppHelper:
         """Wait for the home screen to be visible, dismissing onboarding if needed."""
         try:
             self._find("Zajel", timeout=15)
+            print("[wait_for_app_ready] Home screen detected directly")
             return
         except TimeoutError:
             pass
@@ -316,17 +317,44 @@ class LinuxAppHelper:
         self._dismiss_onboarding()
 
         # Now wait for the actual home screen
-        self._find("Zajel", timeout)
+        try:
+            self._find("Zajel", timeout)
+            print("[wait_for_app_ready] Home screen confirmed after onboarding dismissal")
+        except TimeoutError:
+            print("[wait_for_app_ready] FAILED to reach home screen after onboarding dismissal")
+            raise
 
     def _dismiss_onboarding(self):
         """Dismiss the onboarding screen if present (first launch)."""
+        # Strategy 1: Click the Skip button directly
         try:
-            skip_el = self._find("Skip", timeout=5)
+            skip_el = self._find("Skip", timeout=10)
             print("[wait_for_app_ready] Onboarding screen detected, clicking Skip")
             skip_el.click()
             time.sleep(2)
+            return
         except (TimeoutError, Exception):
-            pass  # No onboarding screen
+            pass
+
+        # Strategy 2: Click through Next/Get Started pages
+        try:
+            for page in range(5):
+                try:
+                    next_el = self._find("Next", timeout=3)
+                    print(f"[wait_for_app_ready] Clicking Next (page {page + 1})")
+                    next_el.click()
+                    time.sleep(1)
+                except (TimeoutError, Exception):
+                    try:
+                        gs_el = self._find("Get Started", timeout=2)
+                        print("[wait_for_app_ready] Clicking Get Started")
+                        gs_el.click()
+                        time.sleep(2)
+                        return
+                    except (TimeoutError, Exception):
+                        break
+        except Exception:
+            pass
 
     def clear_data(self):
         """Clear all app data by removing the data directory."""

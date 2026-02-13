@@ -135,6 +135,7 @@ class WindowsAppHelper:
         """Wait for the home screen to be visible, dismissing onboarding if needed."""
         try:
             self.find_by_name("Zajel", timeout=15)
+            print("[wait_for_app_ready] Home screen detected directly")
             return
         except TimeoutError:
             pass
@@ -143,18 +144,91 @@ class WindowsAppHelper:
         self._dismiss_onboarding()
 
         # Now wait for the actual home screen
-        self.find_by_name("Zajel", timeout)
+        try:
+            self.find_by_name("Zajel", timeout=timeout)
+            print("[wait_for_app_ready] Home screen confirmed after onboarding dismissal")
+        except TimeoutError:
+            print("[wait_for_app_ready] FAILED to reach home screen after onboarding dismissal")
+            raise
 
     def _dismiss_onboarding(self):
-        """Dismiss the onboarding screen if present (first launch)."""
+        """Dismiss the onboarding screen if present (first launch).
+
+        Tries multiple strategies since Flutter's UIA tree may expose
+        TextButton text differently on Windows Server CI runners.
+        """
+        # Strategy 1: Find Skip button by exact title
         try:
             skip = self.main_window.child_window(title="Skip", found_index=0)
-            if skip.exists(timeout=5):
+            if skip.exists(timeout=10):
                 print("[wait_for_app_ready] Onboarding screen detected, clicking Skip")
                 skip.click_input()
                 time.sleep(2)
+                return
         except Exception:
-            pass  # No onboarding screen
+            pass
+
+        # Strategy 2: Find Skip by regex (case-insensitive)
+        try:
+            skip = self.main_window.child_window(title_re="(?i)^skip$", found_index=0)
+            if skip.exists(timeout=5):
+                print("[wait_for_app_ready] Onboarding detected (regex), clicking Skip")
+                skip.click_input()
+                time.sleep(2)
+                return
+        except Exception:
+            pass
+
+        # Strategy 3: Walk descendants looking for "Skip" text
+        try:
+            for child in self.main_window.descendants():
+                try:
+                    name = child.window_text()
+                    if name and name.strip().lower() == "skip":
+                        print(f"[wait_for_app_ready] Found Skip via descendants walk")
+                        child.click_input()
+                        time.sleep(2)
+                        return
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        # Strategy 4: Click through onboarding pages using Next/Get Started
+        try:
+            for page in range(5):
+                try:
+                    btn = self.main_window.child_window(
+                        title_re="(?i)(next|get started)", found_index=0
+                    )
+                    if btn.exists(timeout=3):
+                        print(f"[wait_for_app_ready] Clicking Next/Get Started (page {page + 1})")
+                        btn.click_input()
+                        time.sleep(1)
+                    else:
+                        break
+                except Exception:
+                    break
+        except Exception:
+            pass
+
+        # Debug: dump visible UIA elements to help diagnose future issues
+        try:
+            print("[wait_for_app_ready] UIA tree dump (top 30 named elements):")
+            count = 0
+            for child in self.main_window.descendants():
+                if count >= 30:
+                    break
+                try:
+                    name = child.window_text()
+                    if name:
+                        ctrl = child.element_info.control_type
+                        print(f"  [{ctrl}] '{name}'")
+                        count += 1
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
     # ── Navigation ────────────────────────────────────────────────
 
