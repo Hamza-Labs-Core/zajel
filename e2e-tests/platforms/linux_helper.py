@@ -242,6 +242,13 @@ class LinuxAppHelper:
                 self.process.kill()
             self.process = None
 
+    @property
+    def current_activity(self):
+        """Cross-platform compat: return truthy value when app is running."""
+        if self._shelf:
+            return "FlutterLinuxApp"
+        return None
+
     # ── Element finding ────────────────────────────────────────
 
     def _find(self, text: str, timeout: int = ELEMENT_WAIT_TIMEOUT):

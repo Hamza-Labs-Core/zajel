@@ -1485,14 +1485,15 @@ jobs:
           ZAJEL_TEST_PLATFORM: linux
           E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-artifacts/e2e
         run: |
-          # ── Part 1: AT-SPI smoke test (informational) ──
-          # Flutter AT-SPI doesn't respond to D-Bus queries in headless Xvfb
-          # (framework limitation). Run as a probe but don't gate on it.
-          echo "=== AT-SPI smoke test (informational) ==="
+          # ── Part 1: Shelf HTTP smoke test ──
+          # Uses LinuxAppHelper which connects to Flutter's Shelf HTTP server,
+          # not AT-SPI D-Bus (which doesn't work under headless Xvfb).
+          echo "=== Shelf HTTP smoke test ==="
           cd ${{ github.workspace }}/e2e-tests
-          timeout 180 python3 -m pytest tests/test_pairing.py -v -s --timeout=120 -k "smoke or test_app" || true
+          SMOKE_RESULT=0
+          timeout 180 python3 -m pytest tests/test_pairing.py -v -s --timeout=120 -k "smoke or test_app" || SMOKE_RESULT=$?
 
-          # ── Part 2: Signaling tests (mandatory gate) ──
+          # ── Part 2: Signaling tests ──
           SIGNALING_RESULT=0
           if [ -n "$SIGNALING_URL" ]; then
             echo ""
@@ -1505,10 +1506,11 @@ jobs:
             echo "=== Skipping signaling tests (SIGNALING_URL not set) ==="
           fi
 
-          if [ $SIGNALING_RESULT -ne 0 ]; then
-            echo "FAILED: Signaling tests"
-            exit 1
-          fi
+          # Final gate
+          FAILED=0
+          [ $SMOKE_RESULT -ne 0 ] && echo "FAILED: Shelf HTTP smoke test" && FAILED=1
+          [ $SIGNALING_RESULT -ne 0 ] && echo "FAILED: Signaling tests" && FAILED=1
+          [ $FAILED -ne 0 ] && exit 1
           echo "All Linux E2E tests passed."
 
       - name: Stop Flutter test app
