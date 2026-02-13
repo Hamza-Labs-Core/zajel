@@ -204,7 +204,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // Tap the Create Group button in the empty state
-      await tester.tap(find.widgetWithText(FilledButton, 'Create Group'));
+      await tester.tap(find.text('Create Group'));
       await tester.pumpAndSettle();
 
       // Dialog should be shown
@@ -227,7 +227,7 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.widgetWithText(FilledButton, 'Create Group'));
+      await tester.tap(find.text('Create Group'));
       await tester.pumpAndSettle();
 
       expect(find.text('e.g. Family Chat'), findsOneWidget);

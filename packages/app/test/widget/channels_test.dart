@@ -180,7 +180,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // Tap the Create Channel button in the empty state
-      await tester.tap(find.widgetWithText(FilledButton, 'Create Channel'));
+      await tester.tap(find.text('Create Channel'));
       await tester.pumpAndSettle();
 
       // Dialog should be shown
@@ -334,7 +334,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Channel Info'), findsOneWidget);
-      expect(find.text('A channel for testing'), findsOneWidget);
+      // Description appears twice: once in the banner and once in the info sheet
+      expect(find.text('A channel for testing'), findsWidgets);
       expect(find.text('Rules'), findsOneWidget);
     });
 

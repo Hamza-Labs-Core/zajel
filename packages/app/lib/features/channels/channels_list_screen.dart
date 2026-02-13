@@ -70,9 +70,6 @@ class ChannelsListScreen extends ConsumerWidget {
       );
       ref.invalidate(channelsProvider);
     }
-
-    nameController.dispose();
-    descriptionController.dispose();
   }
 
   /// Show the subscribe dialog. Exposed as static for reuse in sidebar.
@@ -140,8 +137,6 @@ class ChannelsListScreen extends ConsumerWidget {
         }
       }
     }
-
-    linkController.dispose();
   }
 
   @override

@@ -130,7 +130,5 @@ class GroupsListScreen extends ConsumerWidget {
       );
       ref.invalidate(groupsProvider);
     }
-
-    nameController.dispose();
   }
 }
