@@ -30,20 +30,28 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
   }
 
   Future<void> _activateGroupConnection() async {
-    final groupService = ref.read(groupServiceProvider);
-    final group = await groupService.getGroup(widget.groupId);
-    if (group != null && mounted) {
-      final connectionService = ref.read(groupConnectionServiceProvider);
-      await connectionService.activateGroup(group);
-      _groupActivated = true;
+    try {
+      final groupService = ref.read(groupServiceProvider);
+      final group = await groupService.getGroup(widget.groupId);
+      if (group != null && mounted) {
+        final connectionService = ref.read(groupConnectionServiceProvider);
+        await connectionService.activateGroup(group);
+        _groupActivated = true;
+      }
+    } catch (_) {
+      // Mesh activation is best-effort; the screen works without it.
     }
   }
 
   @override
   void dispose() {
     if (_groupActivated) {
-      final connectionService = ref.read(groupConnectionServiceProvider);
-      connectionService.deactivateGroup(widget.groupId);
+      try {
+        final connectionService = ref.read(groupConnectionServiceProvider);
+        connectionService.deactivateGroup(widget.groupId);
+      } catch (_) {
+        // Best-effort cleanup.
+      }
     }
     _messageController.dispose();
     super.dispose();
