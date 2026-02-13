@@ -38,9 +38,53 @@ class LinuxAppHelper:
         self.process = None
         self._shelf = None
         self._shelf_port = None
+        self._launch_mode = None  # "binary" or "flutter_test"
 
     def launch(self, timeout: int = APP_LAUNCH_TIMEOUT):
-        """Launch the app and wait for the Shelf HTTP server to be ready."""
+        """Launch the app and wait for the Shelf HTTP server to be ready.
+
+        Supports three launch modes (auto-detected):
+
+        **Pre-launched mode** (``ZAJEL_SHELF_PORT`` is set):
+            The app and its Shelf server are already running (e.g. CI starts
+            ``flutter test integration_test/appium_test.dart -d linux &``
+            before pytest). Skips process launch, connects directly.
+
+        **Binary mode** (``app_path`` exists as executable):
+            Runs the pre-built binary directly. The binary must have been
+            built with ``--target integration_test/appium_test.dart`` so
+            the embedded Shelf HTTP server is included.
+
+        **Flutter-test mode** (fallback):
+            Runs ``flutter test integration_test/appium_test.dart -d linux``
+            which compiles and launches the app in one step. Useful for local
+            development without a prior ``flutter build linux`` step.
+            Set ``ZAJEL_PROJECT_DIR`` to override the project path.
+        """
+        # ── Pre-launched mode: app already running externally ──
+        pre_port = os.environ.get("ZAJEL_SHELF_PORT")
+        if pre_port:
+            self._launch_mode = "pre_launched"
+            self._shelf_port = int(pre_port)
+            self._shelf = ShelfClient(port=self._shelf_port)
+            self._shelf.wait_for_server(timeout=timeout)
+            self._shelf.create_session()
+            LinuxAppHelper._claimed_ports.add(self._shelf_port)
+            print(f"Pre-launched mode: connected to Shelf server on port {self._shelf_port}")
+            return
+
+        # ── Scan for an already-running Shelf server (CI may not set the env var) ──
+        existing_port = self._probe_existing_server()
+        if existing_port is not None:
+            self._launch_mode = "pre_launched"
+            self._shelf_port = existing_port
+            self._shelf = ShelfClient(port=self._shelf_port)
+            self._shelf.create_session()
+            LinuxAppHelper._claimed_ports.add(self._shelf_port)
+            print(f"Pre-launched mode: found existing Shelf server on port {existing_port}")
+            return
+
+        # ── Self-launched: start the app process ──
         os.makedirs(self.data_dir, exist_ok=True)
 
         env = os.environ.copy()
@@ -51,18 +95,80 @@ class LinuxAppHelper:
         if os.environ.get("CI"):
             env["LIBGL_ALWAYS_SOFTWARE"] = "1"
 
-        cmd = [self.app_path]
+        if os.path.isfile(self.app_path) and os.access(self.app_path, os.X_OK):
+            self._launch_mode = "binary"
+            cmd = [self.app_path]
+            cwd = None
+        else:
+            self._launch_mode = "flutter_test"
+            project_dir = self._find_project_dir()
+            cmd = [
+                "flutter", "test",
+                "integration_test/appium_test.dart",
+                "-d", "linux",
+            ]
+            cwd = project_dir
+            # flutter test compiles first; allow extra time
+            timeout = max(timeout, 180)
+            print(f"No binary at {self.app_path} — using flutter test mode from {project_dir}")
+
+        # start_new_session=True creates a new process group so we can
+        # kill the entire tree in flutter_test mode (flutter → dart → app).
         self.process = subprocess.Popen(
             cmd,
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            cwd=cwd,
+            start_new_session=(self._launch_mode == "flutter_test"),
         )
 
         # Find the Shelf server port (9000-9020 range)
         self._shelf_port = self._find_server_port(timeout)
         self._shelf = ShelfClient(port=self._shelf_port)
         self._shelf.create_session()
+
+    def _probe_existing_server(self) -> int | None:
+        """Check if a Shelf server is already running on ports 9000-9020."""
+        for port in range(9000, 9021):
+            if port in LinuxAppHelper._claimed_ports:
+                continue
+            try:
+                client = ShelfClient(port=port, timeout=1)
+                client._get("/status")
+                return port
+            except Exception:
+                continue
+        return None
+
+    def _find_project_dir(self) -> str:
+        """Derive the Flutter project directory for flutter-test mode."""
+        # Explicit override
+        project_dir = os.environ.get("ZAJEL_PROJECT_DIR")
+        if project_dir and os.path.isfile(os.path.join(project_dir, "pubspec.yaml")):
+            return project_dir
+
+        # Try to infer from app_path (flutter build layout):
+        #   .../packages/app/build/linux/x64/release/bundle/zajel
+        parts = os.path.normpath(self.app_path).split(os.sep)
+        for i in range(len(parts) - 1, -1, -1):
+            if parts[i] == "build" and i > 0:
+                candidate = os.sep.join(parts[:i])
+                if os.path.isfile(os.path.join(candidate, "pubspec.yaml")):
+                    return candidate
+
+        # Fallback: common local layout
+        for candidate in [
+            os.path.expanduser("~/zajel/packages/app"),
+            os.path.join(os.getcwd(), "packages", "app"),
+        ]:
+            if os.path.isfile(os.path.join(candidate, "pubspec.yaml")):
+                return candidate
+
+        raise FileNotFoundError(
+            f"Cannot find Flutter project directory. "
+            f"Set ZAJEL_PROJECT_DIR or build the binary first at {self.app_path}"
+        )
 
     def _find_server_port(self, timeout: int = 60) -> int:
         """Scan ports 9000-9020 to find the Shelf server for this process."""
@@ -103,7 +209,11 @@ class LinuxAppHelper:
         )
 
     def stop(self):
-        """Stop the app and release the Shelf port."""
+        """Stop the app and release the Shelf port.
+
+        In pre-launched mode, only closes the Shelf session (the external
+        process is managed by CI / the caller).
+        """
         if self._shelf:
             try:
                 self._shelf.delete_session()
@@ -115,8 +225,17 @@ class LinuxAppHelper:
             LinuxAppHelper._claimed_ports.discard(self._shelf_port)
             self._shelf_port = None
 
+        # Don't kill the process in pre-launched mode — we don't own it.
         if self.process:
-            self.process.terminate()
+            if self._launch_mode == "flutter_test":
+                # Kill the whole process group (flutter → dart → app).
+                try:
+                    import signal
+                    os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+                except (OSError, ProcessLookupError):
+                    self.process.terminate()
+            else:
+                self.process.terminate()
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
