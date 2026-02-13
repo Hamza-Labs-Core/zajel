@@ -66,8 +66,17 @@ class TestHeadlessPairing:
         alice_code = helper.get_pairing_code_from_connect_screen()
         print(f"Alice's pairing code: {alice_code}")
 
-        # Bob (headless) pairs with Alice's code
-        headless_bob.pair_with(alice_code)
+        # Bob (headless) starts pairing in background (non-blocking)
+        # because Alice needs to tap "Accept" on the connection request dialog
+        import concurrent.futures
+        future = headless_bob.pair_with_async(alice_code)
+
+        # Wait for the Connection Request dialog to appear and tap Accept
+        time.sleep(3)
+        helper._find("Accept", timeout=15).click()
+
+        # Wait for Bob's pair_with to complete
+        future.result(timeout=60)
 
         time.sleep(P2P_CONNECTION_TIMEOUT)
 
