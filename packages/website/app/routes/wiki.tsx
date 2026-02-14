@@ -78,7 +78,7 @@ export default function Wiki() {
       // Arabic fallback: if page doesn't exist in Arabic, load English version
       if (!loader && isArabic) {
         loader = enPages[slug];
-        if (loader) fallback = true;
+        if (loader != null) fallback = true;
       }
 
       if (!loader) {
