@@ -548,10 +548,19 @@ class AppHelper:
     # -- Media settings helpers --
 
     def navigate_to_media_settings(self):
-        """Navigate to Settings > Audio & Video."""
+        """Navigate to Settings > Audio & Video.
+
+        On a Pixel 6 (1080x2400), "Audio & Video" is the 4th section
+        (~494dp from top) and fits within the ~859dp visible area without
+        scrolling.  If it's not immediately visible (e.g. keyboard pushed
+        the view), try one small scroll before failing.
+        """
         self.navigate_to_settings()
-        self._scroll_down(times=2)
-        self.tap_settings_option("Audio & Video")
+        try:
+            self.tap_settings_option("Audio & Video")
+        except Exception:
+            self._scroll_down()
+            self.tap_settings_option("Audio & Video")
 
     # -- Emoji helpers --
 
