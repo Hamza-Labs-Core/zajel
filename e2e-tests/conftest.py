@@ -384,6 +384,17 @@ class HeadlessBob:
 
     # ── Channel methods ──────────────────────────────────────
 
+    def create_channel(self, name: str, description: str = ""):
+        return self._run(self._client.create_channel(name, description))
+
+    def get_channel_invite_link(self, channel_id: str) -> str:
+        return self._client.get_channel_invite_link(channel_id)
+
+    def publish_channel_message(self, channel_id: str, text: str):
+        return self._run(
+            self._client.publish_channel_message(channel_id, text)
+        )
+
     def subscribe_channel(self, invite_link: str):
         return self._run(self._client.subscribe_channel(invite_link))
 

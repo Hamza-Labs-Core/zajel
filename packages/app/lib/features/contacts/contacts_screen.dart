@@ -112,9 +112,11 @@ class _ContactTile extends ConsumerWidget {
     bool isOnline = false;
     Peer? livePeer;
     peersAsync.whenData((peers) {
-      livePeer = peers.where((p) =>
-          p.id == contact.id ||
-          (p.publicKey != null && p.publicKey == contact.publicKey)).firstOrNull;
+      livePeer = peers
+          .where((p) =>
+              p.id == contact.id ||
+              (p.publicKey != null && p.publicKey == contact.publicKey))
+          .firstOrNull;
       isOnline = livePeer?.connectionState == PeerConnectionState.connected;
     });
 

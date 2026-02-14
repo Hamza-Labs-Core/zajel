@@ -23,11 +23,14 @@ from typing import Any, Callable, Coroutine, Optional
 from .channels import (
     ChannelCryptoService,
     ChannelManifest,
+    ChannelRules,
     ChannelStorage,
     Chunk,
     ChunkPayload,
+    OwnedChannel,
     SubscribedChannel,
     decode_channel_link,
+    encode_channel_link,
     is_channel_link,
 )
 from .crypto import CryptoService
@@ -272,6 +275,11 @@ class ZajelHeadlessClient:
         if self.auto_accept_pairs:
             self._signaling._on_pair_request = self._auto_accept_pair
             self._signaling._on_pair_match = self._auto_establish_connection
+
+        # Set up channel callbacks
+        self._signaling._on_chunk_pull = self._handle_chunk_pull
+        self._signaling._on_chunk_available = self._handle_chunk_available
+        self._signaling._on_chunk_data = self._handle_chunk_data
 
         # Start WebRTC signal handler
         self._tasks.append(asyncio.create_task(self._webrtc_signal_loop()))
@@ -519,6 +527,166 @@ class ZajelHeadlessClient:
 
     # ── Channels ─────────────────────────────────────────────
 
+    async def create_channel(
+        self, name: str, description: str = ""
+    ) -> OwnedChannel:
+        """Create a new channel owned by this client.
+
+        Generates Ed25519 signing and X25519 encryption keypairs,
+        creates and signs the manifest, registers as owner with the
+        signaling server, and returns the OwnedChannel.
+        """
+        pub, priv = self._channel_crypto.generate_signing_keypair()
+        enc_pub, enc_priv = self._channel_crypto.generate_encryption_keypair()
+        channel_id = self._channel_crypto.derive_channel_id(pub)
+
+        manifest = ChannelManifest(
+            channel_id=channel_id,
+            name=name,
+            description=description,
+            owner_key=pub,
+            current_encrypt_key=enc_pub,
+        )
+        manifest = self._channel_crypto.sign_manifest(manifest, priv)
+
+        channel = OwnedChannel(
+            channel_id=channel_id,
+            manifest=manifest,
+            signing_key_private=priv,
+            encryption_key_private=enc_priv,
+            encryption_key_public=enc_pub,
+        )
+        self._channel_storage.save_owned(channel)
+
+        # Register as owner with signaling server
+        if self._signaling.is_connected:
+            await self._signaling.send_channel_owner_register(channel_id)
+
+        logger.info("Created channel %s (%s)", name, channel_id[:16])
+        return channel
+
+    def get_channel_invite_link(self, channel_id: str) -> str:
+        """Generate an invite link for an owned channel."""
+        channel = self._channel_storage.get_owned(channel_id)
+        if channel is None:
+            raise RuntimeError(f"Owned channel not found: {channel_id}")
+        return encode_channel_link(channel.manifest, channel.encryption_key_private)
+
+    async def publish_channel_message(
+        self, channel_id: str, text: str
+    ) -> list[Chunk]:
+        """Publish a text message to an owned channel.
+
+        Encrypts, chunks, signs, announces via signaling, and stores
+        the chunks for responding to chunk_pull requests.
+        """
+        channel = self._channel_storage.get_owned(channel_id)
+        if channel is None:
+            raise RuntimeError(f"Owned channel not found: {channel_id}")
+
+        # Enforce content type rules (Plan 09 content safety)
+        allowed = channel.manifest.rules.allowed_types
+        if allowed and "text" not in allowed:
+            raise RuntimeError(
+                f"Channel does not allow 'text' content (allowed: {allowed})"
+            )
+
+        channel.sequence += 1
+        sequence = channel.sequence
+
+        routing_hash = self._channel_crypto.derive_routing_hash(
+            channel.encryption_key_private
+        )
+
+        payload = ChunkPayload(
+            content_type="text",
+            payload=text.encode("utf-8"),
+        )
+
+        chunks = self._channel_crypto.create_chunks(
+            payload=payload,
+            encryption_key_private_b64=channel.encryption_key_private,
+            signing_key_private_b64=channel.signing_key_private,
+            owner_public_key_b64=channel.manifest.owner_key,
+            key_epoch=channel.manifest.key_epoch,
+            sequence=sequence,
+            routing_hash=routing_hash,
+        )
+
+        # Store chunks locally for chunk_pull responses
+        for chunk in chunks:
+            channel.chunks[chunk.chunk_id] = chunk
+
+        # Announce and push chunks to the signaling server
+        if self._signaling.is_connected:
+            chunk_list = [
+                {"chunkId": c.chunk_id, "routingHash": c.routing_hash}
+                for c in chunks
+            ]
+            await self._signaling.send_chunk_announce(
+                self._pairing_code or "",
+                channel_id,
+                chunk_list,
+            )
+            # Proactively push chunk data so VPS caches it for late subscribers
+            for chunk in chunks:
+                await self._signaling.send_chunk_push(
+                    chunk.chunk_id, channel_id, chunk.to_dict()
+                )
+
+        logger.info(
+            "Published message to channel %s (seq %d, %d chunks)",
+            channel_id[:16], sequence, len(chunks),
+        )
+        return chunks
+
+    async def _handle_chunk_pull(self, msg: dict) -> None:
+        """Handle chunk_pull from the server — respond with chunk_push."""
+        chunk_id = msg.get("chunkId", "")
+        channel_id = msg.get("channelId", "")
+
+        # Search all owned channels for the requested chunk
+        for ch in self._channel_storage.get_all_owned():
+            chunk = ch.chunks.get(chunk_id)
+            if chunk:
+                await self._signaling.send_chunk_push(
+                    chunk_id, channel_id, chunk.to_dict()
+                )
+                logger.debug("Pushed chunk %s for channel %s", chunk_id, channel_id[:16])
+                return
+
+        logger.warning("Chunk pull for unknown chunk %s", chunk_id)
+
+    async def _handle_chunk_available(self, msg: dict) -> None:
+        """Handle chunk_available — request the chunks from the relay."""
+        channel_id = msg.get("channelId", "")
+        chunk_ids = msg.get("chunkIds", [])
+        peer_id = self._pairing_code or ""
+
+        channel = self._channel_storage.get_channel(channel_id)
+        if channel is None:
+            return  # Not subscribed to this channel
+
+        for chunk_id in chunk_ids:
+            # Skip chunks we already have
+            if chunk_id in channel.chunks:
+                continue
+            await self._signaling.send_chunk_request(peer_id, chunk_id, channel_id)
+
+    async def _handle_chunk_data(self, msg: dict) -> None:
+        """Handle chunk_data — process received chunk."""
+        channel_id = msg.get("channelId", "")
+        chunk_data = msg.get("data")
+
+        if not chunk_data or not channel_id:
+            return
+
+        # If data is a dict, use it directly; otherwise parse it
+        if isinstance(chunk_data, str):
+            chunk_data = json.loads(chunk_data)
+
+        await self.receive_channel_chunk(channel_id, chunk_data)
+
     async def subscribe_channel(self, invite_link: str) -> SubscribedChannel:
         """Subscribe to a channel by decoding a zajel:// invite link.
 
@@ -547,6 +715,10 @@ class ZajelHeadlessClient:
             encryption_key=encryption_key,
         )
         self._channel_storage.save_channel(channel)
+
+        # Register subscription with signaling server
+        if self._signaling.is_connected:
+            await self._signaling.send_channel_subscribe(manifest.channel_id)
 
         logger.info(
             "Subscribed to channel %s (%s)",
@@ -633,6 +805,17 @@ class ZajelHeadlessClient:
             channel.encryption_key,
             manifest.key_epoch,
         )
+
+        # Enforce content type rules from manifest (Plan 09 content safety)
+        allowed = manifest.rules.allowed_types
+        if allowed and payload.content_type not in allowed:
+            logger.warning(
+                "Chunk %s content type '%s' not in allowed_types %s, discarding",
+                chunk.chunk_id,
+                payload.content_type,
+                allowed,
+            )
+            return None
 
         # Emit event and queue
         self._channel_content_queue.put_nowait((channel_id, payload))

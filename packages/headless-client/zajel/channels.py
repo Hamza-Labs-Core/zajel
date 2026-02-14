@@ -1,12 +1,14 @@
 """Channel and invite link support for the headless client.
 
 Handles:
-- Decoding zajel:// invite links (manifest + decryption key)
+- Creating channels (Ed25519 signing keypair + X25519 encryption keypair)
+- Encoding/decoding zajel:// invite links (manifest + decryption key)
 - Channel manifest model (matching the Dart app's ChannelManifest)
 - Chunk model (matching the Dart app's Chunk)
 - Channel subscription storage (in-memory)
 - Chunk payload encryption/decryption (HKDF + ChaCha20-Poly1305)
-- Ed25519 signature verification for manifests and chunks
+- Ed25519 signature creation and verification for manifests and chunks
+- Chunk creation: encrypt, split, sign for publishing
 
 Channels use VPS relays (not direct P2P). The headless client stores
 subscribed channels locally and can listen for incoming chunks.
@@ -14,9 +16,13 @@ subscribed channels locally and can listen for incoming chunks.
 
 import base64
 import hashlib
+import hmac
 import json
 import logging
+import math
 import os
+import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -25,7 +31,15 @@ from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
     Ed25519PublicKey,
+)
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    PublicFormat,
 )
 
 logger = logging.getLogger("zajel.channels")
@@ -34,6 +48,7 @@ logger = logging.getLogger("zajel.channels")
 NONCE_SIZE = 12
 MAC_SIZE = 16
 CHANNEL_LINK_PREFIX = "zajel://channel/"
+CHUNK_SIZE = 64 * 1024  # 64 KB — must match Dart app's ChannelService.chunkSize
 
 
 # ── Models ──────────────────────────────────────────────────────
@@ -236,7 +251,35 @@ class SubscribedChannel:
     chunks: dict[str, Chunk] = field(default_factory=dict)
 
 
-# ── Invite Link Decode ──────────────────────────────────────────
+@dataclass
+class OwnedChannel:
+    """A channel owned by the headless client."""
+
+    channel_id: str
+    manifest: ChannelManifest
+    signing_key_private: str  # Ed25519 private key seed, base64
+    encryption_key_private: str  # X25519 private key, base64
+    encryption_key_public: str  # X25519 public key, base64
+    sequence: int = 0  # Latest published sequence number
+    chunks: dict[str, Chunk] = field(default_factory=dict)
+
+
+# ── Invite Link Encode/Decode ──────────────────────────────────
+
+
+def encode_channel_link(manifest: ChannelManifest, encryption_key_private: str) -> str:
+    """Encode a channel invite link from manifest + decryption key.
+
+    Format: zajel://channel/<base64url-encoded-json>
+    Matches the Dart app's ChannelLinkService.encode().
+    """
+    payload = {
+        "m": manifest.to_dict(),
+        "k": encryption_key_private,
+    }
+    json_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(json_bytes).decode().rstrip("=")
+    return f"{CHANNEL_LINK_PREFIX}{encoded}"
 
 
 def decode_channel_link(link: str) -> tuple[ChannelManifest, str]:
@@ -284,10 +327,162 @@ class ChannelCryptoService:
     """Cryptographic operations for channels.
 
     Handles:
-    - Ed25519 signature verification for manifests and chunks
+    - Ed25519 keypair generation, signing, and verification
+    - X25519 keypair generation for content encryption
+    - Channel ID derivation (SHA-256 of owner public key)
     - HKDF-derived content key derivation
-    - ChaCha20-Poly1305 decryption of chunk payloads
+    - ChaCha20-Poly1305 encryption/decryption of chunk payloads
+    - Chunk creation: encrypt, split, sign
+    - Routing hash derivation (HMAC-SHA256)
     """
+
+    # ── Key Generation ──────────────────────────────────────────
+
+    @staticmethod
+    def generate_signing_keypair() -> tuple[str, str]:
+        """Generate an Ed25519 signing keypair.
+
+        Returns:
+            (public_key_b64, private_key_seed_b64) tuple.
+        """
+        private_key = Ed25519PrivateKey.generate()
+        seed = private_key.private_bytes(
+            Encoding.Raw, PrivateFormat.Raw, NoEncryption()
+        )
+        public_bytes = private_key.public_key().public_bytes(
+            Encoding.Raw, PublicFormat.Raw
+        )
+        return base64.b64encode(public_bytes).decode(), base64.b64encode(seed).decode()
+
+    @staticmethod
+    def generate_encryption_keypair() -> tuple[str, str]:
+        """Generate an X25519 keypair for content encryption.
+
+        Returns:
+            (public_key_b64, private_key_b64) tuple.
+        """
+        private_key = X25519PrivateKey.generate()
+        private_bytes = private_key.private_bytes(
+            Encoding.Raw, PrivateFormat.Raw, NoEncryption()
+        )
+        public_bytes = private_key.public_key().public_bytes(
+            Encoding.Raw, PublicFormat.Raw
+        )
+        return base64.b64encode(public_bytes).decode(), base64.b64encode(private_bytes).decode()
+
+    @staticmethod
+    def derive_channel_id(public_key_b64: str) -> str:
+        """Derive a channel ID from an Ed25519 public key.
+
+        SHA-256 of the public key bytes, truncated to 16 bytes, hex-encoded.
+        Matches the Dart app's deriveChannelId().
+        """
+        public_key_bytes = base64.b64decode(public_key_b64)
+        digest = hashlib.sha256(public_key_bytes).digest()
+        return digest[:16].hex()
+
+    # ── Manifest Signing ────────────────────────────────────────
+
+    @staticmethod
+    def sign_manifest(
+        manifest: ChannelManifest, private_key_seed_b64: str
+    ) -> ChannelManifest:
+        """Sign a manifest with the owner's Ed25519 private key.
+
+        Returns a new manifest with the signature field populated.
+        """
+        signable = manifest.to_signable_json()
+        signable_bytes = signable.encode("utf-8")
+
+        seed = base64.b64decode(private_key_seed_b64)
+        private_key = Ed25519PrivateKey.from_private_bytes(seed)
+        signature = private_key.sign(signable_bytes)
+
+        manifest.signature = base64.b64encode(signature).decode()
+        return manifest
+
+    # ── Chunk Signing ───────────────────────────────────────────
+
+    @staticmethod
+    def sign_chunk(
+        encrypted_payload: bytes, private_key_seed_b64: str
+    ) -> str:
+        """Sign a chunk's encrypted payload with Ed25519.
+
+        Returns the base64-encoded signature.
+        """
+        seed = base64.b64decode(private_key_seed_b64)
+        private_key = Ed25519PrivateKey.from_private_bytes(seed)
+        signature = private_key.sign(encrypted_payload)
+        return base64.b64encode(signature).decode()
+
+    # ── Chunk Creation ──────────────────────────────────────────
+
+    @staticmethod
+    def create_chunks(
+        payload: ChunkPayload,
+        encryption_key_private_b64: str,
+        signing_key_private_b64: str,
+        owner_public_key_b64: str,
+        key_epoch: int,
+        sequence: int,
+        routing_hash: str,
+    ) -> list[Chunk]:
+        """Encrypt a payload, split into chunks, and sign each one.
+
+        Matches the Dart app's ChannelService.splitIntoChunks().
+        """
+        encrypted_bytes = ChannelCryptoService.encrypt_payload(
+            payload, encryption_key_private_b64, key_epoch
+        )
+
+        total_chunks = max(1, math.ceil(len(encrypted_bytes) / CHUNK_SIZE))
+        chunks = []
+
+        for i in range(total_chunks):
+            start = i * CHUNK_SIZE
+            end = min(start + CHUNK_SIZE, len(encrypted_bytes))
+            chunk_data = encrypted_bytes[start:end]
+
+            signature = ChannelCryptoService.sign_chunk(
+                chunk_data, signing_key_private_b64
+            )
+
+            short_id = uuid.uuid4().hex[:16]
+            chunk_id = f"ch_{short_id}_{i:03d}"
+
+            chunks.append(Chunk(
+                chunk_id=chunk_id,
+                routing_hash=routing_hash,
+                sequence=sequence,
+                chunk_index=i,
+                total_chunks=total_chunks,
+                size=len(chunk_data),
+                signature=signature,
+                author_pubkey=owner_public_key_b64,
+                encrypted_payload=chunk_data,
+            ))
+
+        return chunks
+
+    # ── Routing Hash ────────────────────────────────────────────
+
+    @staticmethod
+    def derive_routing_hash(channel_secret_b64: str) -> str:
+        """Derive a routing hash for the current hourly epoch.
+
+        HMAC-SHA256(channel_secret, "epoch:hourly:<epoch>"), truncated to 16 bytes.
+        Matches the Dart app's RoutingHashService.
+        """
+        secret_bytes = base64.b64decode(channel_secret_b64)
+        epoch_ms = int(time.time() * 1000)
+        hourly_epoch = epoch_ms // 3_600_000
+        message = f"epoch:hourly:{hourly_epoch}".encode("utf-8")
+
+        mac = hmac.new(secret_bytes, message, hashlib.sha256).digest()
+        return mac[:16].hex()
+
+    # ── Verification ────────────────────────────────────────────
 
     @staticmethod
     def verify_manifest(manifest: ChannelManifest) -> bool:
@@ -399,10 +594,11 @@ class ChannelCryptoService:
 
 
 class ChannelStorage:
-    """In-memory storage for subscribed channels and their chunks."""
+    """In-memory storage for subscribed and owned channels."""
 
     def __init__(self):
         self._channels: dict[str, SubscribedChannel] = {}
+        self._owned: dict[str, OwnedChannel] = {}
 
     def save_channel(self, channel: SubscribedChannel) -> None:
         """Save or update a subscribed channel."""
@@ -443,3 +639,17 @@ class ChannelStorage:
         if not channel or not channel.chunks:
             return 0
         return max(c.sequence for c in channel.chunks.values())
+
+    # ── Owned channel methods ───────────────────────────────
+
+    def save_owned(self, channel: OwnedChannel) -> None:
+        """Save or update an owned channel."""
+        self._owned[channel.channel_id] = channel
+
+    def get_owned(self, channel_id: str) -> Optional[OwnedChannel]:
+        """Get an owned channel by ID."""
+        return self._owned.get(channel_id)
+
+    def get_all_owned(self) -> list[OwnedChannel]:
+        """Get all owned channels."""
+        return list(self._owned.values())

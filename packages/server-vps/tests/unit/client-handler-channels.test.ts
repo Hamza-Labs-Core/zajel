@@ -13,7 +13,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'events';
 import { ClientHandler, type ClientHandlerConfig } from '../../src/client/handler.js';
 import { RelayRegistry } from '../../src/registry/relay-registry.js';
+import { SQLiteStorage } from '../../src/storage/sqlite.js';
 import type { ServerIdentity } from '../../src/types.js';
+import { join } from 'path';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
 
 // Valid 32-byte base64-encoded public keys for testing
 const VALID_PUBKEY_1 = 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDE=';
@@ -603,5 +607,164 @@ describe('Cleanup', () => {
     // No error should occur
     const errors = ownerWs.sentMessages.filter((m: any) => m.type === 'error');
     expect(errors.length).toBe(0);
+  });
+});
+
+// Helper: create a handler with real storage for chunk relay (channel tests)
+function createHandlerWithStorage(storage: SQLiteStorage) {
+  const identity: ServerIdentity = {
+    serverId: 'test-server-id',
+    nodeId: 'test-node-id',
+    ephemeralId: 'srv-test',
+    publicKey: new Uint8Array(32),
+    privateKey: new Uint8Array(32),
+  };
+
+  const config: ClientHandlerConfig = {
+    heartbeatInterval: 30000,
+    heartbeatTimeout: 90000,
+    maxConnectionsPerPeer: 10,
+    pairRequestTimeout: 5000,
+    pairRequestWarningTime: 2000,
+  };
+
+  const relayRegistry = new RelayRegistry();
+  const distributedRendezvous = new MockDistributedRendezvous();
+
+  return new ClientHandler(
+    identity,
+    'ws://localhost:8080',
+    config,
+    relayRegistry,
+    distributedRendezvous as any,
+    {},
+    storage,
+  );
+}
+
+describe('Channel Subscription with Chunk Delivery', () => {
+  let handler: ClientHandler;
+  let storage: SQLiteStorage;
+  let tmpDir: string;
+  let ownerWs: MockWebSocket;
+  let subWs: MockWebSocket;
+
+  beforeEach(async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'zajel-chan-test-'));
+    const dbPath = join(tmpDir, 'test.db');
+    storage = new SQLiteStorage(dbPath);
+    await storage.init();
+    handler = createHandlerWithStorage(storage);
+
+    ownerWs = new MockWebSocket();
+    handler.handleConnection(ownerWs as any);
+    await registerPeer(handler, ownerWs, OWNER_CODE, VALID_PUBKEY_1);
+    ownerWs.clearMessages();
+
+    subWs = new MockWebSocket();
+    handler.handleConnection(subWs as any);
+    await registerPeer(handler, subWs, SUB_CODE_1, VALID_PUBKEY_2);
+    subWs.clearMessages();
+  });
+
+  afterEach(async () => {
+    await handler.shutdown();
+    storage.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should send chunk_available with cached chunks on subscribe', async () => {
+    // Pre-populate cache with chunks for this channel
+    await storage.cacheChunk('chunk-1', 'ch_cached', Buffer.from('data1'));
+    await storage.cacheChunk('chunk-2', 'ch_cached', Buffer.from('data2'));
+    // Chunk for a different channel — should NOT be included
+    await storage.cacheChunk('chunk-other', 'ch_other', Buffer.from('other'));
+
+    await handler.handleMessage(subWs as any, JSON.stringify({
+      type: 'channel-subscribe',
+      channelId: 'ch_cached',
+    }));
+
+    const subscribed = subWs.sentMessages.find((m: any) => m.type === 'channel-subscribed');
+    expect(subscribed).toBeDefined();
+    expect(subscribed.channelId).toBe('ch_cached');
+
+    const available = subWs.sentMessages.find((m: any) => m.type === 'chunk_available');
+    expect(available).toBeDefined();
+    expect(available.channelId).toBe('ch_cached');
+    expect(available.chunkIds).toHaveLength(2);
+    expect(available.chunkIds).toContain('chunk-1');
+    expect(available.chunkIds).toContain('chunk-2');
+    // Chunk from other channel should not leak
+    expect(available.chunkIds).not.toContain('chunk-other');
+  });
+
+  it('should not send chunk_available when no cached chunks exist', async () => {
+    await handler.handleMessage(subWs as any, JSON.stringify({
+      type: 'channel-subscribe',
+      channelId: 'ch_empty',
+    }));
+
+    const subscribed = subWs.sentMessages.find((m: any) => m.type === 'channel-subscribed');
+    expect(subscribed).toBeDefined();
+
+    const available = subWs.sentMessages.find((m: any) => m.type === 'chunk_available');
+    expect(available).toBeUndefined();
+  });
+
+  it('should send chunk_available to new subscriber after owner announces', async () => {
+    // Owner registers and announces chunks
+    await handler.handleMessage(ownerWs as any, JSON.stringify({
+      type: 'channel-owner-register',
+      channelId: 'ch_announce',
+    }));
+
+    // Subscribe first subscriber
+    await handler.handleMessage(subWs as any, JSON.stringify({
+      type: 'channel-subscribe',
+      channelId: 'ch_announce',
+    }));
+    subWs.clearMessages();
+
+    // Owner announces chunks — subscriber should get chunk_available
+    await handler.handleMessage(ownerWs as any, JSON.stringify({
+      type: 'chunk_announce',
+      peerId: OWNER_CODE,
+      channelId: 'ch_announce',
+      chunks: [
+        { chunkId: 'announced-1' },
+        { chunkId: 'announced-2' },
+      ],
+    }));
+
+    const available = subWs.sentMessages.find((m: any) => m.type === 'chunk_available');
+    expect(available).toBeDefined();
+    expect(available.channelId).toBe('ch_announce');
+    expect(available.chunkIds).toContain('announced-1');
+    expect(available.chunkIds).toContain('announced-2');
+  });
+
+  it('should send cached chunks to late-joining subscriber', async () => {
+    // Simulate chunks already cached (e.g., from a previous owner push)
+    await storage.cacheChunk('pushed-chunk-1', 'ch_late', Buffer.from('data1'));
+    await storage.cacheChunk('pushed-chunk-2', 'ch_late', Buffer.from('data2'));
+
+    // A late subscriber joins — should get chunk_available with existing chunks
+    const lateSub = new MockWebSocket();
+    handler.handleConnection(lateSub as any);
+    await registerPeer(handler, lateSub, SUB_CODE_2, VALID_PUBKEY_3);
+    lateSub.clearMessages();
+
+    await handler.handleMessage(lateSub as any, JSON.stringify({
+      type: 'channel-subscribe',
+      channelId: 'ch_late',
+    }));
+
+    const available = lateSub.sentMessages.find((m: any) => m.type === 'chunk_available');
+    expect(available).toBeDefined();
+    expect(available.channelId).toBe('ch_late');
+    expect(available.chunkIds).toHaveLength(2);
+    expect(available.chunkIds).toContain('pushed-chunk-1');
+    expect(available.chunkIds).toContain('pushed-chunk-2');
   });
 });
