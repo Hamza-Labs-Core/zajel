@@ -623,6 +623,12 @@ export class SQLiteStorage implements Storage {
     return { data: row.data, channelId: row.channel_id };
   }
 
+  async getCachedChunkIdsByChannel(channelId: string): Promise<string[]> {
+    const stmt = this.db.prepare(`SELECT chunk_id FROM chunk_cache WHERE channel_id = ?`);
+    const rows = stmt.all(channelId) as Array<{ chunk_id: string }>;
+    return rows.map(row => row.chunk_id);
+  }
+
   async deleteCachedChunk(chunkId: string): Promise<boolean> {
     const stmt = this.db.prepare(`DELETE FROM chunk_cache WHERE chunk_id = ?`);
     const result = stmt.run(chunkId);

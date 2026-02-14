@@ -154,6 +154,10 @@ class ConnectionManager {
   /// with a new pairing code.
   MessageStorage? _messageStorage;
 
+  /// Callback invoked after trusted peers are migrated (ID change).
+  /// Used by the provider layer to refresh the contacts list.
+  void Function()? onTrustedPeersChanged;
+
   ConnectionManager({
     required CryptoService cryptoService,
     required WebRTCService webrtcService,
@@ -712,6 +716,7 @@ class ConnectionManager {
       ));
 
       _notifyPeersChanged();
+      onTrustedPeersChanged?.call();
     } catch (e) {
       logger.error('ConnectionManager', 'Failed to migrate trusted peer', e);
     }

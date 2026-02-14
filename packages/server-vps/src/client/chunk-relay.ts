@@ -337,6 +337,14 @@ export class ChunkRelay {
   }
 
   /**
+   * Get cached chunk IDs for a channel.
+   * Used when a new subscriber joins to inform them of existing content.
+   */
+  async getCachedChunkIdsForChannel(channelId: string): Promise<string[]> {
+    return this.storage.getCachedChunkIdsByChannel(channelId);
+  }
+
+  /**
    * Get relay statistics.
    */
   async getStats(): Promise<ChunkRelayStats> {

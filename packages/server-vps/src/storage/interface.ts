@@ -70,6 +70,7 @@ export interface Storage {
   // Chunk cache
   cacheChunk(chunkId: string, channelId: string, data: Buffer): Promise<void>;
   getCachedChunk(chunkId: string): Promise<{ data: Buffer; channelId: string } | null>;
+  getCachedChunkIdsByChannel(channelId: string): Promise<string[]>;
   deleteCachedChunk(chunkId: string): Promise<boolean>;
   cleanupExpiredChunks(maxAgeMs: number): Promise<number>;
   evictLruChunks(maxEntries: number): Promise<number>;

@@ -658,7 +658,7 @@ export class ClientHandler extends EventEmitter {
           break;
 
         case 'channel-subscribe':
-          this.handleChannelSubscribe(ws, message as ChannelSubscribeMessage);
+          await this.handleChannelSubscribe(ws, message as ChannelSubscribeMessage);
           break;
 
         case 'channel-owner-register':
@@ -1718,7 +1718,7 @@ export class ClientHandler extends EventEmitter {
    * Handle channel subscription registration.
    * Subscribers register to receive stream frames and broadcasts.
    */
-  private handleChannelSubscribe(ws: WebSocket, message: ChannelSubscribeMessage): void {
+  private async handleChannelSubscribe(ws: WebSocket, message: ChannelSubscribeMessage): Promise<void> {
     const { channelId } = message;
 
     if (!channelId) {
@@ -1747,6 +1747,18 @@ export class ClientHandler extends EventEmitter {
         channelId,
         title: activeStream.title,
       });
+    }
+
+    // Send existing cached chunks so late-joining subscribers can fetch content.
+    if (this.chunkRelay) {
+      const chunkIds = await this.chunkRelay.getCachedChunkIdsForChannel(channelId);
+      if (chunkIds.length > 0) {
+        this.send(ws, {
+          type: 'chunk_available',
+          channelId,
+          chunkIds,
+        });
+      }
     }
   }
 

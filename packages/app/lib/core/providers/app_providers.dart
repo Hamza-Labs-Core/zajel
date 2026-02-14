@@ -267,6 +267,11 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
   );
   manager.setMessageStorage(messageStorage);
 
+  // Refresh contacts list when a trusted peer is migrated (ID change).
+  manager.onTrustedPeersChanged = () {
+    ref.read(trustedPeerVersionProvider.notifier).state++;
+  };
+
   return manager;
 });
 
@@ -536,6 +541,10 @@ class BlockedPeersNotifier extends StateNotifier<Set<String>> {
     }
   }
 }
+
+/// Version counter incremented when trusted peers storage changes
+/// (e.g., after peer migration). Watched by [contactsProvider] to refresh.
+final trustedPeerVersionProvider = StateProvider<int>((ref) => 0);
 
 /// Provider for signaling connection status.
 final signalingConnectedProvider = StateProvider<bool>((ref) => false);
