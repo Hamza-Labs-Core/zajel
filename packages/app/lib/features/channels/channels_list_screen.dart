@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/providers/app_providers.dart';
 import 'models/channel.dart';
 import 'providers/channel_providers.dart';
 import 'services/channel_link_service.dart';
@@ -64,11 +65,18 @@ class ChannelsListScreen extends ConsumerWidget {
 
     if (result == true && nameController.text.trim().isNotEmpty) {
       final channelService = ref.read(channelServiceProvider);
-      await channelService.createChannel(
+      final channel = await channelService.createChannel(
         name: nameController.text.trim(),
         description: descriptionController.text.trim(),
       );
       ref.invalidate(channelsProvider);
+
+      // Register ownership with VPS so it routes upstream messages to us
+      final signalingClient = ref.read(signalingClientProvider);
+      signalingClient?.send({
+        'type': 'channel-owner-register',
+        'channelId': channel.id,
+      });
     }
   }
 
@@ -115,6 +123,13 @@ class ChannelsListScreen extends ConsumerWidget {
           encryptionPrivateKey: decoded.encryptionKey,
         );
         ref.invalidate(channelsProvider);
+
+        // Register subscription with VPS so it routes chunks to us
+        final signalingClient = ref.read(signalingClientProvider);
+        signalingClient?.send({
+          'type': 'channel-subscribe',
+          'channelId': decoded.manifest.channelId,
+        });
 
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(

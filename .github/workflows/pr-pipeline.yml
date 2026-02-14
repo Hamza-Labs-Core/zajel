@@ -229,7 +229,10 @@ jobs:
             --dart-define=VERSION=${{ env.VERSION }} \
             --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
             --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }} \
-            --dart-define=E2E_TEST=true
+            --dart-define=E2E_TEST=true \
+            --dart-define=TURN_URL=turn:10.0.2.2:3478 \
+            --dart-define=TURN_USER=${{ secrets.TURN_USER || '' }} \
+            --dart-define=TURN_PASS=${{ secrets.TURN_PASS || '' }}
 
           mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/zajel-${{ env.VERSION }}-android.apk
 
@@ -996,7 +999,7 @@ jobs:
   # ============================================
   e2e-tests:
     name: E2E Tests
-    needs: [unit-tests]
+    needs: [unit-tests, build-android]
     # Run on PR events always, and on workflow_dispatch unless skip_e2e is true
     if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
     runs-on: ubuntu-latest
@@ -1009,12 +1012,6 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          cache: true
 
       - name: Enable KVM for hardware acceleration
         run: |
@@ -1117,18 +1114,17 @@ jobs:
           echo "TURN_USER=${TURN_USER}" >> "$GITHUB_ENV"
           echo "TURN_PASS=${TURN_PASS}" >> "$GITHUB_ENV"
 
-      - name: Build E2E APK
-        working-directory: packages/app
+      - name: Download APK from build-android
+        uses: actions/download-artifact@v4
+        with:
+          name: android-build
+          path: ./android-artifact
+
+      - name: Place APK for E2E tests
         run: |
-          flutter pub get
-          flutter build apk --release \
-            --dart-define=ENV=qa \
-            --dart-define=E2E_TEST=true \
-            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
-            --dart-define=SIGNALING_URL=${{ env.SIGNALING_URL }} \
-            --dart-define=TURN_URL=${{ env.TURN_URL_EMU }} \
-            --dart-define=TURN_USER=${{ env.TURN_USER }} \
-            --dart-define=TURN_PASS=${{ env.TURN_PASS }}
+          mkdir -p packages/app/build/app/outputs/flutter-apk
+          cp android-artifact/zajel-*-android.apk packages/app/build/app/outputs/flutter-apk/app-release.apk
+          ls -lh packages/app/build/app/outputs/flutter-apk/app-release.apk
 
       - name: Free up disk space
         run: |
@@ -1162,7 +1158,7 @@ jobs:
           yes | sdkmanager "system-images;android-31;google_apis;x86_64" --channel=0
 
           echo "Creating AVD..."
-          echo "no" | avdmanager create avd -n test-avd-1 -k "system-images;android-31;google_apis;x86_64" --force
+          echo "no" | avdmanager create avd -n test-avd-1 -k "system-images;android-31;google_apis;x86_64" --device "pixel_6" --force
 
           echo "Restarting adb server..."
           adb kill-server || true

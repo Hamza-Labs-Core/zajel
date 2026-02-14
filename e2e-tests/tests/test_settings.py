@@ -92,18 +92,19 @@ class TestSettings:
         helper.navigate_to_settings()
 
         # The External Connections section may be below the fold — scroll down
+        # Use small scroll increments to avoid overshooting past the section
         screen_size = alice.get_window_size()
         center_x = int(screen_size['width'] * 0.5)
-        start_y = int(screen_size['height'] * 0.8)
-        end_y = int(screen_size['height'] * 0.2)
+        start_y = int(screen_size['height'] * 0.6)
+        end_y = int(screen_size['height'] * 0.3)
 
         found_status = False
         # Try without scrolling first, then scroll and retry
-        for attempt in range(4):
+        for attempt in range(6):
             for status_text in ['External Connections', 'Connected',
                                 'Connecting', 'Pairing Code']:
                 try:
-                    helper._find(status_text, timeout=3)
+                    helper._find(status_text, timeout=2)
                     found_status = True
                     break
                 except Exception:
