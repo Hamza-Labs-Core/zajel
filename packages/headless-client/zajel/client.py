@@ -235,6 +235,14 @@ class ZajelHeadlessClient:
         self._group_message_queue: asyncio.Queue[GroupMessage] = asyncio.Queue()
         self._group_invitation_queue: asyncio.Queue[Group] = asyncio.Queue()
 
+        # WebRTC peer tracking (issue-headless-05: bind handshake to specific peer)
+        self._webrtc_peer_id: Optional[str] = None
+
+        # Group invitation verification state (issue-headless-11)
+        self.auto_accept_group_invitations: bool = True
+        self._pending_group_invitations: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
+        self._seen_group_invitations: set[str] = set()
+
     async def __aenter__(self) -> "ZajelHeadlessClient":
         return self
 
@@ -300,6 +308,7 @@ class ZajelHeadlessClient:
         await self._signaling.disconnect()
         self._storage.close()
         self._connected_peers.clear()
+        self._webrtc_peer_id = None
         logger.info("Disconnected")
 
     # ── Pairing ──────────────────────────────────────────────
@@ -570,6 +579,11 @@ class ZajelHeadlessClient:
         channel = self._channel_storage.get_owned(channel_id)
         if channel is None:
             raise RuntimeError(f"Owned channel not found: {channel_id}")
+        logger.warning(
+            "Generating invite link for channel %s. This link contains "
+            "the decryption key -- treat it as a secret.",
+            channel_id[:16],
+        )
         return encode_channel_link(channel.manifest, channel.encryption_key_private)
 
     async def publish_channel_message(
@@ -1118,12 +1132,54 @@ class ZajelHeadlessClient:
             sender_keys = data["senderKeys"]
             invitee_sender_key = data["inviteeSenderKey"]
 
+            # Verify the inviter is the peer who sent this message (issue-headless-11)
+            inviter_device_id = data.get("inviterDeviceId")
+            if inviter_device_id != from_peer_id:
+                logger.warning(
+                    "Group invitation inviterDeviceId mismatch: "
+                    "claimed '%s' but received from '%s'. Rejecting.",
+                    inviter_device_id, from_peer_id,
+                )
+                return
+
+            # Verify the inviter is listed as a member of the group
+            inviter_is_member = any(
+                m["device_id"] == inviter_device_id for m in members_json
+            )
+            if not inviter_is_member:
+                logger.warning(
+                    "Inviter %s is not in the member list of group '%s'. Rejecting.",
+                    inviter_device_id, group_name,
+                )
+                return
+
+            # Verify the inviter has a sender key in the invitation
+            if inviter_device_id not in sender_keys:
+                logger.warning(
+                    "Inviter %s has no sender key in group invitation. Rejecting.",
+                    inviter_device_id,
+                )
+                return
+
+            # Replay protection: reject duplicate invitations (issue-headless-11)
+            invite_key = f"{group_id}:{inviter_device_id}"
+            if invite_key in self._seen_group_invitations:
+                logger.info("Duplicate group invitation for '%s', ignoring", group_name)
+                return
+            self._seen_group_invitations.add(invite_key)
+
             # Check if we already have this group
             existing = self._group_storage.get_group(group_id)
             if existing is not None:
                 logger.info(
                     "Already in group '%s', ignoring invitation", group_name
                 )
+                return
+
+            # If auto-accept is disabled, queue for user approval (issue-headless-11)
+            if not self.auto_accept_group_invitations:
+                self._pending_group_invitations.put_nowait((from_peer_id, data))
+                logger.info("Group invitation queued for approval: '%s'", group_name)
                 return
 
             # Parse members from Dart-format JSON
@@ -1280,6 +1336,9 @@ class ZajelHeadlessClient:
         # which can arrive before we finish _establish_connection)
         self._connected_peers[match.peer_code] = peer
 
+        # Track which peer this WebRTC connection belongs to (issue-headless-05)
+        self._webrtc_peer_id = match.peer_code
+
         # Create WebRTC connection
         await self._webrtc.create_connection(match.is_initiator)
 
@@ -1376,59 +1435,70 @@ class ZajelHeadlessClient:
         msg = parse_channel_message(data)
 
         if msg["type"] == "handshake":
-            # Key exchange
+            # Key exchange — use tracked WebRTC peer ID (issue-headless-05)
             peer_pub_key = msg["publicKey"]
-            # Find which peer this is from
-            for peer_id, peer in self._connected_peers.items():
+            peer_id = self._webrtc_peer_id
+            if peer_id and peer_id in self._connected_peers:
                 if not self._crypto.has_session_key(peer_id):
+                    # Verify the handshake public key matches what we received during pairing
+                    expected_pub = self._connected_peers[peer_id].public_key
+                    if expected_pub and peer_pub_key != expected_pub:
+                        logger.warning(
+                            "Handshake public key mismatch for %s: "
+                            "expected %s, got %s",
+                            peer_id, expected_pub[:16], peer_pub_key[:16],
+                        )
                     self._crypto.perform_key_exchange(peer_id, peer_pub_key)
                     logger.info("Key exchange completed with %s", peer_id)
-                    break
+                else:
+                    logger.warning("Already have session key for %s", peer_id)
             else:
-                logger.warning("No peer found for handshake")
+                logger.warning("Handshake from unknown WebRTC peer")
 
         elif msg["type"] == "encrypted_text":
-            # Encrypted message — decrypt with first connected peer that has a key
-            for peer_id in self._connected_peers:
-                if self._crypto.has_session_key(peer_id):
-                    try:
-                        plaintext = self._crypto.decrypt(peer_id, msg["data"])
+            # Encrypted message — decrypt with the tracked WebRTC peer (issue-headless-06)
+            peer_id = self._webrtc_peer_id
+            if peer_id and self._crypto.has_session_key(peer_id):
+                try:
+                    plaintext = self._crypto.decrypt(peer_id, msg["data"])
 
-                        # Check for group invitation prefix
-                        if plaintext.startswith("ginv:"):
-                            self._handle_group_invitation(
-                                peer_id, plaintext[5:]
-                            )
-                            break
-
-                        # Check for group message prefix
-                        if plaintext.startswith("grp:"):
-                            self._handle_group_data(
-                                peer_id, plaintext[4:]
-                            )
-                            break
-
-                        received = ReceivedMessage(
-                            peer_id=peer_id, content=plaintext
+                    # Check for group invitation prefix
+                    if plaintext.startswith("ginv:"):
+                        self._handle_group_invitation(
+                            peer_id, plaintext[5:]
                         )
-                        self._message_queue.put_nowait(received)
-                        asyncio.get_event_loop().create_task(
-                            self._events.emit("message", peer_id, plaintext, "text")
+                        return
+
+                    # Check for group message prefix
+                    if plaintext.startswith("grp:"):
+                        self._handle_group_data(
+                            peer_id, plaintext[4:]
                         )
-                        break
-                    except Exception as e:
-                        logger.debug("Decrypt failed for %s: %s", peer_id, e)
+                        return
+
+                    received = ReceivedMessage(
+                        peer_id=peer_id, content=plaintext
+                    )
+                    self._message_queue.put_nowait(received)
+                    asyncio.get_event_loop().create_task(
+                        self._events.emit("message", peer_id, plaintext, "text")
+                    )
+                except Exception as e:
+                    logger.error("Decrypt failed for peer %s: %s", peer_id, e)
+            else:
+                logger.warning("No session key for WebRTC peer %s", peer_id)
 
     def _on_file_channel_data(self, data: str) -> None:
         """Handle data from the file channel."""
-        # File channel messages are encrypted — decrypt first
-        for peer_id in self._connected_peers:
-            if self._crypto.has_session_key(peer_id):
-                try:
-                    plaintext = self._crypto.decrypt(peer_id, data)
-                    msg = json.loads(plaintext)
-                    if self._file_transfer:
-                        self._file_transfer.handle_file_message(peer_id, msg)
-                    break
-                except Exception as e:
-                    logger.debug("File channel decrypt failed for %s: %s", peer_id, e)
+        # File channel messages are encrypted — decrypt with tracked peer (issue-headless-06)
+        peer_id = self._webrtc_peer_id
+        if peer_id and self._crypto.has_session_key(peer_id):
+            try:
+                plaintext = self._crypto.decrypt(peer_id, data)
+                msg = json.loads(plaintext)
+                if self._file_transfer:
+                    self._file_transfer.handle_file_message(peer_id, msg)
+            except Exception as e:
+                logger.error("File channel decrypt failed for %s: %s", peer_id, e)
+        else:
+            logger.warning("No session key for file channel peer %s", peer_id)

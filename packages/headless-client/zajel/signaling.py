@@ -12,8 +12,7 @@ Handles:
 import asyncio
 import json
 import logging
-import random
-import string
+import secrets
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine, Optional
 
@@ -30,7 +29,7 @@ HEARTBEAT_INTERVAL = 30  # seconds
 
 def generate_pairing_code() -> str:
     """Generate a random 6-character pairing code."""
-    return "".join(random.choices(PAIRING_CODE_CHARS, k=PAIRING_CODE_LENGTH))
+    return "".join(secrets.choice(PAIRING_CODE_CHARS) for _ in range(PAIRING_CODE_LENGTH))
 
 
 @dataclass

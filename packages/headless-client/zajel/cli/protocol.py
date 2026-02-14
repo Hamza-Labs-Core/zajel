@@ -4,17 +4,27 @@ Transport: UNIX domain socket with JSON-line framing.
 Each message is a single JSON object followed by a newline character.
 """
 
+import asyncio
 import json
 import os
+import re
 import socket
 from dataclasses import asdict, fields, is_dataclass
 from datetime import datetime
 from typing import Any
 
+MAX_MESSAGE_SIZE = 1024 * 1024  # 1 MB
+
 
 def default_socket_path(name: str = "default") -> str:
     """Return the default UNIX socket path for a given daemon name."""
-    return f"/tmp/zajel-headless-{name}.sock"
+    if not re.match(r'^[a-zA-Z0-9_-]+$', name):
+        raise ValueError(
+            f"Invalid daemon name '{name}': "
+            "only alphanumeric characters, hyphens, and underscores allowed"
+        )
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+    return os.path.join(runtime_dir, f"zajel-headless-{name}.sock")
 
 
 def send_request(sock: socket.socket, request: dict) -> None:
@@ -27,6 +37,7 @@ def read_response(sock: socket.socket) -> dict:
     """Read a single JSON-line response from a socket.
 
     Reads bytes until a newline is found.
+    Raises ValueError if the response exceeds MAX_MESSAGE_SIZE.
     """
     buf = b""
     while True:
@@ -34,6 +45,10 @@ def read_response(sock: socket.socket) -> dict:
         if not chunk:
             raise ConnectionError("Socket closed before response received")
         buf += chunk
+        if len(buf) > MAX_MESSAGE_SIZE:
+            raise ValueError(
+                f"Response exceeds maximum size ({MAX_MESSAGE_SIZE} bytes)"
+            )
         if b"\n" in buf:
             line, _ = buf.split(b"\n", 1)
             return json.loads(line.decode("utf-8"))
@@ -50,10 +65,20 @@ async def async_readline(reader) -> str | None:
     """Read a single line from an asyncio StreamReader.
 
     Returns None on EOF.
+    Raises ValueError if the line exceeds MAX_MESSAGE_SIZE.
     """
-    line = await reader.readline()
+    try:
+        line = await reader.readline()
+    except asyncio.LimitOverrunError:
+        raise ValueError(
+            f"Message exceeds maximum size ({MAX_MESSAGE_SIZE} bytes)"
+        )
     if not line:
         return None
+    if len(line) > MAX_MESSAGE_SIZE:
+        raise ValueError(
+            f"Message exceeds maximum size ({MAX_MESSAGE_SIZE} bytes)"
+        )
     return line.decode("utf-8").strip()
 
 

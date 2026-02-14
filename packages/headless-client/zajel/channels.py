@@ -270,12 +270,18 @@ class OwnedChannel:
 def encode_channel_link(manifest: ChannelManifest, encryption_key_private: str) -> str:
     """Encode a channel invite link from manifest + decryption key.
 
+    WARNING: The invite link contains the channel decryption key.
+    Anyone with this link can decrypt all channel content. Treat
+    it as a secret credential and share only through secure channels.
+
     Format: zajel://channel/<base64url-encoded-json>
     Matches the Dart app's ChannelLinkService.encode().
     """
     payload = {
         "m": manifest.to_dict(),
         "k": encryption_key_private,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "version": 1,
     }
     json_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     encoded = base64.urlsafe_b64encode(json_bytes).decode().rstrip("=")
@@ -307,6 +313,13 @@ def decode_channel_link(link: str) -> tuple[ChannelManifest, str]:
         payload = json.loads(json_bytes.decode("utf-8"))
     except Exception as e:
         raise ValueError(f"Invalid channel link: {e}") from e
+
+    # Check for expiration if present (issue-headless-08)
+    expires_at = payload.get("expires_at")
+    if expires_at:
+        exp = datetime.fromisoformat(expires_at)
+        if datetime.now(timezone.utc) > exp:
+            raise ValueError("Channel invite link has expired")
 
     manifest_data = payload["m"]
     encryption_key = payload["k"]

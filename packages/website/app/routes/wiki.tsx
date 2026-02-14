@@ -55,6 +55,7 @@ export default function Wiki() {
   const [isFallback, setIsFallback] = useState(false);
   const [loading, setLoading] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [pageError, setPageError] = useState<"not-found" | "load-error" | null>(null);
 
   // Redirect /wiki to /wiki/en
   useEffect(() => {
@@ -70,6 +71,7 @@ export default function Wiki() {
     async function loadPage() {
       setLoading(true);
       setIsFallback(false);
+      setPageError(null);
 
       const pages = isArabic ? arPages : enPages;
       let loader = pages[slug];
@@ -83,7 +85,8 @@ export default function Wiki() {
 
       if (!loader) {
         if (!cancelled) {
-          setContent(`# Page Not Found\n\nThe page **${slug}** does not exist.`);
+          setContent(null);
+          setPageError("not-found");
           setLoading(false);
         }
         return;
@@ -100,7 +103,9 @@ export default function Wiki() {
         }
       } catch {
         if (!cancelled) {
-          setContent(`# Error\n\nFailed to load **${slug}**.`);
+          setContent(null);
+          setPageError("load-error");
+          setIsFallback(false);
           setLoading(false);
         }
       }
@@ -143,6 +148,16 @@ export default function Wiki() {
 
           {loading ? (
             <div className="wiki-loading">Loading...</div>
+          ) : pageError === "not-found" ? (
+            <div className="wiki-markdown">
+              <h1>Page Not Found</h1>
+              <p>The page <strong>{slug}</strong> does not exist.</p>
+            </div>
+          ) : pageError === "load-error" ? (
+            <div className="wiki-markdown">
+              <h1>Error</h1>
+              <p>Failed to load <strong>{slug}</strong>.</p>
+            </div>
           ) : (
             content && <MarkdownRenderer content={content} lang={lang} />
           )}

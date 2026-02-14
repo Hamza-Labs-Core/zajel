@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import signal
+import stat
 import sys
 import uuid
 
@@ -36,7 +37,11 @@ async def handle_connection(
     logger.debug("CLI connection from %s", peer)
     try:
         while True:
-            line = await async_readline(reader)
+            try:
+                line = await async_readline(reader)
+            except ValueError as e:
+                await async_send(writer, {"error": str(e)})
+                break
             if line is None:
                 break
 
@@ -281,9 +286,21 @@ async def run_daemon(args: argparse.Namespace) -> None:
 
     socket_path = args.socket_path or default_socket_path(args.name)
 
-    # Clean up stale socket file
+    # Clean up stale socket file (safe: refuse to unlink non-socket/symlink)
     if os.path.exists(socket_path):
-        os.unlink(socket_path)
+        try:
+            st = os.lstat(socket_path)  # lstat does NOT follow symlinks
+            if stat.S_ISSOCK(st.st_mode):
+                os.unlink(socket_path)
+            else:
+                raise RuntimeError(
+                    f"Path exists and is not a socket: {socket_path} "
+                    f"(mode: {oct(st.st_mode)}). Remove it manually."
+                )
+        except OSError as e:
+            raise RuntimeError(
+                f"Cannot inspect socket path {socket_path}: {e}"
+            ) from e
 
     shutdown_event = asyncio.Event()
 
@@ -291,6 +308,8 @@ async def run_daemon(args: argparse.Namespace) -> None:
         await handle_connection(reader, writer, client, COMMANDS, shutdown_event)
 
     server = await asyncio.start_unix_server(on_connection, path=socket_path)
+    os.chmod(socket_path, 0o600)
+    logger.info("Socket permissions set to 0600 on %s", socket_path)
 
     # Print pairing code to stdout for CI to capture
     print(json.dumps({"pairing_code": pairing_code, "socket": socket_path}), flush=True)
@@ -308,9 +327,14 @@ async def run_daemon(args: argparse.Namespace) -> None:
     server.close()
     await server.wait_closed()
 
-    # Clean up socket file
+    # Clean up socket file (safe: only unlink actual sockets)
     if os.path.exists(socket_path):
-        os.unlink(socket_path)
+        try:
+            st = os.lstat(socket_path)
+            if stat.S_ISSOCK(st.st_mode):
+                os.unlink(socket_path)
+        except OSError:
+            pass  # Best effort cleanup on shutdown
 
     await client.disconnect()
     logger.info("Daemon stopped")

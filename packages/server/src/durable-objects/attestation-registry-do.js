@@ -8,7 +8,7 @@
  * - Version policy (minimum_version, blocked_versions, etc.)
  *
  * Storage key prefixes:
- * - device:{device_id}        -> { device_id, build_version, platform, registered_at }
+ * - device:{device_id}        -> { device_id, build_version, platform, registered_at, last_seen }
  * - reference:{version}:{platform} -> { version, platform, build_hash, size, critical_regions }
  * - nonce:{nonce}             -> { device_id, created_at, regions }
  * - version_policy            -> { minimum_version, recommended_version, blocked_versions, sunset_dates }
@@ -25,11 +25,24 @@ import {
   compareVersions,
 } from '../crypto/attestation.js';
 
+import { getCorsHeaders } from '../cors.js';
+import { timingSafeEqual } from '../crypto/timing-safe.js';
+import { parseJsonBody, BodyTooLargeError } from '../utils/request-validation.js';
+
 /** Session token TTL: 1 hour */
 const SESSION_TOKEN_TTL = 60 * 60 * 1000;
 
 /** Nonce TTL: 5 minutes (challenges expire) */
 const NONCE_TTL = 5 * 60 * 1000;
+
+/** Device TTL: 90 days (stale devices are cleaned up) */
+const DEVICE_TTL = 90 * 24 * 60 * 60 * 1000;
+
+/** Maximum active nonces per device */
+const MAX_NONCES_PER_DEVICE = 5;
+
+/** Maximum device entries */
+const MAX_DEVICE_ENTRIES = 100000;
 
 /** Number of regions per challenge */
 const MIN_CHALLENGE_REGIONS = 3;
@@ -39,17 +52,61 @@ export class AttestationRegistryDO {
   constructor(state, env) {
     this.state = state;
     this.env = env;
+
+    // Schedule periodic cleanup alarm
+    if (state.blockConcurrencyWhile) {
+      state.blockConcurrencyWhile(async () => {
+        const currentAlarm = await state.storage.getAlarm();
+        if (!currentAlarm) {
+          await state.storage.setAlarm(Date.now() + 5 * 60 * 1000);
+        }
+      });
+    }
+  }
+
+  /**
+   * Periodic alarm for cleaning up expired nonces and stale device entries.
+   */
+  async alarm() {
+    const now = Date.now();
+
+    // Clean up expired nonces
+    const nonces = await this.state.storage.list({ prefix: 'nonce:' });
+    const deleteNonceKeys = [];
+    for (const [key, value] of nonces) {
+      if (now - value.created_at > NONCE_TTL) {
+        deleteNonceKeys.push(key);
+      }
+    }
+    if (deleteNonceKeys.length > 0) {
+      for (let i = 0; i < deleteNonceKeys.length; i += 128) {
+        await this.state.storage.delete(deleteNonceKeys.slice(i, i + 128));
+      }
+    }
+
+    // Clean up stale device entries (not seen in 90 days)
+    const devices = await this.state.storage.list({ prefix: 'device:' });
+    const deleteDeviceKeys = [];
+    for (const [key, device] of devices) {
+      const lastActivity = device.last_seen || device.registered_at;
+      if (now - lastActivity > DEVICE_TTL) {
+        deleteDeviceKeys.push(key);
+      }
+    }
+    if (deleteDeviceKeys.length > 0) {
+      for (let i = 0; i < deleteDeviceKeys.length; i += 128) {
+        await this.state.storage.delete(deleteDeviceKeys.slice(i, i + 128));
+      }
+    }
+
+    // Schedule next cleanup
+    await this.state.storage.setAlarm(Date.now() + 5 * 60 * 1000);
   }
 
   async fetch(request) {
     const url = new URL(request.url);
 
-    const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'Access-Control-Expose-Headers': 'X-Attestation-Token',
-    };
+    const corsHeaders = getCorsHeaders(request, this.env);
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders });
@@ -91,6 +148,12 @@ export class AttestationRegistryDO {
         { status: 404, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
       );
     } catch (error) {
+      if (error instanceof BodyTooLargeError) {
+        return new Response(
+          JSON.stringify({ error: 'Request body too large' }),
+          { status: 413, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+        );
+      }
       return new Response(
         JSON.stringify({ error: error.message }),
         { status: 500, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
@@ -105,7 +168,7 @@ export class AttestationRegistryDO {
    * Payload: { version, platform, build_hash, timestamp }
    */
   async handleRegister(request, corsHeaders) {
-    const body = await request.json();
+    const body = await parseJsonBody(request, 8192);
     const { build_token, device_id } = body;
 
     if (!build_token || !device_id) {
@@ -114,6 +177,11 @@ export class AttestationRegistryDO {
         400,
         corsHeaders
       );
+    }
+
+    // Validate device_id format
+    if (typeof device_id !== 'string' || device_id.length > 128 || !/^[\w-]+$/.test(device_id)) {
+      return this.jsonResponse({ error: 'Invalid device_id format' }, 400, corsHeaders);
     }
 
     if (!build_token.payload || !build_token.signature) {
@@ -205,6 +273,15 @@ export class AttestationRegistryDO {
       );
     }
 
+    // Enforce maximum device entry count (skip check if device already exists)
+    const existingDevice = await this.state.storage.get(`device:${device_id}`);
+    if (!existingDevice) {
+      const deviceCount = await this.state.storage.list({ prefix: 'device:', limit: MAX_DEVICE_ENTRIES + 1 });
+      if (deviceCount.size >= MAX_DEVICE_ENTRIES) {
+        return this.jsonResponse({ error: 'Device registry full' }, 503, corsHeaders);
+      }
+    }
+
     // Register the device
     const deviceEntry = {
       device_id,
@@ -212,6 +289,7 @@ export class AttestationRegistryDO {
       platform,
       build_hash,
       registered_at: Date.now(),
+      last_seen: Date.now(),
     };
 
     await this.state.storage.put(`device:${device_id}`, deviceEntry);
@@ -247,7 +325,8 @@ export class AttestationRegistryDO {
       );
     }
 
-    if (!authHeader || authHeader !== `Bearer ${this.env.CI_UPLOAD_SECRET}`) {
+    const expected = `Bearer ${this.env.CI_UPLOAD_SECRET}`;
+    if (!authHeader || !timingSafeEqual(authHeader, expected)) {
       return this.jsonResponse(
         { error: 'Unauthorized' },
         401,
@@ -255,7 +334,7 @@ export class AttestationRegistryDO {
       );
     }
 
-    const body = await request.json();
+    const body = await parseJsonBody(request, 65536);
     const { version, platform, build_hash, size, critical_regions } = body;
 
     if (!version || !platform || !build_hash) {
@@ -309,7 +388,7 @@ export class AttestationRegistryDO {
    * Returns { nonce, regions: [{ offset, length }...] }
    */
   async handleChallenge(request, corsHeaders) {
-    const body = await request.json();
+    const body = await parseJsonBody(request, 2048);
     const { device_id, build_version } = body;
 
     if (!device_id || !build_version) {
@@ -326,6 +405,27 @@ export class AttestationRegistryDO {
       return this.jsonResponse(
         { error: 'Device not registered' },
         404,
+        corsHeaders
+      );
+    }
+
+    // Update device last_seen
+    device.last_seen = Date.now();
+    await this.state.storage.put(`device:${device_id}`, device);
+
+    // Rate limit: max active nonces per device
+    const now = Date.now();
+    const allNonces = await this.state.storage.list({ prefix: 'nonce:' });
+    let deviceNonceCount = 0;
+    for (const [, value] of allNonces) {
+      if (value.device_id === device_id && now - value.created_at <= NONCE_TTL) {
+        deviceNonceCount++;
+      }
+    }
+    if (deviceNonceCount >= MAX_NONCES_PER_DEVICE) {
+      return this.jsonResponse(
+        { error: 'Too many pending challenges. Please complete or wait for existing challenges to expire.' },
+        429,
         corsHeaders
       );
     }
@@ -386,7 +486,7 @@ export class AttestationRegistryDO {
    * Returns { valid: true/false, session_token? }
    */
   async handleVerify(request, corsHeaders) {
-    const body = await request.json();
+    const body = await parseJsonBody(request, 16384);
     const { device_id, nonce, responses } = body;
 
     if (!device_id || !nonce || !responses || !Array.isArray(responses)) {
@@ -545,7 +645,8 @@ export class AttestationRegistryDO {
       );
     }
 
-    if (!authHeader || authHeader !== `Bearer ${this.env.CI_UPLOAD_SECRET}`) {
+    const expected = `Bearer ${this.env.CI_UPLOAD_SECRET}`;
+    if (!authHeader || !timingSafeEqual(authHeader, expected)) {
       return this.jsonResponse(
         { error: 'Unauthorized' },
         401,
@@ -553,7 +654,7 @@ export class AttestationRegistryDO {
       );
     }
 
-    const body = await request.json();
+    const body = await parseJsonBody(request, 4096);
     const {
       minimum_version,
       recommended_version,

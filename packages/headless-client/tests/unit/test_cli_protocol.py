@@ -1,6 +1,7 @@
 """Tests for zajel.cli.protocol — socket path, JSON-line helpers, serialization."""
 
 import json
+import os
 import socket
 import threading
 from datetime import datetime, timezone
@@ -19,14 +20,32 @@ from zajel.cli.protocol import (
 
 class TestDefaultSocketPath:
     def test_default_name(self):
-        assert default_socket_path() == "/tmp/zajel-headless-default.sock"
+        runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+        expected = os.path.join(runtime_dir, "zajel-headless-default.sock")
+        assert default_socket_path() == expected
 
     def test_custom_name(self):
-        assert default_socket_path("bob") == "/tmp/zajel-headless-bob.sock"
+        runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+        expected = os.path.join(runtime_dir, "zajel-headless-bob.sock")
+        assert default_socket_path("bob") == expected
 
     def test_special_characters(self):
+        runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
         result = default_socket_path("test-bot")
-        assert result == "/tmp/zajel-headless-test-bot.sock"
+        expected = os.path.join(runtime_dir, "zajel-headless-test-bot.sock")
+        assert result == expected
+
+    def test_invalid_name_with_path_traversal(self):
+        with pytest.raises(ValueError, match="Invalid daemon name"):
+            default_socket_path("../../etc/evil")
+
+    def test_invalid_name_empty(self):
+        with pytest.raises(ValueError, match="Invalid daemon name"):
+            default_socket_path("")
+
+    def test_invalid_name_with_spaces(self):
+        with pytest.raises(ValueError, match="Invalid daemon name"):
+            default_socket_path("name with spaces")
 
 
 class TestJsonLineRoundTrip:

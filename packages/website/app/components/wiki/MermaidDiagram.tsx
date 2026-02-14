@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useId } from "react";
+import DOMPurify from "dompurify";
 
 let mermaidInitialized = false;
-let idCounter = 0;
 
 export function MermaidDiagram({ chart }: { chart: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState(false);
-  const idRef = useRef(`mermaid-${++idCounter}`);
+  const reactId = useId();
+  const mermaidId = `mermaid-${reactId.replace(/:/g, '')}`;
 
   useEffect(() => {
     let cancelled = false;
@@ -18,6 +19,7 @@ export function MermaidDiagram({ chart }: { chart: string }) {
         if (!mermaidInitialized) {
           mermaid.initialize({
             startOnLoad: false,
+            securityLevel: 'strict',
             theme: "dark",
             themeVariables: {
               darkMode: true,
@@ -33,9 +35,12 @@ export function MermaidDiagram({ chart }: { chart: string }) {
           mermaidInitialized = true;
         }
 
-        const { svg } = await mermaid.render(idRef.current, chart.trim());
+        const { svg } = await mermaid.render(mermaidId, chart.trim());
         if (!cancelled && containerRef.current) {
-          containerRef.current.innerHTML = svg;
+          containerRef.current.innerHTML = DOMPurify.sanitize(svg, {
+            USE_PROFILES: { svg: true, svgFilters: true },
+            ADD_TAGS: ['foreignObject'],
+          });
         }
       } catch {
         if (!cancelled) setError(true);
@@ -44,7 +49,7 @@ export function MermaidDiagram({ chart }: { chart: string }) {
 
     render();
     return () => { cancelled = true; };
-  }, [chart]);
+  }, [chart, mermaidId]);
 
   if (error) {
     return <pre className="wiki-mermaid-error">{chart}</pre>;

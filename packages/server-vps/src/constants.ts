@@ -111,6 +111,54 @@ export const ENTROPY = {
 } as const;
 
 // =============================================================================
+// RENDEZVOUS LIMITS
+// =============================================================================
+
+export const RENDEZVOUS_LIMITS = {
+  /** Maximum daily points per registration message */
+  MAX_POINTS_PER_MESSAGE: 50,
+
+  /** Maximum hourly tokens per registration message */
+  MAX_TOKENS_PER_MESSAGE: 50,
+
+  /** Maximum length for a point or token hash string */
+  MAX_HASH_LENGTH: 128,
+
+  /** Maximum dead drop payload size in bytes (4KB) */
+  MAX_DEAD_DROP_SIZE: 4096,
+
+  /** Maximum relayId length */
+  MAX_RELAY_ID_LENGTH: 128,
+} as const;
+
+// =============================================================================
+// CHUNK LIMITS
+// =============================================================================
+
+export const CHUNK_LIMITS = {
+  /** Maximum chunks per announce message */
+  MAX_CHUNKS_PER_ANNOUNCE: 100,
+
+  /** Maximum chunkId string length */
+  MAX_CHUNK_ID_LENGTH: 256,
+
+  /** Maximum routingHash string length */
+  MAX_ROUTING_HASH_LENGTH: 256,
+} as const;
+
+// =============================================================================
+// CONNECTION LIMITS
+// =============================================================================
+
+export const CONNECTION_LIMITS = {
+  /** Maximum total WebSocket connections (client + signaling) */
+  MAX_TOTAL_CONNECTIONS: 10000,
+
+  /** Maximum WebSocket connections per IP address */
+  MAX_CONNECTIONS_PER_IP: 50,
+} as const;
+
+// =============================================================================
 // ATTESTATION CONSTANTS
 // =============================================================================
 

@@ -34,6 +34,7 @@ import worker from '../../src/index.js';
 class MockStorage {
   constructor() {
     this.data = new Map();
+    this._alarm = null;
   }
   async get(key) {
     return this.data.get(key);
@@ -42,23 +43,40 @@ class MockStorage {
     this.data.set(key, value);
   }
   async delete(key) {
-    this.data.delete(key);
+    if (Array.isArray(key)) {
+      for (const k of key) this.data.delete(k);
+    } else {
+      this.data.delete(key);
+    }
   }
-  async list({ prefix }) {
+  async list({ prefix, limit }) {
     const results = new Map();
     for (const [key, value] of this.data) {
-      if (key.startsWith(prefix)) results.set(key, value);
+      if (key.startsWith(prefix)) {
+        results.set(key, value);
+        if (limit && results.size >= limit) break;
+      }
     }
     return results;
   }
+  async getAlarm() {
+    return this._alarm;
+  }
+  async setAlarm(time) {
+    this._alarm = time;
+  }
   clear() {
     this.data.clear();
+    this._alarm = null;
   }
 }
 
 class MockState {
   constructor() {
     this.storage = new MockStorage();
+  }
+  blockConcurrencyWhile(fn) {
+    return fn();
   }
 }
 
@@ -370,7 +388,8 @@ describe('Attestation Service E2E Tests', () => {
 
       const response = await attestationDO.fetch(request);
 
-      expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      // CORS origin is only set when a matching Origin header is present
+      expect(response.headers.get('Access-Control-Allow-Methods')).toContain('POST');
       expect(response.headers.get('Content-Type')).toBe('application/json');
     });
 
@@ -707,7 +726,8 @@ describe('Attestation Service E2E Tests', () => {
       await setupDeviceAndReference();
 
       const nonces = new Set();
-      for (let i = 0; i < 10; i++) {
+      // Rate limit is 5 active nonces per device
+      for (let i = 0; i < 5; i++) {
         const response = await attestationDO.fetch(
           createRequest('POST', '/attest/challenge', {
             device_id: 'device-001',
@@ -715,10 +735,37 @@ describe('Attestation Service E2E Tests', () => {
           })
         );
         const data = await response.json();
+        expect(response.status).toBe(200);
         nonces.add(data.nonce);
       }
 
-      expect(nonces.size).toBe(10);
+      expect(nonces.size).toBe(5);
+    });
+
+    it('should rate limit nonce creation per device', async () => {
+      await setupDeviceAndReference();
+
+      // Create 5 challenges (the max)
+      for (let i = 0; i < 5; i++) {
+        const response = await attestationDO.fetch(
+          createRequest('POST', '/attest/challenge', {
+            device_id: 'device-001',
+            build_version: '1.0.0',
+          })
+        );
+        expect(response.status).toBe(200);
+      }
+
+      // 6th should be rate limited
+      const response = await attestationDO.fetch(
+        createRequest('POST', '/attest/challenge', {
+          device_id: 'device-001',
+          build_version: '1.0.0',
+        })
+      );
+      expect(response.status).toBe(429);
+      const data = await response.json();
+      expect(data.error).toContain('Too many pending challenges');
     });
   });
 
@@ -1018,7 +1065,8 @@ describe('Attestation Service E2E Tests', () => {
       const request = createRequest('GET', '/attest/versions');
       const response = await attestationDO.fetch(request);
 
-      expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      // CORS origin is only set when a matching Origin header is present
+      expect(response.headers.get('Access-Control-Allow-Methods')).toContain('GET');
     });
   });
 

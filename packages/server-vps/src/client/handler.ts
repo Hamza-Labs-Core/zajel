@@ -14,7 +14,7 @@ import { DistributedRendezvous, type PartialResult } from '../registry/distribut
 import type { DeadDropResult, LiveMatchResult } from '../registry/rendezvous-registry.js';
 import { logger } from '../utils/logger.js';
 
-import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING, ATTESTATION } from '../constants.js';
+import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING, ATTESTATION, RENDEZVOUS_LIMITS, CHUNK_LIMITS } from '../constants.js';
 import { ChunkRelay } from './chunk-relay.js';
 import type { Storage } from '../storage/interface.js';
 import { AttestationManager, type AttestationConfig } from '../attestation/attestation-manager.js';
@@ -575,6 +575,21 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
+    // Verify peerId consistency for non-register messages that include a peerId.
+    // If the WebSocket is bound to a peerId (relay client), enforce that subsequent
+    // messages use the same peerId. This prevents identity spoofing across messages.
+    if ('peerId' in message && message.type !== 'register') {
+      const boundPeerId = this.wsToClient.get(ws);
+      if (boundPeerId) {
+        if ((message as { peerId: string }).peerId !== boundPeerId) {
+          this.sendError(ws, 'peerId mismatch with registered identity');
+          return;
+        }
+        // Override with bound peerId to prevent spoofing
+        (message as { peerId: string }).peerId = boundPeerId;
+      }
+    }
+
     try {
       switch (message.type) {
         case 'register':
@@ -731,6 +746,20 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
+    // Check if peerId is already registered by a different WebSocket
+    const existingClient = this.clients.get(peerId);
+    if (existingClient && existingClient.ws !== ws) {
+      this.sendError(ws, 'Peer ID already in use by another connection');
+      return;
+    }
+
+    // Check if this WebSocket is already registered with a different peerId
+    const existingPeerId = this.wsToClient.get(ws);
+    if (existingPeerId && existingPeerId !== peerId) {
+      this.sendError(ws, 'Cannot re-register with a different peerId');
+      return;
+    }
+
     const now = Date.now();
 
     // Create client info
@@ -802,11 +831,59 @@ export class ClientHandler extends EventEmitter {
     const dailyPoints = message.dailyPoints || message.daily_points || [];
     const hourlyTokens = message.hourlyTokens || message.hourly_tokens || [];
 
+    // Validate array sizes
+    if (!Array.isArray(dailyPoints) || dailyPoints.length > RENDEZVOUS_LIMITS.MAX_POINTS_PER_MESSAGE) {
+      this.sendError(ws, `Too many daily points (max ${RENDEZVOUS_LIMITS.MAX_POINTS_PER_MESSAGE})`);
+      return;
+    }
+    if (!Array.isArray(hourlyTokens) || hourlyTokens.length > RENDEZVOUS_LIMITS.MAX_TOKENS_PER_MESSAGE) {
+      this.sendError(ws, `Too many hourly tokens (max ${RENDEZVOUS_LIMITS.MAX_TOKENS_PER_MESSAGE})`);
+      return;
+    }
+
+    // Validate array element types and lengths
+    if (!dailyPoints.every(p => typeof p === 'string' && p.length <= RENDEZVOUS_LIMITS.MAX_HASH_LENGTH)) {
+      this.sendError(ws, 'Invalid daily points format');
+      return;
+    }
+    if (!hourlyTokens.every(t => typeof t === 'string' && t.length <= RENDEZVOUS_LIMITS.MAX_HASH_LENGTH)) {
+      this.sendError(ws, 'Invalid hourly tokens format');
+      return;
+    }
+
+    // Validate relayId field size
+    if (relayId && (typeof relayId !== 'string' || relayId.length > RENDEZVOUS_LIMITS.MAX_RELAY_ID_LENGTH)) {
+      this.sendError(ws, 'Invalid relayId');
+      return;
+    }
+
     // Support both single dead drop (legacy) and map (new format)
     // Priority: dead_drops > deadDrops > deadDrop (legacy)
     const deadDropsMap: Record<string, string> =
       message.dead_drops || message.deadDrops || {};
     const legacyDeadDrop = message.deadDrop || '';
+
+    // Validate dead drops map size and values
+    if (Object.keys(deadDropsMap).length > RENDEZVOUS_LIMITS.MAX_POINTS_PER_MESSAGE) {
+      this.sendError(ws, 'Too many dead drops');
+      return;
+    }
+    for (const [key, value] of Object.entries(deadDropsMap)) {
+      if (typeof key !== 'string' || key.length > RENDEZVOUS_LIMITS.MAX_HASH_LENGTH) {
+        this.sendError(ws, 'Invalid dead drop key');
+        return;
+      }
+      if (typeof value !== 'string' || value.length > RENDEZVOUS_LIMITS.MAX_DEAD_DROP_SIZE) {
+        this.sendError(ws, 'Dead drop payload too large (max 4KB)');
+        return;
+      }
+    }
+
+    // Validate legacy dead drop size
+    if (legacyDeadDrop && (typeof legacyDeadDrop !== 'string' || legacyDeadDrop.length > RENDEZVOUS_LIMITS.MAX_DEAD_DROP_SIZE)) {
+      this.sendError(ws, 'Dead drop payload too large (max 4KB)');
+      return;
+    }
 
     // Update client's last seen
     const client = this.clients.get(peerId);
@@ -2134,10 +2211,20 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
-    // Validate chunk entries
+    // Validate chunk array length
+    if (chunks.length > CHUNK_LIMITS.MAX_CHUNKS_PER_ANNOUNCE) {
+      this.sendError(ws, `Too many chunks per announce (max ${CHUNK_LIMITS.MAX_CHUNKS_PER_ANNOUNCE})`);
+      return;
+    }
+
+    // Validate individual chunk entries
     for (const chunk of chunks) {
-      if (!chunk.chunkId) {
-        this.sendError(ws, 'Each chunk must have a chunkId');
+      if (!chunk.chunkId || typeof chunk.chunkId !== 'string' || chunk.chunkId.length > CHUNK_LIMITS.MAX_CHUNK_ID_LENGTH) {
+        this.sendError(ws, 'Invalid chunk entry: chunkId must be a string up to 256 chars');
+        return;
+      }
+      if (chunk.routingHash !== undefined && (typeof chunk.routingHash !== 'string' || chunk.routingHash.length > CHUNK_LIMITS.MAX_ROUTING_HASH_LENGTH)) {
+        this.sendError(ws, 'Invalid chunk entry: routingHash must be a string up to 256 chars');
         return;
       }
     }
@@ -2146,6 +2233,11 @@ export class ClientHandler extends EventEmitter {
     this.chunkRelay.registerPeer(peerId, ws);
 
     const result = await this.chunkRelay.handleAnnounce(peerId, chunks);
+
+    if (result.error) {
+      this.sendError(ws, result.error);
+      return;
+    }
 
     this.send(ws, {
       type: 'chunk_announce_ack',
@@ -2385,20 +2477,26 @@ export class ClientHandler extends EventEmitter {
     const peerId = this.wsToClient.get(ws);
     if (!peerId) return;
 
-    // Remove from registries
-    this.relayRegistry.unregister(peerId);
-    await this.distributedRendezvous.unregisterPeer(peerId);
+    // Only clean up if this WebSocket is still the registered one for this peerId
+    const client = this.clients.get(peerId);
+    if (client && client.ws === ws) {
+      // Remove from registries
+      this.relayRegistry.unregister(peerId);
+      await this.distributedRendezvous.unregisterPeer(peerId);
 
-    // Clean up chunk relay for this peer
-    if (this.chunkRelay) {
-      await this.chunkRelay.unregisterPeer(peerId);
+      // Clean up chunk relay for this peer
+      if (this.chunkRelay) {
+        await this.chunkRelay.unregisterPeer(peerId);
+      }
+
+      // Clean up mappings
+      this.clients.delete(peerId);
+
+      this.emit('client-disconnected', peerId);
     }
 
-    // Clean up mappings
-    this.clients.delete(peerId);
+    // Always clean up the reverse mapping for this WebSocket
     this.wsToClient.delete(ws);
-
-    this.emit('client-disconnected', peerId);
   }
 
   /**

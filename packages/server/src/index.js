@@ -17,6 +17,8 @@
  */
 
 import { importSigningKey, signPayload } from './crypto/signing.js';
+import { getCorsHeaders } from './cors.js';
+import { rateLimiter } from './rate-limiter.js';
 
 export { ServerRegistryDO } from './durable-objects/server-registry-do.js';
 export { AttestationRegistryDO } from './durable-objects/attestation-registry-do.js';
@@ -25,12 +27,22 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'Access-Control-Expose-Headers': 'X-Bootstrap-Signature, X-Attestation-Token',
-    };
+    const corsHeaders = getCorsHeaders(request, env);
+
+    // Rate limiting: 100 requests per minute per IP
+    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+    const { allowed } = rateLimiter.check(ip, 100, 60000);
+    if (!allowed) {
+      return new Response(
+        JSON.stringify({ error: 'Too Many Requests' }),
+        { status: 429, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+      );
+    }
+
+    // Periodically prune stale rate limit entries (every ~100 requests)
+    if (Math.random() < 0.01) {
+      rateLimiter.prune();
+    }
 
     // Handle CORS preflight
     if (request.method === 'OPTIONS') {

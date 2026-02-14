@@ -159,7 +159,7 @@ export class ChunkRelay {
    * Handle chunk_announce: peer announces it has chunks.
    * Stores the source mappings in the database.
    */
-  async handleAnnounce(peerId: string, chunks: ChunkAnnouncement[]): Promise<{ registered: number }> {
+  async handleAnnounce(peerId: string, chunks: ChunkAnnouncement[]): Promise<{ registered: number; error?: string }> {
     let registered = 0;
 
     for (const chunk of chunks) {
