@@ -10,7 +10,7 @@ import { createServer, type Server as HttpServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
 import { loadConfig, type ServerConfig } from './config.js';
-import { WEBSOCKET } from './constants.js';
+import { WEBSOCKET, CONNECTION_LIMITS } from './constants.js';
 import { loadOrGenerateIdentity, type ServerIdentity } from './identity/server-identity.js';
 import { SQLiteStorage } from './storage/sqlite.js';
 import { FederationManager, type FederationConfig } from './federation/federation-manager.js';
@@ -21,6 +21,22 @@ import { DistributedRendezvous } from './registry/distributed-rendezvous.js';
 import { ClientHandler, type ClientHandlerConfig } from './client/handler.js';
 import { logger } from './utils/logger.js';
 import { createAdminModule, type AdminModule } from './admin/index.js';
+
+/**
+ * Check authentication for stats/metrics endpoints.
+ * Requires a Bearer token matching the STATS_SECRET environment variable.
+ * If no secret is configured, denies all access (fail-closed).
+ */
+function checkStatsAuth(req: IncomingMessage): boolean {
+  const adminSecret = process.env['STATS_SECRET'];
+  if (!adminSecret) return false; // If no secret configured, deny all access
+
+  const authHeader = req.headers['authorization'];
+  if (!authHeader || authHeader !== `Bearer ${adminSecret}`) {
+    return false;
+  }
+  return true;
+}
 
 export interface ZajelServer {
   httpServer: HttpServer;
@@ -96,8 +112,14 @@ export async function createZajelServer(
       return;
     }
 
-    // Stats endpoint
+    // Stats endpoint (requires authentication)
     if (req.url === '/stats') {
+      if (!checkStatsAuth(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+
       const handler = clientHandlerRef;
       const stats = {
         serverId: identity.serverId,
@@ -117,8 +139,14 @@ export async function createZajelServer(
       return;
     }
 
-    // Metrics endpoint (Issue #41: Pairing code entropy monitoring)
+    // Metrics endpoint (Issue #41: Pairing code entropy monitoring, requires authentication)
     if (req.url === '/metrics') {
+      if (!checkStatsAuth(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+
       const handler = clientHandlerRef;
       if (!handler) {
         res.writeHead(503, { 'Content-Type': 'application/json' });
@@ -222,13 +250,23 @@ export async function createZajelServer(
     maxConnectionsPerPeer: config.client.maxConnectionsPerPeer,
   };
 
+  // Build attestation config if attestation settings are present
+  const attestationConfig = config.attestation ? {
+    bootstrapUrl: config.attestation.bootstrapUrl,
+    vpsIdentityKey: config.attestation.vpsIdentityKey,
+    sessionTokenTtl: config.attestation.sessionTokenTtl,
+    gracePeriod: config.attestation.gracePeriod,
+  } : undefined;
+
   const clientHandler = new ClientHandler(
     identity,
     config.network.publicEndpoint,
     clientHandlerConfig,
     relayRegistry,
     distributedRendezvous,
-    metadata
+    metadata,
+    storage,
+    attestationConfig
   );
 
   // Set the reference for HTTP handler (used by /metrics endpoint)
@@ -258,9 +296,28 @@ export async function createZajelServer(
     }
   });
 
+  // Per-IP connection tracking for rate limiting
+  const ipConnectionCounts = new Map<string, number>();
+
   // Handle client WebSocket connections
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     const clientIp = req.socket.remoteAddress || 'unknown';
+
+    // Check total connection limit
+    const totalConnections = clientHandler.clientCount + clientHandler.signalingClientCount;
+    if (totalConnections >= CONNECTION_LIMITS.MAX_TOTAL_CONNECTIONS) {
+      ws.close(1013, 'Server at capacity');
+      return;
+    }
+
+    // Check per-IP connection limit
+    const ipCount = ipConnectionCounts.get(clientIp) || 0;
+    if (ipCount >= CONNECTION_LIMITS.MAX_CONNECTIONS_PER_IP) {
+      ws.close(1013, 'Too many connections from this IP');
+      return;
+    }
+    ipConnectionCounts.set(clientIp, ipCount + 1);
+
     logger.clientConnection('connected', clientIp);
 
     // Send server info
@@ -275,6 +332,14 @@ export async function createZajelServer(
 
     // Handle disconnect
     ws.on('close', async () => {
+      // Decrement per-IP count
+      const count = ipConnectionCounts.get(clientIp) || 1;
+      if (count <= 1) {
+        ipConnectionCounts.delete(clientIp);
+      } else {
+        ipConnectionCounts.set(clientIp, count - 1);
+      }
+
       await clientHandler.handleDisconnect(ws);
       logger.clientConnection('disconnected', clientIp);
     });
