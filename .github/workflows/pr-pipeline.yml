@@ -1486,12 +1486,13 @@ jobs:
           E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-artifacts/e2e
         run: |
           # ── Part 1: Shelf HTTP smoke test ──
-          # Uses LinuxAppHelper which connects to Flutter's Shelf HTTP server,
-          # not AT-SPI D-Bus (which doesn't work under headless Xvfb).
+          # Uses LinuxAppHelper which connects to Flutter's embedded Shelf HTTP
+          # server (appium_flutter_server). Verifies the app launches and the
+          # widget tree is accessible via the Shelf API.
           echo "=== Shelf HTTP smoke test ==="
           cd ${{ github.workspace }}/e2e-tests
           SMOKE_RESULT=0
-          timeout 180 python3 -m pytest tests/test_pairing.py -v -s --timeout=120 -k "smoke or test_app" || SMOKE_RESULT=$?
+          timeout 180 python3 -m pytest tests/test_pairing.py::TestPairing::test_app_launches_successfully -v -s --timeout=120 || SMOKE_RESULT=$?
 
           # ── Part 2: Signaling tests ──
           SIGNALING_RESULT=0

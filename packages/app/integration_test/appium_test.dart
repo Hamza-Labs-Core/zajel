@@ -27,7 +27,9 @@ import 'package:zajel/main.dart';
 void main() async {
   // Initialize SharedPreferences before passing the app to initializeTest.
   // The mock values give us an empty but valid prefs instance.
-  SharedPreferences.setMockInitialValues({});
+  SharedPreferences.setMockInitialValues({
+    'hasSeenOnboarding': true,
+  });
   final prefs = await SharedPreferences.getInstance();
 
   // Ensure semantics tree so the Shelf server can find widgets.

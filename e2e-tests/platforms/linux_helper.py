@@ -314,7 +314,7 @@ class LinuxAppHelper:
     def wait_for_app_ready(self, timeout: int = APP_LAUNCH_TIMEOUT):
         """Wait for the home screen to be visible, dismissing onboarding if needed."""
         try:
-            self._find("Zajel", timeout=15)
+            self._find("Zajel", timeout=min(30, timeout))
             print("[wait_for_app_ready] Home screen detected directly")
             return
         except TimeoutError:
