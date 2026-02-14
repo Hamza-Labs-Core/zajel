@@ -10,6 +10,8 @@ import '../../shared/widgets/relative_time.dart';
 /// Provider for all trusted peers as contacts.
 final contactsProvider = FutureProvider<List<TrustedPeer>>((ref) async {
   final storage = ref.watch(trustedPeersStorageProvider);
+  // Re-fetch when a trusted peer is migrated (ID change after reconnection).
+  ref.watch(trustedPeerVersionProvider);
   final peers = await storage.getAllPeers();
   return peers.where((p) => !p.isBlocked).toList()
     ..sort((a, b) {
@@ -104,12 +106,18 @@ class _ContactTile extends ConsumerWidget {
     final displayName = contact.alias ?? contact.displayName;
     final peersAsync = ref.watch(visiblePeersProvider);
 
-    // Check if this contact is currently online
+    // Check if this contact is currently online.
+    // Match by publicKey in addition to ID because peer IDs change after
+    // migration (peer reconnected with new pairing code, same public key).
     bool isOnline = false;
+    Peer? livePeer;
     peersAsync.whenData((peers) {
-      isOnline = peers.any((p) =>
-          p.id == contact.id &&
-          p.connectionState == PeerConnectionState.connected);
+      livePeer = peers
+          .where((p) =>
+              p.id == contact.id ||
+              (p.publicKey != null && p.publicKey == contact.publicKey))
+          .firstOrNull;
+      isOnline = livePeer?.connectionState == PeerConnectionState.connected;
     });
 
     return ListTile(
@@ -146,14 +154,14 @@ class _ContactTile extends ConsumerWidget {
             )
           : null,
       onTap: () {
-        // Set selected peer and navigate to chat
-        peersAsync.whenData((peers) {
-          final peer = peers.where((p) => p.id == contact.id).firstOrNull;
-          if (peer != null) {
-            ref.read(selectedPeerProvider.notifier).state = peer;
-          }
-        });
-        context.push('/chat/${contact.id}');
+        // Set selected peer and navigate to chat.
+        // Use the live peer (matched by publicKey) so the correct ID is used
+        // after migration (peer reconnected with a new pairing code).
+        if (livePeer != null) {
+          ref.read(selectedPeerProvider.notifier).state = livePeer;
+        }
+        final chatId = livePeer?.id ?? contact.id;
+        context.push('/chat/$chatId');
       },
       onLongPress: () => context.push('/contacts/${contact.id}'),
     );

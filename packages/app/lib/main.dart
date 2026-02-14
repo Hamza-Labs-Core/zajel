@@ -6,7 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:uuid/uuid.dart';
+import 'package:workmanager/workmanager.dart';
 
 import 'app_router.dart';
 import 'core/config/environment.dart';
@@ -19,9 +21,26 @@ import 'core/notifications/call_foreground_service.dart';
 import 'core/providers/app_providers.dart';
 import 'features/call/call_screen.dart';
 import 'features/call/incoming_call_dialog.dart';
+import 'features/channels/providers/channel_providers.dart';
+import 'features/channels/services/background_sync_service.dart';
+import 'features/groups/providers/group_providers.dart';
 import 'shared/theme/app_theme.dart';
 
 const bool _isE2eTest = bool.fromEnvironment('E2E_TEST');
+
+/// Top-level callback dispatcher for WorkManager background tasks.
+///
+/// This function is invoked by the platform in a separate isolate (Android)
+/// or background session (iOS). It must be a top-level function.
+@pragma('vm:entry-point')
+void callbackDispatcher() {
+  Workmanager().executeTask((taskName, inputData) async {
+    if (taskName == BackgroundSyncService.backgroundTaskName) {
+      return await backgroundSyncCallback();
+    }
+    return true;
+  });
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -29,6 +48,11 @@ void main() async {
   // Force semantics tree so UiAutomator2/AT-SPI/UIA can see widgets in E2E tests
   if (_isE2eTest) {
     SemanticsBinding.instance.ensureSemantics();
+  }
+
+  // Initialize WorkManager for mobile background sync
+  if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+    await Workmanager().initialize(callbackDispatcher, isInDebugMode: false);
   }
 
   // Initialize logger first
@@ -47,6 +71,13 @@ void main() async {
       logger.error('PlatformError', 'Unhandled platform error', error, stack);
       return true;
     };
+  }
+
+  // Initialize sqflite FFI for desktop platforms (must happen once, before
+  // any storage service opens a database).
+  if (!kIsWeb && (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
   }
 
   // Initialize shared preferences
@@ -122,6 +153,24 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       logger.info('ZajelApp', 'Initializing message storage...');
       final messageStorage = ref.read(messageStorageProvider);
       await messageStorage.initialize();
+
+      // Auto-delete old messages on startup if the setting is enabled
+      if (ref.read(autoDeleteMessagesProvider)) {
+        final cutoff = DateTime.now().subtract(const Duration(hours: 24));
+        final deleted = await messageStorage.deleteMessagesOlderThan(cutoff);
+        if (deleted > 0) {
+          logger.info(
+              'ZajelApp', 'Auto-deleted $deleted messages older than 24h');
+        }
+      }
+
+      logger.info('ZajelApp', 'Initializing channel storage...');
+      final channelStorage = ref.read(channelStorageServiceProvider);
+      await channelStorage.initialize();
+
+      logger.info('ZajelApp', 'Initializing group storage...');
+      final groupStorage = ref.read(groupStorageServiceProvider);
+      await groupStorage.initialize();
 
       // Load peer aliases from TrustedPeersStorage
       final trustedPeers = ref.read(trustedPeersStorageProvider);
@@ -292,6 +341,12 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
 
       // Register meeting points for trusted peer reconnection
       await connectionManager.reconnectTrustedPeers();
+
+      // Initialize channel sync and group services now that signaling is connected.
+      // These providers are lazy — reading them triggers creation and starts
+      // listening for incoming messages (channel chunks, group invitations, etc.).
+      ref.read(channelSyncServiceProvider);
+      ref.read(groupInvitationServiceProvider);
     } catch (e, stack) {
       logger.error('ZajelApp', 'Failed to auto-connect to signaling', e, stack);
       ref.read(signalingDisplayStateProvider.notifier).state =
@@ -607,6 +662,12 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     // Global message listener: persist to DB immediately, then notify
     connectionManager.messages.listen((event) {
       final (peerId, message) = event;
+
+      // Skip protocol messages — handled by their respective services
+      // (e.g. GroupInvitationService) and must not leak into chat.
+      if (message.startsWith('ginv:') || message.startsWith('grp:')) {
+        return;
+      }
 
       // Persist incoming message to DB immediately (prevents message drops)
       final msg = Message(

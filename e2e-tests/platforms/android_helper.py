@@ -550,7 +550,7 @@ class AppHelper:
     def navigate_to_media_settings(self):
         """Navigate to Settings > Audio & Video."""
         self.navigate_to_settings()
-        self._scroll_down()
+        self._scroll_down(times=2)
         self.tap_settings_option("Audio & Video")
 
     # -- Emoji helpers --
@@ -748,3 +748,205 @@ class AppHelper:
                 return True
             except Exception:
                 return False
+
+    # -- Channel helpers --
+
+    def navigate_to_channels(self):
+        """Tap 'Channels' tooltip button in home app bar → channels list."""
+        self._find("Channels", timeout=10).click()
+        import time as _time
+        _time.sleep(1)
+
+    def navigate_to_groups(self):
+        """Tap 'Groups' tooltip button in home app bar → groups list."""
+        self._find("Groups", timeout=10).click()
+        import time as _time
+        _time.sleep(1)
+
+    def create_channel(self, name, description=""):
+        """Create a channel via FAB → dialog → fill fields → tap Create."""
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+        import time as _time
+
+        # Tap FAB (tooltip: "Create Channel")
+        self._find("Create Channel", timeout=10).click()
+        _time.sleep(1)
+
+        # Fill channel name (first EditText in dialog)
+        fields = self.driver.find_elements(By.XPATH, "//android.widget.EditText")
+        if fields:
+            fields[0].click()
+            self.driver.execute_script('mobile: type', {'text': name})
+
+        # Fill description if provided (second EditText)
+        if description and len(fields) > 1:
+            fields[1].click()
+            self.driver.execute_script('mobile: type', {'text': description})
+
+        # Tap Create button
+        self._find("Create", timeout=5, partial=False).click()
+        _time.sleep(2)
+
+    def open_channel(self, name):
+        """Tap a channel in the list by name."""
+        self._find(name, timeout=10).click()
+        import time as _time
+        _time.sleep(1)
+
+    def get_channel_invite_link(self):
+        """Open share dialog → extract SelectableText link → dismiss."""
+        import time as _time
+
+        # Tap 'Share channel' button
+        self._find("Share channel", timeout=10).click()
+        _time.sleep(2)
+
+        # The share dialog shows the link as selectable text starting with zajel://
+        try:
+            link_el = self._find("zajel://", timeout=10)
+            link = link_el.text or link_el.get_attribute("content-desc") or ""
+            # Sometimes the full text is in content-desc
+            if not link.startswith("zajel://"):
+                link = link_el.get_attribute("content-desc") or link_el.text or ""
+        except Exception:
+            link = ""
+
+        # Dismiss the dialog
+        try:
+            self._find("Done", timeout=5).click()
+        except Exception:
+            self.driver.back()
+        _time.sleep(1)
+
+        return link
+
+    def publish_channel_message(self, text):
+        """Type in 'Publish to channel...' field → tap send button."""
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+        import time as _time
+
+        input_field = WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, "//android.widget.EditText"))
+        )
+        input_field.click()
+        input_field.clear()
+        _time.sleep(0.5)
+        self.driver.execute_script('mobile: type', {'text': text})
+        _time.sleep(0.5)
+
+        # Tap the send button — use tooltip-text to avoid matching
+        # "Publish something!" empty state text
+        try:
+            send_btn = self.driver.find_element(
+                By.XPATH,
+                '//*[@tooltip-text="Publish" and @clickable="true"]'
+            )
+            send_btn.click()
+        except Exception:
+            # Fallback: find by content-desc
+            self._find("Publish", timeout=5).click()
+        _time.sleep(2)
+
+    def has_channel_message(self, text):
+        """Check if a channel message is visible."""
+        try:
+            self._find(text, timeout=5)
+            return True
+        except Exception:
+            return False
+
+    # -- Group helpers --
+
+    def create_group(self, name):
+        """Create a group via FAB → dialog → fill name → tap Create."""
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+        import time as _time
+
+        # Tap FAB (tooltip: "Create Group")
+        self._find("Create Group", timeout=10).click()
+        _time.sleep(1)
+
+        # Fill group name
+        input_field = WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, "//android.widget.EditText"))
+        )
+        input_field.click()
+        self.driver.execute_script('mobile: type', {'text': name})
+
+        # Tap Create button
+        self._find("Create", timeout=5, partial=False).click()
+        _time.sleep(2)
+
+    def open_group(self, name):
+        """Tap a group in the list by name."""
+        self._find(name, timeout=10).click()
+        import time as _time
+        _time.sleep(1)
+
+    def add_group_member(self, peer_name):
+        """Tap 'Add member' → select peer by name in the dialog.
+
+        peer_name can be a display name or partial match. The app shows
+        peers as "Peer XXXX" (pairing code) if no display name is set,
+        or by their display name.
+        """
+        import time as _time
+
+        self._find("Add member", timeout=10).click()
+        _time.sleep(1)
+
+        # Try exact match first, then partial match with "Peer" prefix
+        try:
+            self._find(peer_name, timeout=5).click()
+        except Exception:
+            # App may show "Peer <code>" instead of display name
+            self._find("Peer", timeout=5, partial=True).click()
+        _time.sleep(2)
+
+    def send_group_message(self, text):
+        """Type in 'Type a message...' field → tap 'Send' button."""
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+
+        input_field = WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, "//android.widget.EditText"))
+        )
+        input_field.click()
+        input_field.clear()
+        self.driver.execute_script('mobile: type', {'text': text})
+
+        self._find("Send", timeout=5).click()
+        import time as _time
+        _time.sleep(2)
+
+    def has_group_message(self, text):
+        """Check if a group message is visible."""
+        try:
+            self._find(text, timeout=5)
+            return True
+        except Exception:
+            return False
+
+    def open_members_sheet(self):
+        """Tap the members button to open the bottom sheet."""
+        self._find("members", timeout=10).click()
+        import time as _time
+        _time.sleep(1)
+
+    # -- Screenshot helper --
+
+    def take_screenshot(self, name):
+        """Save screenshot to E2E_ARTIFACTS_DIR/{name}.png."""
+        import os
+        artifacts_dir = os.environ.get("E2E_ARTIFACTS_DIR", "/tmp/e2e-artifacts")
+        os.makedirs(artifacts_dir, exist_ok=True)
+        path = os.path.join(artifacts_dir, f"{name}.png")
+        self.driver.save_screenshot(path)
+        print(f"Screenshot saved: {path}")

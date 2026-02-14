@@ -10,6 +10,7 @@ export function Nav() {
         <a href="/#features">Features</a>
         <a href="/#download">Download</a>
         <Link to="/guide">User Guide</Link>
+        <Link to="/wiki/en">Wiki</Link>
         <a href="https://github.com/Hamza-Labs-Core/zajel" target="_blank" rel="noopener noreferrer">
           GitHub
         </a>
