@@ -316,8 +316,7 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
 
   void _showMessageCopyMenu(
       BuildContext context, Offset globalPosition, String content) {
-    final overlay =
-        Overlay.of(context).context.findRenderObject() as RenderBox;
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final position = RelativeRect.fromRect(
       globalPosition & const Size(1, 1),
       Offset.zero & overlay.size,

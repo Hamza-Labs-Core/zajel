@@ -945,8 +945,7 @@ class _MessageBubble extends StatelessWidget {
     final isTextMessage = message.type == MessageType.text;
     if (!isTextMessage) return;
 
-    final overlay =
-        Overlay.of(context).context.findRenderObject() as RenderBox;
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final position = RelativeRect.fromRect(
       details.globalPosition & const Size(1, 1),
       Offset.zero & overlay.size,
@@ -988,13 +987,14 @@ class _MessageBubble extends StatelessWidget {
     return Align(
       alignment: isOutgoing ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
-        onSecondaryTapDown:
-            isTextMessage ? (details) => _showMessageMenu(context, details) : null,
+        onSecondaryTapDown: isTextMessage
+            ? (details) => _showMessageMenu(context, details)
+            : null,
         onLongPressStart: isTextMessage
             ? (details) => _showMessageMenu(
-                context,
-                TapDownDetails(globalPosition: details.globalPosition),
-              )
+                  context,
+                  TapDownDetails(globalPosition: details.globalPosition),
+                )
             : null,
         child: Container(
           margin: const EdgeInsets.only(bottom: 4),

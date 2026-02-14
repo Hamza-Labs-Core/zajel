@@ -973,8 +973,7 @@ class _AdminManagementSheet extends StatelessWidget {
                       final admin = admins[index];
                       return ListTile(
                         leading: CircleAvatar(
-                          backgroundColor:
-                              theme.colorScheme.primaryContainer,
+                          backgroundColor: theme.colorScheme.primaryContainer,
                           child: Icon(
                             Icons.admin_panel_settings,
                             color: theme.colorScheme.onPrimaryContainer,

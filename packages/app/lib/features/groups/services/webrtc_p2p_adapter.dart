@@ -80,8 +80,7 @@ class WebRtcP2PAdapter implements P2PConnectionAdapter {
           final previousState = _lastKnownState[groupPeerId];
           if (previousState != peer.connectionState) {
             _lastKnownState[groupPeerId] = peer.connectionState;
-            _connectionStateController
-                .add((groupPeerId, peer.connectionState));
+            _connectionStateController.add((groupPeerId, peer.connectionState));
           }
         }
       }
@@ -104,8 +103,7 @@ class WebRtcP2PAdapter implements P2PConnectionAdapter {
         final data = base64Decode(payload);
         // Forward to all group contexts that include this device.
         for (final groupPeerId in groupPeerIds) {
-          _incomingDataController
-              .add((groupPeerId, Uint8List.fromList(data)));
+          _incomingDataController.add((groupPeerId, Uint8List.fromList(data)));
         }
       } catch (e) {
         logger.error(
@@ -133,9 +131,7 @@ class WebRtcP2PAdapter implements P2PConnectionAdapter {
     // Check if the underlying 1:1 connection is already established.
     // If so, immediately emit a connected state for the group peer.
     final existingPeers = _connectionManager.currentPeers;
-    final existingPeer = existingPeers
-        .where((p) => p.id == deviceId)
-        .toList();
+    final existingPeer = existingPeers.where((p) => p.id == deviceId).toList();
 
     if (existingPeer.isNotEmpty) {
       final state = existingPeer.first.connectionState;
