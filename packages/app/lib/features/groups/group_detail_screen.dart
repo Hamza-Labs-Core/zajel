@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/logging/logger_service.dart';
 import '../../core/models/peer.dart';
 import '../../core/providers/app_providers.dart';
 import 'models/group.dart';
@@ -39,8 +40,9 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
         await connectionService.activateGroup(group);
         _groupActivated = true;
       }
-    } catch (_) {
-      // Mesh activation is best-effort; the screen works without it.
+    } catch (e) {
+      logger.error('GroupDetailScreen',
+          'Failed to activate mesh for group ${widget.groupId}', e);
     }
   }
 
@@ -50,8 +52,9 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
       try {
         final connectionService = ref.read(groupConnectionServiceProvider);
         connectionService.deactivateGroup(widget.groupId);
-      } catch (_) {
-        // Best-effort cleanup.
+      } catch (e) {
+        logger.error('GroupDetailScreen',
+            'Failed to deactivate mesh for group ${widget.groupId}', e);
       }
     }
     _messageController.dispose();
@@ -293,7 +296,10 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
             if (directPeers.contains(member.deviceId)) {
               try {
                 await connectionManager.sendMessage(member.deviceId, payload);
-              } catch (_) {}
+              } catch (e) {
+                logger.error('GroupDetailScreen',
+                    'Failed to send group message to ${member.deviceId}', e);
+              }
             }
           }
         }
