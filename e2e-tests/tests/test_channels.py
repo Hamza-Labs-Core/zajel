@@ -65,7 +65,7 @@ class TestChannels:
 
         # Find the text fields in the dialog
         _type_in_field(helper, 0, "Test Channel Alpha")
-        _type_in_field(helper, 1, "A channel for testing", hide_keyboard=True)
+        _type_in_field(helper, 1, "A channel for testing")
 
         # Tap the Create button in the dialog
         helper._find("Create", timeout=10, partial=False).click()
@@ -90,7 +90,7 @@ class TestChannels:
         time.sleep(2)
 
         # Fill in channel name
-        _type_in_field(helper, 0, "Empty State Channel", hide_keyboard=True)
+        _type_in_field(helper, 0, "Empty State Channel")
 
         # Tap Create
         helper._find("Create", timeout=10, partial=False).click()
@@ -114,7 +114,7 @@ class TestChannels:
         time.sleep(2)
 
         # Type a name
-        _type_in_field(helper, 0, "Should Not Exist", hide_keyboard=True)
+        _type_in_field(helper, 0, "Should Not Exist")
 
         # Cancel the dialog
         helper._find("Cancel", timeout=5, partial=False).click()
@@ -137,7 +137,7 @@ class TestChannels:
         time.sleep(2)
 
         _type_in_field(helper, 0, "Detail Test Channel")
-        _type_in_field(helper, 1, "Channel description here", hide_keyboard=True)
+        _type_in_field(helper, 1, "Channel description here")
 
         helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
@@ -168,7 +168,7 @@ class TestChannels:
         helper._find("Create Channel", timeout=10).click()
         time.sleep(2)
 
-        _type_in_field(helper, 0, "Compose Bar Channel", hide_keyboard=True)
+        _type_in_field(helper, 0, "Compose Bar Channel")
 
         helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
@@ -193,7 +193,7 @@ class TestChannels:
         helper._find("Create Channel", timeout=10).click()
         time.sleep(2)
 
-        _type_in_field(helper, 0, "Publish Test Channel", hide_keyboard=True)
+        _type_in_field(helper, 0, "Publish Test Channel")
 
         helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
@@ -226,7 +226,7 @@ class TestChannels:
         helper._find("Create Channel", timeout=10).click()
         time.sleep(2)
 
-        _type_in_field(helper, 0, "Share Test Channel", hide_keyboard=True)
+        _type_in_field(helper, 0, "Share Test Channel")
 
         helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
@@ -251,7 +251,7 @@ class TestChannels:
         helper._find("Create Channel", timeout=10).click()
         time.sleep(2)
 
-        _type_in_field(helper, 0, "Info Test Channel", hide_keyboard=True)
+        _type_in_field(helper, 0, "Info Test Channel")
 
         helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
@@ -277,7 +277,7 @@ class TestChannels:
         time.sleep(2)
 
         _type_in_field(helper, 0, "Info Sheet Channel")
-        _type_in_field(helper, 1, "Sheet description", hide_keyboard=True)
+        _type_in_field(helper, 1, "Sheet description")
 
         helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
@@ -307,7 +307,7 @@ class TestChannels:
         helper._find("Create Channel", timeout=10).click()
         time.sleep(2)
 
-        _type_in_field(helper, 0, "Role Display Channel", hide_keyboard=True)
+        _type_in_field(helper, 0, "Role Display Channel")
 
         helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
@@ -328,7 +328,7 @@ class TestChannels:
         helper._find("Create Channel", timeout=10).click()
         time.sleep(2)
 
-        _type_in_field(helper, 0, "Nav Back Channel", hide_keyboard=True)
+        _type_in_field(helper, 0, "Nav Back Channel")
 
         helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
@@ -352,15 +352,17 @@ class TestChannels:
 # ── Helpers ──────────────────────────────────────────────────────
 
 
-def _type_in_field(helper, field_index, text, hide_keyboard=False):
+def _type_in_field(helper, field_index, text):
     """Type text into a specific EditText field by index within a dialog.
 
     Flutter dialogs render TextField widgets as android.widget.EditText
     in UiAutomator2. We locate them by index since multiple fields may
     be present (e.g. channel name + description).
 
-    Set hide_keyboard=True after typing the last field so the keyboard
-    doesn't obscure dialog action buttons (Create, Cancel, etc.).
+    NOTE: We do NOT dismiss the keyboard here. Flutter AlertDialog content
+    is wrapped in SingleChildScrollView, so action buttons remain accessible
+    above the keyboard. Calling hide_keyboard() on UiAutomator2 triggers
+    pressBack() which can dismiss the dialog entirely.
     """
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
@@ -380,13 +382,6 @@ def _type_in_field(helper, field_index, text, hide_keyboard=False):
     time.sleep(0.5)
     helper.driver.execute_script('mobile: type', {'text': text})
     time.sleep(0.5)
-
-    if hide_keyboard:
-        try:
-            helper.driver.hide_keyboard()
-        except Exception:
-            pass  # Keyboard might already be hidden
-        time.sleep(0.5)
 
 
 def _type_in_compose_bar(helper, text):

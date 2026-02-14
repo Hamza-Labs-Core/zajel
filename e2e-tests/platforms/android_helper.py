@@ -477,10 +477,16 @@ class AppHelper:
         input_field = WebDriverWait(self.driver, 10).until(
             EC.presence_of_element_located((By.XPATH, "//android.widget.EditText"))
         )
+        # Flutter TextFields may not respond to .clear() properly.
+        # Select all text first, then type to replace it.
+        input_field.click()
+        _time.sleep(0.3)
         input_field.clear()
+        _time.sleep(0.3)
         self.driver.execute_script('mobile: type', {'text': name})
+        _time.sleep(0.5)
 
-        self._find("Save", timeout=5, partial=False).click()
+        self._find("Save", timeout=10, partial=False).click()
         _time.sleep(1)
 
     def tap_settings_option(self, text: str):
