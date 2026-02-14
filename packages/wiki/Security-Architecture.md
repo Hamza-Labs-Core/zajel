@@ -8,42 +8,17 @@ Zajel uses modern, well-vetted cryptographic primitives for all security operati
 
 ```mermaid
 graph TD
-    subgraph "Identity Layer"
-        IK[X25519 Identity Keypair<br/>Generated at first launch<br/>Stored in secure storage]
-    end
+    IK["X25519 Identity Keypair<br/>Generated at first launch"] --> ECDH["X25519 ECDH<br/>Shared secret"]
+    ECDH --> HKDF1["HKDF-SHA256<br/>info: 'zajel_session'"]
+    HKDF1 --> SK["Session Key<br/>Per-peer symmetric"]
+    SK --> CC1["ChaCha20-Poly1305<br/>1:1 Chat Encryption"]
 
-    subgraph "Session Layer (1:1 Chat)"
-        ECDH[X25519 ECDH<br/>Shared secret from keypair exchange]
-        HKDF1[HKDF-SHA256<br/>info: 'zajel_session'<br/>output: 32 bytes]
-        SK[Session Key<br/>Per-peer symmetric key]
-        CC1[ChaCha20-Poly1305<br/>Random nonce per message]
-    end
+    CSK["Ed25519 Signing Keypair<br/>Channel owner identity"] --> SIG["Ed25519 Signature<br/>Per-chunk authenticity"]
+    CEK["X25519 Encryption Keypair<br/>Channel content"] --> HKDF2["HKDF-SHA256<br/>info: 'zajel_channel_content_epoch_N'"]
+    HKDF2 --> CK["Content Key<br/>Epoch-scoped symmetric"]
+    CK --> CC2["ChaCha20-Poly1305<br/>Channel Encryption"]
 
-    subgraph "Channel Layer (Broadcast)"
-        CSK[Ed25519 Signing Keypair<br/>Owner identity]
-        CEK[X25519 Encryption Keypair<br/>Content encryption]
-        HKDF2[HKDF-SHA256<br/>info: 'zajel_channel_content_epoch_N']
-        CK[Content Key<br/>Epoch-scoped symmetric key]
-        CC2[ChaCha20-Poly1305<br/>Payload encryption]
-        SIG[Ed25519 Signature<br/>Per-chunk authenticity]
-    end
-
-    subgraph "Group Layer (Multi-party)"
-        GSK[Sender Key<br/>32-byte symmetric per member]
-        CC3[ChaCha20-Poly1305<br/>Message encryption]
-    end
-
-    IK --> ECDH
-    ECDH --> HKDF1
-    HKDF1 --> SK
-    SK --> CC1
-
-    CSK --> SIG
-    CEK --> HKDF2
-    HKDF2 --> CK
-    CK --> CC2
-
-    GSK --> CC3
+    GSK["Sender Key<br/>32-byte per member"] --> CC3["ChaCha20-Poly1305<br/>Group Encryption"]
 ```
 
 ---

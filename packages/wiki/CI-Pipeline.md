@@ -6,53 +6,32 @@ Zajel uses GitHub Actions for continuous integration and deployment. There are 1
 
 ```mermaid
 graph TD
-    PR["Pull Request Opened/Updated"] --> V["Determine Version"]
-    V --> P1
-
-    subgraph "Phase 1: Tests"
-        P1["Unit Tests<br/>(Flutter analyze + test)"]
-        P1S["Server Tests<br/>(CF + VPS)"]
-        P1H["Headless Client Tests<br/>(pytest)"]
-    end
+    PR["Pull Request"] --> V["Determine Version"]
+    V --> P1["Flutter Tests"]
+    V --> P1S["Server Tests"]
+    V --> P1H["Headless Tests"]
 
     P1 & P1S & P1H --> GATE1["Phase 1 Gate"]
 
-    GATE1 --> P2["Phase 2: Tag Pre-release"]
+    GATE1 --> P2["Tag Pre-release"]
 
-    P2 --> P3
-
-    subgraph "Phase 3: Build & Deploy"
-        subgraph "Builds"
-            P3A["Build Android"]
-            P3I["Build iOS"]
-            P3L["Build Linux"]
-        end
-        subgraph "More Builds"
-            P3M["Build macOS"]
-            P3W["Build Windows"]
-            P3WEB["Build Web"]
-        end
-        subgraph "Deploys"
-            P3CF["Deploy CF Signaling"]
-            P3CFA["Deploy CF Admin"]
-            P3CFW["Deploy CF Website"]
-        end
-    end
-    P3 --> P3A & P3I & P3L
-    P3 --> P3M & P3W & P3WEB
-    P3 --> P3CF & P3CFA & P3CFW
+    P2 --> P3A["Build Android"]
+    P2 --> P3I["Build iOS"]
+    P2 --> P3L["Build Linux"]
+    P2 --> P3M["Build macOS"]
+    P2 --> P3W["Build Windows"]
+    P2 --> P3WEB["Build Web"]
+    P2 --> P3CF["Deploy Signaling"]
+    P2 --> P3CFA["Deploy Admin"]
+    P2 --> P3CFW["Deploy Website"]
 
     P3A & P3I & P3L & P3M & P3W & P3WEB & P3CF & P3CFA & P3CFW --> GATE3["Phase 3 Gate"]
 
-    GATE3 --> P4["Phase 4: Create GitHub Pre-release"]
+    GATE3 --> P4["Create GitHub Pre-release"]
 
-    P1 --> P5
-    subgraph "Phase 5: E2E Tests"
-        P5A["E2E Android<br/>(Appium + emulator)"]
-        P5L["E2E Linux<br/>(Shelf HTTP + Xvfb)"]
-        P5W["E2E Windows<br/>(Headless client)"]
-    end
-    P5 --> P5A & P5L & P5W
+    P1 --> P5A["E2E Android"]
+    P1 --> P5L["E2E Linux"]
+    P1 --> P5W["E2E Windows"]
 
     P5A & P5L & P5W --> GATE5["Phase 5 Gate"]
 

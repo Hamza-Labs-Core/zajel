@@ -6,58 +6,19 @@ The Zajel headless client is a pure-Python implementation of the Zajel P2P proto
 
 ```mermaid
 graph TB
-    subgraph "CLI Layer (cli/)"
-        CLI["zajel-cli<br/>(client.py)"]
-        DAEMON["zajel-daemon<br/>(daemon.py)"]
-        CLIPROTO["Protocol<br/>(protocol.py)"]
-        SER["Serializers<br/>(serializers.py)"]
-        CLI -->|"UNIX socket"| DAEMON
-        DAEMON --> CLIPROTO
-        DAEMON --> SER
-    end
+    CLI["zajel-cli"] -->|"UNIX socket"| DAEMON["zajel-daemon"]
+    DAEMON --> API["ZajelHeadlessClient"]
 
-    subgraph "ZajelHeadlessClient (client.py)"
-        API["High-Level API<br/>connect, pair_with, send_text,<br/>create_channel, create_group, etc."]
-    end
-
-    DAEMON --> API
-
-    subgraph "Services"
-        subgraph "Core"
-            SIG["SignalingClient<br/>(signaling.py)"]
-            WEBRTC["WebRTCService<br/>(webrtc.py)"]
-            CRYPTO["CryptoService<br/>(crypto.py)"]
-            PROTO["Protocol<br/>(protocol.py)"]
-        end
-        subgraph "Features"
-            CHAN["ChannelCrypto<br/>(channels.py)"]
-            GRP["GroupCrypto<br/>(groups.py)"]
-            FT["FileTransfer<br/>(file_transfer.py)"]
-            MEDIA["Media Sources<br/>(media/)"]
-        end
-    end
-
-    subgraph "State"
-        subgraph "Storage"
-            PS["PeerStorage<br/>(peer_storage.py)"]
-            CS["ChannelStorage<br/>(channels.py)"]
-            GS["GroupStorage<br/>(groups.py)"]
-        end
-        EE["EventEmitter<br/>(hooks.py)"]
-    end
-
-    API --> SIG
-    API --> WEBRTC
-    API --> CRYPTO
-    API --> PROTO
-    API --> CHAN
-    API --> GRP
-    API --> FT
-    API --> MEDIA
-    API --> PS
-    API --> CS
-    API --> GS
-    API --> EE
+    API --> SIG["SignalingClient"]
+    API --> WEBRTC["WebRTCService"]
+    API --> CRYPTO["CryptoService"]
+    API --> CHAN["ChannelCrypto"]
+    API --> GRP["GroupCrypto"]
+    API --> FT["FileTransfer"]
+    API --> PS["PeerStorage"]
+    API --> CS["ChannelStorage"]
+    API --> GS["GroupStorage"]
+    API --> EE["EventEmitter"]
 ```
 
 ## Module Reference
