@@ -68,58 +68,29 @@ zajel/
 
 ```mermaid
 graph TD
-    subgraph "Features"
-        subgraph "Communication"
-            CHAT[Chat]
-            CHAN[Channels]
-            GRP[Groups]
-            CALL[Call / VoIP]
-        end
-        subgraph "Management"
-            CONN[Connection & Pairing]
-            CONTACT[Contacts]
-            HOME[Home & Navigation]
-        end
-        subgraph "System"
-            SET[Settings]
-            OB[Onboarding]
-            HELP[Help]
-            ATT[Attestation]
-        end
-    end
-
-    subgraph "Core Services"
-        subgraph "Security & Network"
-            CRYPTO[Crypto Service<br/>X25519 + ChaCha20]
-            NET[Network Layer<br/>WebRTC + Signaling]
-            PROTO[Message Protocol]
-        end
-        subgraph "Data & Media"
-            STORE[Storage Layer<br/>SQLite + SecureStorage]
-            MEDIA[Media Service<br/>Audio + Video]
-            NOTIF[Notifications]
-            LOG[Logger]
-        end
-    end
-
-    CHAT --> CRYPTO
+    CHAT[Chat] --> CRYPTO
     CHAT --> NET
     CHAT --> STORE
     CHAT --> MEDIA
-    CONN --> CRYPTO
-    CONN --> NET
-    CALL --> NET
-    CALL --> MEDIA
-    CHAN --> CRYPTO
+    CHAN[Channels] --> CRYPTO
     CHAN --> NET
     CHAN --> STORE
-    GRP --> CRYPTO
+    GRP[Groups] --> CRYPTO
     GRP --> NET
     GRP --> STORE
-    ATT --> CRYPTO
-    HOME --> NET
+    CALL[Call / VoIP] --> NET
+    CALL --> MEDIA
+    CONN[Connection & Pairing] --> CRYPTO
+    CONN --> NET
+    HOME[Home & Navigation] --> NET
     HOME --> STORE
-    CONTACT --> STORE
+    CONTACT[Contacts] --> STORE
+    ATT[Attestation] --> CRYPTO
+
+    CRYPTO[Crypto Service<br/>X25519 + ChaCha20]
+    NET[Network Layer<br/>WebRTC + Signaling]
+    STORE[Storage Layer<br/>SQLite + SecureStorage]
+    MEDIA[Media Service<br/>Audio + Video]
 ```
 
 ---

@@ -48,7 +48,6 @@ def serialize_subscribed_channel(channel) -> dict[str, Any]:
 
 def serialize_channel_content(channel_id: str, payload) -> dict[str, Any]:
     """Serialize a (channel_id, ChunkPayload) tuple."""
-    import base64
     return {
         "channel_id": channel_id,
         "content_type": payload.content_type,
