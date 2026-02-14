@@ -112,6 +112,10 @@ class SignalingClient {
   // Rendezvous stream controller
   final _rendezvousController = StreamController<RendezvousEvent>.broadcast();
 
+  // Chunk relay stream controller — forwards raw chunk messages to ChannelSyncService
+  final _chunkMessageController =
+      StreamController<Map<String, dynamic>>.broadcast();
+
   final _logger = LoggerService.instance;
 
   bool _isConnected = false;
@@ -161,6 +165,10 @@ class SignalingClient {
 
   /// Stream of rendezvous events (matches, dead drops, partial results).
   Stream<RendezvousEvent> get rendezvousEvents => _rendezvousController.stream;
+
+  /// Stream of raw chunk relay messages for the channel sync service.
+  Stream<Map<String, dynamic>> get chunkMessages =>
+      _chunkMessageController.stream;
 
   /// Whether currently connected to the signaling server.
   bool get isConnected => _isConnected;
@@ -491,6 +499,8 @@ class SignalingClient {
     await _callIceController.close();
     // Close rendezvous stream controller
     await _rendezvousController.close();
+    // Close chunk message stream controller
+    await _chunkMessageController.close();
   }
 
   // Private methods
@@ -674,6 +684,35 @@ class SignalingClient {
           _logger.info(
               'SignalingClient', 'Received rendezvous_match: ${json['match']}');
           _handleRendezvousMatch(json);
+          break;
+
+        // VPS server handshake messages
+        case 'server_info':
+          _logger.debug('SignalingClient',
+              'Server info: serverId=${json['serverId']}, region=${json['region']}');
+          break;
+
+        case 'server_identity':
+          _logger.debug('SignalingClient', 'Server identity proof received');
+          break;
+
+        // Chunk relay messages — forward to ChannelSyncService stream
+        case 'chunk_data':
+        case 'chunk_pull':
+        case 'chunk_available':
+        case 'chunk_not_found':
+        case 'chunk_announce_ack':
+        case 'chunk_push_ack':
+        case 'chunk_error':
+        case 'chunk_pulling':
+          _logger.debug('SignalingClient', 'Chunk message: $type');
+          _chunkMessageController.add(json);
+          break;
+
+        // Channel registration acknowledgements
+        case 'channel-owner-registered':
+        case 'channel-subscribed':
+          _logger.debug('SignalingClient', 'Channel registration: $type');
           break;
 
         case 'pong':

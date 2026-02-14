@@ -141,11 +141,13 @@ export function sendJson<T>(
 /**
  * Set authentication cookie (after verifying token from URL)
  */
-export function setAuthCookie(res: ServerResponse, token: string): void {
+export function setAuthCookie(res: ServerResponse, token: string, isSecure = false): void {
   // 15 minute expiry, matching JWT
   const maxAge = 15 * 60;
+  const securePart = isSecure ? '; Secure' : '';
+  const sameSite = isSecure ? 'Strict' : 'Lax';
   res.setHeader(
     'Set-Cookie',
-    `zajel_vps_token=${token}; Path=/admin; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Strict`
+    `zajel_vps_token=${token}; Path=/admin; Max-Age=${maxAge}; HttpOnly${securePart}; SameSite=${sameSite}`
   );
 }
