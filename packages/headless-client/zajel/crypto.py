@@ -42,6 +42,10 @@ class CryptoService:
         self._session_keys: dict[str, bytes] = {}
         # peerId -> peer public key bytes
         self._peer_public_keys: dict[str, bytes] = {}
+        # Replay protection: track seen nonces per peer
+        self._seen_nonces: dict[str, set[bytes]] = {}
+        # Sliding window size for nonce tracking
+        self._max_nonce_history = 10000
 
     def initialize(self) -> None:
         """Generate a new X25519 key pair."""
@@ -93,6 +97,7 @@ class CryptoService:
         ).derive(shared_secret)
 
         self._session_keys[peer_id] = session_key
+        self._seen_nonces[peer_id] = set()  # Reset for new session
         return session_key
 
     def encrypt(self, peer_id: str, plaintext: str) -> str:
@@ -124,6 +129,9 @@ class CryptoService:
 
         Returns:
             The decrypted plaintext string.
+
+        Raises:
+            ValueError: If a replayed nonce is detected.
         """
         key = self._session_keys.get(peer_id)
         if key is None:
@@ -133,8 +141,23 @@ class CryptoService:
         nonce = raw[:NONCE_SIZE]
         ciphertext = raw[NONCE_SIZE:]  # includes MAC
 
+        # Replay detection: check for previously seen nonces
+        if peer_id not in self._seen_nonces:
+            self._seen_nonces[peer_id] = set()
+        if nonce in self._seen_nonces[peer_id]:
+            raise ValueError(f"Replay detected: duplicate nonce from peer {peer_id}")
+
         aead = ChaCha20Poly1305(key)
         plaintext = aead.decrypt(nonce, ciphertext, None)
+
+        # Record the nonce after successful decryption
+        self._seen_nonces[peer_id].add(nonce)
+
+        # Evict oldest nonces if the set is too large
+        if len(self._seen_nonces[peer_id]) > self._max_nonce_history:
+            nonce_list = list(self._seen_nonces[peer_id])
+            self._seen_nonces[peer_id] = set(nonce_list[len(nonce_list) // 2:])
+
         return plaintext.decode()
 
     def has_session_key(self, peer_id: str) -> bool:

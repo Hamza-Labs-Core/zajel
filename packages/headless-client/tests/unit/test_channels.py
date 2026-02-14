@@ -236,16 +236,15 @@ class TestInviteLink:
         assert decoded_manifest.admin_keys[0].label == "Adm"
 
     def test_decode_without_prefix(self):
-        """decode_channel_link can handle just the encoded part."""
+        """decode_channel_link rejects links without the zajel://channel/ prefix."""
         manifest = _make_manifest(name="No Prefix")
         encryption_key = "key_no_prefix"
         payload = {"m": manifest.to_dict(), "k": encryption_key}
         json_bytes = json.dumps(payload).encode("utf-8")
         encoded = base64.urlsafe_b64encode(json_bytes).decode().rstrip("=")
 
-        decoded_manifest, decoded_key = decode_channel_link(encoded)
-        assert decoded_manifest.name == "No Prefix"
-        assert decoded_key == encryption_key
+        with pytest.raises(ValueError, match="must start with"):
+            decode_channel_link(encoded)
 
     def test_decode_invalid_link(self):
         with pytest.raises(ValueError):

@@ -33,6 +33,7 @@ export async function importVerifyKey(base64Key) {
 /**
  * Import an Ed25519 signing key from a hex-encoded 32-byte seed.
  * Uses PKCS8 wrapping same as signing.js.
+ * Key is extractable to allow public key derivation for build token verification.
  * @param {string} hexSeed - 64-character hex string (32 bytes)
  * @returns {Promise<CryptoKey>}
  */
@@ -53,6 +54,31 @@ export async function importAttestationSigningKey(hexSeed) {
   pkcs8.set(seed, pkcs8Prefix.length);
 
   return crypto.subtle.importKey('pkcs8', pkcs8, 'Ed25519', true, ['sign']);
+}
+
+/**
+ * Import an Ed25519 signing key for session tokens (non-extractable).
+ * The private key material cannot be exported from this key object.
+ * @param {string} hexSeed - 64-character hex string (32 bytes)
+ * @returns {Promise<CryptoKey>}
+ */
+export async function importSessionSigningKey(hexSeed) {
+  const seed = hexToBytes(hexSeed);
+
+  const pkcs8Prefix = new Uint8Array([
+    0x30, 0x2e,
+    0x02, 0x01, 0x00,
+    0x30, 0x05,
+    0x06, 0x03, 0x2b, 0x65, 0x70,
+    0x04, 0x22,
+    0x04, 0x20,
+  ]);
+
+  const pkcs8 = new Uint8Array(pkcs8Prefix.length + seed.length);
+  pkcs8.set(pkcs8Prefix);
+  pkcs8.set(seed, pkcs8Prefix.length);
+
+  return crypto.subtle.importKey('pkcs8', pkcs8, 'Ed25519', false, ['sign']);
 }
 
 /**

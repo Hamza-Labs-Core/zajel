@@ -62,13 +62,29 @@ function detectPlatform(): string | null {
   return null;
 }
 
+function isValidGithubDownloadUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === 'https:' &&
+      (parsed.hostname === 'github.com' ||
+       parsed.hostname.endsWith('.githubusercontent.com'))
+    );
+  } catch {
+    return false;
+  }
+}
+
 function findAssetUrl(assets: ReleaseAsset[], platform: string): string | null {
   const ext = platforms[platform].extension;
   const asset = assets.find((a) => {
     const name = a.name.toLowerCase();
     return name.includes(platform) && (name.endsWith(`.${ext}`) || name.endsWith(".zip"));
   });
-  return asset ? asset.browser_download_url : null;
+  if (asset && isValidGithubDownloadUrl(asset.browser_download_url)) {
+    return asset.browser_download_url;
+  }
+  return null;
 }
 
 export default function Home() {
@@ -80,18 +96,26 @@ export default function Home() {
     setDetectedPlatform(detectPlatform());
 
     fetch(GITHUB_API)
-      .then((res) => res.json())
-      .then((data: Release) => {
-        setRelease(data);
-        if (data.assets) {
-          const urls: Record<string, string | null> = {};
-          Object.keys(platforms).forEach((p) => {
-            urls[p] = findAssetUrl(data.assets, p);
-          });
-          setDownloadUrls(urls);
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error(`GitHub API returned ${res.status}`);
         }
+        return res.json();
       })
-      .catch(console.error);
+      .then((data: Release) => {
+        if (!data.tag_name || !Array.isArray(data.assets)) {
+          throw new Error('Invalid release data structure');
+        }
+        setRelease(data);
+        const urls: Record<string, string | null> = {};
+        Object.keys(platforms).forEach((p) => {
+          urls[p] = findAssetUrl(data.assets, p);
+        });
+        setDownloadUrls(urls);
+      })
+      .catch((err) => {
+        console.error('Failed to fetch release data:', err);
+      });
   }, []);
 
   return (

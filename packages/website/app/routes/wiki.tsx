@@ -1,12 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, Component } from "react";
 import { useParams, useNavigate } from "react-router";
-import type { MetaFunction, LinksFunction } from "react-router";
+import type { MetaFunction } from "react-router";
 import { Nav } from "~/components/Nav";
 import { Footer } from "~/components/Footer";
 import { WikiSidebar } from "~/components/wiki/WikiSidebar";
 import { MarkdownRenderer } from "~/components/wiki/MarkdownRenderer";
 import { LanguageSwitch } from "~/components/wiki/LanguageSwitch";
 import "~/styles/wiki.css";
+import "~/styles/fonts.css";
+
+const SUPPORTED_LANGS = ["en", "ar"] as const;
+type SupportedLang = typeof SUPPORTED_LANGS[number];
+
+function isSupportedLang(lang: string): lang is SupportedLang {
+  return (SUPPORTED_LANGS as readonly string[]).includes(lang);
+}
 
 // Eagerly load sidebar (needed on every page)
 const sidebarModules = import.meta.glob("../../../wiki/_Sidebar.md", { query: "?raw", eager: true });
@@ -37,11 +45,40 @@ export const meta: MetaFunction = () => [
   { name: "description", content: "Zajel developer documentation — architecture, protocols, security, and more" },
 ];
 
-export const links: LinksFunction = () => [
-  { rel: "preconnect", href: "https://fonts.googleapis.com" },
-  { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
-  { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;600;700&display=swap" },
-];
+// Fonts are self-hosted via ~/styles/fonts.css (no external Google Fonts dependency)
+
+class WikiErrorBoundary extends Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(): { hasError: boolean } {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error("Wiki content rendering error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="wiki-markdown">
+          <h1>Rendering Error</h1>
+          <p>This page could not be rendered. The content may be malformed.</p>
+          <p>
+            <a href="/wiki/en">Return to Wiki Home</a>
+          </p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export default function Wiki() {
   const params = useParams();
@@ -57,12 +94,12 @@ export default function Wiki() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [pageError, setPageError] = useState<"not-found" | "load-error" | null>(null);
 
-  // Redirect /wiki to /wiki/en
+  // Redirect /wiki or invalid lang to /wiki/en
   useEffect(() => {
-    if (!params.lang) {
-      navigate("/wiki/en", { replace: true });
+    if (!params.lang || !isSupportedLang(params.lang)) {
+      navigate(`/wiki/en${slug !== "Home" ? `/${slug}` : ""}`, { replace: true });
     }
-  }, [params.lang, navigate]);
+  }, [params.lang, navigate, slug]);
 
   // Load page content
   useEffect(() => {
@@ -120,7 +157,7 @@ export default function Wiki() {
     setSidebarOpen(false);
   }, [slug, lang]);
 
-  if (!params.lang) return null; // Will redirect
+  if (!params.lang || !isSupportedLang(params.lang)) return null; // Will redirect
 
   return (
     <>
@@ -159,7 +196,9 @@ export default function Wiki() {
               <p>Failed to load <strong>{slug}</strong>.</p>
             </div>
           ) : (
-            content && <MarkdownRenderer content={content} lang={lang} />
+            <WikiErrorBoundary>
+              {content && <MarkdownRenderer content={content} lang={lang} />}
+            </WikiErrorBoundary>
           )}
         </main>
 
@@ -170,6 +209,26 @@ export default function Wiki() {
         >
           {sidebarOpen ? "\u2715" : "\u2630"}
         </button>
+      </div>
+      <Footer />
+    </>
+  );
+}
+
+export function ErrorBoundary() {
+  return (
+    <>
+      <Nav />
+      <div className="wiki-layout">
+        <main className="wiki-content">
+          <div className="wiki-markdown">
+            <h1>Something went wrong</h1>
+            <p>An unexpected error occurred. Please try again later.</p>
+            <p>
+              <a href="/wiki/en">Return to Wiki Home</a>
+            </p>
+          </div>
+        </main>
       </div>
       <Footer />
     </>

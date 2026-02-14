@@ -98,6 +98,8 @@ export default {
 
     // GET /servers — fetch from DO, add timestamp, and sign the response
     if (url.pathname === '/servers' && request.method === 'GET') {
+      // TODO: Single global instance - acceptable for current scale.
+      // Consider sharding by region when request volume grows.
       const id = env.SERVER_REGISTRY.idFromName('global');
       const stub = env.SERVER_REGISTRY.get(id);
       const doResponse = await stub.fetch(request);
@@ -128,16 +130,30 @@ export default {
 
     // All other /servers/* routes go to the ServerRegistry Durable Object
     if (url.pathname.startsWith('/servers')) {
+      // TODO: Single global instance - acceptable for current scale.
+      // Consider sharding by region when request volume grows.
       const id = env.SERVER_REGISTRY.idFromName('global');
       const stub = env.SERVER_REGISTRY.get(id);
-      return stub.fetch(request);
+      const doResponse = await stub.fetch(request);
+      const response = new Response(doResponse.body, doResponse);
+      for (const [key, value] of Object.entries(corsHeaders)) {
+        response.headers.set(key, value);
+      }
+      return response;
     }
 
     // All /attest/* routes go to the AttestationRegistry Durable Object
     if (url.pathname.startsWith('/attest')) {
+      // TODO: Single global instance - acceptable for current scale.
+      // Consider sharding by device_id prefix when request volume grows.
       const id = env.ATTESTATION_REGISTRY.idFromName('global');
       const stub = env.ATTESTATION_REGISTRY.get(id);
-      return stub.fetch(request);
+      const doResponse = await stub.fetch(request);
+      const response = new Response(doResponse.body, doResponse);
+      for (const [key, value] of Object.entries(corsHeaders)) {
+        response.headers.set(key, value);
+      }
+      return response;
     }
 
     // Default - not found

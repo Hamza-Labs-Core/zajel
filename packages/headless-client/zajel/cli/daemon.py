@@ -14,15 +14,52 @@ import json
 import logging
 import os
 import signal
+import socket
 import stat
+import struct
 import sys
 import uuid
+from pathlib import Path
 
 from ..client import ZajelHeadlessClient
 from .protocol import async_readline, async_send, default_socket_path, serialize_result
 from . import serializers
 
 logger = logging.getLogger("zajel.cli.daemon")
+
+
+class UserFacingError(Exception):
+    """Exception whose message is safe to return to CLI clients."""
+    pass
+
+
+def _verify_peer_uid(writer: asyncio.StreamWriter) -> bool:
+    """Verify the connecting process runs as the same UID as the daemon.
+
+    Uses SO_PEERCRED (Linux) to get the peer's PID, UID, and GID.
+    Returns True if the UID matches or if credential checking is unavailable.
+    """
+    sock = writer.get_extra_info("socket")
+    if sock is None:
+        logger.warning("Cannot verify peer credentials: no socket info")
+        return False
+    try:
+        creds = sock.getsockopt(
+            socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("iII")
+        )
+        pid, uid, gid = struct.unpack("iII", creds)
+        if uid != os.getuid():
+            logger.warning(
+                "Rejecting connection from UID %d (pid %d), expected UID %d",
+                uid, pid, os.getuid(),
+            )
+            return False
+        logger.debug("Accepted connection from UID %d (pid %d)", uid, pid)
+        return True
+    except (OSError, AttributeError):
+        # SO_PEERCRED not available (non-Linux) -- log and allow
+        logger.warning("SO_PEERCRED not available; skipping UID check")
+        return True
 
 
 async def handle_connection(
@@ -35,6 +72,15 @@ async def handle_connection(
     """Handle a single CLI connection."""
     peer = writer.get_extra_info("peername") or "unknown"
     logger.debug("CLI connection from %s", peer)
+
+    if not _verify_peer_uid(writer):
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+        return
+
     try:
         while True:
             try:
@@ -69,11 +115,26 @@ async def handle_connection(
                     "id": req_id,
                     "result": serialize_result(result),
                 })
-            except Exception as e:
-                logger.error("Command %s failed: %s", cmd, e, exc_info=True)
+            except KeyError as e:
+                error_id = uuid.uuid4().hex[:8]
+                logger.error("Command %s failed [%s]: missing key %s", cmd, error_id, e, exc_info=True)
+                await async_send(writer, {
+                    "id": req_id,
+                    "error": f"Missing required argument: {e}",
+                })
+            except (ValueError, UserFacingError) as e:
+                error_id = uuid.uuid4().hex[:8]
+                logger.error("Command %s failed [%s]: %s", cmd, error_id, e, exc_info=True)
                 await async_send(writer, {
                     "id": req_id,
                     "error": str(e),
+                })
+            except Exception as e:
+                error_id = uuid.uuid4().hex[:8]
+                logger.error("Command %s failed [%s]: %s", cmd, error_id, e, exc_info=True)
+                await async_send(writer, {
+                    "id": req_id,
+                    "error": f"Internal error (ref: {error_id}). Check daemon logs.",
                 })
 
             # Check if we should shut down
@@ -204,7 +265,13 @@ async def cmd_leave_group(client: ZajelHeadlessClient, args: dict):
 
 
 async def cmd_send_file(client: ZajelHeadlessClient, args: dict):
-    file_id = await client.send_file(args["peer_id"], args["file_path"])
+    file_path = Path(args["file_path"]).resolve()
+    allowed_dir = Path(client.media_dir).resolve()
+    if not file_path.is_relative_to(allowed_dir):
+        raise ValueError(
+            f"File path must be within the media directory: {allowed_dir}"
+        )
+    file_id = await client.send_file(args["peer_id"], str(file_path))
     return {"file_id": file_id}
 
 

@@ -147,6 +147,33 @@ export const CHUNK_LIMITS = {
 } as const;
 
 // =============================================================================
+// PEER ID VALIDATION
+// =============================================================================
+
+export const PEER_ID = {
+  /** Maximum length for a peerId string */
+  MAX_LENGTH: 128,
+
+  /** Allowed characters: alphanumeric, hyphens, underscores */
+  PATTERN: /^[\w-]+$/,
+} as const;
+
+// =============================================================================
+// RELAY REGISTRATION LIMITS
+// =============================================================================
+
+export const RELAY = {
+  /** Minimum maxConnections value */
+  MIN_MAX_CONNECTIONS: 1,
+
+  /** Maximum maxConnections value */
+  MAX_MAX_CONNECTIONS: 1000,
+
+  /** Maximum connectedCount value */
+  MAX_CONNECTED_COUNT: 10000,
+} as const;
+
+// =============================================================================
 // CONNECTION LIMITS
 // =============================================================================
 

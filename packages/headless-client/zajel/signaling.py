@@ -84,8 +84,13 @@ class SignalingClient:
     """WebSocket-based signaling client for the Zajel protocol."""
 
     def __init__(self, url: str, pairing_code: Optional[str] = None):
+        if not url.startswith(("ws://", "wss://")):
+            raise ValueError(
+                f"Invalid signaling URL: {url}. Must start with ws:// or wss://"
+            )
         self.url = url
         self.pairing_code = pairing_code or generate_pairing_code()
+        self._public_key_b64: Optional[str] = None
         self._ws: Optional[ClientConnection] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._receive_task: Optional[asyncio.Task] = None
@@ -129,6 +134,20 @@ class SignalingClient:
         Returns:
             Our pairing code.
         """
+        if self.url.startswith("ws://"):
+            logger.warning(
+                "INSECURE: Using unencrypted WebSocket connection to %s. "
+                "Signaling traffic (including public keys and pairing codes) "
+                "will be visible to network observers. Use wss:// in production.",
+                self.url,
+            )
+        elif not self.url.startswith("wss://"):
+            raise ValueError(
+                f"Invalid signaling URL scheme: {self.url}. "
+                "Use wss:// for secure connections or ws:// for local development."
+            )
+
+        self._public_key_b64 = public_key_b64
         logger.info("Connecting to %s with code %s", self.url, self.pairing_code)
         self._ws = await websockets.connect(self.url)
         self._connected.set()
@@ -157,6 +176,10 @@ class SignalingClient:
             self._heartbeat_task = None
         if self._receive_task:
             self._receive_task.cancel()
+            try:
+                await self._receive_task
+            except asyncio.CancelledError:
+                pass
             self._receive_task = None
         if self._ws:
             await self._ws.close()
@@ -381,24 +404,61 @@ class SignalingClient:
         except Exception as e:
             logger.error("Heartbeat error: %s", e)
 
+    async def _reconnect(self) -> None:
+        """Reconnect to the signaling server and re-register."""
+        if self._public_key_b64 is None:
+            raise RuntimeError("Cannot reconnect: no stored public key")
+
+        logger.info("Reconnecting to %s...", self.url)
+        self._ws = await websockets.connect(self.url)
+        self._connected.set()
+
+        # Re-register with the same pairing code
+        await self._send({
+            "type": "register",
+            "pairingCode": self.pairing_code,
+            "publicKey": self._public_key_b64,
+        })
+
+        # Restart heartbeat
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
+        logger.info("Reconnected and re-registered as %s", self.pairing_code)
+
     async def _receive_loop(self) -> None:
-        try:
-            async for raw in self._ws:
-                try:
-                    msg = json.loads(raw)
-                    await self._handle_message(msg)
-                except json.JSONDecodeError:
-                    logger.warning("Non-JSON message: %s", raw[:100])
-        except websockets.ConnectionClosed:
-            logger.info("WebSocket connection closed")
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error("Receive loop error: %s", e)
-        finally:
+        backoff = 1
+        max_backoff = 60
+
+        while True:
+            try:
+                async for raw in self._ws:
+                    backoff = 1  # Reset on successful message
+                    try:
+                        msg = json.loads(raw)
+                        await self._handle_message(msg)
+                    except json.JSONDecodeError:
+                        logger.warning("Non-JSON message: %s", raw[:100])
+            except websockets.ConnectionClosed:
+                logger.warning("WebSocket closed, reconnecting in %ds...", backoff)
+            except asyncio.CancelledError:
+                return  # Intentional shutdown
+            except Exception as e:
+                logger.error("Receive loop error: %s, reconnecting in %ds...", e, backoff)
+
             self._connected.clear()
-            if self._on_disconnect:
-                await self._on_disconnect()
+
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
+
+            try:
+                await self._reconnect()
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.error("Reconnect failed: %s", e)
+                continue
 
     async def _handle_message(self, msg: dict) -> None:
         msg_type = msg.get("type", "")

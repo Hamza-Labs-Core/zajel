@@ -14,7 +14,7 @@ import { DistributedRendezvous, type PartialResult } from '../registry/distribut
 import type { DeadDropResult, LiveMatchResult } from '../registry/rendezvous-registry.js';
 import { logger } from '../utils/logger.js';
 
-import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING, ATTESTATION, RENDEZVOUS_LIMITS, CHUNK_LIMITS } from '../constants.js';
+import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING, ATTESTATION, RENDEZVOUS_LIMITS, CHUNK_LIMITS, PEER_ID, RELAY } from '../constants.js';
 import { ChunkRelay } from './chunk-relay.js';
 import type { Storage } from '../storage/interface.js';
 import { AttestationManager, type AttestationConfig } from '../attestation/attestation-manager.js';
@@ -303,6 +303,19 @@ type ClientMessage =
   | ChunkPushMessage
   | AttestRequestMessage
   | AttestResponseMessage;
+
+/**
+ * Validate peerId format: must be a string of 1-128 alphanumeric characters,
+ * hyphens, or underscores.
+ */
+function isValidPeerId(peerId: unknown): peerId is string {
+  return (
+    typeof peerId === 'string' &&
+    peerId.length > 0 &&
+    peerId.length <= PEER_ID.MAX_LENGTH &&
+    PEER_ID.PATTERN.test(peerId)
+  );
+}
 
 export class ClientHandler extends EventEmitter {
   private identity: ServerIdentity;
@@ -741,8 +754,15 @@ export class ClientHandler extends EventEmitter {
   private async handleRegister(ws: WebSocket, message: RegisterMessage): Promise<void> {
     const { peerId, maxConnections = 20, publicKey } = message;
 
-    if (!peerId) {
-      this.sendError(ws, 'Missing required field: peerId');
+    if (!isValidPeerId(peerId)) {
+      this.sendError(ws, 'Invalid peerId: must be 1-128 alphanumeric characters, hyphens, or underscores');
+      return;
+    }
+
+    // Validate maxConnections
+    const maxConn = Number(maxConnections);
+    if (!Number.isFinite(maxConn) || maxConn < RELAY.MIN_MAX_CONNECTIONS || maxConn > RELAY.MAX_MAX_CONNECTIONS) {
+      this.sendError(ws, `maxConnections must be a finite number between ${RELAY.MIN_MAX_CONNECTIONS} and ${RELAY.MAX_MAX_CONNECTIONS}`);
       return;
     }
 
@@ -777,7 +797,7 @@ export class ClientHandler extends EventEmitter {
 
     // Register in relay registry
     this.relayRegistry.register(peerId, {
-      maxConnections,
+      maxConnections: maxConn,
       publicKey,
     });
 
@@ -800,18 +820,29 @@ export class ClientHandler extends EventEmitter {
   private handleUpdateLoad(ws: WebSocket, message: UpdateLoadMessage): void {
     const { peerId, connectedCount } = message;
 
+    if (!isValidPeerId(peerId)) {
+      this.sendError(ws, 'Invalid peerId');
+      return;
+    }
+
+    const count = Number(connectedCount);
+    if (!Number.isFinite(count) || count < 0 || count > RELAY.MAX_CONNECTED_COUNT) {
+      this.sendError(ws, 'Invalid connectedCount');
+      return;
+    }
+
     // Update client's last seen
     const client = this.clients.get(peerId);
     if (client) {
       client.lastSeen = Date.now();
     }
 
-    this.relayRegistry.updateLoad(peerId, connectedCount);
+    this.relayRegistry.updateLoad(peerId, count);
 
     this.send(ws, {
       type: 'load_updated',
       peerId,
-      connectedCount,
+      connectedCount: count,
     });
   }
 
@@ -826,6 +857,11 @@ export class ClientHandler extends EventEmitter {
     message: RegisterRendezvousMessage
   ): Promise<void> {
     const { peerId, relayId } = message;
+
+    if (!isValidPeerId(peerId)) {
+      this.sendError(ws, 'Invalid peerId');
+      return;
+    }
 
     // Support both naming conventions
     const dailyPoints = message.dailyPoints || message.daily_points || [];
@@ -979,6 +1015,11 @@ export class ClientHandler extends EventEmitter {
   private handleGetRelays(ws: WebSocket, message: GetRelaysMessage): void {
     const { peerId, count = 10 } = message;
 
+    if (!isValidPeerId(peerId)) {
+      this.sendError(ws, 'Invalid peerId');
+      return;
+    }
+
     const relays = this.relayRegistry.getAvailableRelays(peerId, count);
 
     this.send(ws, {
@@ -992,6 +1033,11 @@ export class ClientHandler extends EventEmitter {
    */
   private handleHeartbeat(ws: WebSocket, message: HeartbeatMessage): void {
     const { peerId } = message;
+
+    if (!isValidPeerId(peerId)) {
+      this.sendError(ws, 'Invalid peerId');
+      return;
+    }
 
     // Update last seen
     const client = this.clients.get(peerId);
@@ -2201,8 +2247,8 @@ export class ClientHandler extends EventEmitter {
 
     const { peerId, channelId, chunks } = message;
 
-    if (!peerId) {
-      this.sendError(ws, 'Missing required field: peerId');
+    if (!isValidPeerId(peerId)) {
+      this.sendError(ws, 'Invalid peerId');
       return;
     }
 

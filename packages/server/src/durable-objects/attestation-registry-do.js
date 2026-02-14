@@ -16,6 +16,7 @@
 
 import {
   importAttestationSigningKey,
+  importSessionSigningKey,
   importVerifyKey,
   exportPublicKeyBase64,
   verifyBuildTokenSignature,
@@ -25,6 +26,7 @@ import {
   compareVersions,
 } from '../crypto/attestation.js';
 
+import { hexToBytes } from '../crypto/signing.js';
 import { getCorsHeaders } from '../cors.js';
 import { timingSafeEqual } from '../crypto/timing-safe.js';
 import { parseJsonBody, BodyTooLargeError } from '../utils/request-validation.js';
@@ -44,9 +46,28 @@ const MAX_NONCES_PER_DEVICE = 5;
 /** Maximum device entries */
 const MAX_DEVICE_ENTRIES = 100000;
 
+/** Maximum age for build tokens: 30 days */
+const MAX_TOKEN_AGE = 30 * 24 * 60 * 60 * 1000;
+
+/** Maximum clock skew tolerance: 1 minute */
+const MAX_CLOCK_SKEW = 60 * 1000;
+
+/** Generic error message for all attestation verification failures */
+const VERIFY_FAILED_MSG = 'Verification failed';
+
 /** Number of regions per challenge */
 const MIN_CHALLENGE_REGIONS = 3;
 const MAX_CHALLENGE_REGIONS = 5;
+
+/**
+ * Validate an ID string for use in storage keys.
+ * Allows alphanumeric characters, dots, hyphens, and underscores.
+ * @param {string} id
+ * @returns {boolean}
+ */
+function isValidId(id) {
+  return typeof id === 'string' && id.length >= 1 && id.length <= 128 && /^[a-zA-Z0-9._-]+$/.test(id);
+}
 
 export class AttestationRegistryDO {
   constructor(state, env) {
@@ -154,8 +175,9 @@ export class AttestationRegistryDO {
           { status: 413, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
         );
       }
+      console.error('AttestationRegistry error:', error.message, error.stack);
       return new Response(
-        JSON.stringify({ error: error.message }),
+        JSON.stringify({ error: 'Internal server error' }),
         { status: 500, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
       );
     }
@@ -180,7 +202,7 @@ export class AttestationRegistryDO {
     }
 
     // Validate device_id format
-    if (typeof device_id !== 'string' || device_id.length > 128 || !/^[\w-]+$/.test(device_id)) {
+    if (!isValidId(device_id)) {
       return this.jsonResponse({ error: 'Invalid device_id format' }, 400, corsHeaders);
     }
 
@@ -192,32 +214,42 @@ export class AttestationRegistryDO {
       );
     }
 
-    // Verify build token signature using the attestation signing key
-    if (!this.env.ATTESTATION_SIGNING_KEY) {
+    // Verify build token signature using a dedicated build token verify key,
+    // or fall back to deriving from ATTESTATION_SIGNING_KEY for backward compatibility.
+    let verifyKey;
+    if (this.env.BUILD_TOKEN_VERIFY_KEY) {
+      try {
+        verifyKey = await importVerifyKey(this.env.BUILD_TOKEN_VERIFY_KEY);
+      } catch (e) {
+        return this.jsonResponse(
+          { error: 'Build token verification configuration error' },
+          500,
+          corsHeaders
+        );
+      }
+    } else if (this.env.ATTESTATION_SIGNING_KEY) {
+      let signingKey;
+      try {
+        signingKey = await importAttestationSigningKey(this.env.ATTESTATION_SIGNING_KEY);
+      } catch (e) {
+        return this.jsonResponse(
+          { error: 'Attestation service configuration error' },
+          500,
+          corsHeaders
+        );
+      }
+      const publicKeyBase64 = await exportPublicKeyBase64(signingKey);
+      verifyKey = await importVerifyKey(publicKeyBase64);
+    } else {
       return this.jsonResponse(
-        { error: 'Attestation service not configured' },
+        { error: 'Build token verification not configured' },
         503,
         corsHeaders
       );
     }
 
-    let signingKey;
-    try {
-      signingKey = await importAttestationSigningKey(this.env.ATTESTATION_SIGNING_KEY);
-    } catch (e) {
-      return this.jsonResponse(
-        { error: 'Attestation service configuration error' },
-        500,
-        corsHeaders
-      );
-    }
-
-    // Get the public key to verify the build token
-    const publicKeyBase64 = await exportPublicKeyBase64(signingKey);
-    const publicKey = await importVerifyKey(publicKeyBase64);
-
     const valid = await verifyBuildTokenSignature(
-      publicKey,
+      verifyKey,
       build_token.payload,
       build_token.signature
     );
@@ -252,9 +284,16 @@ export class AttestationRegistryDO {
       );
     }
 
-    // Check build token timestamp (reject tokens older than 1 year)
+    // Check build token timestamp
     const tokenAge = Date.now() - timestamp;
-    if (tokenAge > 365 * 24 * 60 * 60 * 1000) {
+    if (tokenAge < -MAX_CLOCK_SKEW) {
+      return this.jsonResponse(
+        { error: 'Build token has a future timestamp' },
+        403,
+        corsHeaders
+      );
+    }
+    if (tokenAge > MAX_TOKEN_AGE) {
       return this.jsonResponse(
         { error: 'Build token expired' },
         403,
@@ -345,6 +384,14 @@ export class AttestationRegistryDO {
       );
     }
 
+    if (!isValidId(version) || !isValidId(platform)) {
+      return this.jsonResponse(
+        { error: 'Invalid version or platform format' },
+        400,
+        corsHeaders
+      );
+    }
+
     if (!critical_regions || !Array.isArray(critical_regions) || critical_regions.length === 0) {
       return this.jsonResponse(
         { error: 'critical_regions must be a non-empty array of { offset, length, hmac } objects' },
@@ -397,6 +444,10 @@ export class AttestationRegistryDO {
         400,
         corsHeaders
       );
+    }
+
+    if (!isValidId(device_id)) {
+      return this.jsonResponse({ error: 'Invalid device_id format' }, 400, corsHeaders);
     }
 
     // Verify device is registered
@@ -497,9 +548,14 @@ export class AttestationRegistryDO {
       );
     }
 
+    if (!isValidId(device_id)) {
+      return this.jsonResponse({ error: 'Invalid device_id format' }, 400, corsHeaders);
+    }
+
     // Look up the challenge
     const challenge = await this.state.storage.get(`nonce:${nonce}`);
     if (!challenge) {
+      console.error('[verify] Invalid or expired nonce', { device_id });
       return this.jsonResponse(
         { error: 'Invalid or expired nonce' },
         403,
@@ -510,6 +566,7 @@ export class AttestationRegistryDO {
     // Verify nonce hasn't expired
     if (Date.now() - challenge.created_at > NONCE_TTL) {
       await this.state.storage.delete(`nonce:${nonce}`);
+      console.error('[verify] Challenge expired', { device_id, nonce });
       return this.jsonResponse(
         { error: 'Challenge expired' },
         403,
@@ -519,6 +576,7 @@ export class AttestationRegistryDO {
 
     // Verify device_id matches
     if (challenge.device_id !== device_id) {
+      console.error('[verify] Device ID mismatch', { device_id, expected: challenge.device_id });
       return this.jsonResponse(
         { error: 'Device ID mismatch' },
         403,
@@ -534,9 +592,10 @@ export class AttestationRegistryDO {
       `reference:${challenge.build_version}:${challenge.platform}`
     );
     if (!reference) {
+      console.error('[verify] Reference binary not found', { version: challenge.build_version, platform: challenge.platform });
       return this.jsonResponse(
-        { error: 'Reference binary no longer available' },
-        404,
+        { valid: false, error: 'Reference binary no longer available' },
+        200,
         corsHeaders
       );
     }
@@ -547,6 +606,7 @@ export class AttestationRegistryDO {
     // For this implementation, critical_regions store pre-computed region_data (hex)
     // and we compute HMAC(region_data, nonce) to compare with the client's response.
     if (responses.length !== challenge.regions.length) {
+      console.error('[verify] Wrong response count', { expected: challenge.regions.length, got: responses.length });
       return this.jsonResponse(
         { valid: false, error: 'Wrong number of responses' },
         200,
@@ -558,8 +618,9 @@ export class AttestationRegistryDO {
       const { region_index, hmac } = response;
 
       if (region_index < 0 || region_index >= challenge.regions.length) {
+        console.error('[verify] Invalid region_index', { region_index });
         return this.jsonResponse(
-          { valid: false, error: `Invalid region_index: ${region_index}` },
+          { valid: false, error: VERIFY_FAILED_MSG },
           200,
           corsHeaders
         );
@@ -573,8 +634,9 @@ export class AttestationRegistryDO {
       );
 
       if (!refRegion || !refRegion.data_hex) {
+        console.error('[verify] Reference data not available for region', { region_index });
         return this.jsonResponse(
-          { valid: false, error: 'Reference data not available for region' },
+          { valid: false, error: VERIFY_FAILED_MSG },
           200,
           corsHeaders
         );
@@ -584,7 +646,8 @@ export class AttestationRegistryDO {
       const regionBytes = hexToBytes(refRegion.data_hex);
       const expectedHmac = await computeHmac(regionBytes, nonce);
 
-      if (hmac !== expectedHmac) {
+      if (!timingSafeEqual(hmac, expectedHmac)) {
+        console.error('[verify] HMAC mismatch', { region_index });
         return this.jsonResponse(
           { valid: false, error: 'HMAC mismatch' },
           200,
@@ -602,7 +665,7 @@ export class AttestationRegistryDO {
       );
     }
 
-    const signingKey = await importAttestationSigningKey(this.env.ATTESTATION_SIGNING_KEY);
+    const signingKey = await importSessionSigningKey(this.env.ATTESTATION_SIGNING_KEY);
 
     const tokenData = {
       device_id,
@@ -764,13 +827,3 @@ export class AttestationRegistryDO {
   }
 }
 
-/**
- * Helper: convert hex to bytes (re-exported for use in verify handler).
- */
-function hexToBytes(hex) {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
-  }
-  return bytes;
-}

@@ -216,6 +216,7 @@ class ZajelHeadlessClient:
 
         # State
         self._connected_peers: dict[str, ConnectedPeer] = {}
+        self._pending_peers: dict[str, ConnectedPeer] = {}
         self._active_call: Optional[ActiveCall] = None
         self._message_queue: asyncio.Queue[ReceivedMessage] = asyncio.Queue()
         self._file_transfer: Optional[FileTransferService] = None
@@ -234,6 +235,9 @@ class ZajelHeadlessClient:
         self._group_crypto = GroupCryptoService()
         self._group_message_queue: asyncio.Queue[GroupMessage] = asyncio.Queue()
         self._group_invitation_queue: asyncio.Queue[Group] = asyncio.Queue()
+
+        # Event loop reference (issue-headless-16: avoid deprecated get_event_loop)
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
         # WebRTC peer tracking (issue-headless-05: bind handshake to specific peer)
         self._webrtc_peer_id: Optional[str] = None
@@ -272,6 +276,7 @@ class ZajelHeadlessClient:
         Returns:
             Our pairing code.
         """
+        self._loop = asyncio.get_running_loop()
         self._crypto.initialize()
         self._storage.initialize()
 
@@ -297,8 +302,18 @@ class ZajelHeadlessClient:
 
     async def disconnect(self) -> None:
         """Disconnect from all peers and the signaling server."""
+        # Cancel all background tasks
         for task in self._tasks:
             task.cancel()
+        # Wait for all tasks to finish cancellation (issue-headless-24)
+        if self._tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self._tasks, return_exceptions=True),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Some tasks did not finish within 5s after cancellation")
         self._tasks.clear()
 
         if self._active_call and self._active_call.recorder:
@@ -308,6 +323,7 @@ class ZajelHeadlessClient:
         await self._signaling.disconnect()
         self._storage.close()
         self._connected_peers.clear()
+        self._pending_peers.clear()
         self._webrtc_peer_id = None
         logger.info("Disconnected")
 
@@ -362,7 +378,7 @@ class ZajelHeadlessClient:
 
         encrypted = self._crypto.encrypt(peer_id, content)
         await self._webrtc.send_message(encrypted)
-        logger.info("Sent message to %s: %s", peer_id, content[:50])
+        logger.info("Sent message to %s (%d chars)", peer_id, len(content))
 
     async def receive_message(self, timeout: float = 30) -> ReceivedMessage:
         """Wait for a text message from any peer."""
@@ -697,7 +713,11 @@ class ZajelHeadlessClient:
 
         # If data is a dict, use it directly; otherwise parse it
         if isinstance(chunk_data, str):
-            chunk_data = json.loads(chunk_data)
+            try:
+                chunk_data = json.loads(chunk_data)
+            except json.JSONDecodeError as e:
+                logger.warning("Invalid JSON in chunk_data: %s", e)
+                return
 
         await self.receive_channel_chunk(channel_id, chunk_data)
 
@@ -797,6 +817,24 @@ class ZajelHeadlessClient:
                 chunk.chunk_id,
             )
             return None
+
+        # Validate sequence number (replay/reorder detection) (issue-headless-20)
+        latest_seq = self._channel_storage.get_latest_sequence(channel_id)
+
+        if chunk.sequence < latest_seq:
+            logger.warning(
+                "Chunk %s has old sequence %d (latest: %d), possible replay. Discarding.",
+                chunk.chunk_id, chunk.sequence, latest_seq,
+            )
+            return None
+
+        if chunk.sequence > latest_seq + 1:
+            logger.warning(
+                "Sequence gap detected in channel %s: expected %d, got %d. "
+                "Some messages may have been censored or lost.",
+                channel_id[:16], latest_seq + 1, chunk.sequence,
+            )
+            # Still accept the chunk (gaps can occur due to network issues)
 
         # Store chunk
         self._channel_storage.save_chunk(channel_id, chunk)
@@ -1010,8 +1048,8 @@ class ZajelHeadlessClient:
                     )
 
         logger.info(
-            "Sent group message to '%s' (%d/%d peers): %s",
-            group.name, sent_count, len(group.other_members), content[:50],
+            "Sent group message to '%s' (%d/%d peers, %d chars)",
+            group.name, sent_count, len(group.other_members), len(content),
         )
         return message
 
@@ -1043,6 +1081,16 @@ class ZajelHeadlessClient:
         message = GroupMessage.from_bytes(
             plaintext, group_id=group_id, is_outgoing=False
         )
+
+        # Validate sequence number (issue-headless-23)
+        if not self._group_storage.validate_sequence(
+            group_id, message.author_device_id, message.sequence_number
+        ):
+            logger.warning(
+                "Invalid sequence number %d from %s in group %s",
+                message.sequence_number, message.author_device_id, group_id[:8],
+            )
+            return None
 
         # Check for duplicate
         if self._group_storage.is_duplicate(group_id, message.id):
@@ -1260,10 +1308,10 @@ class ZajelHeadlessClient:
                         )
                         if message:
                             logger.info(
-                                "Received group message from %s in '%s': %s",
+                                "Received group message from %s in '%s' (%d chars)",
                                 from_peer_id,
                                 group.name,
-                                message.content[:50],
+                                len(message.content),
                             )
                         return
                     except Exception as e:
@@ -1292,6 +1340,16 @@ class ZajelHeadlessClient:
             plaintext, group_id=group.id, is_outgoing=False
         )
 
+        # Validate sequence number (issue-headless-23)
+        if not self._group_storage.validate_sequence(
+            group.id, message.author_device_id, message.sequence_number
+        ):
+            logger.warning(
+                "Invalid sequence number %d from %s in group %s",
+                message.sequence_number, message.author_device_id, group.id[:8],
+            )
+            return None
+
         # Check for duplicate
         if self._group_storage.is_duplicate(group.id, message.id):
             return None
@@ -1306,9 +1364,10 @@ class ZajelHeadlessClient:
         # Store and emit
         self._group_storage.save_message(message)
         self._group_message_queue.put_nowait(message)
-        asyncio.get_event_loop().create_task(
-            self._events.emit("group_message", group.id, message)
-        )
+        if self._loop and self._loop.is_running():
+            self._loop.create_task(
+                self._events.emit("group_message", group.id, message)
+            )
         return message
 
     # ── Internal ─────────────────────────────────────────────
@@ -1331,81 +1390,102 @@ class ZajelHeadlessClient:
             is_initiator=match.is_initiator,
         )
 
-        # Store peer early so incoming handshake messages can find it
-        # (the app sends its handshake as soon as the data channel opens,
-        # which can arrive before we finish _establish_connection)
-        self._connected_peers[match.peer_code] = peer
+        # Store in pending so handshake handler can find it
+        self._pending_peers[match.peer_code] = peer
 
         # Track which peer this WebRTC connection belongs to (issue-headless-05)
         self._webrtc_peer_id = match.peer_code
 
-        # Create WebRTC connection
-        await self._webrtc.create_connection(match.is_initiator)
+        ice_task = None
+        try:
+            # Create WebRTC connection
+            await self._webrtc.create_connection(match.is_initiator)
 
-        # Set up data channel handlers
-        self._webrtc.on_message_channel_message = self._on_message_channel_data
-        self._webrtc.on_file_channel_message = self._on_file_channel_data
+            # Set up data channel handlers
+            self._webrtc.on_message_channel_message = self._on_message_channel_data
+            self._webrtc.on_file_channel_message = self._on_file_channel_data
 
-        # Set up ICE candidate handler
-        async def on_ice(candidate_dict):
-            await self._signaling.send_ice_candidate(
-                match.peer_code, candidate_dict
+            # Set up ICE candidate handler
+            async def on_ice(candidate_dict):
+                await self._signaling.send_ice_candidate(
+                    match.peer_code, candidate_dict
+                )
+            self._webrtc.on_ice_candidate = on_ice
+
+            if match.is_initiator:
+                # Create and send offer
+                sdp = await self._webrtc.create_offer()
+                await self._signaling.send_offer(match.peer_code, sdp)
+
+                # Wait for answer
+                signal = await self._signaling.wait_for_webrtc_signal(timeout=30)
+                if signal.signal_type == "answer":
+                    await self._webrtc.set_remote_description(
+                        signal.payload["sdp"], "answer"
+                    )
+            else:
+                # Wait for offer
+                signal = await self._signaling.wait_for_webrtc_signal(timeout=30)
+                if signal.signal_type == "offer":
+                    await self._webrtc.set_remote_description(
+                        signal.payload["sdp"], "offer"
+                    )
+                    sdp = await self._webrtc.create_answer()
+                    await self._signaling.send_answer(match.peer_code, sdp)
+
+            # Process ICE candidates in background
+            ice_task = asyncio.create_task(self._ice_candidate_loop(match.peer_code))
+            self._tasks.append(ice_task)
+
+            # Wait for data channel
+            await self._webrtc.wait_for_message_channel(timeout=30)
+
+            # Send handshake (key exchange)
+            handshake = HandshakeMessage(public_key=self._crypto.public_key_base64)
+            await self._webrtc.send_message(handshake.to_json())
+
+            # Initialize file transfer service
+            self._file_transfer = FileTransferService(
+                crypto=self._crypto,
+                send_fn=lambda data: self._webrtc._channels.file_channel.send(data)
+                if self._webrtc._channels.file_channel
+                else None,
+                receive_dir=str(self.receive_dir),
             )
-        self._webrtc.on_ice_candidate = on_ice
 
-        if match.is_initiator:
-            # Create and send offer
-            sdp = await self._webrtc.create_offer()
-            await self._signaling.send_offer(match.peer_code, sdp)
+            # Save to storage
+            from datetime import datetime
+            self._storage.save_peer(StoredPeer(
+                peer_id=match.peer_code,
+                display_name=peer.display_name or match.peer_code,
+                public_key=match.peer_public_key,
+                trusted_at=datetime.utcnow(),
+                last_seen=datetime.utcnow(),
+            ))
 
-            # Wait for answer
-            signal = await self._signaling.wait_for_webrtc_signal(timeout=30)
-            if signal.signal_type == "answer":
-                await self._webrtc.set_remote_description(
-                    signal.payload["sdp"], "answer"
-                )
-        else:
-            # Wait for offer
-            signal = await self._signaling.wait_for_webrtc_signal(timeout=30)
-            if signal.signal_type == "offer":
-                await self._webrtc.set_remote_description(
-                    signal.payload["sdp"], "offer"
-                )
-                sdp = await self._webrtc.create_answer()
-                await self._signaling.send_answer(match.peer_code, sdp)
+            # Move from pending to connected after everything succeeds
+            self._connected_peers[match.peer_code] = peer
+            del self._pending_peers[match.peer_code]
 
-        # Process ICE candidates in background
-        self._tasks.append(asyncio.create_task(self._ice_candidate_loop(match.peer_code)))
+            await self._events.emit("peer_connected", peer.peer_id, peer.public_key)
+            logger.info("Connected to peer %s", match.peer_code)
+            return peer
 
-        # Wait for data channel
-        await self._webrtc.wait_for_message_channel(timeout=30)
-
-        # Send handshake (key exchange)
-        handshake = HandshakeMessage(public_key=self._crypto.public_key_base64)
-        await self._webrtc.send_message(handshake.to_json())
-
-        # Initialize file transfer service
-        self._file_transfer = FileTransferService(
-            crypto=self._crypto,
-            send_fn=lambda data: self._webrtc._channels.file_channel.send(data)
-            if self._webrtc._channels.file_channel
-            else None,
-            receive_dir=str(self.receive_dir),
-        )
-
-        # Save to storage
-        from datetime import datetime
-        self._storage.save_peer(StoredPeer(
-            peer_id=match.peer_code,
-            display_name=peer.display_name or match.peer_code,
-            public_key=match.peer_public_key,
-            trusted_at=datetime.utcnow(),
-            last_seen=datetime.utcnow(),
-        ))
-
-        await self._events.emit("peer_connected", peer.peer_id, peer.public_key)
-        logger.info("Connected to peer %s", match.peer_code)
-        return peer
+        except Exception:
+            # Clean up on failure
+            logger.error(
+                "Failed to establish connection with %s, cleaning up",
+                match.peer_code,
+            )
+            self._pending_peers.pop(match.peer_code, None)
+            if ice_task is not None:
+                ice_task.cancel()
+                self._tasks = [t for t in self._tasks if t is not ice_task]
+            try:
+                await self._webrtc.close()
+            except Exception as close_err:
+                logger.debug("Error closing WebRTC during cleanup: %s", close_err)
+            raise
 
     async def _ice_candidate_loop(self, peer_code: str) -> None:
         """Process ICE candidates from the signaling server."""
@@ -1438,10 +1518,12 @@ class ZajelHeadlessClient:
             # Key exchange — use tracked WebRTC peer ID (issue-headless-05)
             peer_pub_key = msg["publicKey"]
             peer_id = self._webrtc_peer_id
-            if peer_id and peer_id in self._connected_peers:
+            # Check both connected and pending peers (issue-headless-14)
+            if peer_id and (peer_id in self._connected_peers or peer_id in self._pending_peers):
                 if not self._crypto.has_session_key(peer_id):
                     # Verify the handshake public key matches what we received during pairing
-                    expected_pub = self._connected_peers[peer_id].public_key
+                    peer_entry = self._connected_peers.get(peer_id) or self._pending_peers.get(peer_id)
+                    expected_pub = peer_entry.public_key if peer_entry else None
                     if expected_pub and peer_pub_key != expected_pub:
                         logger.warning(
                             "Handshake public key mismatch for %s: "
@@ -1480,9 +1562,10 @@ class ZajelHeadlessClient:
                         peer_id=peer_id, content=plaintext
                     )
                     self._message_queue.put_nowait(received)
-                    asyncio.get_event_loop().create_task(
-                        self._events.emit("message", peer_id, plaintext, "text")
-                    )
+                    if self._loop and self._loop.is_running():
+                        self._loop.create_task(
+                            self._events.emit("message", peer_id, plaintext, "text")
+                        )
                 except Exception as e:
                     logger.error("Decrypt failed for peer %s: %s", peer_id, e)
             else:

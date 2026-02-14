@@ -106,14 +106,21 @@ class FileCompleteMessage:
     """Signals the end of a file transfer."""
 
     file_id: str
+    sha256: str = ""
 
     def to_json(self) -> str:
-        return json.dumps({"type": "file_complete", "fileId": self.file_id})
+        d = {"type": "file_complete", "fileId": self.file_id}
+        if self.sha256:
+            d["sha256"] = self.sha256
+        return json.dumps(d)
 
     @staticmethod
     def from_json(data: str) -> "FileCompleteMessage":
         msg = json.loads(data)
-        return FileCompleteMessage(file_id=msg["fileId"])
+        return FileCompleteMessage(
+            file_id=msg["fileId"],
+            sha256=msg.get("sha256", ""),
+        )
 
 
 def parse_channel_message(data: str) -> dict[str, Any]:

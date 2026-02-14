@@ -29,6 +29,7 @@ NONCE_SIZE = 12
 MAC_SIZE = 16
 SENDER_KEY_SIZE = 32
 MAX_GROUP_MEMBERS = 15
+MAX_MESSAGES_PER_GROUP = 5000
 
 
 # ── Models ──────────────────────────────────────────────────────
@@ -142,6 +143,15 @@ class GroupMessage:
     ) -> "GroupMessage":
         """Deserialize from decrypted bytes."""
         data = json.loads(raw.decode("utf-8"))
+
+        # Schema validation (issue-headless-30)
+        required = ["author_device_id", "sequence_number", "content", "timestamp"]
+        missing = [k for k in required if k not in data]
+        if missing:
+            raise ValueError(f"GroupMessage missing required fields: {missing}")
+        if not isinstance(data["sequence_number"], int):
+            raise ValueError("sequence_number must be int")
+
         return GroupMessage(
             group_id=group_id,
             author_device_id=data["author_device_id"],
@@ -166,8 +176,14 @@ class GroupCryptoService:
     """
 
     def __init__(self):
-        # {group_id: {device_id: key_bytes}}
-        self._sender_keys: dict[str, dict[str, bytes]] = {}
+        # {group_id: {device_id: key_bytes (bytearray for zeroization)}}
+        self._sender_keys: dict[str, dict[str, bytearray]] = {}
+
+    @staticmethod
+    def _zeroize(key: bytearray) -> None:
+        """Overwrite key material with zeros."""
+        for i in range(len(key)):
+            key[i] = 0
 
     def generate_sender_key(self) -> str:
         """Generate a new random sender key (32 bytes, base64-encoded)."""
@@ -178,7 +194,7 @@ class GroupCryptoService:
         self, group_id: str, device_id: str, sender_key_b64: str
     ) -> None:
         """Store a sender key for a member in a group."""
-        key_bytes = base64.b64decode(sender_key_b64)
+        key_bytes = bytearray(base64.b64decode(sender_key_b64))
         if len(key_bytes) != SENDER_KEY_SIZE:
             raise ValueError(
                 f"Invalid sender key length: expected {SENDER_KEY_SIZE}, "
@@ -190,7 +206,7 @@ class GroupCryptoService:
 
     def get_sender_key(
         self, group_id: str, device_id: str
-    ) -> Optional[bytes]:
+    ) -> Optional[bytearray]:
         """Get a sender key for a member."""
         return self._sender_keys.get(group_id, {}).get(device_id)
 
@@ -199,13 +215,17 @@ class GroupCryptoService:
         return device_id in self._sender_keys.get(group_id, {})
 
     def remove_sender_key(self, group_id: str, device_id: str) -> None:
-        """Remove a member's sender key."""
+        """Remove a member's sender key, zeroizing key material."""
         if group_id in self._sender_keys:
-            self._sender_keys[group_id].pop(device_id, None)
+            key = self._sender_keys[group_id].pop(device_id, None)
+            if key is not None:
+                self._zeroize(key)
 
     def clear_group_keys(self, group_id: str) -> None:
-        """Remove all sender keys for a group."""
-        self._sender_keys.pop(group_id, None)
+        """Remove all sender keys for a group, zeroizing key material."""
+        keys = self._sender_keys.pop(group_id, {})
+        for key_bytes in keys.values():
+            self._zeroize(key_bytes)
 
     def encrypt(
         self, plaintext: bytes, group_id: str, self_device_id: str
@@ -258,6 +278,8 @@ class GroupStorage:
         self._groups: dict[str, Group] = {}
         self._messages: dict[str, list[GroupMessage]] = {}  # group_id -> msgs
         self._sequence_counters: dict[str, dict[str, int]] = {}  # group_id -> {device_id -> seq}
+        self._seen_message_ids: dict[str, set[str]] = {}  # group_id -> set of message IDs
+        self._last_seen_sequence: dict[str, dict[str, int]] = {}  # group_id -> {device_id -> last_seq}
 
     def save_group(self, group: Group) -> None:
         """Save or update a group."""
@@ -266,6 +288,10 @@ class GroupStorage:
             self._messages[group.id] = []
         if group.id not in self._sequence_counters:
             self._sequence_counters[group.id] = {}
+        if group.id not in self._seen_message_ids:
+            self._seen_message_ids[group.id] = set()
+        if group.id not in self._last_seen_sequence:
+            self._last_seen_sequence[group.id] = {}
 
     def get_group(self, group_id: str) -> Optional[Group]:
         """Get a group by ID."""
@@ -280,12 +306,22 @@ class GroupStorage:
         self._groups.pop(group_id, None)
         self._messages.pop(group_id, None)
         self._sequence_counters.pop(group_id, None)
+        self._seen_message_ids.pop(group_id, None)
+        self._last_seen_sequence.pop(group_id, None)
 
     def save_message(self, message: GroupMessage) -> None:
-        """Save a group message."""
+        """Save a group message, evicting oldest if over limit."""
         if message.group_id not in self._messages:
             self._messages[message.group_id] = []
         self._messages[message.group_id].append(message)
+        # Evict oldest messages if over limit
+        msgs = self._messages[message.group_id]
+        if len(msgs) > MAX_MESSAGES_PER_GROUP:
+            self._messages[message.group_id] = msgs[-MAX_MESSAGES_PER_GROUP:]
+        # Maintain seen message ID set for O(1) duplicate detection
+        if message.group_id not in self._seen_message_ids:
+            self._seen_message_ids[message.group_id] = set()
+        self._seen_message_ids[message.group_id].add(message.id)
 
     def get_messages(
         self, group_id: str, limit: Optional[int] = None
@@ -306,6 +342,33 @@ class GroupStorage:
         return counter
 
     def is_duplicate(self, group_id: str, message_id: str) -> bool:
-        """Check if a message has already been stored."""
-        msgs = self._messages.get(group_id, [])
-        return any(m.id == message_id for m in msgs)
+        """Check if a message has already been stored (O(1) set lookup)."""
+        return message_id in self._seen_message_ids.get(group_id, set())
+
+    def validate_sequence(self, group_id: str, author_device_id: str, sequence_number: int) -> bool:
+        """Validate that a sequence number is reasonable (non-negative, not excessively ahead).
+
+        Logs a warning if sequence gaps are detected.
+        Returns False if the sequence number is invalid.
+        """
+        if sequence_number < 0:
+            return False
+
+        last_seen = self._last_seen_sequence.get(group_id, {}).get(author_device_id, 0)
+
+        # Allow sequence numbers that are ahead by at most a reasonable gap
+        MAX_SEQ_GAP = 100
+        if sequence_number > last_seen + MAX_SEQ_GAP:
+            logger.warning(
+                "Sequence gap too large from %s in group %s: last=%d, received=%d",
+                author_device_id, group_id[:8], last_seen, sequence_number,
+            )
+            return False
+
+        # Update last seen
+        if group_id not in self._last_seen_sequence:
+            self._last_seen_sequence[group_id] = {}
+        if sequence_number > last_seen:
+            self._last_seen_sequence[group_id][author_device_id] = sequence_number
+
+        return True

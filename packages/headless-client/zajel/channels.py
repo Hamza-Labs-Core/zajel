@@ -49,6 +49,7 @@ NONCE_SIZE = 12
 MAC_SIZE = 16
 CHANNEL_LINK_PREFIX = "zajel://channel/"
 CHUNK_SIZE = 64 * 1024  # 64 KB — must match Dart app's ChannelService.chunkSize
+MAX_CHUNKS_PER_CHANNEL = 1000
 
 
 # ── Models ──────────────────────────────────────────────────────
@@ -299,10 +300,11 @@ def decode_channel_link(link: str) -> tuple[ChannelManifest, str]:
     """
     trimmed = link.strip()
 
-    if trimmed.startswith(CHANNEL_LINK_PREFIX):
-        encoded = trimmed[len(CHANNEL_LINK_PREFIX) :]
-    else:
-        encoded = trimmed
+    if not trimmed.startswith(CHANNEL_LINK_PREFIX):
+        raise ValueError(
+            f"Invalid channel link: must start with '{CHANNEL_LINK_PREFIX}'"
+        )
+    encoded = trimmed[len(CHANNEL_LINK_PREFIX):]
 
     # Restore base64url padding
     pad_len = (4 - len(encoded) % 4) % 4
@@ -630,10 +632,19 @@ class ChannelStorage:
         self._channels.pop(channel_id, None)
 
     def save_chunk(self, channel_id: str, chunk: Chunk) -> None:
-        """Save a chunk for a channel."""
+        """Save a chunk for a channel, evicting oldest if over limit."""
         channel = self._channels.get(channel_id)
         if channel:
             channel.chunks[chunk.chunk_id] = chunk
+            # Evict oldest chunks if over limit
+            if len(channel.chunks) > MAX_CHUNKS_PER_CHANNEL:
+                sorted_ids = sorted(
+                    channel.chunks.keys(),
+                    key=lambda cid: channel.chunks[cid].sequence,
+                )
+                excess = len(channel.chunks) - MAX_CHUNKS_PER_CHANNEL
+                for old_id in sorted_ids[:excess]:
+                    del channel.chunks[old_id]
 
     def get_chunks_by_sequence(
         self, channel_id: str, sequence: int
