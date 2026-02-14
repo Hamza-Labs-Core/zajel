@@ -27,6 +27,10 @@ export function getCorsHeaders(request, env) {
     'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Expose-Headers': 'X-Bootstrap-Signature, X-Attestation-Token',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Cache-Control': 'no-store',
+    'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
   };
 
   if (origin && isOriginAllowed(origin, allowedOrigins)) {

@@ -145,10 +145,10 @@ class WebRTCService:
         # Initiator creates data channels
         if is_initiator:
             msg_ch = self._pc.createDataChannel(
-                MESSAGE_CHANNEL_LABEL, ordered=True, maxRetransmits=3
+                MESSAGE_CHANNEL_LABEL, ordered=True
             )
             file_ch = self._pc.createDataChannel(
-                FILE_CHANNEL_LABEL, ordered=True, maxRetransmits=3
+                FILE_CHANNEL_LABEL, ordered=True
             )
             self._setup_channel(msg_ch)
             self._setup_channel(file_ch)

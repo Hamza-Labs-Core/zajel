@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Link } from "react-router";
 
 interface SidebarSection {
@@ -49,14 +50,44 @@ interface WikiSidebarProps {
 
 export function WikiSidebar({ sidebarMd, lang, currentSlug, open, onClose }: WikiSidebarProps) {
   const { homeLabel, sections } = parseSidebar(sidebarMd);
+  const sidebarRef = useRef<HTMLElement>(null);
+
+  // Escape key handler
+  useEffect(() => {
+    if (!open) return;
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open, onClose]);
+
+  // Focus management: move focus to sidebar when it opens
+  useEffect(() => {
+    if (open && sidebarRef.current) {
+      sidebarRef.current.focus();
+    }
+  }, [open]);
 
   return (
     <>
       <div
         className={`wiki-sidebar-overlay${open ? " open" : ""}`}
         onClick={onClose}
+        aria-hidden="true"
       />
-      <aside className={`wiki-sidebar${open ? " open" : ""}`}>
+      <aside
+        ref={sidebarRef}
+        className={`wiki-sidebar${open ? " open" : ""}`}
+        role={open ? "dialog" : undefined}
+        aria-modal={open ? "true" : undefined}
+        aria-label="Wiki navigation"
+        tabIndex={-1}
+      >
         <Link
           to={`/wiki/${lang}`}
           className={`wiki-sidebar-home${currentSlug === "Home" ? " active" : ""}`}

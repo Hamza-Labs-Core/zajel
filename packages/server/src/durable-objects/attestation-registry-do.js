@@ -30,6 +30,7 @@ import { hexToBytes } from '../crypto/signing.js';
 import { getCorsHeaders } from '../cors.js';
 import { timingSafeEqual } from '../crypto/timing-safe.js';
 import { parseJsonBody, BodyTooLargeError } from '../utils/request-validation.js';
+import { createLogger } from '../logger.js';
 
 /** Session token TTL: 1 hour */
 const SESSION_TOKEN_TTL = 60 * 60 * 1000;
@@ -73,6 +74,7 @@ export class AttestationRegistryDO {
   constructor(state, env) {
     this.state = state;
     this.env = env;
+    this.logger = createLogger(env);
 
     // Schedule periodic cleanup alarm
     if (state.blockConcurrencyWhile) {
@@ -175,7 +177,7 @@ export class AttestationRegistryDO {
           { status: 413, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
         );
       }
-      console.error('AttestationRegistry error:', error.message, error.stack);
+      this.logger.error('[attestation-registry] Unhandled error', error);
       return new Response(
         JSON.stringify({ error: 'Internal server error' }),
         { status: 500, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
@@ -333,6 +335,14 @@ export class AttestationRegistryDO {
 
     await this.state.storage.put(`device:${device_id}`, deviceEntry);
 
+    this.logger.info('[audit] Device registered', {
+      action: 'device_register',
+      device_id,
+      version,
+      platform,
+      ip: request.headers.get('CF-Connecting-IP'),
+    });
+
     return this.jsonResponse(
       {
         status: 'registered',
@@ -366,6 +376,10 @@ export class AttestationRegistryDO {
 
     const expected = `Bearer ${this.env.CI_UPLOAD_SECRET}`;
     if (!authHeader || !timingSafeEqual(authHeader, expected)) {
+      this.logger.warn('[audit] Unauthorized reference upload attempt', {
+        action: 'reference_upload_failed',
+        ip: request.headers.get('CF-Connecting-IP'),
+      });
       return this.jsonResponse(
         { error: 'Unauthorized' },
         401,
@@ -421,6 +435,12 @@ export class AttestationRegistryDO {
     };
 
     await this.state.storage.put(`reference:${version}:${platform}`, referenceEntry);
+
+    this.logger.info('[audit] Reference uploaded', {
+      action: 'reference_upload',
+      version,
+      platform,
+    });
 
     return this.jsonResponse(
       { success: true, reference: referenceEntry },
@@ -677,6 +697,11 @@ export class AttestationRegistryDO {
 
     const sessionToken = await createSessionToken(signingKey, tokenData);
 
+    this.logger.info('[audit] Attestation verified', {
+      action: 'attest_verify_success',
+      device_id,
+    });
+
     return this.jsonResponse(
       { valid: true, session_token: sessionToken },
       200,
@@ -710,6 +735,10 @@ export class AttestationRegistryDO {
 
     const expected = `Bearer ${this.env.CI_UPLOAD_SECRET}`;
     if (!authHeader || !timingSafeEqual(authHeader, expected)) {
+      this.logger.warn('[audit] Unauthorized version policy update attempt', {
+        action: 'version_policy_failed',
+        ip: request.headers.get('CF-Connecting-IP'),
+      });
       return this.jsonResponse(
         { error: 'Unauthorized' },
         401,
@@ -725,6 +754,15 @@ export class AttestationRegistryDO {
       sunset_dates,
     } = body;
 
+    // Validate version formats
+    const semverRegex = /^\d+\.\d+\.\d+$/;
+    if (minimum_version && !semverRegex.test(minimum_version)) {
+      return this.jsonResponse({ error: 'Invalid minimum_version format (expected X.Y.Z)' }, 400, corsHeaders);
+    }
+    if (recommended_version && !semverRegex.test(recommended_version)) {
+      return this.jsonResponse({ error: 'Invalid recommended_version format (expected X.Y.Z)' }, 400, corsHeaders);
+    }
+
     const policy = {
       minimum_version: minimum_version || '1.0.0',
       recommended_version: recommended_version || '1.0.0',
@@ -733,6 +771,11 @@ export class AttestationRegistryDO {
     };
 
     await this.state.storage.put('version_policy', policy);
+
+    this.logger.info('[audit] Version policy updated', {
+      action: 'version_policy_updated',
+      policy,
+    });
 
     return this.jsonResponse(
       { success: true, policy },
@@ -761,7 +804,7 @@ export class AttestationRegistryDO {
    * @returns {{ blocked: boolean, status: string, reason?: string }}
    */
   checkVersionPolicy(version, policy) {
-    // Check blocked list
+    // Check blocked list (exact string match, no parsing needed)
     if (policy.blocked_versions && policy.blocked_versions.includes(version)) {
       return {
         blocked: true,
@@ -770,23 +813,32 @@ export class AttestationRegistryDO {
       };
     }
 
-    // Check minimum version
-    if (policy.minimum_version && compareVersions(version, policy.minimum_version) < 0) {
+    try {
+      // Check minimum version
+      if (policy.minimum_version && compareVersions(version, policy.minimum_version) < 0) {
+        return {
+          blocked: true,
+          status: 'below_minimum',
+          reason: `Version ${version} is below minimum required version ${policy.minimum_version}`,
+        };
+      }
+
+      // Check if update is recommended
+      if (
+        policy.recommended_version &&
+        compareVersions(version, policy.recommended_version) < 0
+      ) {
+        return {
+          blocked: false,
+          status: 'update_recommended',
+        };
+      }
+    } catch (e) {
+      // Invalid version format - reject the client
       return {
         blocked: true,
-        status: 'below_minimum',
-        reason: `Version ${version} is below minimum required version ${policy.minimum_version}`,
-      };
-    }
-
-    // Check if update is recommended
-    if (
-      policy.recommended_version &&
-      compareVersions(version, policy.recommended_version) < 0
-    ) {
-      return {
-        blocked: false,
-        status: 'update_recommended',
+        status: 'invalid_version',
+        reason: `Invalid version format: ${version}`,
       };
     }
 

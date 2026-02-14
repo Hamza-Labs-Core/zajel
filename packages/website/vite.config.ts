@@ -11,7 +11,7 @@ export default defineConfig({
   },
   server: {
     fs: {
-      allow: [".", "../wiki"],
+      allow: [".", path.resolve(__dirname, "../wiki")],
     },
   },
 });

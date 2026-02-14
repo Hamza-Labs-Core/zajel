@@ -10,6 +10,7 @@
 import { getCorsHeaders } from '../cors.js';
 import { timingSafeEqual } from '../crypto/timing-safe.js';
 import { parseJsonBody, BodyTooLargeError } from '../utils/request-validation.js';
+import { createLogger } from '../logger.js';
 
 /** Maximum number of server entries allowed in the registry */
 const MAX_SERVER_ENTRIES = 1000;
@@ -28,6 +29,7 @@ export class ServerRegistryDO {
   constructor(state, env) {
     this.state = state;
     this.env = env;
+    this.logger = createLogger(env);
     // TTL for server entries (5 minutes)
     this.serverTTL = 5 * 60 * 1000;
 
@@ -149,7 +151,7 @@ export class ServerRegistryDO {
           { status: 413, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
         );
       }
-      console.error('ServerRegistry error:', error.message, error.stack);
+      this.logger.error('[server-registry] Unhandled error', error);
       return new Response(
         JSON.stringify({ error: 'Internal server error' }),
         { status: 500, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
@@ -176,6 +178,71 @@ export class ServerRegistryDO {
       );
     }
 
+    // Validate endpoint URL
+    let endpointUrl;
+    try {
+      endpointUrl = new URL(endpoint);
+    } catch {
+      return new Response(
+        JSON.stringify({ error: 'Invalid endpoint: must be a valid URL' }),
+        { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+      );
+    }
+
+    // Require secure protocols
+    if (!['https:', 'wss:'].includes(endpointUrl.protocol)) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid endpoint: must use HTTPS or WSS protocol' }),
+        { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+      );
+    }
+
+    // Reject private/internal addresses
+    const hostname = endpointUrl.hostname;
+    const privatePatterns = [
+      'localhost',
+      '127.0.0.1',
+      '0.0.0.0',
+      '::1',
+      '[::1]',
+    ];
+    const privateRanges = [
+      /^10\./,
+      /^172\.(1[6-9]|2[0-9]|3[01])\./,
+      /^192\.168\./,
+      /^169\.254\./,
+      /^fc00:/i,
+      /^fd[0-9a-f]{2}:/i,
+    ];
+
+    if (privatePatterns.includes(hostname) || privateRanges.some(r => r.test(hostname))) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid endpoint: must not point to private or internal addresses' }),
+        { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+      );
+    }
+
+    // Enforce maximum URL length
+    if (endpoint.length > 2048) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid endpoint: URL too long (max 2048 characters)' }),
+        { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+      );
+    }
+
+    // Validate publicKey length
+    if (publicKey.length > 1024) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid publicKey: too long' }),
+        { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+      );
+    }
+
+    // Validate and sanitize region
+    const validRegion = typeof region === 'string' && region.length <= 64 && /^[a-zA-Z0-9._-]+$/.test(region)
+      ? region
+      : 'unknown';
+
     // Enforce maximum server entry count
     const existing = await this.state.storage.list({ prefix: 'server:' });
     if (existing.size >= MAX_SERVER_ENTRIES && !existing.has(`server:${serverId}`)) {
@@ -189,12 +256,19 @@ export class ServerRegistryDO {
       serverId,
       endpoint,
       publicKey,
-      region: region || 'unknown',
+      region: validRegion,
       registeredAt: Date.now(),
       lastSeen: Date.now(),
     };
 
     await this.state.storage.put(`server:${serverId}`, serverEntry);
+
+    this.logger.info('[audit] Server registered', {
+      action: 'server_register',
+      serverId,
+      region: validRegion,
+      ip: request.headers.get('CF-Connecting-IP'),
+    });
 
     return new Response(
       JSON.stringify({ success: true, server: serverEntry }),
@@ -205,6 +279,7 @@ export class ServerRegistryDO {
   async listServers(corsHeaders) {
     const now = Date.now();
     const servers = [];
+    const staleKeys = [];
 
     // Get all server entries
     const entries = await this.state.storage.list({ prefix: 'server:' });
@@ -214,9 +289,13 @@ export class ServerRegistryDO {
       if (now - server.lastSeen < this.serverTTL) {
         servers.push(server);
       } else {
-        // Clean up stale entry
-        await this.state.storage.delete(key);
+        staleKeys.push(key);
       }
+    }
+
+    // Batch delete all stale entries in a single operation
+    if (staleKeys.length > 0) {
+      await this.state.storage.delete(staleKeys);
     }
 
     return new Response(
@@ -253,6 +332,11 @@ export class ServerRegistryDO {
     }
 
     await this.state.storage.delete(`server:${serverId}`);
+
+    this.logger.info('[audit] Server unregistered', {
+      action: 'server_unregister',
+      serverId,
+    });
 
     return new Response(
       JSON.stringify({ success: true }),

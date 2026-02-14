@@ -43,6 +43,14 @@ const arPages = buildSlugMap(arModules, "../../../wiki/ar/");
 export const meta: MetaFunction = () => [
   { title: "Developer Wiki - Zajel" },
   { name: "description", content: "Zajel developer documentation — architecture, protocols, security, and more" },
+  { property: "og:title", content: "Developer Wiki - Zajel" },
+  { property: "og:description", content: "Zajel developer documentation — architecture, protocols, security, and more" },
+  { property: "og:type", content: "article" },
+  { property: "og:image", content: "https://zajel.app/og-image.png" },
+  { name: "twitter:card", content: "summary_large_image" },
+  { name: "twitter:title", content: "Developer Wiki - Zajel" },
+  { name: "twitter:description", content: "Zajel developer documentation" },
+  { name: "twitter:image", content: "https://zajel.app/og-image.png" },
 ];
 
 // Fonts are self-hosted via ~/styles/fonts.css (no external Google Fonts dependency)
@@ -151,6 +159,14 @@ export default function Wiki() {
     loadPage();
     return () => { cancelled = true; };
   }, [lang, slug, isArabic]);
+
+  // Update document language for accessibility
+  useEffect(() => {
+    document.documentElement.lang = lang;
+    return () => {
+      document.documentElement.lang = "en";
+    };
+  }, [lang]);
 
   // Close sidebar on navigation
   useEffect(() => {

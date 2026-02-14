@@ -21,6 +21,21 @@ export function hexToBytes(hex) {
 }
 
 /**
+ * Convert an ArrayBuffer or Uint8Array to a base64 string.
+ * Uses a loop instead of spread operator to avoid stack overflow on large inputs.
+ * @param {ArrayBuffer|Uint8Array} buffer
+ * @returns {string} Base64-encoded string
+ */
+export function bytesToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+/**
  * Import an Ed25519 signing key from a 32-byte hex-encoded seed.
  *
  * The seed is wrapped in PKCS8 format since Web Crypto requires it.
@@ -57,5 +72,5 @@ export async function importSigningKey(hexSeed) {
 export async function signPayload(key, payload) {
   const data = new TextEncoder().encode(payload);
   const signature = await crypto.subtle.sign('Ed25519', key, data);
-  return btoa(String.fromCharCode(...new Uint8Array(signature)));
+  return bytesToBase64(signature);
 }

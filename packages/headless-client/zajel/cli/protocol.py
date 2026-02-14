@@ -33,25 +33,36 @@ def send_request(sock: socket.socket, request: dict) -> None:
     sock.sendall(line.encode("utf-8"))
 
 
-def read_response(sock: socket.socket) -> dict:
+def read_response(sock: socket.socket, buf: bytearray | None = None) -> tuple[dict, bytearray]:
     """Read a single JSON-line response from a socket.
 
-    Reads bytes until a newline is found.
-    Raises ValueError if the response exceeds MAX_MESSAGE_SIZE.
+    Args:
+        sock: The socket to read from.
+        buf: Optional buffer containing leftover data from a previous read.
+
+    Returns:
+        Tuple of (parsed response dict, remaining buffer data).
+
+    Raises:
+        ConnectionError: If the socket closes before a complete response.
+        ValueError: If the response exceeds MAX_MESSAGE_SIZE.
     """
-    buf = b""
+    if buf is None:
+        buf = bytearray()
     while True:
-        chunk = sock.recv(4096)
-        if not chunk:
-            raise ConnectionError("Socket closed before response received")
-        buf += chunk
+        if b"\n" in buf:
+            idx = buf.index(b"\n")
+            line = bytes(buf[:idx])
+            del buf[:idx + 1]
+            return json.loads(line.decode("utf-8")), buf
         if len(buf) > MAX_MESSAGE_SIZE:
             raise ValueError(
                 f"Response exceeds maximum size ({MAX_MESSAGE_SIZE} bytes)"
             )
-        if b"\n" in buf:
-            line, _ = buf.split(b"\n", 1)
-            return json.loads(line.decode("utf-8"))
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise ConnectionError("Socket closed before response received")
+        buf.extend(chunk)
 
 
 async def async_send(writer, response: dict) -> None:

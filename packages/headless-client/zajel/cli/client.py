@@ -45,7 +45,7 @@ def execute_command(socket_path: str, cmd: str, args: dict, pretty: bool = False
     try:
         req_id = str(uuid.uuid4())
         send_request(sock, {"id": req_id, "cmd": cmd, "args": args})
-        response = read_response(sock)
+        response, _ = read_response(sock)
     finally:
         sock.close()
 

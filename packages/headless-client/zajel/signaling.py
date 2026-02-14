@@ -464,122 +464,142 @@ class SignalingClient:
         msg_type = msg.get("type", "")
         logger.debug("RX: %s", msg_type)
 
-        match msg_type:
-            case "registered":
-                self._registered.set()
+        try:
+            match msg_type:
+                case "registered":
+                    self._registered.set()
 
-            case "pong":
-                pass  # Heartbeat response
+                case "pong":
+                    pass  # Heartbeat response
 
-            case "pair_incoming":
-                req = PairRequest(
-                    from_code=msg["fromCode"],
-                    from_public_key=msg["fromPublicKey"],
-                    proposed_name=msg.get("proposedName"),
-                )
-                await self._pair_requests.put(req)
-                if self._on_pair_request:
-                    await self._on_pair_request(req)
+                case "pair_incoming":
+                    if not all(k in msg for k in ("fromCode", "fromPublicKey")):
+                        logger.warning("Malformed pair_incoming: missing required fields")
+                        return
+                    req = PairRequest(
+                        from_code=msg["fromCode"],
+                        from_public_key=msg["fromPublicKey"],
+                        proposed_name=msg.get("proposedName"),
+                    )
+                    await self._pair_requests.put(req)
+                    if self._on_pair_request:
+                        await self._on_pair_request(req)
 
-            case "pair_matched":
-                match = PairMatch(
-                    peer_code=msg["peerCode"],
-                    peer_public_key=msg["peerPublicKey"],
-                    is_initiator=msg["isInitiator"],
-                )
-                await self._pair_matches.put(match)
-                if self._on_pair_match:
-                    await self._on_pair_match(match)
+                case "pair_matched":
+                    if not all(k in msg for k in ("peerCode", "peerPublicKey", "isInitiator")):
+                        logger.warning("Malformed pair_matched: missing required fields")
+                        return
+                    pair_match = PairMatch(
+                        peer_code=msg["peerCode"],
+                        peer_public_key=msg["peerPublicKey"],
+                        is_initiator=msg["isInitiator"],
+                    )
+                    await self._pair_matches.put(pair_match)
+                    if self._on_pair_match:
+                        await self._on_pair_match(pair_match)
 
-            case "pair_rejected":
-                await self._pair_rejections.put(msg["peerCode"])
+                case "pair_rejected":
+                    if "peerCode" not in msg:
+                        logger.warning("Malformed pair_rejected: missing peerCode")
+                        return
+                    await self._pair_rejections.put(msg["peerCode"])
 
-            case "pair_timeout":
-                logger.warning("Pair timeout for %s", msg.get("peerCode"))
+                case "pair_timeout":
+                    logger.warning("Pair timeout for %s", msg.get("peerCode"))
 
-            case "pair_error":
-                logger.error("Pair error: %s", msg.get("error"))
-                await self._errors.put(msg.get("error", "unknown"))
+                case "pair_error":
+                    logger.error("Pair error: %s", msg.get("error"))
+                    await self._errors.put(msg.get("error", "unknown"))
 
-            case "offer" | "answer" | "ice_candidate":
-                signal = WebRTCSignal(
-                    signal_type=msg_type,
-                    from_code=msg["from"],
-                    payload=msg["payload"],
-                )
-                await self._webrtc_signals.put(signal)
-                if self._on_webrtc_signal:
-                    await self._on_webrtc_signal(signal)
+                case "offer" | "answer" | "ice_candidate":
+                    if not all(k in msg for k in ("from", "payload")):
+                        logger.warning("Malformed %s: missing required fields", msg_type)
+                        return
+                    signal = WebRTCSignal(
+                        signal_type=msg_type,
+                        from_code=msg["from"],
+                        payload=msg["payload"],
+                    )
+                    await self._webrtc_signals.put(signal)
+                    if self._on_webrtc_signal:
+                        await self._on_webrtc_signal(signal)
 
-            case "call_offer" | "call_answer" | "call_reject" | "call_hangup" | "call_ice":
-                signal = CallSignal(
-                    signal_type=msg_type,
-                    from_code=msg["from"],
-                    payload=msg["payload"],
-                )
-                await self._call_signals.put(signal)
-                if self._on_call_signal:
-                    await self._on_call_signal(signal)
+                case "call_offer" | "call_answer" | "call_reject" | "call_hangup" | "call_ice":
+                    if not all(k in msg for k in ("from", "payload")):
+                        logger.warning("Malformed %s: missing required fields", msg_type)
+                        return
+                    signal = CallSignal(
+                        signal_type=msg_type,
+                        from_code=msg["from"],
+                        payload=msg["payload"],
+                    )
+                    await self._call_signals.put(signal)
+                    if self._on_call_signal:
+                        await self._on_call_signal(signal)
 
-            case "rendezvous_result":
-                for m in msg.get("liveMatches", []):
+                case "rendezvous_result":
+                    for m in msg.get("liveMatches", []):
+                        await self._rendezvous_matches.put(
+                            RendezvousMatch(peer_id=m["peerId"], relay_id=m.get("relayId"))
+                        )
+
+                case "rendezvous_partial":
+                    local = msg.get("local", {})
+                    for m in local.get("liveMatches", []):
+                        await self._rendezvous_matches.put(
+                            RendezvousMatch(peer_id=m["peerId"], relay_id=m.get("relayId"))
+                        )
+
+                case "rendezvous_match":
+                    m = msg.get("match", msg)
                     await self._rendezvous_matches.put(
-                        RendezvousMatch(peer_id=m["peerId"], relay_id=m.get("relayId"))
+                        RendezvousMatch(
+                            peer_id=m["peerId"],
+                            relay_id=m.get("relayId"),
+                            meeting_point=m.get("meetingPoint"),
+                        )
                     )
 
-            case "rendezvous_partial":
-                local = msg.get("local", {})
-                for m in local.get("liveMatches", []):
-                    await self._rendezvous_matches.put(
-                        RendezvousMatch(peer_id=m["peerId"], relay_id=m.get("relayId"))
-                    )
+                case "channel-owner-registered":
+                    logger.info("Registered as channel owner: %s", msg.get("channelId"))
 
-            case "rendezvous_match":
-                m = msg.get("match", msg)
-                await self._rendezvous_matches.put(
-                    RendezvousMatch(
-                        peer_id=m["peerId"],
-                        relay_id=m.get("relayId"),
-                        meeting_point=m.get("meetingPoint"),
-                    )
-                )
+                case "channel-subscribed":
+                    logger.info("Subscribed to channel: %s", msg.get("channelId"))
 
-            case "channel-owner-registered":
-                logger.info("Registered as channel owner: %s", msg.get("channelId"))
+                case "chunk_announce_ack":
+                    logger.debug("Chunk announce ack: %s chunks", msg.get("registered"))
 
-            case "channel-subscribed":
-                logger.info("Subscribed to channel: %s", msg.get("channelId"))
+                case "chunk_pull":
+                    await self._chunk_pulls.put(msg)
+                    if self._on_chunk_pull:
+                        await self._on_chunk_pull(msg)
 
-            case "chunk_announce_ack":
-                logger.debug("Chunk announce ack: %s chunks", msg.get("registered"))
+                case "chunk_available":
+                    await self._chunk_available.put(msg)
+                    if self._on_chunk_available:
+                        await self._on_chunk_available(msg)
 
-            case "chunk_pull":
-                await self._chunk_pulls.put(msg)
-                if self._on_chunk_pull:
-                    await self._on_chunk_pull(msg)
+                case "chunk_data":
+                    await self._chunk_data.put(msg)
+                    if self._on_chunk_data:
+                        await self._on_chunk_data(msg)
 
-            case "chunk_available":
-                await self._chunk_available.put(msg)
-                if self._on_chunk_available:
-                    await self._on_chunk_available(msg)
+                case "chunk_pulling":
+                    logger.debug("Chunk pulling: %s", msg.get("chunkId"))
 
-            case "chunk_data":
-                await self._chunk_data.put(msg)
-                if self._on_chunk_data:
-                    await self._on_chunk_data(msg)
+                case "chunk_push_ack":
+                    logger.debug("Chunk push ack: %s", msg.get("chunkId"))
 
-            case "chunk_pulling":
-                logger.debug("Chunk pulling: %s", msg.get("chunkId"))
+                case "chunk_error":
+                    logger.warning("Chunk error for %s: %s", msg.get("chunkId"), msg.get("error"))
 
-            case "chunk_push_ack":
-                logger.debug("Chunk push ack: %s", msg.get("chunkId"))
+                case "error":
+                    logger.error("Server error: %s", msg.get("message"))
+                    await self._errors.put(msg.get("message", "unknown"))
 
-            case "chunk_error":
-                logger.warning("Chunk error for %s: %s", msg.get("chunkId"), msg.get("error"))
-
-            case "error":
-                logger.error("Server error: %s", msg.get("message"))
-                await self._errors.put(msg.get("message", "unknown"))
-
-            case _:
-                logger.debug("Unhandled message type: %s", msg_type)
+                case _:
+                    logger.debug("Unhandled message type: %s", msg_type)
+        except (KeyError, TypeError, ValueError) as e:
+            logger.warning(
+                "Error processing %s message: %s", msg_type, e
+            )

@@ -5,7 +5,18 @@ import { MermaidDiagram } from "./MermaidDiagram";
 import type { Components } from "react-markdown";
 
 function isWikiLink(href: string): boolean {
-  return !href.startsWith("http") && !href.startsWith("#") && !href.includes("/") && !href.includes(".");
+  // External protocols (http:, https:, mailto:, ftp:, tel:, javascript:, etc.)
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false;
+  // Protocol-relative URLs
+  if (href.startsWith('//')) return false;
+  // Anchor links
+  if (href.startsWith('#')) return false;
+  // Relative paths with directories
+  if (href.includes('/')) return false;
+  // File extensions (e.g., .pdf, .png, .html) -- but not slugs with dots
+  if (/\.\w{2,4}$/.test(href)) return false;
+  // Anything remaining is treated as a wiki slug
+  return true;
 }
 
 export function MarkdownRenderer({ content, lang }: { content: string; lang: string }) {
@@ -30,14 +41,14 @@ export function MarkdownRenderer({ content, lang }: { content: string; lang: str
 
     code({ className, children }) {
       const match = /language-(\w+)/.exec(className || "");
-      const lang = match ? match[1] : "";
+      const codeLang = match ? match[1] : "";
       const codeStr = String(children).replace(/\n$/, "");
 
-      if (lang === "mermaid") {
+      if (codeLang === "mermaid") {
         return <MermaidDiagram chart={codeStr} />;
       }
 
-      if (lang) {
+      if (codeLang) {
         return (
           <pre>
             <code className={className}>{codeStr}</code>

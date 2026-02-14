@@ -74,6 +74,7 @@ class FileTransferService:
         self._receive_dir = Path(receive_dir)
         self._receive_dir.mkdir(parents=True, exist_ok=True)
         self._incoming: dict[str, IncomingTransfer] = {}
+        self._new_transfer_event: asyncio.Event = asyncio.Event()
         self._on_file_received: Optional[Callable] = None
 
     def _cleanup_stale_transfers(self) -> None:
@@ -217,6 +218,7 @@ class FileTransferService:
                 total_chunks=total_chunks,
             )
             self._incoming[file_id] = IncomingTransfer(info=info)
+            self._new_transfer_event.set()
             logger.info(
                 "Receiving file: %s (%d bytes, %d chunks)",
                 info.file_name, info.total_size, info.total_chunks,
@@ -296,23 +298,44 @@ class FileTransferService:
     async def wait_for_file(self, timeout: float = 60) -> FileTransferProgress:
         """Wait for a file transfer to complete.
 
+        Args:
+            timeout: Maximum time to wait in seconds (applies to overall wait).
+
         Returns:
             The completed file transfer progress info.
+
+        Raises:
+            TimeoutError: If no file transfer completes within the timeout.
         """
-        # Wait for any incoming transfer to complete
+        deadline = asyncio.get_event_loop().time() + timeout
         while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("File transfer timed out")
+
+            # Check for any incomplete transfers
             for transfer in self._incoming.values():
                 if not transfer.info.completed:
                     try:
                         await asyncio.wait_for(
-                            transfer.complete_event.wait(), timeout=timeout
+                            transfer.complete_event.wait(),
+                            timeout=remaining,
                         )
                         return transfer.info
                     except asyncio.TimeoutError:
                         raise TimeoutError("File transfer timed out")
 
-            # No pending transfers, wait briefly
-            await asyncio.sleep(0.1)
+            # No pending transfers -- wait for a new one to arrive
+            self._new_transfer_event.clear()
+            try:
+                await asyncio.wait_for(
+                    self._new_transfer_event.wait(),
+                    timeout=remaining,
+                )
+            except asyncio.TimeoutError:
+                raise TimeoutError(
+                    "File transfer timed out (no transfer started)"
+                )
 
     def get_transfer(self, file_id: str) -> Optional[FileTransferProgress]:
         """Get the progress of a file transfer."""

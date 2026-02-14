@@ -166,6 +166,33 @@ class ZajelHeadlessClient:
                 if entry_is_turn:
                     input_had_turn = True
 
+                # Validate URL schemes
+                valid_schemes = ("stun:", "stuns:", "turn:", "turns:")
+                for url in entry_urls:
+                    if not any(url.startswith(scheme) for scheme in valid_schemes):
+                        logger.warning(
+                            "ICE server at index %d has URL with unknown scheme: %s "
+                            "(expected stun:, stuns:, turn:, or turns:)",
+                            i, url,
+                        )
+
+                # Validate TURN credentials
+                if entry_is_turn and isinstance(s, dict):
+                    username = s.get("username")
+                    credential = s.get("credential")
+                    if not username or not credential:
+                        logger.warning(
+                            "TURN server at index %d is missing username and/or credential; "
+                            "TURN authentication will fail at runtime. URLs: %s",
+                            i, entry_urls,
+                        )
+                    elif credential in ("password", "test", "changeme", ""):
+                        logger.warning(
+                            "TURN server at index %d appears to have a placeholder credential; "
+                            "verify TURN credentials are correct.",
+                            i,
+                        )
+
                 try:
                     if isinstance(s, dict):
                         rtc_ice_servers.append(RTCIceServer(**s))
@@ -258,8 +285,25 @@ class ZajelHeadlessClient:
         return self._pairing_code
 
     @property
+    def public_key_base64(self) -> str:
+        """Get our public key as base64 (read-only, no key material exposed)."""
+        return self._crypto.public_key_base64
+
+    @property
     def crypto(self) -> CryptoService:
+        """Access the crypto service.
+
+        WARNING: This exposes key material. Prefer using public_key_base64
+        or the high-level send/receive methods instead. This property may
+        be removed in a future version.
+
+        Kept for backward compatibility and testing.
+        """
         return self._crypto
+
+    def has_session_key(self, peer_id: str) -> bool:
+        """Check if we have a session key for a peer."""
+        return self._crypto.has_session_key(peer_id)
 
     def on(self, event: str) -> Callable:
         """Decorator to register an event handler.
@@ -1366,9 +1410,15 @@ class ZajelHeadlessClient:
         self._group_message_queue.put_nowait(message)
         if self._loop and self._loop.is_running():
             self._loop.create_task(
-                self._events.emit("group_message", group.id, message)
+                self._emit_logged("group_message", group.id, message)
             )
         return message
+
+    async def _emit_logged(self, event: str, *args, **kwargs) -> None:
+        """Emit an event and log any handler errors."""
+        errors = await self._events.emit(event, *args, **kwargs)
+        if errors:
+            logger.warning("%d handler(s) failed for event '%s'", len(errors), event)
 
     # ── Internal ─────────────────────────────────────────────
 
@@ -1564,7 +1614,7 @@ class ZajelHeadlessClient:
                     self._message_queue.put_nowait(received)
                     if self._loop and self._loop.is_running():
                         self._loop.create_task(
-                            self._events.emit("message", peer_id, plaintext, "text")
+                            self._emit_logged("message", peer_id, plaintext, "text")
                         )
                 except Exception as e:
                     logger.error("Decrypt failed for peer %s: %s", peer_id, e)

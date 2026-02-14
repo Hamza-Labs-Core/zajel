@@ -5,7 +5,48 @@
  * Uses Web Crypto API (available in Cloudflare Workers runtime).
  */
 
-import { hexToBytes } from './signing.js';
+import { hexToBytes, bytesToBase64 } from './signing.js';
+
+/**
+ * Encode a string to base64url (RFC 4648 Section 5).
+ * @param {string} str - String to encode
+ * @returns {string} base64url-encoded string
+ */
+function toBase64Url(str) {
+  return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
+ * Decode a base64url string (RFC 4648 Section 5).
+ * Also accepts standard base64 for backward compatibility.
+ * @param {string} b64url - base64url-encoded string
+ * @returns {string} Decoded string
+ */
+function fromBase64Url(b64url) {
+  let b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = (4 - (b64.length % 4)) % 4;
+  b64 += '='.repeat(pad);
+  return atob(b64);
+}
+
+/**
+ * Convert an ArrayBuffer or Uint8Array to a base64url string.
+ * Uses a loop instead of spread operator to avoid stack overflow on large inputs.
+ * @param {ArrayBuffer|Uint8Array} buffer
+ * @returns {string} Base64url-encoded string
+ */
+function bytesToBase64Url(buffer) {
+  return toBase64Url(
+    (() => {
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return binary;
+    })()
+  );
+}
 
 /**
  * Import an Ed25519 public key from a base64-encoded raw key (32 bytes).
@@ -110,21 +151,21 @@ export async function exportPublicKeyBase64(signingKey) {
  * @returns {Promise<boolean>}
  */
 export async function verifyBuildTokenSignature(publicKey, payload, signatureBase64) {
-  const sigBytes = Uint8Array.from(atob(signatureBase64), (c) => c.charCodeAt(0));
+  const sigBytes = Uint8Array.from(fromBase64Url(signatureBase64), (c) => c.charCodeAt(0));
   const data = new TextEncoder().encode(payload);
   return crypto.subtle.verify('Ed25519', publicKey, sigBytes, data);
 }
 
 /**
- * Sign a payload with Ed25519 and return base64 signature.
+ * Sign a payload with Ed25519 and return base64url signature.
  * @param {CryptoKey} privateKey - Ed25519 private key
  * @param {string} payload - UTF-8 string to sign
- * @returns {Promise<string>} Base64-encoded signature
+ * @returns {Promise<string>} Base64url-encoded signature
  */
 export async function signPayloadEd25519(privateKey, payload) {
   const data = new TextEncoder().encode(payload);
   const signature = await crypto.subtle.sign('Ed25519', privateKey, data);
-  return btoa(String.fromCharCode(...new Uint8Array(signature)));
+  return bytesToBase64Url(signature);
 }
 
 /**
@@ -162,11 +203,11 @@ export async function computeHmac(data, nonceHex) {
  * Create a signed session token.
  * @param {CryptoKey} signingKey - Ed25519 private key for signing session tokens
  * @param {object} tokenData - { device_id, build_version, expires_at }
- * @returns {Promise<string>} Signed session token in format: base64(payload).base64(signature)
+ * @returns {Promise<string>} Signed session token in format: base64url(payload).base64url(signature)
  */
 export async function createSessionToken(signingKey, tokenData) {
   const payload = JSON.stringify(tokenData);
-  const payloadBase64 = btoa(payload);
+  const payloadBase64 = toBase64Url(payload);
   const signature = await signPayloadEd25519(signingKey, payload);
   return `${payloadBase64}.${signature}`;
 }
@@ -174,7 +215,7 @@ export async function createSessionToken(signingKey, tokenData) {
 /**
  * Verify and decode a session token.
  * @param {CryptoKey} publicKey - Ed25519 public key for verification
- * @param {string} token - Session token in format: base64(payload).base64(signature)
+ * @param {string} token - Session token in format: base64url(payload).base64url(signature)
  * @returns {Promise<object|null>} Decoded token data or null if invalid
  */
 export async function verifySessionToken(publicKey, token) {
@@ -183,7 +224,7 @@ export async function verifySessionToken(publicKey, token) {
     if (parts.length !== 2) return null;
 
     const [payloadBase64, signature] = parts;
-    const payload = atob(payloadBase64);
+    const payload = fromBase64Url(payloadBase64);
 
     const valid = await verifyBuildTokenSignature(publicKey, payload, signature);
     if (!valid) return null;
@@ -204,16 +245,26 @@ export async function verifySessionToken(publicKey, token) {
  * @param {string} a - Version string (e.g., "1.2.3")
  * @param {string} b - Version string (e.g., "1.3.0")
  * @returns {number} -1 if a < b, 0 if a == b, 1 if a > b
+ * @throws {Error} If either argument is not a valid semver string
  */
 export function compareVersions(a, b) {
+  const semverRegex = /^\d+\.\d+\.\d+$/;
+  if (typeof a !== 'string' || typeof b !== 'string') {
+    throw new Error('Version must be a string');
+  }
+  if (!semverRegex.test(a)) {
+    throw new Error(`Invalid semver version format: "${a}"`);
+  }
+  if (!semverRegex.test(b)) {
+    throw new Error(`Invalid semver version format: "${b}"`);
+  }
+
   const partsA = a.split('.').map(Number);
   const partsB = b.split('.').map(Number);
 
   for (let i = 0; i < 3; i++) {
-    const va = partsA[i] || 0;
-    const vb = partsB[i] || 0;
-    if (va < vb) return -1;
-    if (va > vb) return 1;
+    if (partsA[i] < partsB[i]) return -1;
+    if (partsA[i] > partsB[i]) return 1;
   }
   return 0;
 }

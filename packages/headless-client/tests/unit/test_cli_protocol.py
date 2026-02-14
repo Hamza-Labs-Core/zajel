@@ -78,7 +78,7 @@ class TestJsonLineRoundTrip:
 
         msg = {"id": "123", "cmd": "status", "args": {}}
         send_request(client, msg)
-        response = read_response(client)
+        response, remaining = read_response(client)
 
         t.join(timeout=5)
         client.close()
@@ -87,6 +87,7 @@ class TestJsonLineRoundTrip:
         assert received["id"] == "123"
         assert received["cmd"] == "status"
         assert response["id"] == "123"
+        assert len(remaining) == 0
 
     def test_unicode_content(self, tmp_path):
         sock_path = str(tmp_path / "unicode.sock")
@@ -110,13 +111,14 @@ class TestJsonLineRoundTrip:
 
         msg = {"content": "Hello \u4e16\u754c \U0001f30d"}
         send_request(client, msg)
-        response = read_response(client)
+        response, remaining = read_response(client)
 
         t.join(timeout=5)
         client.close()
         server.close()
 
         assert response["content"] == "Hello \u4e16\u754c \U0001f30d"
+        assert len(remaining) == 0
 
     def test_connection_closed_raises(self, tmp_path):
         sock_path = str(tmp_path / "closed.sock")

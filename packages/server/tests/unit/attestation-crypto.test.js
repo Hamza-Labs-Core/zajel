@@ -275,9 +275,18 @@ describe('Attestation Crypto Utilities', () => {
       expect(compareVersions('1.0.1', '1.0.0')).toBe(1);
     });
 
-    it('should handle missing patch version', () => {
-      expect(compareVersions('1.0', '1.0.0')).toBe(0);
-      expect(compareVersions('1.0', '1.0.1')).toBe(-1);
+    it('should reject missing patch version (non-semver)', () => {
+      expect(() => compareVersions('1.0', '1.0.0')).toThrow('Invalid semver version format');
+      expect(() => compareVersions('1.0.0', '1.0')).toThrow('Invalid semver version format');
+    });
+
+    it('should reject non-string inputs', () => {
+      expect(() => compareVersions(null, '1.0.0')).toThrow('Version must be a string');
+      expect(() => compareVersions('1.0.0', 123)).toThrow('Version must be a string');
+    });
+
+    it('should reject pre-release versions', () => {
+      expect(() => compareVersions('1.0.0-beta', '1.0.0')).toThrow('Invalid semver version format');
     });
 
     it('should handle multi-digit versions', () => {

@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import type { MetaFunction } from "react-router";
-import { Link } from "react-router";
+import { Link, useLoaderData } from "react-router";
 import { Nav } from "~/components/Nav";
 import { Footer } from "~/components/Footer";
 
@@ -18,6 +18,15 @@ export const meta: MetaFunction = () => {
       content: "End-to-end encrypted peer-to-peer messaging. No servers, no tracking.",
     },
     { property: "og:type", content: "website" },
+    { property: "og:url", content: "https://zajel.app/" },
+    { property: "og:image", content: "https://zajel.app/og-image.png" },
+    { name: "twitter:card", content: "summary_large_image" },
+    { name: "twitter:title", content: "Zajel - Private P2P Messaging" },
+    {
+      name: "twitter:description",
+      content: "End-to-end encrypted peer-to-peer messaging. No servers, no tracking.",
+    },
+    { name: "twitter:image", content: "https://zajel.app/og-image.png" },
   ];
 };
 
@@ -87,35 +96,43 @@ function findAssetUrl(assets: ReleaseAsset[], platform: string): string | null {
   return null;
 }
 
+export async function clientLoader() {
+  try {
+    const res = await fetch(GITHUB_API, {
+      headers: {
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'Zajel-Website',
+      },
+    });
+    if (!res.ok) {
+      return { release: null };
+    }
+    const data = await res.json();
+    if (!data.tag_name || !Array.isArray(data.assets)) {
+      return { release: null };
+    }
+    return { release: data as Release };
+  } catch {
+    return { release: null };
+  }
+}
+
 export default function Home() {
-  const [release, setRelease] = useState<Release | null>(null);
+  const { release } = useLoaderData<typeof clientLoader>();
   const [detectedPlatform, setDetectedPlatform] = useState<string | null>(null);
-  const [downloadUrls, setDownloadUrls] = useState<Record<string, string | null>>({});
+
+  const downloadUrls = useMemo(() => {
+    const urls: Record<string, string | null> = {};
+    if (release?.assets) {
+      Object.keys(platforms).forEach((p) => {
+        urls[p] = findAssetUrl(release.assets, p);
+      });
+    }
+    return urls;
+  }, [release]);
 
   useEffect(() => {
     setDetectedPlatform(detectPlatform());
-
-    fetch(GITHUB_API)
-      .then((res) => {
-        if (!res.ok) {
-          throw new Error(`GitHub API returned ${res.status}`);
-        }
-        return res.json();
-      })
-      .then((data: Release) => {
-        if (!data.tag_name || !Array.isArray(data.assets)) {
-          throw new Error('Invalid release data structure');
-        }
-        setRelease(data);
-        const urls: Record<string, string | null> = {};
-        Object.keys(platforms).forEach((p) => {
-          urls[p] = findAssetUrl(data.assets, p);
-        });
-        setDownloadUrls(urls);
-      })
-      .catch((err) => {
-        console.error('Failed to fetch release data:', err);
-      });
   }, []);
 
   return (
@@ -212,6 +229,8 @@ export default function Home() {
                     isRecommended && !isDisabled ? "recommended" : ""
                   }`}
                   onClick={(e) => isDisabled && e.preventDefault()}
+                  target={url ? "_blank" : undefined}
+                  rel={url ? "noopener noreferrer" : undefined}
                 >
                   {isRecommended && !isDisabled && (
                     <div className="recommended-badge">Recommended</div>
