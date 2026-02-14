@@ -231,8 +231,8 @@ jobs:
             --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }} \
             --dart-define=E2E_TEST=true \
             --dart-define=TURN_URL=turn:10.0.2.2:3478 \
-            --dart-define=TURN_USER=${{ secrets.TURN_USER || '' }} \
-            --dart-define=TURN_PASS=${{ secrets.TURN_PASS || '' }}
+            --dart-define=TURN_USER=${{ secrets.TURN_USER || 'ci-turn' }} \
+            --dart-define=TURN_PASS=${{ secrets.TURN_PASS || 'ci-turn-pass' }}
 
           mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/zajel-${{ env.VERSION }}-android.apk
 
@@ -1003,7 +1003,7 @@ jobs:
     # Run on PR events always, and on workflow_dispatch unless skip_e2e is true
     if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -1065,14 +1065,17 @@ jobs:
           echo "Resolved SIGNALING_URL=${URL:-<empty>}"
 
       - name: Setup TURN relay (coturn)
+        env:
+          # Must match the credentials baked into the APK (--dart-define in build-android)
+          TURN_USER_SECRET: ${{ secrets.TURN_USER || 'ci-turn' }}
+          TURN_PASS_SECRET: ${{ secrets.TURN_PASS || 'ci-turn-pass' }}
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq coturn
           HOST_IP=$(hostname -I | awk '{print $1}')
           echo "Host IP for TURN: $HOST_IP"
 
-          # Generate random credentials per CI run to avoid hardcoded secrets
-          TURN_USER="ci-$(openssl rand -hex 4)"
-          TURN_PASS="$(openssl rand -hex 16)"
+          TURN_USER="$TURN_USER_SECRET"
+          TURN_PASS="$TURN_PASS_SECRET"
 
           sudo tee /etc/turnserver.conf > /dev/null <<CONF
           listening-ip=0.0.0.0
@@ -1177,7 +1180,7 @@ jobs:
           adb devices
 
       - name: Run E2E tests
-        timeout-minutes: 40
+        timeout-minutes: 55
         env:
           APK_PATH: ${{ github.workspace }}/packages/app/build/app/outputs/flutter-apk/app-release.apk
           ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
