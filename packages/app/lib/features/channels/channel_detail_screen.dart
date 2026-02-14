@@ -574,32 +574,271 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
                 '${channel.manifest.rules.maxUpstreamSize} bytes'),
             _infoRow('Allowed types',
                 channel.manifest.rules.allowedTypes.join(', ')),
-            if (channel.manifest.adminKeys.isNotEmpty) ...[
+            if (channel.manifest.adminKeys.isNotEmpty ||
+                channel.role == ChannelRole.owner) ...[
               const Divider(height: 32),
-              Text(
-                'Admins (${channel.manifest.adminKeys.length})',
-                style: Theme.of(context).textTheme.titleMedium,
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Admins (${channel.manifest.adminKeys.length})',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  if (channel.role == ChannelRole.owner)
+                    TextButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _showManageAdminsSheet(context, channel);
+                      },
+                      icon: const Icon(Icons.settings, size: 18),
+                      label: const Text('Manage'),
+                    ),
+                ],
               ),
               const SizedBox(height: 8),
-              ...channel.manifest.adminKeys.map(
-                (admin) => ListTile(
-                  dense: true,
-                  leading: const Icon(Icons.admin_panel_settings, size: 20),
-                  title: Text(admin.label),
-                  subtitle: Text(
-                    admin.key.length > 16
-                        ? '${admin.key.substring(0, 16)}...'
-                        : admin.key,
-                    style:
-                        const TextStyle(fontFamily: 'monospace', fontSize: 11),
+              if (channel.manifest.adminKeys.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    'No admins yet.',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                )
+              else
+                ...channel.manifest.adminKeys.map(
+                  (admin) => ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.admin_panel_settings, size: 20),
+                    title: Text(admin.label),
+                    subtitle: Text(
+                      admin.key.length > 16
+                          ? '${admin.key.substring(0, 16)}...'
+                          : admin.key,
+                      style: const TextStyle(
+                          fontFamily: 'monospace', fontSize: 11),
+                    ),
                   ),
                 ),
-              ),
             ],
           ],
         ),
       ),
     );
+  }
+
+  void _showManageAdminsSheet(BuildContext context, Channel channel) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => _AdminManagementSheet(
+        channel: channel,
+        onAddAdmin: () async {
+          Navigator.pop(sheetContext);
+          await _showAddAdminDialog(context, channel);
+        },
+        onRemoveAdmin: (admin) async {
+          Navigator.pop(sheetContext);
+          await _showRemoveAdminConfirmation(context, channel, admin);
+        },
+      ),
+    );
+  }
+
+  Future<void> _showAddAdminDialog(
+      BuildContext context, Channel channel) async {
+    final publicKeyController = TextEditingController();
+    final labelController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Add Admin'),
+        content: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Enter the admin\'s Ed25519 public key (base64) and a display name.',
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: publicKeyController,
+                decoration: const InputDecoration(
+                  labelText: 'Public Key (base64)',
+                  hintText: 'Paste Ed25519 public key...',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 2,
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Public key is required';
+                  }
+                  // Basic base64 validation
+                  try {
+                    final decoded =
+                        base64Decode(value.trim().replaceAll('\n', ''));
+                    if (decoded.length != 32) {
+                      return 'Key must be 32 bytes (Ed25519)';
+                    }
+                  } catch (_) {
+                    return 'Invalid base64 encoding';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: labelController,
+                decoration: const InputDecoration(
+                  labelText: 'Display Name',
+                  hintText: 'e.g. "Alice" or "Moderator"',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Display name is required';
+                  }
+                  return null;
+                },
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (formKey.currentState!.validate()) {
+                Navigator.pop(dialogContext, true);
+              }
+            },
+            child: const Text('Add Admin'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      try {
+        final adminService = ref.read(adminManagementServiceProvider);
+        await adminService.appointAdmin(
+          channel: channel,
+          adminPublicKey: publicKeyController.text.trim().replaceAll('\n', ''),
+          adminLabel: labelController.text.trim(),
+        );
+        ref.invalidate(channelByIdProvider(widget.channelId));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                  'Admin "${labelController.text.trim()}" added successfully'),
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to add admin: $e')),
+          );
+        }
+      }
+    }
+
+    publicKeyController.dispose();
+    labelController.dispose();
+  }
+
+  Future<void> _showRemoveAdminConfirmation(
+      BuildContext context, Channel channel, AdminKey admin) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Remove Admin'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Remove "${admin.label}" from admins?'),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(dialogContext)
+                    .colorScheme
+                    .errorContainer
+                    .withValues(alpha: 0.3),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded,
+                      color: Theme.of(dialogContext).colorScheme.error,
+                      size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'This will rotate the channel encryption key. '
+                      'The removed admin will not be able to decrypt '
+                      'future content.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(dialogContext).colorScheme.error,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(dialogContext).colorScheme.error,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      try {
+        final adminService = ref.read(adminManagementServiceProvider);
+        await adminService.removeAdmin(
+          channel: channel,
+          adminPublicKey: admin.key,
+        );
+        ref.invalidate(channelByIdProvider(widget.channelId));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Admin "${admin.label}" removed successfully'),
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to remove admin: $e')),
+          );
+        }
+      }
+    }
   }
 
   Widget _infoRow(String label, String value) {
@@ -636,6 +875,147 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
           ),
           const SizedBox(width: 8),
           Text(label),
+        ],
+      ),
+    );
+  }
+}
+
+/// Bottom sheet widget for managing channel admins.
+///
+/// Shows the list of current admins with remove buttons and an "Add Admin"
+/// button at the bottom. Used only by the channel owner.
+class _AdminManagementSheet extends StatelessWidget {
+  final Channel channel;
+  final VoidCallback onAddAdmin;
+  final void Function(AdminKey admin) onRemoveAdmin;
+
+  const _AdminManagementSheet({
+    required this.channel,
+    required this.onAddAdmin,
+    required this.onRemoveAdmin,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final admins = channel.manifest.adminKeys;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.5,
+      minChildSize: 0.3,
+      maxChildSize: 0.8,
+      expand: false,
+      builder: (context, scrollController) => Column(
+        children: [
+          // Handle bar
+          Padding(
+            padding: const EdgeInsets.only(top: 12, bottom: 8),
+            child: Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+          ),
+          // Title
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                Icon(Icons.admin_panel_settings,
+                    color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                Text(
+                  'Manage Admins',
+                  style: theme.textTheme.titleLarge,
+                ),
+              ],
+            ),
+          ),
+          const Divider(),
+          // Admin list
+          Expanded(
+            child: admins.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.person_add_alt,
+                            size: 48,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'No admins yet. Add an admin to allow '
+                            'them to publish content to this channel.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : ListView.builder(
+                    controller: scrollController,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    itemCount: admins.length,
+                    itemBuilder: (context, index) {
+                      final admin = admins[index];
+                      return ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor:
+                              theme.colorScheme.primaryContainer,
+                          child: Icon(
+                            Icons.admin_panel_settings,
+                            color: theme.colorScheme.onPrimaryContainer,
+                            size: 20,
+                          ),
+                        ),
+                        title: Text(admin.label),
+                        subtitle: Text(
+                          admin.key.length > 24
+                              ? '${admin.key.substring(0, 24)}...'
+                              : admin.key,
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 11,
+                          ),
+                        ),
+                        trailing: IconButton(
+                          icon: Icon(Icons.close,
+                              color: theme.colorScheme.error, size: 20),
+                          tooltip: 'Remove admin',
+                          onPressed: () => onRemoveAdmin(admin),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          // Add admin button
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: SafeArea(
+              top: false,
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: onAddAdmin,
+                  icon: const Icon(Icons.person_add),
+                  label: const Text('Add Admin'),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );

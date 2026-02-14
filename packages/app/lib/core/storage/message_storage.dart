@@ -1,10 +1,6 @@
-import 'dart:io' show Platform;
-
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../models/message.dart';
 
@@ -20,15 +16,12 @@ class MessageStorage {
   Database? _db;
 
   /// Open the database, creating it if necessary.
+  ///
+  /// On desktop platforms (Linux, Windows, macOS), the sqflite FFI backend
+  /// must be initialized once before any database is opened. This is done
+  /// centrally in `main()` — do NOT call `sqfliteFfiInit()` here.
   Future<void> initialize() async {
     if (_db != null) return;
-
-    // sqflite requires FFI initialization on desktop platforms
-    if (!kIsWeb &&
-        (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
-      sqfliteFfiInit();
-      databaseFactory = databaseFactoryFfi;
-    }
 
     final dir = await getApplicationDocumentsDirectory();
     final path = join(dir.path, _dbName);
@@ -97,8 +90,12 @@ class MessageStorage {
     );
   }
 
-  /// Get messages for a peer, ordered by timestamp ascending.
-  /// Returns the most recent [limit] messages, offset by [offset].
+  /// Get the most recent [limit] messages for a peer, returned in
+  /// chronological order (oldest first).
+  ///
+  /// The query fetches the newest rows by sorting DESC, then reverses the
+  /// result so the caller receives messages in ascending timestamp order
+  /// (suitable for display in a chat view).
   Future<List<Message>> getMessages(
     String peerId, {
     int limit = 100,
@@ -111,12 +108,12 @@ class MessageStorage {
       _tableName,
       where: 'peerId = ?',
       whereArgs: [peerId],
-      orderBy: 'timestamp ASC',
+      orderBy: 'timestamp DESC',
       limit: limit,
       offset: offset,
     );
 
-    return rows.map(_rowToMessage).toList();
+    return rows.map(_rowToMessage).toList().reversed.toList();
   }
 
   /// Get the last message for a peer (for conversation list preview).

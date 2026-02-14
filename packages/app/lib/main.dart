@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:uuid/uuid.dart';
 import 'package:workmanager/workmanager.dart';
 
@@ -70,6 +71,13 @@ void main() async {
       logger.error('PlatformError', 'Unhandled platform error', error, stack);
       return true;
     };
+  }
+
+  // Initialize sqflite FFI for desktop platforms (must happen once, before
+  // any storage service opens a database).
+  if (!kIsWeb && (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
   }
 
   // Initialize shared preferences
@@ -654,6 +662,12 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     // Global message listener: persist to DB immediately, then notify
     connectionManager.messages.listen((event) {
       final (peerId, message) = event;
+
+      // Skip protocol messages — handled by their respective services
+      // (e.g. GroupInvitationService) and must not leak into chat.
+      if (message.startsWith('ginv:') || message.startsWith('grp:')) {
+        return;
+      }
 
       // Persist incoming message to DB immediately (prevents message drops)
       final msg = Message(

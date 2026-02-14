@@ -272,6 +272,13 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
     ref.read(trustedPeerVersionProvider.notifier).state++;
   };
 
+  // After message migration (old peer → new peer), invalidate the chat
+  // messages providers for both IDs so the UI loads the correct messages.
+  manager.onPeerMessagesMigrated = (oldPeerId, newPeerId) {
+    ref.invalidate(chatMessagesProvider(oldPeerId));
+    ref.invalidate(chatMessagesProvider(newPeerId));
+  };
+
   return manager;
 });
 
@@ -368,10 +375,10 @@ class ChatMessagesNotifier extends StateNotifier<List<Message>> {
 
   Future<void> _loadMessages() async {
     if (_loaded) return;
+    _loaded = true;
     final messages = await _storage.getMessages(peerId);
     if (mounted) {
       state = messages;
-      _loaded = true;
     }
   }
 

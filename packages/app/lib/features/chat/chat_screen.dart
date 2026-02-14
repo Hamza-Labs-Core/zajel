@@ -941,59 +941,109 @@ class _MessageBubble extends StatelessWidget {
 
   const _MessageBubble({required this.message, this.onOpenFile});
 
+  void _showMessageMenu(BuildContext context, TapDownDetails details) {
+    final isTextMessage = message.type == MessageType.text;
+    if (!isTextMessage) return;
+
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox;
+    final position = RelativeRect.fromRect(
+      details.globalPosition & const Size(1, 1),
+      Offset.zero & overlay.size,
+    );
+
+    showMenu<String>(
+      context: context,
+      position: position,
+      items: [
+        const PopupMenuItem<String>(
+          value: 'copy',
+          child: Row(
+            children: [
+              Icon(Icons.copy, size: 18),
+              SizedBox(width: 8),
+              Text('Copy'),
+            ],
+          ),
+        ),
+      ],
+    ).then((value) {
+      if (value == 'copy') {
+        Clipboard.setData(ClipboardData(text: message.content));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Message copied to clipboard'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final isOutgoing = message.isOutgoing;
+    final isTextMessage = message.type == MessageType.text;
 
     return Align(
       alignment: isOutgoing ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
-        ),
-        decoration: BoxDecoration(
-          color: isOutgoing
-              ? Theme.of(context).colorScheme.primary
-              : Theme.of(context).colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(20).copyWith(
-            bottomRight: isOutgoing ? const Radius.circular(4) : null,
-            bottomLeft: !isOutgoing ? const Radius.circular(4) : null,
+      child: GestureDetector(
+        onSecondaryTapDown:
+            isTextMessage ? (details) => _showMessageMenu(context, details) : null,
+        onLongPressStart: isTextMessage
+            ? (details) => _showMessageMenu(
+                context,
+                TapDownDetails(globalPosition: details.globalPosition),
+              )
+            : null,
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.75,
           ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            if (message.type == MessageType.file)
-              _buildFileContent(context, isOutgoing)
-            else
-              Text(
-                message.content,
-                style: TextStyle(
-                  color: isOutgoing ? Colors.white : null,
-                ),
-              ),
-            const SizedBox(height: 4),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
+          decoration: BoxDecoration(
+            color: isOutgoing
+                ? Theme.of(context).colorScheme.primary
+                : Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(20).copyWith(
+              bottomRight: isOutgoing ? const Radius.circular(4) : null,
+              bottomLeft: !isOutgoing ? const Radius.circular(4) : null,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (message.type == MessageType.file)
+                _buildFileContent(context, isOutgoing)
+              else
                 Text(
-                  _formatTime(message.timestamp),
+                  message.content,
                   style: TextStyle(
-                    fontSize: 11,
-                    color: isOutgoing
-                        ? Colors.white.withOpacity(0.7)
-                        : Colors.grey,
+                    color: isOutgoing ? Colors.white : null,
                   ),
                 ),
-                if (isOutgoing) ...[
-                  const SizedBox(width: 4),
-                  _buildStatusIcon(),
+              const SizedBox(height: 4),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _formatTime(message.timestamp),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: isOutgoing
+                          ? Colors.white.withOpacity(0.7)
+                          : Colors.grey,
+                    ),
+                  ),
+                  if (isOutgoing) ...[
+                    const SizedBox(width: 4),
+                    _buildStatusIcon(),
+                  ],
                 ],
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
       ),
     );

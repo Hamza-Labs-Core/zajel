@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/peer.dart';
@@ -137,43 +138,59 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
                           alignment: isOutgoing
                               ? Alignment.centerRight
                               : Alignment.centerLeft,
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(vertical: 4),
-                            padding: const EdgeInsets.all(12),
-                            constraints: BoxConstraints(
-                              maxWidth:
-                                  MediaQuery.of(context).size.width * 0.75,
-                            ),
-                            decoration: BoxDecoration(
-                              color: isOutgoing
-                                  ? Theme.of(context)
-                                      .colorScheme
-                                      .primaryContainer
-                                  : Theme.of(context)
-                                      .colorScheme
-                                      .surfaceContainerHighest,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                if (!isOutgoing)
-                                  Padding(
-                                    padding: const EdgeInsets.only(bottom: 4),
-                                    child: Text(
-                                      _resolveAuthorName(
-                                          group, msg.authorDeviceId),
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .primary,
+                          child: GestureDetector(
+                            onLongPressStart: (details) {
+                              _showMessageCopyMenu(
+                                context,
+                                details.globalPosition,
+                                msg.content,
+                              );
+                            },
+                            onSecondaryTapDown: (details) {
+                              _showMessageCopyMenu(
+                                context,
+                                details.globalPosition,
+                                msg.content,
+                              );
+                            },
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(vertical: 4),
+                              padding: const EdgeInsets.all(12),
+                              constraints: BoxConstraints(
+                                maxWidth:
+                                    MediaQuery.of(context).size.width * 0.75,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isOutgoing
+                                    ? Theme.of(context)
+                                        .colorScheme
+                                        .primaryContainer
+                                    : Theme.of(context)
+                                        .colorScheme
+                                        .surfaceContainerHighest,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (!isOutgoing)
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: 4),
+                                      child: Text(
+                                        _resolveAuthorName(
+                                            group, msg.authorDeviceId),
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold,
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .primary,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                Text(msg.content),
-                              ],
+                                  Text(msg.content),
+                                ],
+                              ),
                             ),
                           ),
                         );
@@ -295,6 +312,43 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
         setState(() => _sending = false);
       }
     }
+  }
+
+  void _showMessageCopyMenu(
+      BuildContext context, Offset globalPosition, String content) {
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox;
+    final position = RelativeRect.fromRect(
+      globalPosition & const Size(1, 1),
+      Offset.zero & overlay.size,
+    );
+
+    showMenu<String>(
+      context: context,
+      position: position,
+      items: [
+        const PopupMenuItem<String>(
+          value: 'copy',
+          child: Row(
+            children: [
+              Icon(Icons.copy, size: 18),
+              SizedBox(width: 8),
+              Text('Copy'),
+            ],
+          ),
+        ),
+      ],
+    ).then((value) {
+      if (value == 'copy') {
+        Clipboard.setData(ClipboardData(text: content));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Message copied to clipboard'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    });
   }
 
   String _resolveAuthorName(Group group, String deviceId) {

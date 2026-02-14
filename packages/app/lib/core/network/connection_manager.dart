@@ -158,6 +158,11 @@ class ConnectionManager {
   /// Used by the provider layer to refresh the contacts list.
   void Function()? onTrustedPeersChanged;
 
+  /// Callback invoked after messages are migrated from an old peer ID to a new
+  /// one. The provider layer uses this to invalidate the [chatMessagesProvider]
+  /// for both old and new IDs so the UI shows the correct messages.
+  void Function(String oldPeerId, String newPeerId)? onPeerMessagesMigrated;
+
   ConnectionManager({
     required CryptoService cryptoService,
     required WebRTCService webrtcService,
@@ -693,6 +698,9 @@ class ConnectionManager {
         _peers.remove(stale.id);
         // Remove old entry from trusted storage
         await _trustedPeersStorage.removePeer(stale.id);
+        // Notify the provider layer so it invalidates chat message providers
+        // for both the old and new peer IDs.
+        onPeerMessagesMigrated?.call(stale.id, newPeerCode);
       }
 
       // Carry over display name and alias from the primary (most recent) entry

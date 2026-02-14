@@ -1,7 +1,5 @@
-import 'dart:io' show Platform;
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
@@ -35,14 +33,12 @@ class ChannelStorageService {
             );
 
   /// Open the database, creating tables if necessary.
+  ///
+  /// On desktop platforms (Linux, Windows, macOS), the sqflite FFI backend
+  /// must be initialized once before any database is opened. This is done
+  /// centrally in `main()` — do NOT call `sqfliteFfiInit()` here.
   Future<void> initialize() async {
     if (_db != null) return;
-
-    if (!kIsWeb &&
-        (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
-      sqfliteFfiInit();
-      databaseFactory = databaseFactoryFfi;
-    }
 
     final dir = await getApplicationDocumentsDirectory();
     final path = join(dir.path, _dbName);
