@@ -284,4 +284,10 @@ export interface ServerConfig {
     jwtSecret: string;
     cfAdminUrl?: string;
   };
+  attestation: {
+    bootstrapUrl: string | null;
+    vpsIdentityKey: string | null;
+    sessionTokenTtl: number;
+    gracePeriod: number;
+  };
 }
