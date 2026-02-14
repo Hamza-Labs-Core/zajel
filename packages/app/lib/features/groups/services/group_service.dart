@@ -27,6 +27,10 @@ class GroupService {
   final GroupSyncService _syncService;
   final _uuid = const Uuid();
 
+  /// Groups whose sender keys have already been loaded from secure storage
+  /// into the in-memory crypto cache this session.
+  final Set<String> _keysLoadedForGroup = {};
+
   GroupService({
     required GroupCryptoService cryptoService,
     required GroupStorageService storageService,
@@ -34,6 +38,18 @@ class GroupService {
   })  : _cryptoService = cryptoService,
         _storageService = storageService,
         _syncService = syncService;
+
+  /// Ensure sender keys for [groupId] are loaded from secure storage into
+  /// the in-memory crypto cache. This is a no-op if already loaded this
+  /// session.
+  Future<void> _ensureKeysLoaded(String groupId) async {
+    if (_keysLoadedForGroup.contains(groupId)) return;
+    final keys = await _storageService.loadAllSenderKeys(groupId);
+    if (keys.isNotEmpty) {
+      _cryptoService.importGroupKeys(groupId, keys);
+    }
+    _keysLoadedForGroup.add(groupId);
+  }
 
   // ---------------------------------------------------------------------------
   // Group creation
@@ -252,6 +268,9 @@ class GroupService {
       isOutgoing: true,
     );
 
+    // Ensure sender keys are loaded from secure storage
+    await _ensureKeysLoaded(groupId);
+
     // Encrypt with our sender key
     final plaintextBytes = message.toBytes();
     final encryptedBytes =
@@ -274,6 +293,9 @@ class GroupService {
     required String authorDeviceId,
     required Uint8List encryptedBytes,
   }) async {
+    // Ensure sender keys are loaded from secure storage
+    await _ensureKeysLoaded(groupId);
+
     // Decrypt with the author's sender key
     final plaintextBytes =
         await _cryptoService.decrypt(encryptedBytes, groupId, authorDeviceId);
