@@ -1,3 +1,12 @@
+# RESOLVED -- Dead code removed; VPS does not broadcast pairing codes
+
+**Status**: RESOLVED
+**Resolution**: The original `SignalingRoom` was dead code in the CF Worker and has been deleted (commit 366c85d). The VPS server does not broadcast pairing codes to all connected peers. Instead, it uses a targeted lookup model: pairing codes are stored in a `Map<string, WebSocket>` (`pairingCodeToWs`) and messages are only forwarded to the specific target peer identified by the pairing code. The `handlePairRequest()` method sends a `pair_incoming` notification only to the targeted peer, not to all connected clients.
+**Original target**: `packages/server/src/signaling-room.js` (deleted)
+**VPS status**: `packages/server-vps/src/client/handler.ts` uses targeted messaging throughout: (1) `handlePairingCodeRegister()` (line 940) stores a 1:1 mapping of pairingCode to WebSocket, (2) `handlePairRequest()` (line 1029) sends `pair_incoming` only to the specific `targetWs = this.pairingCodeToWs.get(targetCode)`, (3) `handleSignalingForward()` (line 1509) routes offers/answers/ICE candidates only to the specific target. No broadcast of pairing codes exists.
+
+---
+
 # Plan: SignalingRoom broadcasts peer_joined to ALL connected peers
 
 **Issue**: issue-server-32.md

@@ -1,3 +1,12 @@
+# RESOLVED -- Dead code removed; VPS uses heartbeat timeout to clean up stale connections
+
+**Status**: RESOLVED
+**Resolution**: The original `relay-registry.js` and `relay-registry-do.js` were dead code in the CF Worker and have been deleted (commit 366c85d). The VPS server handles stale peer cleanup via a heartbeat-based timeout mechanism. The `ClientHandler.cleanup()` method runs on a periodic interval and disconnects clients whose `lastSeen` timestamp exceeds `heartbeatTimeout`. Dead clients are fully cleaned up (relay registry, rendezvous, chunk relay, pairing code mappings) via `handleDisconnect()`.
+**Original target**: `packages/server/src/relay-registry.js`, `packages/server/src/durable-objects/relay-registry-do.js` (both deleted)
+**VPS status**: `packages/server-vps/src/index.ts` lines 348-364 run a periodic cleanup interval that calls `clientHandler.cleanup()`. In `handler.ts` lines 2507-2539, `cleanup()` iterates all clients and disconnects those with `now - client.lastSeen > this.config.heartbeatTimeout`. The `handleDisconnect()` method (lines 2281-2402) fully removes the stale client from all registries. Additionally, stale rate limiter entries are cleaned up after 5 minutes of inactivity.
+
+---
+
 # Plan: RelayRegistry stale peers never cleaned up
 
 **Issue**: issue-server-26.md

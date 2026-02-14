@@ -1,29 +1,40 @@
-# Plan: RendezvousRegistry allows unbounded meeting point and token registration
+# Plan: Unbounded rendezvous registration allows memory/storage exhaustion
+
+**Retargeted**: This issue was originally identified in dead CF Worker code (`packages/server/src/websocket-handler.js` and `packages/server/src/rendezvous-registry.js`). The same vulnerability exists in the VPS server.
 
 **Issue**: issue-server-13.md
 **Severity**: HIGH
-**Area**: Server
+**Area**: Server (VPS)
 **Files to modify**:
-- `packages/server/src/websocket-handler.js`
-- `packages/server/src/rendezvous-registry.js`
+- `packages/server-vps/src/client/handler.ts`
+- `packages/server-vps/src/registry/rendezvous-registry.ts`
+- `packages/server-vps/src/registry/distributed-rendezvous.ts`
 
 ## Analysis
 
-In `packages/server/src/websocket-handler.js`:
-- `handleRegisterRendezvous()` (lines 160-187): Accepts `dailyPoints` and `hourlyTokens` arrays from the message (line 163-164) and passes them directly to the registry methods with no size validation.
+In `packages/server-vps/src/client/handler.ts`:
+- `handleRegisterRendezvous()` (lines 795-897): Accepts `dailyPoints` and `hourlyTokens` arrays from the message at lines 802-803:
+  ```ts
+  const dailyPoints = message.dailyPoints || message.daily_points || [];
+  const hourlyTokens = message.hourlyTokens || message.hourly_tokens || [];
+  ```
+  These arrays are passed to the distributed rendezvous layer with **no size validation** on the array length.
+- The method also accepts `deadDropsMap` (line 807-808) and `legacyDeadDrop` (line 809) without validating payload sizes.
+- When `hasPerPointDeadDrops` is true (line 824), the method iterates all points at lines 838-847, calling `this.distributedRendezvous.registerDailyPoints()` for each point with a dead drop. An attacker sending 100,000 points would trigger 100,000 individual registration calls.
 
-In `packages/server/src/rendezvous-registry.js`:
-- `registerDailyPoints()` (lines 37-73): Iterates `points` array without checking its length. Each point creates a Map entry.
-- `registerHourlyTokens()` (lines 84-127): Iterates `tokens` array without checking its length.
-- Both Maps (`dailyPoints` and `hourlyTokens`) have no size cap.
-- Cleanup runs every 5 minutes via the alarm in `relay-registry-do.js` line 52, but only removes expired entries, not excessive ones.
-- For each point/token, the code iterates all existing entries at that key (lines 49-57, 98-111), making registration O(points * entries_per_point).
+In `packages/server-vps/src/registry/distributed-rendezvous.ts`:
+- `registerDailyPoints()` (line 63): Accepts the points array and iterates each point at line 76 to determine routing, then passes local points to the underlying registry. No size cap on the input.
+- `registerHourlyTokens()`: Similarly has no size cap.
+
+In `packages/server-vps/src/registry/rendezvous-registry.ts`:
+- Uses SQLite storage for persistence. Each daily point and hourly token creates a database row via `storage.saveDailyPoint()` and `storage.saveHourlyToken()`.
+- The in-memory `hourlyCache` Map (line 48) grows unbounded as tokens are registered.
+- Cleanup runs periodically (configured via `config.cleanup.interval` in index.ts line 364) but only removes expired entries, not excessive ones.
 
 ## Fix Steps
 
-1. **Add array size validation in `handleRegisterRendezvous()` (websocket-handler.js, after line 167)**:
-   ```js
-   // Limit arrays to prevent abuse
+1. **Add array size validation in `handleRegisterRendezvous()` (handler.ts, after line 803)**:
+   ```ts
    const MAX_POINTS_PER_MESSAGE = 50;
    const MAX_TOKENS_PER_MESSAGE = 50;
 
@@ -37,8 +48,8 @@ In `packages/server/src/rendezvous-registry.js`:
    }
    ```
 
-2. **Validate array element types** in `handleRegisterRendezvous()`:
-   ```js
+2. **Validate array element types** in `handleRegisterRendezvous()` (after the size check):
+   ```ts
    if (!Array.isArray(dailyPoints) || !dailyPoints.every(p => typeof p === 'string' && p.length <= 128)) {
      this.sendError(ws, 'Invalid daily points format');
      return;
@@ -49,28 +60,28 @@ In `packages/server/src/rendezvous-registry.js`:
    }
    ```
 
-3. **Add global size caps in `rendezvous-registry.js`**:
-   - Add constants at the top of the class:
-     ```js
-     this.MAX_DAILY_POINTS = 100000;
-     this.MAX_HOURLY_TOKENS = 100000;
-     ```
-   - In `registerDailyPoints()` (before line 42):
-     ```js
-     if (this.dailyPoints.size >= this.MAX_DAILY_POINTS) {
-       return { deadDrops: [], error: 'Daily points registry full' };
+3. **Validate `deadDropsMap` entries** in `handleRegisterRendezvous()`:
+   ```ts
+   // Validate dead drops map size and values
+   if (Object.keys(deadDropsMap).length > MAX_POINTS_PER_MESSAGE) {
+     this.sendError(ws, 'Too many dead drops');
+     return;
+   }
+   for (const [key, value] of Object.entries(deadDropsMap)) {
+     if (typeof key !== 'string' || key.length > 128) {
+       this.sendError(ws, 'Invalid dead drop key');
+       return;
      }
-     ```
-   - In `registerHourlyTokens()` (before line 91):
-     ```js
-     if (this.hourlyTokens.size >= this.MAX_HOURLY_TOKENS) {
-       return { liveMatches: [], error: 'Hourly tokens registry full' };
+     if (typeof value !== 'string' || value.length > 4096) {
+       this.sendError(ws, 'Dead drop payload too large (max 4KB)');
+       return;
      }
-     ```
+   }
+   ```
 
-4. **Validate `deadDrop` and `relayId` field sizes** in `handleRegisterRendezvous()`:
-   ```js
-   if (deadDrop && (typeof deadDrop !== 'string' || deadDrop.length > 4096)) {
+4. **Validate `legacyDeadDrop` and `relayId` field sizes** in `handleRegisterRendezvous()`:
+   ```ts
+   if (legacyDeadDrop && (typeof legacyDeadDrop !== 'string' || legacyDeadDrop.length > 4096)) {
      this.sendError(ws, 'Dead drop payload too large (max 4KB)');
      return;
    }
@@ -80,17 +91,23 @@ In `packages/server/src/rendezvous-registry.js`:
    }
    ```
 
+5. **Add per-peer registration limits** in `RendezvousRegistry`:
+   - Track how many points/tokens each peer has registered.
+   - Reject registrations that would exceed a per-peer cap (e.g., 500 points and 500 tokens per peer).
+   - This prevents a single peer from monopolizing storage even with many small batched registrations.
+
 ## Testing
 
 - Verify that registration with <= 50 daily points and <= 50 hourly tokens succeeds.
-- Verify that registration with > 50 points/tokens is rejected.
+- Verify that registration with > 50 points/tokens is rejected with an error message.
 - Verify that non-string or overly long point/token values are rejected.
-- Verify that the global size cap prevents excessive entries.
-- Verify that existing rendezvous matching logic still works.
+- Verify that dead drop payloads > 4KB are rejected.
+- Verify that existing rendezvous matching logic still works after adding validation.
 - Run existing rendezvous tests.
 
 ## Risk Assessment
 
-- **Client compatibility**: Verify the Flutter app's rendezvous registration sends <= 50 points/tokens per message. If the client sends more, increase the limit or have the client batch registrations.
-- **Global cap impact**: A global cap of 100,000 entries per Map should be far more than needed for normal operation. If reached, it indicates either a bug or an attack.
-- **Performance at scale**: Even with limits, iterating entries per point (lines 49-57) is O(entries_per_point). This is acceptable with the per-message limit since each point typically has very few entries.
+- **Client compatibility**: Verify the Flutter app's rendezvous registration sends <= 50 points/tokens per message. If the client sends more, increase the limit or have the client batch registrations across multiple messages.
+- **Per-peer limits vs per-message limits**: Both are needed. The per-message limit prevents a single large message from overwhelming the server. The per-peer limit (implemented in the registry) prevents accumulated abuse across many small messages.
+- **SQLite storage implications**: Unlike the CF Worker's in-memory Maps, the VPS uses SQLite for persistence. Unbounded writes can exhaust disk space and slow down queries. The per-message and per-peer limits protect both memory and disk.
+- **Performance at scale**: The dead drops map iteration at lines 838-847 calls `registerDailyPoints()` once per point with a dead drop. With the 50-point limit, this is at most 50 calls per message, which is acceptable.

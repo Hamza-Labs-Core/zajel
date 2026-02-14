@@ -1,122 +1,85 @@
 # Plan: Math.random() used for security-sensitive random selection
 
+**Retargeted**: This issue was originally identified in dead CF Worker code. The same vulnerability exists in the VPS server.
+
 **Issue**: issue-server-18.md
 **Severity**: MEDIUM
-**Area**: Server
+**Area**: Server (VPS)
 **Files to modify**:
-- `packages/server/src/durable-objects/attestation-registry-do.js`
-- `packages/server/src/relay-registry.js`
+- `packages/server-vps/src/registry/relay-registry.ts`
 
 ## Analysis
 
-`Math.random()` is used in two security-relevant contexts:
+`Math.random()` is used in a security-relevant context in the VPS server:
 
-**1. Attestation challenge region selection** (attestation-registry-do.js):
-- Line 346-348: Number of regions selected:
-  ```js
-  const numRegions = MIN_CHALLENGE_REGIONS + Math.floor(
-    Math.random() * (MAX_CHALLENGE_REGIONS - MIN_CHALLENGE_REGIONS + 1)
-  );
-  ```
-- Line 647 (in `selectRandomRegions`):
-  ```js
-  const idx = Math.floor(Math.random() * available.length);
+**Relay selection shuffle** (`packages/server-vps/src/registry/relay-registry.ts`):
+- Lines 108-111 (Fisher-Yates shuffle in `getAvailableRelays`):
+  ```ts
+  // Fisher-Yates shuffle for random distribution
+  for (let i = available.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [available[i], available[j]] = [available[j]!, available[i]!];
+  }
   ```
 
-**2. Relay selection shuffle** (relay-registry.js):
-- Lines 82-84 (Fisher-Yates shuffle):
-  ```js
-  const j = Math.floor(Math.random() * (i + 1));
-  ```
-
-`Math.random()` uses a non-cryptographic PRNG (xorshift128+ in V8). Its output can be predicted if an attacker can observe enough outputs, which in the attestation context weakens the challenge-response protocol.
+`Math.random()` uses a non-cryptographic PRNG (xorshift128+ in V8). Its output can be predicted if an attacker can observe enough outputs. In the relay selection context, a predictable shuffle could allow an attacker to predict which relay peers are returned, potentially enabling targeted relay positioning attacks.
 
 ## Fix Steps
 
-1. **Create a `packages/server/src/crypto/secure-random.js` utility**:
-   ```js
+1. **Create a `packages/server-vps/src/crypto/secure-random.ts` utility**:
+   ```ts
+   import { randomInt } from 'node:crypto';
+
    /**
     * Generate a cryptographically secure random integer in [0, max).
-    * @param {number} max - Exclusive upper bound
-    * @returns {number} Random integer
+    * Uses Node.js crypto.randomInt which uses rejection sampling internally
+    * to avoid modulo bias.
+    * @param max - Exclusive upper bound (must be > 0)
+    * @returns Random integer in [0, max)
     */
-   export function secureRandomInt(max) {
+   export function secureRandomInt(max: number): number {
      if (max <= 0) return 0;
-     const arr = new Uint32Array(1);
-     crypto.getRandomValues(arr);
-     return arr[0] % max;
+     return randomInt(max);
    }
 
    /**
     * Cryptographically secure Fisher-Yates shuffle.
-    * @param {Array} array - Array to shuffle (mutated in place)
-    * @returns {Array} The shuffled array
+    * Mutates the array in place.
+    * @param array - Array to shuffle
+    * @returns The shuffled array (same reference)
     */
-   export function secureShuffleArray(array) {
+   export function secureShuffleArray<T>(array: T[]): T[] {
      for (let i = array.length - 1; i > 0; i--) {
        const j = secureRandomInt(i + 1);
-       [array[i], array[j]] = [array[j], array[i]];
+       [array[i], array[j]] = [array[j]!, array[i]!];
      }
      return array;
    }
    ```
 
-   Note: `crypto.getRandomValues()` is available in Cloudflare Workers runtime.
+   Note: Node.js `crypto.randomInt()` is available since Node.js 14.10 and internally uses rejection sampling to avoid modulo bias.
 
-2. **Update `attestation-registry-do.js`**:
-   - Import: `import { secureRandomInt } from '../crypto/secure-random.js';`
-   - Replace line 346-348:
-     ```js
-     const numRegions = MIN_CHALLENGE_REGIONS + secureRandomInt(
-       MAX_CHALLENGE_REGIONS - MIN_CHALLENGE_REGIONS + 1
-     );
+2. **Update `packages/server-vps/src/registry/relay-registry.ts`**:
+   - Add import at the top (after line 1 or near existing imports):
+     ```ts
+     import { secureShuffleArray } from '../crypto/secure-random.js';
      ```
-   - Replace `selectRandomRegions()` method (lines 641-653):
-     ```js
-     selectRandomRegions(criticalRegions, count) {
-       const available = [...criticalRegions];
-       const selected = [];
-       const selectCount = Math.min(count, available.length);
-
-       for (let i = 0; i < selectCount; i++) {
-         const idx = secureRandomInt(available.length);
-         selected.push(available[idx]);
-         available.splice(idx, 1);
-       }
-
-       return selected;
-     }
-     ```
-
-3. **Update `relay-registry.js`**:
-   - Import: `import { secureShuffleArray } from './crypto/secure-random.js';`
-   - Replace lines 82-85 (Fisher-Yates shuffle) with:
-     ```js
+   - Replace lines 107-111 (the Fisher-Yates shuffle block):
+     ```ts
+     // Cryptographically secure shuffle for random distribution
      secureShuffleArray(available);
      ```
-
-4. **Modulo bias note**: The simple `arr[0] % max` approach has a very slight bias when `max` does not evenly divide 2^32. For security-critical applications, this can be eliminated with rejection sampling. However, for selecting 3-5 regions from ~10-20 candidates, the bias is negligible (< 0.0000001%). If desired, add rejection sampling:
-   ```js
-   export function secureRandomInt(max) {
-     const arr = new Uint32Array(1);
-     const limit = Math.floor(0x100000000 / max) * max;
-     do {
-       crypto.getRandomValues(arr);
-     } while (arr[0] >= limit);
-     return arr[0] % max;
-   }
-   ```
 
 ## Testing
 
 - Verify that `secureRandomInt()` returns values in the correct range [0, max).
-- Verify that `selectRandomRegions()` still selects the correct number of regions.
 - Verify that relay shuffle still produces randomized output.
-- Run existing attestation and relay tests.
+- Run existing relay registry tests.
 - Statistical test: Call `secureRandomInt(6)` 10,000 times and verify roughly uniform distribution.
+- Verify `getAvailableRelays` still correctly excludes self, filters by capacity, and returns the requested count.
 
 ## Risk Assessment
 
-- **Very low risk**: This is a drop-in replacement for the randomness source. The behavior is identical (random selection/shuffle), only the quality of randomness improves.
-- **Performance**: `crypto.getRandomValues()` is slightly slower than `Math.random()`, but this is called at most a few times per request (3-5 region selections, or one shuffle of ~10-20 relays). The overhead is negligible.
-- **Import path**: Ensure the import path from `relay-registry.js` to `crypto/secure-random.js` is correct relative to the file location.
+- **Very low risk**: This is a drop-in replacement for the randomness source. The behavior is identical (random shuffle), only the quality of randomness improves.
+- **Performance**: `crypto.randomInt()` is slightly slower than `Math.random()`, but this is called at most a few times per request (one shuffle of ~10-20 relays). The overhead is negligible.
+- **No modulo bias**: Node.js `crypto.randomInt()` uses rejection sampling internally, so there is zero modulo bias unlike a naive `getRandomValues() % max` approach.

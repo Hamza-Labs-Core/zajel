@@ -1,40 +1,45 @@
 # Plan: peerId not validated for format or length in WebSocket handler
 
+**Retargeted**: This issue was originally identified in dead CF Worker code. The same vulnerability exists in the VPS server.
+
 **Issue**: issue-server-20.md
 **Severity**: MEDIUM
-**Area**: Server
+**Area**: Server (VPS)
 **Files to modify**:
-- `packages/server/src/websocket-handler.js`
+- `packages/server-vps/src/client/handler.ts`
 
 ## Analysis
 
-In `packages/server/src/websocket-handler.js`:
-- `handleRegister()` (lines 111-136): Only checks truthiness at line 114:
-  ```js
+In `packages/server-vps/src/client/handler.ts`:
+
+- `handleRegister()` (lines 726-766): Only checks truthiness at lines 729-732:
+  ```ts
+  const { peerId, maxConnections = 20, publicKey } = message;
+
   if (!peerId) {
     this.sendError(ws, 'Missing required field: peerId');
     return;
   }
   ```
-  No type check (could be a number, object, or array), no length check (could be megabytes), no character set check.
+  No type check (could be a number, object, or array due to JSON.parse), no length check (could be megabytes), no character set check.
 
 The same lack of validation applies to `peerId` in:
-- `handleUpdateLoad()` (line 144): Uses `peerId` directly from message without any validation.
-- `handleRegisterRendezvous()` (line 162): Uses `peerId` from message destructuring.
-- `handleChunkAnnounce()` (lines 241-246): Checks `!peerId` but not type/length.
-- `handleChunkRequest()` (line 287): Checks `!peerId || !chunkId` but not type/length.
-- `handleHeartbeat()` (line 211): Uses `peerId` directly without validation.
+- `handleUpdateLoad()` (line 772): Uses `peerId` directly from message without any validation.
+- `handleRegisterRendezvous()` (line 799): Uses `peerId` from message destructuring.
+- `handleHeartbeat()` (line 917): Uses `peerId` directly without validation.
+- `handleChunkAnnounce()` (lines 2125-2129): Checks `!peerId` but not type/length.
+- `handleGetRelays()` (line 903): Uses `peerId` from message without validation.
 
-These peerIds are used as Map keys in `wsConnections`, `relayRegistry.peers`, `rendezvousRegistry`, and `chunkIndex.chunkSources`. Very long string keys consume excess memory.
+These peerIds are used as Map keys in `clients`, `wsToClient`, `relayRegistry.peers`, and passed to `distributedRendezvous`. Very long string keys consume excess memory and could be used for DoS.
 
 ## Fix Steps
 
-1. **Create a validation helper** at the top of `websocket-handler.js` (or in a shared utility):
-   ```js
+1. **Create a validation helper** at the top of `handler.ts` (or in a shared utility file like `packages/server-vps/src/utils/validation.ts`):
+   ```ts
    const PEER_ID_MAX_LENGTH = 128;
    const PEER_ID_PATTERN = /^[\w-]+$/;
 
-   function isValidPeerId(peerId) {
+   function isValidPeerId(peerId: unknown): peerId is string {
      return (
        typeof peerId === 'string' &&
        peerId.length > 0 &&
@@ -44,18 +49,19 @@ These peerIds are used as Map keys in `wsConnections`, `relayRegistry.peers`, `r
    }
    ```
 
-2. **Update `handleRegister()`** (lines 114-117):
-   ```js
+2. **Update `handleRegister()`** (replace lines 729-732):
+   ```ts
    if (!isValidPeerId(peerId)) {
      this.sendError(ws, 'Invalid peerId: must be 1-128 alphanumeric characters, hyphens, or underscores');
      return;
    }
    ```
 
-3. **Update `handleUpdateLoad()`** (after line 144):
-   ```js
-   handleUpdateLoad(ws, message) {
+3. **Update `handleUpdateLoad()`** (after line 772):
+   ```ts
+   private handleUpdateLoad(ws: WebSocket, message: UpdateLoadMessage): void {
      const { peerId, connectedCount } = message;
+
      if (!isValidPeerId(peerId)) {
        this.sendError(ws, 'Invalid peerId');
        return;
@@ -64,40 +70,40 @@ These peerIds are used as Map keys in `wsConnections`, `relayRegistry.peers`, `r
    }
    ```
 
-4. **Update `handleRegisterRendezvous()`** (after line 162):
-   ```js
+4. **Update `handleRegisterRendezvous()`** (after line 799):
+   ```ts
    if (!isValidPeerId(peerId)) {
      this.sendError(ws, 'Invalid peerId');
      return;
    }
    ```
 
-5. **Update `handleChunkAnnounce()`** (replace line 243-246):
-   ```js
+5. **Update `handleGetRelays()`** (after line 903):
+   ```ts
    if (!isValidPeerId(peerId)) {
      this.sendError(ws, 'Invalid peerId');
      return;
    }
    ```
 
-6. **Update `handleChunkRequest()`** (replace line 288-290):
-   ```js
-   if (!isValidPeerId(peerId) || !chunkId || typeof chunkId !== 'string' || chunkId.length > 256) {
-     this.sendError(ws, 'Missing or invalid required fields: peerId, chunkId');
-     return;
-   }
-   ```
-
-7. **Update `handleHeartbeat()`** (after line 211):
-   ```js
+6. **Update `handleHeartbeat()`** (after line 917):
+   ```ts
    if (!isValidPeerId(peerId)) {
      this.sendError(ws, 'Invalid peerId');
      return;
    }
    ```
 
-8. **Also validate `connectedCount`** in `handleUpdateLoad()`:
-   ```js
+7. **Update `handleChunkAnnounce()`** (replace lines 2127-2129):
+   ```ts
+   if (!isValidPeerId(peerId)) {
+     this.sendError(ws, 'Invalid peerId');
+     return;
+   }
+   ```
+
+8. **Also validate `connectedCount`** in `handleUpdateLoad()` (line 780):
+   ```ts
    if (typeof connectedCount !== 'number' || connectedCount < 0 || connectedCount > 10000) {
      this.sendError(ws, 'Invalid connectedCount');
      return;

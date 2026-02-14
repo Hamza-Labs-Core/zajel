@@ -1,3 +1,12 @@
+# RESOLVED -- Dead code removed; VPS validates pairing codes with PAIRING_CODE.REGEX
+
+**Status**: RESOLVED
+**Resolution**: The original `SignalingRoom` was dead code in the CF Worker and has been deleted (commit 366c85d). The VPS server validates pairing codes using `PAIRING_CODE.REGEX` in `handlePairingCodeRegister()`, validates public key format and length (X25519 32-byte check), and enforces message-level size limits via `WEBSOCKET.MAX_MESSAGE_SIZE` (256KB) at both the `ws` library level (`maxPayload`) and application level.
+**Original target**: `packages/server/src/signaling-room.js` (deleted)
+**VPS status**: `packages/server-vps/src/client/handler.ts` lines 940-1024 (`handlePairingCodeRegister`) validates: (1) pairingCode presence, (2) format via `PAIRING_CODE.REGEX.test(pairingCode)`, (3) publicKey base64 format, (4) publicKey length (32 bytes for X25519). Signaling payloads are size-constrained by the WebSocket `maxPayload: WEBSOCKET.MAX_MESSAGE_SIZE` setting in `index.ts` line 155.
+
+---
+
 # Plan: Pairing code has no length or format validation enabling storage abuse
 
 **Issue**: issue-server-7.md

@@ -1,3 +1,20 @@
+# RESOLVED -- All dead code files have been removed
+
+**Status**: RESOLVED
+**Resolution**: All 6 dead source files and their 6 corresponding test files were deleted in commit 366c85d ("refactor(server): remove dead CF Worker relay/signaling code"). The CF Worker package (`packages/server/`) now only contains the active `ServerRegistryDO` and `AttestationRegistryDO` Durable Objects.
+**Original target**: `packages/server/src/index.js` and 6 dead code files
+**VPS status**: Not applicable -- this issue was about dead code cleanup, not VPS functionality. The VPS server (`packages/server-vps/`) has its own complete implementations for all the functionality that the dead CF Worker code previously provided.
+
+Deleted source files:
+- `packages/server/src/signaling-room.js`
+- `packages/server/src/durable-objects/relay-registry-do.js`
+- `packages/server/src/relay-registry.js`
+- `packages/server/src/rendezvous-registry.js`
+- `packages/server/src/chunk-index.js`
+- `packages/server/src/websocket-handler.js`
+
+---
+
 # Plan: SignalingRoom and RelayRegistryDO exported but SignalingRoom not routed
 
 **Issue**: issue-server-36.md

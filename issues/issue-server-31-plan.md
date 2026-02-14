@@ -1,3 +1,12 @@
+# RESOLVED -- Dead code removed; VPS uses SQLite-backed storage with LRU eviction
+
+**Status**: RESOLVED
+**Resolution**: The original `chunk-index.js` was dead code in the CF Worker and has been deleted (commit 366c85d). The VPS server uses a completely different chunk caching architecture via `ChunkRelay` backed by SQLite persistent storage (not in-memory Maps). The cache uses disk-based storage via `Storage.cacheChunk()`, enforces a per-chunk size limit of 64KB (`MAX_TEXT_CHUNK_PAYLOAD`), and applies LRU eviction via `storage.evictLruChunks(MAX_CACHE_ENTRIES)` capped at 1000 entries. TTL-based cleanup runs every 5 minutes.
+**Original target**: `packages/server/src/chunk-index.js` (deleted)
+**VPS status**: `packages/server-vps/src/client/chunk-relay.ts` uses SQLite-backed storage (`Storage` interface) for chunk caching. Key safeguards: (1) `MAX_TEXT_CHUNK_PAYLOAD = 64 * 1024` per-chunk size limit (line 34), (2) `MAX_CACHE_ENTRIES = 1000` with LRU eviction via `storage.evictLruChunks()` (line 277), (3) `CACHE_TTL_MS = 30 * 60 * 1000` TTL-based expiration (line 316), (4) Periodic cleanup every 5 minutes (line 28). Since data is stored on disk via SQLite, there is no in-memory unbounded growth risk.
+
+---
+
 # Plan: Chunk cache stores full chunk data in memory with no per-entry size limit
 
 **Issue**: issue-server-31.md

@@ -1,3 +1,12 @@
+# RESOLVED -- Dead code removed; VPS enforces maxPayload at WebSocket protocol level
+
+**Status**: RESOLVED
+**Resolution**: The original `relay-registry-do.js` was dead code in the CF Worker and has been deleted (commit 366c85d). The VPS server enforces WebSocket message size limits at the protocol level via `maxPayload: WEBSOCKET.MAX_MESSAGE_SIZE` (256KB) on the `WebSocketServer` configuration. Messages exceeding this limit are rejected by the `ws` library with close code 1009 ("Message Too Big") before they reach application code. Additionally, `handleMessage()` has a defense-in-depth size check at handler.ts line 556.
+**Original target**: `packages/server/src/durable-objects/relay-registry-do.js` (deleted)
+**VPS status**: `packages/server-vps/src/index.ts` lines 153-156 configure `new WebSocketServer({ noServer: true, maxPayload: WEBSOCKET.MAX_MESSAGE_SIZE })` where `WEBSOCKET.MAX_MESSAGE_SIZE = 256 * 1024` (256KB). The handler also has an application-level check at `handler.ts` line 556: `if (data.length > WEBSOCKET.MAX_MESSAGE_SIZE)`.
+
+---
+
 # Plan: No WebSocket message size limit
 
 **Issue**: issue-server-25.md

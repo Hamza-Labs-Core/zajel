@@ -1,3 +1,12 @@
+# RESOLVED -- Dead code removed; VPS uses `ws` library with automatic Upgrade validation
+
+**Status**: RESOLVED
+**Resolution**: The original `SignalingRoom` Durable Object was dead code in the CF Worker and has been deleted (commit 366c85d). The VPS server (`packages/server-vps/`) uses the Node.js `ws` library, which automatically validates the HTTP Upgrade header during the `handleUpgrade()` call. No manual check is needed -- the `ws` library rejects non-WebSocket requests at the protocol level.
+**Original target**: `packages/server/src/signaling-room.js` (deleted)
+**VPS status**: `packages/server-vps/src/index.ts` lines 248-269 use `httpServer.on('upgrade', ...)` with `wss.handleUpgrade()` / `federationWss.handleUpgrade()`, both backed by `WebSocketServer` from the `ws` library which validates the Upgrade header internally.
+
+---
+
 # Plan: SignalingRoom accepts WebSocket upgrade without verifying Upgrade header
 
 **Issue**: issue-server-5.md

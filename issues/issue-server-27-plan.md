@@ -1,64 +1,79 @@
 # Plan: maxConnections value not validated in relay registration
 
+**Retargeted**: This issue was originally identified in dead CF Worker code. The same vulnerability exists in the VPS server.
+
 **Issue**: issue-server-27.md
 **Severity**: MEDIUM
-**Area**: Server
-**Files to modify**: `packages/server/src/websocket-handler.js`, `packages/server/src/relay-registry.js`
+**Area**: Server (VPS)
+**Files to modify**: `packages/server-vps/src/client/handler.ts`, `packages/server-vps/src/registry/relay-registry.ts`
 
 ## Analysis
 
-In `packages/server/src/websocket-handler.js`, the `handleRegister` method (lines 111-136) destructures `maxConnections` with a default of 20 but no validation:
+In `packages/server-vps/src/client/handler.ts`, the `handleRegister` method (lines 726-766) destructures `maxConnections` with a default of 20 but no validation:
 
-```js
-handleRegister(ws, message) {
+```ts
+private async handleRegister(ws: WebSocket, message: RegisterMessage): Promise<void> {
   const { peerId, maxConnections = 20, publicKey } = message;
   // ...
-  this.relayRegistry.register(peerId, { maxConnections, publicKey });
+  this.relayRegistry.register(peerId, {
+    maxConnections,
+    publicKey,
+  });
 }
 ```
 
-In `packages/server/src/relay-registry.js`, the `register` method (line 22) accepts `maxConnections` as-is:
+In `packages/server-vps/src/registry/relay-registry.ts`, the `register` method (lines 41-65) accepts `maxConnections` as-is:
 
-```js
-register(peerId, { maxConnections = 20, publicKey = null } = {}) {
+```ts
+register(
+  peerId: string,
+  options: { maxConnections?: number; publicKey?: string | null } = {}
+): void {
+  const { maxConnections = 20, publicKey = null } = options;
   // ...
-  this.peers.set(peerId, { peerId, maxConnections, ... });
+  const info: RelayInfo = {
+    peerId,
+    maxConnections,
+    // ...
+  };
+  this.peers.set(peerId, info);
 }
 ```
 
-Similarly, `handleUpdateLoad` (websocket-handler.js line 143-153) passes `connectedCount` directly to `updateLoad` without validation:
+Similarly, `handleUpdateLoad` (handler.ts lines 771-787) passes `connectedCount` directly to `updateLoad` without validation:
 
-```js
-handleUpdateLoad(ws, message) {
+```ts
+private handleUpdateLoad(ws: WebSocket, message: UpdateLoadMessage): void {
   const { peerId, connectedCount } = message;
+  // ...
   this.relayRegistry.updateLoad(peerId, connectedCount);
 }
 ```
 
-And `updateLoad` (relay-registry.js line 50-56) sets it directly:
+And `updateLoad` (relay-registry.ts lines 77-85) sets it directly:
 
-```js
-updateLoad(peerId, connectedCount) {
+```ts
+updateLoad(peerId: string, connectedCount: number): boolean {
   const peer = this.peers.get(peerId);
-  if (peer) {
-    peer.connectedCount = connectedCount;
-  }
+  if (!peer) return false;
+  peer.connectedCount = connectedCount;
+  // ...
 }
 ```
 
-The capacity calculation in `getAvailableRelays` (line 71) divides by `maxConnections`:
-```js
+The capacity calculation in `getAvailableRelays` (relay-registry.ts line 97) divides by `maxConnections`:
+```ts
 const capacity = peer.connectedCount / peer.maxConnections;
 ```
 
-If `maxConnections` is 0, this produces `Infinity`/`NaN`. If negative, the capacity check `< 0.5` always passes.
+If `maxConnections` is 0, this produces `Infinity`/`NaN`. If negative, the capacity check `< 0.5` always passes. The same issue exists in `getStats()` at line 151.
 
 ## Fix Steps
 
-1. **Add validation in `websocket-handler.js` `handleRegister`** (after line 112):
+1. **Add validation in `handler.ts` `handleRegister`** (after line 727):
 
-```js
-handleRegister(ws, message) {
+```ts
+private async handleRegister(ws: WebSocket, message: RegisterMessage): Promise<void> {
   const { peerId, maxConnections = 20, publicKey } = message;
 
   if (!peerId) {
@@ -73,16 +88,15 @@ handleRegister(ws, message) {
     return;
   }
 
-  this.wsConnections.set(peerId, ws);
+  // ... rest uses maxConn instead of maxConnections
   this.relayRegistry.register(peerId, { maxConnections: maxConn, publicKey });
-  // ...
 }
 ```
 
-2. **Add validation in `websocket-handler.js` `handleUpdateLoad`** (after line 144):
+2. **Add validation in `handler.ts` `handleUpdateLoad`** (after line 772):
 
-```js
-handleUpdateLoad(ws, message) {
+```ts
+private handleUpdateLoad(ws: WebSocket, message: UpdateLoadMessage): void {
   const { peerId, connectedCount } = message;
 
   if (!peerId) {
@@ -96,17 +110,28 @@ handleUpdateLoad(ws, message) {
     return;
   }
 
+  // Update client's last seen
+  const client = this.clients.get(peerId);
+  if (client) {
+    client.lastSeen = Date.now();
+  }
+
   this.relayRegistry.updateLoad(peerId, count);
   // ...
 }
 ```
 
-3. **Add defensive validation in `relay-registry.js` `register` method** (line 22) as defense-in-depth:
+3. **Add defensive validation in `relay-registry.ts` `register` method** (line 45) as defense-in-depth:
 
-```js
-register(peerId, { maxConnections = 20, publicKey = null } = {}) {
+```ts
+register(
+  peerId: string,
+  options: { maxConnections?: number; publicKey?: string | null } = {}
+): void {
+  const { maxConnections = 20, publicKey = null } = options;
+  // Defense-in-depth: clamp maxConnections to valid range
   const maxConn = Math.max(1, Math.min(1000, Number(maxConnections) || 20));
-  // ... use maxConn instead of maxConnections
+  // ... use maxConn instead of maxConnections in the RelayInfo object
 }
 ```
 
@@ -116,9 +141,10 @@ register(peerId, { maxConnections = 20, publicKey = null } = {}) {
 - Test with invalid values: 0, -1, `Infinity`, `NaN`, `"string"`, `null`, `undefined`, very large numbers.
 - Verify that `getAvailableRelays` never produces `NaN` or `Infinity` capacity values.
 - Test `handleUpdateLoad` with valid and invalid `connectedCount` values.
+- Verify that `getStats()` does not produce `NaN` or `Infinity` when iterating over peers.
 
 ## Risk Assessment
 
 - **Low risk**: The validation only rejects values that would cause incorrect behavior. Legitimate clients always send reasonable numeric values.
-- **Dead code caveat**: `RelayRegistryDO` is currently dead code, but the validation should still be applied for correctness if the code is ever re-enabled.
+- **Live code**: Unlike the original CF Worker target, this is live production code in the VPS server. The fix prevents real division-by-zero and capacity calculation bugs.
 - The upper bound of 1000 for `maxConnections` is a reasonable safety limit. If a legitimate use case needs more, the constant can be adjusted.

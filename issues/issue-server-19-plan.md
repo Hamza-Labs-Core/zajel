@@ -1,3 +1,12 @@
+# RESOLVED -- Dead code removed; VPS parses JSON only once per message
+
+**Status**: RESOLVED
+**Resolution**: The original `relay-registry-do.js` and `websocket-handler.js` were dead code in the CF Worker and have been deleted (commit 366c85d). The VPS server parses each WebSocket message exactly once in `handleMessage()` at `handler.ts` line 572: `message = JSON.parse(data)`. There is no second parse -- the parsed object is used directly in the switch statement that follows.
+**Original target**: `packages/server/src/durable-objects/relay-registry-do.js`, `packages/server/src/websocket-handler.js` (both deleted)
+**VPS status**: `packages/server-vps/src/client/handler.ts` line 572 performs a single `JSON.parse(data)` call per message. The `ws` library delivers raw data to the `message` event handler, and the VPS handler parses it once before routing.
+
+---
+
 # Plan: WebSocket message handler double-parses JSON
 
 **Issue**: issue-server-19.md
