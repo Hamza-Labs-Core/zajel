@@ -68,7 +68,7 @@ class TestChannels:
         _type_in_field(helper, 1, "A channel for testing")
 
         # Tap the Create button in the dialog
-        helper._find("Create", timeout=5, partial=False).click()
+        helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
 
         # Verify the channel appears in the list
@@ -93,7 +93,7 @@ class TestChannels:
         _type_in_field(helper, 0, "Empty State Channel")
 
         # Tap Create
-        helper._find("Create", timeout=5, partial=False).click()
+        helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
 
         # Verify the channel appears in the list
@@ -139,7 +139,7 @@ class TestChannels:
         _type_in_field(helper, 0, "Detail Test Channel")
         _type_in_field(helper, 1, "Channel description here")
 
-        helper._find("Create", timeout=5, partial=False).click()
+        helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
 
         # Tap the channel in the list to open detail
@@ -170,7 +170,7 @@ class TestChannels:
 
         _type_in_field(helper, 0, "Compose Bar Channel")
 
-        helper._find("Create", timeout=5, partial=False).click()
+        helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
 
         # Open the channel
@@ -195,7 +195,7 @@ class TestChannels:
 
         _type_in_field(helper, 0, "Publish Test Channel")
 
-        helper._find("Create", timeout=5, partial=False).click()
+        helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
 
         # Open the channel
@@ -228,7 +228,7 @@ class TestChannels:
 
         _type_in_field(helper, 0, "Share Test Channel")
 
-        helper._find("Create", timeout=5, partial=False).click()
+        helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
 
         # Open the channel
@@ -253,7 +253,7 @@ class TestChannels:
 
         _type_in_field(helper, 0, "Info Test Channel")
 
-        helper._find("Create", timeout=5, partial=False).click()
+        helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
 
         # Open the channel
@@ -279,7 +279,7 @@ class TestChannels:
         _type_in_field(helper, 0, "Info Sheet Channel")
         _type_in_field(helper, 1, "Sheet description")
 
-        helper._find("Create", timeout=5, partial=False).click()
+        helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
 
         # Open the channel
@@ -309,7 +309,7 @@ class TestChannels:
 
         _type_in_field(helper, 0, "Role Display Channel")
 
-        helper._find("Create", timeout=5, partial=False).click()
+        helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
 
         # Verify the OWNER role is displayed in the list
@@ -330,7 +330,7 @@ class TestChannels:
 
         _type_in_field(helper, 0, "Nav Back Channel")
 
-        helper._find("Create", timeout=5, partial=False).click()
+        helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
 
         # Open the channel

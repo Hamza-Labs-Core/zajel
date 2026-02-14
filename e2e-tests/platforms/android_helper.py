@@ -550,7 +550,7 @@ class AppHelper:
     def navigate_to_media_settings(self):
         """Navigate to Settings > Audio & Video."""
         self.navigate_to_settings()
-        self._scroll_down()
+        self._scroll_down(times=2)
         self.tap_settings_option("Audio & Video")
 
     # -- Emoji helpers --
