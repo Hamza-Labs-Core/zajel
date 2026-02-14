@@ -266,3 +266,115 @@ The server uses an environment-aware logger:
 - **Production**: Pairing codes are redacted (only first and last characters shown)
 - **Development**: Full logging with debug-level detail
 - Configurable log levels: debug, info, warning, error
+
+---
+
+## Security Hardening
+
+The server tier is split across two packages -- the CF Worker (`packages/server/`) handles the server registry and attestation, while the VPS (`packages/server-vps/`) handles all client-facing functionality (signaling, relay, rendezvous, channels, chunks). Security measures are applied to both.
+
+### CF Worker Security
+
+#### CORS Policy
+
+The CF Worker enforces an origin allowlist rather than a wildcard `*` CORS policy. Only explicitly configured origins are permitted in `Access-Control-Allow-Origin` responses. This prevents unauthorized web origins from making cross-origin requests to the API.
+
+#### Rate Limiting
+
+All endpoints are rate-limited to **100 requests per minute per IP address**. Rate limit state is tracked per Durable Object. Requests exceeding the limit receive a `429 Too Many Requests` response with a `Retry-After` header.
+
+#### Server Registration and Deletion Authentication
+
+- **Registration**: VPS servers must present a valid authentication token to register. Unauthenticated registration requests are rejected.
+- **Deletion**: Server deletion requires proof of ownership. Only the server that registered an entry can delete it. This prevents a malicious actor from unregistering legitimate servers.
+
+#### Error Response Sanitization
+
+All error responses return generic messages (e.g., "Bad request", "Internal error") without leaking internal stack traces, variable names, or implementation details. This prevents information disclosure to attackers probing the API.
+
+#### Security Headers
+
+All responses include hardened security headers:
+
+| Header | Value | Purpose |
+|--------|-------|---------|
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | Force HTTPS |
+| `X-Frame-Options` | `DENY` | Prevent clickjacking |
+| `X-Content-Type-Options` | `nosniff` | Prevent MIME sniffing |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | Limit referrer leakage |
+| `Permissions-Policy` | (restrictive) | Disable unnecessary browser features |
+
+#### Bounded Storage with TTL
+
+Nonce, device, and server storage within Durable Objects is bounded with maximum entry counts and time-to-live enforcement:
+
+- **Nonce storage**: Bounded capacity with automatic eviction of expired entries
+- **Device storage**: TTL-based expiration prevents unbounded growth from abandoned devices
+- **Server storage**: Registrations require periodic heartbeats; stale entries are pruned
+
+#### Input Validation
+
+All inputs are validated before processing:
+
+- **`hexToBytes`**: Validates hex string format (even length, valid hex characters)
+- **Storage keys**: Sanitized to prevent key injection or traversal
+- **Endpoint URLs**: Validated as well-formed HTTPS URLs
+- **Semver strings**: Validated against semver format in `compareVersions`
+- **HTTP body size**: Capped to prevent oversized payloads
+
+#### Timing-Safe Comparisons
+
+All secret comparisons (HMAC verification, token validation) use constant-time comparison functions to prevent timing side-channel attacks. This applies to build token verification, session token validation, and attestation challenge responses.
+
+#### Token Format and Validity
+
+- **Base64url encoding**: Session tokens use RFC 4648 base64url encoding (URL-safe, no padding) instead of standard base64
+- **Build token validity**: Reduced from 365 days to **30 days** to limit the window of exposure if a token is compromised
+- **Separate signing keys**: Build token signing and session token signing use distinct keys. Compromising one key does not affect the other
+
+#### Structured Audit Logging
+
+All security-relevant operations are logged with structured fields:
+
+- Server registration and deletion events
+- Authentication successes and failures
+- Rate limit triggers
+- Attestation verification outcomes
+
+Logs include timestamps, request metadata (IP, user agent), and operation results but never include secrets or credentials.
+
+### VPS Server Security
+
+#### Peer Identity Verification
+
+- **PeerId consistency**: The VPS verifies that the PeerId a client claims matches the identity established during the WebSocket handshake. Inconsistent PeerIds are rejected.
+- **PeerId format validation**: PeerIds are validated for expected format and length before being accepted into any registry.
+- **PeerId takeover prevention**: Once a PeerId is registered to a WebSocket connection, subsequent registration attempts with the same PeerId from a different connection are rejected. This prevents an attacker from hijacking another peer's identity.
+
+#### Connection Limits
+
+The VPS enforces connection limits to prevent resource exhaustion:
+
+| Limit | Value | Purpose |
+|-------|-------|---------|
+| Total connections | 10,000 | Prevent server overload |
+| Per-IP connections | 50 | Mitigate single-source abuse |
+
+Connections exceeding these limits are rejected with a descriptive close code.
+
+#### Rendezvous and Chunk Announce Limits
+
+- **Rendezvous registrations**: Each peer is limited in the number of daily meeting points and hourly tokens it can register. Excess registrations are rejected.
+- **Chunk announcements**: The number of chunks a single peer can announce is bounded. This prevents a malicious peer from flooding the chunk index.
+
+#### Cryptographic PRNG
+
+All security-sensitive random values (e.g., session identifiers, nonces) use `crypto.randomInt()` instead of `Math.random()`. This provides cryptographically secure randomness suitable for security contexts.
+
+#### maxConnections Clamping
+
+The `maxConnections` (capacity) value reported by relay peers is clamped to the range **[1, 1000]**. Values outside this range are rejected or clamped, preventing a peer from advertising unrealistic capacity (e.g., `Infinity` or negative values) that could disrupt load balancing.
+
+#### Authenticated Metrics Endpoints
+
+The `/stats` and `/metrics` endpoints require authentication. Unauthenticated requests receive a `401 Unauthorized` response. This prevents public enumeration of server state, connected peer counts, and capacity information.

@@ -204,6 +204,8 @@ When you open a new chat with no messages, Zajel displays the encryption method 
 
 > Messages are end-to-end encrypted using X25519 key exchange and ChaCha20-Poly1305 authenticated encryption.
 
+Messages are also protected against replay attacks. Each message includes a sequence number, and a sliding window mechanism rejects duplicate or stale messages. This means an attacker cannot record and retransmit your encrypted messages to impersonate you.
+
 ---
 
 ## 6. Sending Files
@@ -228,6 +230,8 @@ To send a file to a connected peer:
 - No file data ever passes through or is stored on any server.
 - Large files are split into 16KB encrypted chunks with metadata and per-chunk encryption.
 - Transfer progress is tracked and displayed.
+- **Integrity verification**: Each file transfer includes a SHA-256 hash. The recipient verifies that the reassembled file matches the expected hash, ensuring the file was not corrupted or tampered with during transfer.
+- **Size validation**: Incoming file transfers are validated against size limits to prevent resource exhaustion.
 
 ---
 
@@ -319,7 +323,7 @@ If you own a channel:
 2. Tap the **Share** button.
 3. The invite link is displayed and can be copied to the clipboard.
 
-The invite link is self-contained: it encodes the signed manifest and decryption key so that anyone with the link can subscribe.
+The invite link is self-contained: it encodes the signed manifest and the channel decryption key so that anyone with the link can subscribe. Invite links never expose the channel's private signing key -- only the content decryption key is shared, so subscribers can read content but cannot forge messages on behalf of the channel owner.
 
 ### Publishing Content
 
@@ -429,7 +433,15 @@ Each group member has their own symmetric sender key (32 bytes, randomly generat
 2. The encrypted message is sent to all group members.
 3. Each member decrypts it using your sender key (which they received during the invitation or key rotation).
 
-When a member leaves the group, keys are rotated for forward secrecy, ensuring the departed member cannot decrypt future messages.
+When a member leaves the group, keys are rotated for forward secrecy, ensuring the departed member cannot decrypt future messages. Additionally, the departed member's sender key material is explicitly zeroized (wiped from memory and storage) so it cannot be recovered.
+
+### Message Verification
+
+Group messages are validated before processing to prevent abuse:
+- **Sequence validation**: Each sender maintains a monotonic sequence counter. Messages with out-of-order or duplicate sequence numbers are rejected, preventing replay attacks.
+- **Duplicate detection**: Messages are checked against previously seen identifiers to prevent duplicates from being displayed.
+- **Schema validation**: Messages must conform to the expected group message structure before they are processed.
+- **Bounded storage**: Group message history is capped to prevent unbounded storage growth.
 
 ### Message Ordering
 
@@ -602,6 +614,8 @@ In **Settings > External Connections > Linked Devices**, you can:
 
 ## 13. Security
 
+Zajel has undergone a comprehensive security audit covering 94 issues across all packages (client, servers, and website). The following sections describe the security properties you benefit from as a user.
+
 ### Encryption
 
 Zajel uses the following cryptographic primitives:
@@ -617,9 +631,31 @@ Zajel uses the following cryptographic primitives:
 | Fingerprinting | SHA-256 | Generate public key fingerprints for verification |
 | Channel ID Derivation | SHA-256 (truncated 128-bit) | Derive channel IDs from owner public keys |
 
+### Replay Protection
+
+All encrypted communication channels include replay protection:
+- **1:1 messages**: Each message includes a monotonically increasing sequence number. A sliding window mechanism rejects duplicate or out-of-order messages, preventing an attacker from recording and retransmitting your encrypted messages.
+- **Group messages**: Each sender maintains a per-device sequence counter. Messages with duplicate or out-of-order sequence numbers are rejected.
+- **Channel chunks**: Channel content chunks include sequence validation to detect and reject replayed content.
+
 ### Forward Secrecy
 
-Each session uses ephemeral keys. When you connect with a peer, a new session key is established via X25519 ECDH key exchange. Previous session keys are not reused. In groups, sender keys are rotated when members leave.
+Each session uses ephemeral keys. When you connect with a peer, a new session key is established via X25519 ECDH key exchange. Previous session keys are not reused. In groups, sender keys are rotated when members leave, and the departed member's key material is explicitly zeroized (wiped from memory and storage).
+
+### Secure Key Management
+
+Zajel protects your cryptographic keys at every stage:
+- **Keys encrypted at rest**: Session keys are encrypted with ChaCha20-Poly1305 before being persisted to secure storage, providing defense-in-depth even if platform secure storage is compromised.
+- **Secure storage**: Private keys are stored in your device's platform secure storage (Keychain on iOS/macOS, Keystore on Android, platform-specific secure storage on desktop).
+- **Key zeroization**: When you leave a group, your sender key material is explicitly wiped from memory and storage so it cannot be recovered.
+- **Key binding**: Session keys are derived using both peers' public keys as salt, binding the key to the specific peer pair and preventing man-in-the-middle key substitution.
+
+### File Transfer Security
+
+- Each file transfer includes a **SHA-256 integrity hash**. The recipient verifies that the reassembled file matches the expected hash, detecting corruption or tampering.
+- Incoming file transfers are validated against **size limits** to prevent resource exhaustion.
+- File names are sanitized to prevent **path traversal attacks** (malicious file names that attempt to write outside the download directory).
+- Files are encrypted per-chunk with ChaCha20-Poly1305 before transmission.
 
 ### Fingerprint Verification
 
@@ -633,6 +669,20 @@ To verify that you are communicating with the correct person (and not a man-in-t
 
 Each fingerprint is a SHA-256 hash of the X25519 public key, displayed in monospace hexadecimal format. You can copy fingerprints to the clipboard.
 
+### Connection Security
+
+- **WebSocket reconnection**: If your connection to the signaling server drops, Zajel automatically reconnects with exponential backoff, maintaining your session continuity.
+- **Peer identity verification**: When reconnecting with an existing peer, their cryptographic identity is verified against the stored public key to detect impersonation attempts.
+- **TLS certificate pinning**: On native platforms (Android, iOS, desktop), WebSocket connections use certificate pinning to prevent TLS interception by compromised certificate authorities.
+- **Input validation**: All incoming messages and signaling data are validated against strict schemas before processing.
+
+### Channel Invite Link Security
+
+Channel invite links contain only the content decryption key and the signed channel manifest. They never expose the channel's private signing key. This means:
+- Anyone with the link can read channel content (subscriber access).
+- Only the channel owner and authorized admins can publish content (signing authority is not shared in the link).
+- The manifest signature is verified upon subscription, preventing tampered invite links.
+
 ### Zero-Knowledge Server
 
 The signaling server facilitates peer discovery and WebRTC negotiation but:
@@ -643,21 +693,41 @@ The signaling server facilitates peer discovery and WebRTC negotiation but:
 
 For channels, the relay server temporarily caches encrypted chunks (30-minute TTL) but cannot decrypt them because it does not have the channel's encryption key.
 
+### Resource Limits and Abuse Prevention
+
+Zajel enforces resource limits across all server endpoints to prevent abuse:
+- **Rate limiting**: Server endpoints enforce per-client rate limits to prevent denial-of-service attacks.
+- **Connection limits**: The number of simultaneous WebSocket connections per server is bounded.
+- **Input size limits**: All HTTP and WebSocket message payloads are validated against size limits.
+- **Storage bounds**: Server-side registries (rendezvous, relay, chunk cache) enforce maximum entry limits with eviction policies.
+- **Bounded client storage**: Group message history and channel chunk caches are capped to prevent unbounded growth on your device.
+
 ### Server Attestation
 
 Zajel verifies the identity of signaling servers using the bootstrap registry:
 - Server responses are signed with Ed25519.
 - The app verifies signatures against known public keys.
+- Responses include timestamps; stale responses are rejected.
 - This prevents connection to rogue servers.
 
 ### App Attestation
 
 Zajel includes anti-tamper protections:
 - Build token registration with the bootstrap server.
-- Dynamic binary attestation challenges using HMAC-SHA256.
+- Dynamic binary attestation challenges using HMAC-SHA256 with constant-time comparison.
 - Session tokens with 1-hour expiration.
 - Version policy enforcement (minimum version, recommended updates, blocked versions).
 - Detection of debuggers, rooted/jailbroken devices, and emulators.
+
+### Server-Side Security
+
+The signaling and relay servers are hardened with:
+- **Strict CORS policies**: Only allowed origins can access server APIs (no wildcard CORS).
+- **Authenticated server registration**: VPS servers must authenticate with Ed25519 signatures to join the federation.
+- **Content Security Policy**: The website enforces CSP headers to prevent cross-site scripting (XSS) attacks.
+- **Security headers**: All server responses include standard security headers (X-Content-Type-Options, X-Frame-Options, Referrer-Policy, etc.).
+- **Constant-time comparisons**: All cryptographic secret comparisons use constant-time algorithms to prevent timing attacks.
+- **Error message sanitization**: Server error responses do not leak internal implementation details.
 
 ---
 
@@ -782,7 +852,10 @@ A: Zajel uses X25519 for key exchange, HKDF for key derivation, and ChaCha20-Pol
 A: Files are chunked into 16KB encrypted segments and sent over WebRTC data channels. There is no hard file size limit, but very large files may take time to transfer over a peer-to-peer connection.
 
 **Q: Can someone intercept my messages?**
-A: Messages are end-to-end encrypted. Even if someone intercepted the encrypted data (on the network or at the signaling server), they could not decrypt it without your private key. You can verify your connection is not being intercepted by comparing fingerprints with your peer through an out-of-band channel.
+A: Messages are end-to-end encrypted. Even if someone intercepted the encrypted data (on the network or at the signaling server), they could not decrypt it without your private key. You can verify your connection is not being intercepted by comparing fingerprints with your peer through an out-of-band channel. Additionally, replay protection prevents an attacker from recording and retransmitting your messages.
+
+**Q: Has Zajel been security audited?**
+A: Yes. Zajel underwent a comprehensive security audit covering 94 issues across all packages (mobile/desktop app, signaling servers, headless client, and website). The audit addressed issues from critical to low severity, including encryption hardening, replay protection, input validation, rate limiting, secure key management, and server-side security. For details, see the [Security Architecture](https://github.com/Hamza-Labs-Core/zajel/wiki/Security-Architecture) wiki page.
 
 **Q: What is a channel vs. a group?**
 A: A **channel** is a one-to-many broadcast. The owner (and appointed admins) publish content that subscribers receive. Subscribers can send replies, votes, and reactions to the owner if the channel rules allow it. A **group** is a many-to-many conversation where all members can send and receive messages equally.

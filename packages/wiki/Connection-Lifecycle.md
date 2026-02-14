@@ -170,3 +170,67 @@ Web browser clients connect through a linked mobile device:
 5. Mobile app proxies all peer messages to/from the web client
 
 Link sessions expire after 5 minutes if not completed. Linked devices can be revoked from the mobile app at any time.
+
+---
+
+## Security Hardening
+
+### Socket Path Symlink Prevention
+
+Before creating or connecting to a UNIX domain socket (used by the headless client daemon), the system checks for existing symlinks at the target path:
+
+1. If the socket path already exists and is a symlink, the operation is **refused**
+2. The parent directory ownership is verified to match the current user
+3. The socket is created with permissions `0o600` (owner-only access)
+
+This prevents symlink-based attacks where an attacker creates a symlink at the expected socket path pointing to a sensitive file or an attacker-controlled socket. Without this check, the daemon could unknowingly bind to (or connect to) a location controlled by a different user.
+
+### Pending Peer State
+
+Peers are now held in a **pending state** during the connection setup until the cryptographic key exchange completes successfully:
+
+```
+Connection States (updated):
+
+  [*] --> Disconnected
+  Disconnected --> Connecting (signaling begins)
+  Connecting --> PendingKeyExchange (WebRTC established, awaiting handshake)
+  PendingKeyExchange --> Connected (key exchange verified)
+  PendingKeyExchange --> Disconnected (key exchange failed or timed out)
+  Connected --> Disconnected (peer offline or connection lost)
+```
+
+In the pending state:
+- The peer appears in the internal connection table but is **not exposed** to the application layer
+- No messages can be sent to or received from the peer
+- The peer's public key is not trusted until the full handshake completes
+- A timeout (default: 30 seconds) automatically transitions pending peers to disconnected if the handshake does not complete
+
+This prevents a race condition where the application layer could attempt to send messages to a peer before the encryption handshake is finalized, which would either fail or send unencrypted data.
+
+### WebRTC Cleanup on Connection Failure
+
+When a WebRTC connection attempt fails (ICE timeout, DTLS failure, or handshake rejection), all associated resources are cleaned up:
+
+1. The `RTCPeerConnection` is closed
+2. Data channels are closed
+3. Media tracks (if any) are stopped
+4. ICE candidates are discarded
+5. The peer is removed from internal connection tracking
+6. Signaling state for the failed peer is reset
+
+Previously, a failed connection could leave orphaned `RTCPeerConnection` objects consuming memory and port resources. The cleanup is performed in a `finally` block to ensure it runs even if an exception occurs during the connection attempt.
+
+### ICE Server Configuration Validation
+
+ICE server configurations (STUN/TURN) are validated before being used:
+
+| Check | Validation rule |
+|-------|----------------|
+| URL format | Must be a valid `stun:` or `turn:` URI |
+| Hostname | Must resolve to a valid address (not empty, not a private IP for production) |
+| Port | Must be in range 1-65535 |
+| Credential | If `turn:`, username and credential must be present |
+| Duplicate detection | Duplicate URLs are removed |
+
+Invalid ICE server entries are logged and excluded from the configuration. The connection attempt proceeds with the remaining valid entries. If no valid ICE servers remain, the system falls back to direct connectivity only and logs a warning.

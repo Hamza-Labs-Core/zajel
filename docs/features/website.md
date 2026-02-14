@@ -94,6 +94,72 @@
 - **Location**: `packages/website/app/styles/global.css:L427-452`
 - **Description**: Mobile breakpoints for hero text, navigation, and download grid layout adjustments
 
+## Security Hardening
+
+### DOMPurify SVG Sanitization
+- **Location**: `packages/website/app/components/wiki/MermaidDiagram.tsx`
+- **Description**: Mermaid diagram SVG output sanitized with DOMPurify before DOM insertion to prevent XSS via injected SVG content
+
+### Mermaid Security Level
+- **Location**: `packages/website/app/components/wiki/MermaidDiagram.tsx`
+- **Description**: Mermaid `securityLevel` set to `strict` to disable inline event handlers and script execution in diagrams
+
+### Content Security Policy Headers
+- **Location**: `packages/website/public/_headers`
+- **Description**: CSP headers configured with script-src, style-src, img-src, and connect-src directives to restrict resource loading
+
+### Security Headers
+- **Location**: `packages/website/public/_headers`
+- **Description**: X-Content-Type-Options, X-Frame-Options, Referrer-Policy, and Permissions-Policy headers added to all responses
+
+### Self-Hosted Fonts
+- **Location**: `packages/website/app/styles/global.css`
+- **Description**: Google Fonts replaced with locally hosted font files to eliminate third-party tracking and external resource dependencies
+
+### Download URL Domain Allowlist
+- **Location**: `packages/website/app/routes/home.tsx`
+- **Description**: GitHub release download URLs validated against an explicit domain allowlist before rendering as download links
+
+### GitHub API Response Validation
+- **Location**: `packages/website/app/routes/home.tsx`
+- **Description**: GitHub API responses validated for expected structure before extracting release data
+
+### Language Parameter Validation
+- **Location**: `packages/website/app/routes/wiki.tsx`
+- **Description**: Wiki language parameter validated against a known set of supported locales; invalid values fall back to English
+
+### Slug Parameter Sanitization
+- **Location**: `packages/website/app/routes/wiki.tsx`
+- **Description**: Wiki slug parameter sanitized before rendering in error messages to prevent reflected content injection
+
+### Error Boundary for Wiki Rendering
+- **Location**: `packages/website/app/routes/wiki.tsx`
+- **Description**: React error boundary wraps wiki and diagram rendering to catch runtime errors and prevent full-page crashes
+
+### Mermaid Module State Isolation
+- **Location**: `packages/website/app/components/wiki/MermaidDiagram.tsx`
+- **Description**: Module-level mutable state replaced with component-scoped state to prevent cross-render contamination
+
+### ARIA Accessibility Attributes
+- **Location**: `packages/website/app/components/Nav.tsx`, `packages/website/app/components/wiki/WikiSidebar.tsx`
+- **Description**: Navigation, sidebar, and interactive elements annotated with proper ARIA roles, labels, and landmarks
+
+### OG and Twitter Meta Tags
+- **Location**: `packages/website/app/root.tsx`
+- **Description**: Open Graph and Twitter Card meta tags added for proper link preview rendering in social media and chat apps
+
+### Sidebar Focus Management
+- **Location**: `packages/website/app/components/wiki/WikiSidebar.tsx`
+- **Description**: Sidebar focus trap and Escape key handler added for keyboard-accessible navigation
+
+### Rel Attributes on Download Links
+- **Location**: `packages/website/app/routes/home.tsx`
+- **Description**: External download links include `rel="noopener noreferrer"` to prevent window.opener access
+
+### HTML Lang Attribute
+- **Location**: `packages/website/app/root.tsx`
+- **Description**: HTML `lang` attribute set dynamically based on resolved locale instead of hardcoded "en"
+
 ## Build and Deployment
 
 ### React Router Configuration

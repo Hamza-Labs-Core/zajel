@@ -150,6 +150,28 @@
 - **Location**: `packages/app/lib/features/groups/services/webrtc_p2p_adapter.dart:L1-122`
 - **Description**: Concrete P2PConnectionAdapter implementation bridging group layer to ConnectionManager/WebRTCService with base64 encoding
 
+## Security Hardening
+
+### Group Invitation Verification
+- **Location**: `packages/app/lib/features/groups/services/group_invitation_service.dart`
+- **Description**: Incoming group invitations are verified for valid structure and known sender before acceptance; malformed or unsolicited invitations are rejected
+
+### Sequence Validation + Duplicate Detection
+- **Location**: `packages/app/lib/features/groups/services/group_sync_service.dart`
+- **Description**: Group message sequence numbers are validated per-device; duplicates detected via vector clock comparison and rejected before storage
+
+### Sender Key Zeroization
+- **Location**: `packages/app/lib/features/groups/services/group_crypto_service.dart`
+- **Description**: Sender keys are securely zeroized from the in-memory cache and secure storage when a member leaves or is removed from a group
+
+### Bounded Message Storage
+- **Location**: `packages/app/lib/features/groups/services/group_storage_service.dart`
+- **Description**: Maximum 5000 messages stored per group; oldest messages are evicted first when the limit is reached
+
+### JSON Schema Validation
+- **Location**: `packages/app/lib/features/groups/services/group_invitation_service.dart`, `packages/app/lib/features/groups/services/group_service.dart`
+- **Description**: Group metadata, invitation payloads, and message envelopes validated against expected JSON schemas before deserialization
+
 ## Providers
 
 ### Group Providers

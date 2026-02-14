@@ -300,6 +300,102 @@
 - **Location**: `packages/server/wrangler.jsonc:L24-42`
 - **Description**: Versioned migrations (v1: SignalingRoom, v2: RelayRegistryDO, v3: ServerRegistryDO, v4: AttestationRegistryDO)
 
+## Security Hardening (CF Worker)
+
+### CORS Origin Allowlist
+- **Location**: `packages/server/src/index.js`
+- **Description**: Replaced wildcard CORS (`*`) with an explicit origin allowlist; only configured domains receive CORS headers
+
+### Rate Limiting
+- **Location**: `packages/server/src/index.js`
+- **Description**: Per-IP rate limiting on all HTTP and WebSocket endpoints to prevent abuse and denial-of-service
+
+### Authentication on Server Registration
+- **Location**: `packages/server/src/durable-objects/server-registry-do.js`
+- **Description**: Server registration and deletion require HMAC-authenticated requests; unauthenticated mutations are rejected
+
+### Security Headers
+- **Location**: `packages/server/src/index.js`
+- **Description**: All responses include X-Content-Type-Options, X-Frame-Options, and Strict-Transport-Security headers
+
+### Generic Error Responses
+- **Location**: `packages/server/src/durable-objects/attestation-registry-do.js`, `packages/server/src/durable-objects/server-registry-do.js`
+- **Description**: Internal error details are no longer leaked to clients; errors return generic messages with correlation IDs
+
+### Audit Logging
+- **Location**: `packages/server/src/durable-objects/attestation-registry-do.js`, `packages/server/src/durable-objects/server-registry-do.js`
+- **Description**: Security-relevant operations (registration, attestation, challenge, deletion) are logged for audit trails
+
+### Input Validation (URLs, IDs, Semver, Hex)
+- **Location**: `packages/server/src/durable-objects/server-registry-do.js`, `packages/server/src/durable-objects/attestation-registry-do.js`, `packages/server/src/crypto/attestation.js`
+- **Description**: Strict validation for endpoint URLs, server IDs, semver version strings, and hex-encoded cryptographic values
+
+### Timing-Safe Comparisons
+- **Location**: `packages/server/src/crypto/attestation.js`
+- **Description**: HMAC verification and secret comparison use constant-time algorithms to prevent timing side-channel attacks
+
+### Base64url Session Tokens
+- **Location**: `packages/server/src/crypto/attestation.js`
+- **Description**: Session tokens encoded with URL-safe base64 (base64url) instead of standard base64
+
+### Storage Bounds
+- **Location**: `packages/server/src/durable-objects/attestation-registry-do.js`, `packages/server/src/durable-objects/server-registry-do.js`
+- **Description**: Bounded nonce, device, and server storage with maximum entry limits and eviction policies to prevent unbounded growth
+
+### Token Validity Window
+- **Location**: `packages/server/src/durable-objects/attestation-registry-do.js`
+- **Description**: Reduced build token validity window from 1 year to a shorter period; enforced on registration
+
+### Separate Signing Keys
+- **Location**: `packages/server/src/crypto/attestation.js`, `packages/server/src/crypto/signing.js`
+- **Description**: Build tokens and session tokens use distinct cryptographic signing keys for isolation
+
+### HTTP Body Size Limits
+- **Location**: `packages/server/src/index.js`
+- **Description**: Enforced maximum request body size on all HTTP endpoints to prevent memory exhaustion
+
+### Storage Key Sanitization
+- **Location**: `packages/server/src/durable-objects/server-registry-do.js`, `packages/server/src/durable-objects/attestation-registry-do.js`
+- **Description**: Server IDs and device IDs sanitized before use as Durable Object storage keys to prevent injection
+
+### Path Traversal Prevention
+- **Location**: `packages/server/src/index.js`
+- **Description**: Server ID extraction from URL paths validated to prevent path traversal attacks
+
+## Security Hardening (VPS)
+
+### WebSocket Connection Limits
+- **Location**: `packages/server-vps/src/index.ts`
+- **Description**: Maximum concurrent WebSocket connections enforced per server to prevent resource exhaustion
+
+### PeerId Format Validation
+- **Location**: `packages/server-vps/src/client/handler.ts`
+- **Description**: PeerId validated for format and length on registration to reject malformed identifiers
+
+### Peer Takeover Prevention
+- **Location**: `packages/server-vps/src/client/handler.ts`
+- **Description**: Re-registration with a PeerId that already has an active WebSocket connection is rejected
+
+### Cryptographically Secure Random
+- **Location**: `packages/server-vps/src/client/handler.ts`
+- **Description**: Replaced `Math.random()` with `crypto.randomBytes()` for all security-sensitive operations
+
+### Stats Endpoint Authentication
+- **Location**: `packages/server-vps/src/index.ts`
+- **Description**: Statistics endpoint requires an authentication token to prevent information disclosure
+
+### Bounded Rendezvous Registrations
+- **Location**: `packages/server-vps/src/registry/rendezvous-registry.ts`
+- **Description**: Maximum registrations per peer enforced on rendezvous and hourly token endpoints
+
+### Bounded Chunk Announce Arrays
+- **Location**: `packages/server-vps/src/client/chunk-relay.ts`
+- **Description**: Chunk announce messages limited in array size to prevent memory exhaustion from oversized payloads
+
+### MaxConnections Validation
+- **Location**: `packages/server-vps/src/registry/relay-registry.ts`
+- **Description**: Relay peer maxConnections field validated to be a positive integer within a reasonable range
+
 ## Testing
 
 ### WebSocket Handler Tests

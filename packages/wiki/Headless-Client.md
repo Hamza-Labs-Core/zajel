@@ -406,3 +406,108 @@ The headless client relies on:
 - `aiosqlite` -- Async SQLite for peer storage
 
 All dependencies are MIT/BSD/Apache-2.0 licensed (no GPL/AGPL).
+
+---
+
+## Security Hardening
+
+The headless client has been hardened across several areas: daemon socket security, file transfer safety, cryptographic improvements, and operational robustness.
+
+### Daemon Socket Security
+
+#### UNIX Socket Permissions
+
+The daemon creates its UNIX domain socket with file permissions **`0o600`** (owner read/write only). Additionally, on Linux, the daemon verifies the connecting process UID via `SO_PEERCRED` to ensure only the same user can issue commands. This prevents other users on a shared system from controlling the daemon.
+
+#### Socket Path Symlink Prevention
+
+Before creating the UNIX socket, the daemon checks for existing symlinks at the socket path. If the path is a symlink, the daemon refuses to bind, preventing symlink-based attacks that could redirect the socket to an attacker-controlled location. See also the [Connection Lifecycle](Connection-Lifecycle.md) page for related socket path security.
+
+#### Message Size Limits
+
+The daemon socket enforces a **1 MB maximum message size** for incoming JSON-line requests. Messages exceeding this limit are rejected before parsing. This prevents a malicious local process from exhausting daemon memory with oversized payloads.
+
+#### Error Response Sanitization
+
+Error responses from the daemon redact internal exception details. Clients receive a generic error code and message rather than full stack traces or internal variable values. This limits information leakage even on the local socket.
+
+### File Transfer Security
+
+#### Path Traversal Prevention
+
+Received file names are sanitized to prevent directory traversal attacks. Path components like `..`, absolute paths, and special characters are stripped. Files are always written into a designated download directory, never to arbitrary filesystem locations.
+
+#### File Size Limits
+
+Incoming file transfers are limited to **100 MB**. The receiving side checks the declared file size in the `file_start` message and rejects transfers exceeding the limit before any data is received. This prevents denial-of-service through disk exhaustion.
+
+#### Hash Verification
+
+File transfers include a SHA-256 hash in the `file_complete` message. The receiver computes the hash of the received data and compares it to the declared hash. If they differ, the file is rejected. This detects both corruption and tampering during transfer.
+
+#### Send Path Validation
+
+The `send_file` command validates that the provided path is within an allowed directory subtree. Paths that attempt to traverse outside the allowed area (e.g., via `..` components or symlinks to sensitive directories) are rejected before the file is read.
+
+### Cryptographic Improvements
+
+#### Cryptographic PRNG for Pairing Codes
+
+Pairing codes are generated using `secrets.choice()` (a CSPRNG) instead of `random.choice()`. This ensures the 6-character codes are cryptographically unpredictable. The `random` module uses a Mersenne Twister PRNG whose output can be predicted after observing a relatively small number of values.
+
+#### HKDF with Both Public Keys
+
+The HKDF key derivation step now includes both parties' public keys in the salt parameter. The salt is computed as `SHA-256(sorted(alice_pubkey || bob_pubkey))`, ensuring the derived session key is bound to both identities. This prevents an attacker from substituting their own key during the exchange.
+
+#### Peer Identity Binding
+
+During the WebRTC handshake, the peer's public key received over the data channel is compared to the public key received during signaling. If they do not match, the connection is rejected. This binds the peer's cryptographic identity to the WebRTC transport and prevents man-in-the-middle substitution.
+
+#### Session Key Encryption at Rest
+
+Session keys stored in the peer storage database are encrypted with ChaCha20-Poly1305 using a device-local master key before being written to SQLite. This ensures that if the database file is exfiltrated, session keys are not directly usable. See also the [Data Storage](Data-Storage.md) page.
+
+#### Nonce-Based Replay Protection
+
+Each encrypted message includes a monotonically increasing nonce. The receiver tracks the highest nonce seen per peer and rejects messages with a nonce that has already been processed. This prevents replay attacks where an attacker re-sends captured ciphertext.
+
+#### Sender Key Zeroization
+
+When a member leaves a group, their sender key is overwritten with zeros in memory before being discarded. This limits the window during which a departed member's key persists in the process address space.
+
+### Operational Robustness
+
+#### Message Content Redaction in Logs
+
+Message content is redacted from all log output at every log level. Logs record message metadata (peer ID, timestamp, message type, size) but never the plaintext content. This prevents sensitive user data from appearing in log files.
+
+#### WebSocket Reconnection
+
+The signaling WebSocket connection implements automatic reconnection with **exponential backoff**. On disconnection, the client waits an increasing delay (starting at 1 second, doubling up to a maximum of 60 seconds) before reconnecting. Jitter is added to prevent thundering herd effects when many clients reconnect simultaneously.
+
+#### Bounded In-Memory Storage
+
+In-memory storage for channels and groups is bounded:
+
+| Store | Maximum entries | Eviction policy |
+|-------|----------------|-----------------|
+| Channel chunks | 1,000 per channel | Oldest-sequence-first eviction |
+| Group messages | 5,000 per group | Oldest-first eviction |
+
+This prevents unbounded memory growth for long-running daemon instances.
+
+#### Graceful Async Task Cancellation
+
+When the client disconnects, all pending async tasks (WebSocket listeners, heartbeat loops, file transfers) are cancelled and awaited. This prevents resource leaks and ensures the process shuts down cleanly without orphaned coroutines.
+
+#### Event-Driven File Transfer
+
+The file transfer receiver uses an event-driven architecture instead of busy-wait polling. Incoming chunks trigger an `asyncio.Event`, and the receiver awaits the event rather than spinning in a loop. This reduces CPU usage during file transfers.
+
+#### Signaling Message Validation
+
+Messages received from the signaling server are validated against expected schemas before processing. Unknown message types are logged and discarded. Malformed fields (missing required keys, wrong types) cause the message to be rejected without crashing the client.
+
+#### Reliable SCTP Delivery
+
+WebRTC data channels are configured with `ordered=True` and increased `maxRetransmits` to ensure reliable, in-order delivery of messages. This prevents message loss and reordering in degraded network conditions.

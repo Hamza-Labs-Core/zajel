@@ -176,6 +176,36 @@
 - **Location**: `packages/app/lib/core/protocol/message_protocol.dart:L89-134`
 - **Description**: Protocol encoding for file metadata and chunked data with indices
 
+## Security Hardening
+
+### HKDF with Both Public Keys
+- **Location**: `packages/app/lib/core/crypto/crypto_service.dart`
+- **Description**: HKDF key derivation includes both parties' public keys as info parameter, preventing key confusion attacks where a peer could manipulate the derived session key
+
+### Session Keys Encrypted at Rest
+- **Location**: `packages/app/lib/core/crypto/crypto_service.dart`
+- **Description**: Session keys stored in platform secure storage (Keychain/Keystore) rather than plaintext SQLite, protecting keys when device is at rest
+
+### Nonce-Based Replay Protection
+- **Location**: `packages/app/lib/core/crypto/crypto_service.dart`
+- **Description**: Encrypted messages include nonce tracking; previously seen nonces are rejected to detect and prevent replayed messages
+
+### Socket Permissions + Auth
+- **Location**: Headless client `packages/headless-client/zajel/daemon.py`
+- **Description**: UNIX daemon socket restricted with filesystem permissions (owner-only access) and commands require authentication tokens
+
+### File Path Traversal Prevention
+- **Location**: `packages/app/lib/core/storage/file_receive_service.dart`, headless client `packages/headless-client/zajel/file_transfer.py`
+- **Description**: Received file names sanitized to remove path separators, `..` sequences, and absolute path prefixes, preventing directory traversal attacks
+
+### WebSocket Reconnection with Backoff
+- **Location**: `packages/app/lib/core/network/signaling_client.dart`
+- **Description**: WebSocket reconnection uses exponential backoff with jitter instead of immediate retry, preventing reconnection storms
+
+### Reliable SCTP Delivery
+- **Location**: `packages/app/lib/core/network/webrtc_service.dart`
+- **Description**: WebRTC data channels configured for reliable ordered delivery (SCTP) where message loss is unacceptable, preventing silent data loss
+
 ## Storage
 
 ### SQLite Message Storage

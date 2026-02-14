@@ -252,3 +252,59 @@ When sending a group message:
 ### Storage
 
 Messages are stored in SQLite with a composite key of `(group_id, author_device_id, sequence_number)` for deduplication. Vector clocks are persisted per group. Sender keys are stored in FlutterSecureStorage with `group_{groupId}_device_{deviceId}` namespacing.
+
+---
+
+## Security Hardening
+
+### Invitation Verification
+
+Group invitations are no longer auto-accepted without verification. The invitation flow now includes:
+
+1. **Sender verification**: The invitation must arrive over an established 1:1 encrypted channel with a known, paired peer. Invitations from unknown peers are rejected.
+2. **Payload validation**: The invitation JSON payload is validated against a strict schema (required fields: `groupId`, `name`, `members`, `senderKeys`). Malformed invitations are rejected with a descriptive error.
+3. **Member cross-check**: The inviting peer's device ID must appear in the `members` list. An invitation from a peer who is not listed as a member is rejected.
+
+This prevents an attacker who compromises a single 1:1 channel from injecting the victim into a malicious group.
+
+### Message Sequence Validation and Duplicate Detection
+
+Group message processing includes sequence validation to prevent replay and injection attacks:
+
+1. **Per-device sequence tracking**: Each group maintains the expected next sequence number for every member device. Messages with a sequence number that does not match the expected value trigger a gap-fill or rejection.
+2. **O(1) duplicate detection**: A hash set of `(authorDeviceId, sequenceNumber)` pairs is maintained per group. Duplicate messages are detected in constant time and silently dropped. This replaces any linear-scan approaches.
+3. **Sequence gap handling**: When a gap is detected, the receiver requests the missing messages from connected group members via vector clock comparison. Messages are buffered until gaps are filled, preserving causal order.
+
+### Sender Key Zeroization on Leave
+
+When a member leaves or is removed from a group:
+
+1. The departed member's sender key is **overwritten with zeros** in memory before being dereferenced
+2. The key is deleted from secure storage (FlutterSecureStorage or the headless client's key store)
+3. All remaining members generate and distribute new sender keys
+4. The old sender key material is not retained in any cache or log
+
+This limits the window during which a departed member's key material persists in process memory. Combined with key rotation (already described in the Key Rotation section above), this ensures forward secrecy for conversations after a member departs.
+
+### JSON Schema Validation for Group Messages
+
+All group messages (including invitations, sender key distributions, and chat messages) are validated against a strict JSON schema before processing:
+
+| Message type | Required fields | Validation rules |
+|-------------|----------------|-----------------|
+| `GROUP_INVITE:` | groupId, name, members, senderKeys | groupId must be UUID, members must be non-empty array, senderKeys must be object with base64 values |
+| `grp:` (chat) | id, groupId, authorDeviceId, sequenceNumber, content | sequenceNumber must be positive integer, content must be string |
+| Sender key distribution | groupId, deviceId, senderKey | senderKey must be 32-byte base64-encoded value |
+
+Messages that fail schema validation are rejected and logged (without content) for debugging.
+
+### Bounded Message Storage
+
+In-memory and persistent group message storage is bounded to **5,000 messages per group**. When the limit is reached, the oldest messages (by timestamp) are evicted:
+
+| Storage layer | Bound | Eviction policy |
+|--------------|-------|-----------------|
+| In-memory (headless client) | 5,000 per group | Oldest-first |
+| SQLite (Flutter app) | Configurable | Oldest-first with vacuum |
+
+This prevents unbounded storage growth for active groups with high message volume. The eviction threshold is intentionally generous to retain sufficient history for vector clock sync and gap-fill operations.

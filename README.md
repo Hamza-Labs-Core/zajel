@@ -218,16 +218,25 @@ npm test
 
 ## Security
 
+Zajel has undergone a **comprehensive 94-issue security audit** covering all packages (app, servers, headless client, and website). Key security properties:
+
 - **End-to-End Encryption**: All 1:1 messages encrypted with ChaCha20-Poly1305 AEAD
-- **Key Exchange**: X25519 elliptic curve Diffie-Hellman with ephemeral session keys
-- **Forward Secrecy**: Session keys derived via HKDF; new keys per session
+- **Key Exchange**: X25519 elliptic curve Diffie-Hellman with peer-bound HKDF key derivation (public keys in salt prevent MITM key substitution)
+- **Replay Protection**: Monotonic sequence numbers with sliding window validation on 1:1, group, and channel messages
+- **Forward Secrecy**: Session keys derived via HKDF; new keys per session; sender key zeroization on group leave
+- **Secure Key Storage**: Session keys encrypted at rest with ChaCha20-Poly1305 before persisting to platform secure storage
 - **Zero-Knowledge Server**: Signaling servers route WebRTC setup only, never see message content
-- **Channel Encryption**: Ed25519 signing (ownership and admin) + X25519 + ChaCha20-Poly1305 (content encryption) with epoch-based key rotation
-- **Group Encryption**: Sender key distribution with ChaCha20-Poly1305 AEAD per member
+- **Channel Encryption**: Ed25519 signing (ownership and admin) + X25519 + ChaCha20-Poly1305 (content encryption) with epoch-based key rotation; invite links never expose private signing keys
+- **Group Encryption**: Sender key distribution with ChaCha20-Poly1305 AEAD per member; sequence validation and duplicate detection per sender
+- **File Transfer Integrity**: SHA-256 hash verification on received files; path traversal protection; size validation
 - **Fingerprint Verification**: SHA-256 fingerprints of X25519 public keys for out-of-band MITM detection
+- **Rate Limiting & Input Validation**: Per-client rate limits, message size limits, schema validation, and bounded storage across all server endpoints
+- **Server Hardening**: Strict CORS policies, authenticated server registration (Ed25519), constant-time secret comparisons, Content Security Policy, security headers, sanitized error responses
 - **App Attestation**: Build token registration, dynamic binary attestation (HMAC-SHA256 challenge-response), server identity verification, anti-tamper checks (debugger, root/jailbreak, emulator detection)
 - **Version Management**: Minimum/recommended/blocked version enforcement with force-update and update-prompt dialogs
-- **Certificate Pinning**: Platform-specific certificate pinning for Android and iOS
+- **Certificate Pinning**: Platform-specific certificate pinning for Android, iOS, and desktop
+
+For full details, see [SECURITY.md](SECURITY.md) and the [Security Architecture](https://github.com/Hamza-Labs-Core/zajel/wiki/Security-Architecture) wiki page.
 
 ## How It Works
 
@@ -341,6 +350,8 @@ npm run deploy
 ## Documentation
 
 - **[Feature Inventory](docs/features/FEATURES.md)** -- Comprehensive list of all features by package
+- **[Security Architecture](https://github.com/Hamza-Labs-Core/zajel/wiki/Security-Architecture)** -- Encryption layers, threat model, and cryptographic design
+- **[Security Policy](SECURITY.md)** -- Security model, vulnerability reporting, and audit status
 - **[VoIP Architecture](docs/voip/)** -- Protocol, server, web, and Flutter VoIP documentation
 - **[Implementation Plans](docs/plans/)** -- Historical plans (01-09) for server relay, rendezvous, channels, groups, attestation, and more
 - **[CI Limitations](docs/testing/CI_LIMITATIONS.md)** -- Known CI/testing constraints

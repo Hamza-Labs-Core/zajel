@@ -56,17 +56,17 @@ graph TB
 | Data | Storage | Encryption |
 |------|---------|-----------|
 | X25519 identity private key | FlutterSecureStorage (Keychain/Keystore) | Platform-encrypted |
-| Session keys per peer | FlutterSecureStorage | Platform-encrypted |
+| Session keys per peer | FlutterSecureStorage | Platform-encrypted + ChaCha20-Poly1305 wrapping |
 | Trusted peer public keys | FlutterSecureStorage | Platform-encrypted |
 | Channel signing private keys | FlutterSecureStorage | Platform-encrypted |
 | Channel encryption private keys | FlutterSecureStorage | Platform-encrypted |
-| Group sender keys | FlutterSecureStorage | Platform-encrypted |
+| Group sender keys | FlutterSecureStorage | Platform-encrypted; zeroized from memory on leave |
 | Message history | SQLite database | Not encrypted at rest (device-level protection) |
 | Channel chunks | SQLite database | Payload is ChaCha20-Poly1305 encrypted |
 | Group messages | SQLite database | Stored encrypted with sender keys |
 | Display name, aliases | SharedPreferences | Not encrypted (non-sensitive) |
 | Media/notification settings | SharedPreferences | Not encrypted (non-sensitive) |
-| Log files | File system | Rotated daily, 7-day retention, 5MB limit |
+| Log files | File system | Rotated daily, 7-day retention, 5MB limit; message content redacted |
 
 ### Stored on Signaling Server (Ephemeral)
 
@@ -82,6 +82,19 @@ graph TB
 | Attestation sessions | 1 hour | Device verification tokens |
 
 **No persistent user database exists on the server.** All server state is ephemeral and tied to connection lifetime or short TTLs.
+
+### Server-Side Resource Bounds
+
+All server-side storage is bounded to prevent accumulation of metadata:
+
+| Resource | Limit | Eviction |
+|----------|-------|----------|
+| Nonce storage (CF Worker) | Bounded entries | TTL-based expiry |
+| Device registrations (CF Worker) | Bounded entries | TTL-based expiry |
+| Server registrations (CF Worker) | Bounded entries | Stale batch cleanup |
+| Chunk cache (VPS) | 1,000 per channel | LRU eviction |
+| Rendezvous registrations (VPS) | Bounded per meeting point | TTL-based expiry |
+| WebSocket connections (VPS) | 10,000 total, 50 per IP | Connection rejected at limit |
 
 ---
 
@@ -146,6 +159,85 @@ Group messages are relayed over existing 1:1 encrypted channels:
 - The server never sees group membership or group identifiers
 - Group messages are encrypted with sender keys before transmission
 - Key rotation on member departure ensures forward secrecy
+- Sender keys are explicitly zeroized from memory when a member leaves, reducing the window for key extraction from memory dumps
+- Group message storage is bounded at 5,000 messages per group, limiting the volume of metadata that accumulates locally
+
+---
+
+## Daemon and Local IPC Security
+
+The headless client communicates with local CLI tools over a UNIX domain socket. This channel is hardened to prevent local privilege escalation and unauthorized access:
+
+- **Socket permissions**: The socket file is created with mode `0o600` (owner read/write only)
+- **UID verification**: On Linux, `SO_PEERCRED` verifies that the connecting process runs as the same user as the daemon
+- **Message size limits**: Incoming messages on the daemon socket are bounded to prevent memory exhaustion
+- **Tiered error handling**: Socket errors are classified and handled at appropriate severity levels; internal errors are never leaked to the caller
+- **Path sanitization**: The socket path is validated to prevent symlink attacks
+
+---
+
+## Server Access Controls
+
+### CORS Policy
+
+The CF Worker uses an explicit origin allowlist instead of wildcard `*` CORS headers. Only approved web client origins can make cross-origin requests to the server API. CORS headers are consistently applied across all response paths, including Durable Object responses and error responses.
+
+### Authentication
+
+| Operation | Authentication Required |
+|-----------|----------------------|
+| Server registration | Bearer token (tied to build attestation) |
+| Server deletion | Bearer token + ownership verification (only the registrant can delete) |
+| Stats/metrics endpoint | Bearer token |
+| Attestation verification | Rate-limited, generic error responses |
+
+### Rate Limiting
+
+The CF Worker enforces rate limits of 100 requests per minute per IP address. This prevents brute-force attacks against attestation endpoints and denial-of-service against registration APIs.
+
+---
+
+## Error and Log Privacy
+
+Error messages and log output are sanitized to prevent information leakage:
+
+| Control | Description |
+|---------|-------------|
+| Generic error responses | HTTP error responses contain generic messages; internal error details, stack traces, and file paths are never returned to clients |
+| Log content redaction | Plaintext message content is never logged at any log level (DEBUG, INFO, WARN, ERROR) |
+| Attestation error sanitization | Failed verification attempts return a generic "verification failed" response; detailed reasons are logged server-side only |
+| Structured audit logging | Security-relevant events (registrations, deletions, auth failures) are logged in a structured format in Durable Objects for post-incident analysis |
+| Wiki error sanitization | User-supplied parameters (e.g., wiki slugs) are sanitized before being included in error pages to prevent reflected injection |
+
+---
+
+## Website Privacy
+
+The public website is hardened to minimize tracking exposure and prevent client-side attacks:
+
+| Control | Privacy Benefit |
+|---------|----------------|
+| Self-hosted fonts | Fonts are served from the application origin; no requests to Google Fonts CDN, eliminating third-party tracking via font loading |
+| Content Security Policy | CSP headers restrict which origins can serve scripts, styles, and frames, preventing injection of third-party tracking code |
+| Security headers | `X-Frame-Options: DENY` prevents clickjacking; `X-Content-Type-Options: nosniff` prevents MIME type sniffing; `Cache-Control: no-store` on sensitive responses prevents caching of user data |
+| HSTS | `Strict-Transport-Security` with `includeSubDomains` ensures all communication uses TLS |
+| Download URL allowlist | Download links are restricted to approved domains, preventing redirection to malicious or tracking-enabled hosts |
+| DOMPurify SVG sanitization | All Mermaid-generated SVG is sanitized through DOMPurify before DOM insertion, preventing stored XSS through diagram content |
+| No external dependencies at runtime | The website does not load scripts, fonts, or analytics from external CDNs after the initial build |
+
+---
+
+## Network Privacy Hardening
+
+| Measure | Description |
+|---------|-------------|
+| WebSocket URL scheme validation | Only `wss://` connections are accepted in production, preventing accidental plaintext signaling |
+| Exponential backoff with jitter | Reconnection attempts use exponential backoff (1s to 60s) with jitter, preventing thundering herd patterns that could be used for traffic analysis |
+| Peer identity binding | PeerIds are server-assigned and bound to the WebRTC connection, preventing identity spoofing |
+| PeerId takeover prevention | A new connection cannot claim an existing PeerId while the original connection is active |
+| ICE server validation | ICE server URLs are validated before use, preventing redirection to malicious TURN/STUN servers |
+| File transfer integrity | SHA-256 hashes are computed for all file transfers; the recipient verifies the hash before accepting the file |
+| Private IP rejection | Server endpoint URLs are validated to reject private IP ranges, preventing SSRF-style attacks |
 
 ---
 

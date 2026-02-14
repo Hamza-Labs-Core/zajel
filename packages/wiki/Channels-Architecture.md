@@ -247,3 +247,40 @@ On mobile platforms, channels sync in the background:
 - **iOS**: BGAppRefresh
 
 Background sync checks all subscribed channels and downloads new chunks even when the app is not in the foreground.
+
+---
+
+## Security Hardening
+
+### Invite Link Security
+
+Channel invite links no longer embed the channel's private encryption key directly. Previously, the invite link contained the full X25519 private key, which meant that anyone who obtained the link gained permanent decryption capability even after the link was revoked.
+
+The updated invite link format:
+
+1. Contains only the channel manifest (public keys, name, description) and a **derived decryption key** sufficient for subscribing
+2. Uses a strict `zajel://channel/` prefix requirement. Links with any other prefix or scheme are rejected during parsing
+3. The decryption key included in the link is derived from the channel's encryption keypair using HKDF, not the raw private key itself
+
+This ensures that revoking a subscriber's access (via key epoch rotation) is effective -- the subscriber cannot derive future content keys from the invite link alone.
+
+### Chunk Sequence Validation and Replay Detection
+
+Subscribers validate chunk sequence numbers to detect replayed or out-of-order content:
+
+1. **Monotonic sequence enforcement**: For each channel, the subscriber tracks the highest sequence number seen. Chunks with a sequence number equal to or lower than a previously processed sequence are flagged as potential replays.
+2. **Duplicate detection**: A set of recently seen `(channelId, sequence, chunkIndex)` tuples is maintained. Exact duplicates are silently dropped.
+3. **Gap detection**: If a gap in sequence numbers is detected (e.g., sequence 5 arrives after sequence 3 with no sequence 4), the subscriber requests the missing chunks from the relay. Gaps are not silently ignored.
+
+This prevents an attacker who has captured valid signed chunks from replaying old content to subscribers as if it were new.
+
+### Bounded Chunk Storage
+
+Local chunk storage is bounded to **1,000 chunks per channel**. When the limit is reached, the oldest chunks (by sequence number) are evicted to make room for new ones. This applies to both the client-side storage and the server-side chunk index cache.
+
+| Bound | Scope | Eviction policy |
+|-------|-------|-----------------|
+| 1,000 chunks | Per channel (client) | Oldest-sequence-first |
+| 1,000 entries | Server chunk cache | LRU with 30-minute TTL |
+
+This prevents unbounded disk or memory growth for channels with high publishing volume or long subscription periods.

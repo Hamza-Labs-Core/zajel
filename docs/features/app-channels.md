@@ -112,6 +112,24 @@
 - **Location**: `packages/app/lib/features/channels/services/channel_crypto_service.dart:L321-365`
 - **Description**: Verify chunk authenticity (signature, authorization, manifest validity, trusted owner, decryptability)
 
+## Security Hardening
+
+### Invite Link Safety
+- **Location**: `packages/app/lib/features/channels/services/channel_link_service.dart`
+- **Description**: Invite links no longer embed private keys; only the public manifest and decryption key are encoded in the `zajel://channel/` URI
+
+### Strict Prefix Validation
+- **Location**: `packages/app/lib/features/channels/services/channel_link_service.dart`
+- **Description**: Channel link decoding rejects payloads that do not match the expected `zajel://channel/` prefix exactly; arbitrary prefixes are no longer accepted
+
+### Chunk Sequence Validation
+- **Location**: `packages/app/lib/features/channels/services/channel_service.dart`
+- **Description**: Chunk sequence numbers and chunk indices are validated on receipt to detect out-of-order, missing, or replayed chunks
+
+### Bounded Chunk Storage
+- **Location**: `packages/app/lib/features/channels/services/channel_storage_service.dart`
+- **Description**: Maximum 1000 chunks stored per channel; oldest chunks are evicted first when the limit is reached
+
 ## Storage & Persistence
 
 ### Storage Service

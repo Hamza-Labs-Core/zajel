@@ -241,3 +241,78 @@ The logging service writes daily rotating log files:
 | Export | Via share sheet or directory export |
 | Real-time | Stream controller for live monitoring |
 | Levels | debug, info, warning, error |
+
+---
+
+## Security Hardening
+
+### Session Key Encryption at Rest
+
+Session keys stored in the peer storage database (SQLite) are now encrypted before being written:
+
+1. A **device-local master key** is generated on first launch and stored in platform secure storage (iOS Keychain, Android Keystore, etc.)
+2. Each session key is encrypted with **ChaCha20-Poly1305** using the master key before being written to the `zajel_session_{peerId}` field in SQLite
+3. On read, the session key is decrypted in memory and used for message encryption/decryption
+4. The master key never leaves secure storage and is never written to SQLite or logs
+
+This provides defense-in-depth: even if the SQLite database file is exfiltrated (e.g., via a backup or filesystem access), the session keys are not directly usable without the platform-specific master key.
+
+| Component | Storage | Encryption |
+|-----------|---------|------------|
+| Master key | Platform secure storage | Platform keychain/keystore |
+| Session keys | SQLite (encrypted) | ChaCha20-Poly1305 with master key |
+| Identity private key | Platform secure storage | Platform keychain/keystore |
+| Sender keys | Platform secure storage | Platform keychain/keystore |
+
+### Bounded Storage with Eviction
+
+Storage for chunks and messages is bounded to prevent unbounded disk growth:
+
+#### Channel Chunks
+
+| Property | Value |
+|----------|-------|
+| Maximum chunks per channel | 1,000 |
+| Eviction policy | Oldest-sequence-first |
+| Trigger | On insert when count exceeds limit |
+
+When a new chunk is stored and the per-channel count exceeds 1,000, the chunks with the lowest sequence numbers are deleted. This keeps the most recent content available while bounding storage.
+
+#### Group Messages
+
+| Property | Value |
+|----------|-------|
+| Maximum messages per group | 5,000 |
+| Eviction policy | Oldest-timestamp-first |
+| Trigger | On insert when count exceeds limit |
+
+When a new group message is stored and the per-group count exceeds 5,000, the oldest messages (by timestamp) are deleted. The eviction threshold is set high enough to retain sufficient history for vector clock synchronization and gap-fill operations.
+
+#### Eviction Implementation
+
+Eviction is performed within the same database transaction as the insert to prevent race conditions:
+
+```sql
+-- Example: chunk eviction within a transaction
+BEGIN;
+INSERT INTO chunks (...) VALUES (...);
+DELETE FROM chunks
+  WHERE channelId = ?
+  AND id NOT IN (
+    SELECT id FROM chunks
+    WHERE channelId = ?
+    ORDER BY sequence DESC
+    LIMIT 1000
+  );
+COMMIT;
+```
+
+### Stale Server Batch Cleanup
+
+The server registry cleanup process (removing servers that have not sent a heartbeat within the TTL window) now uses **batch deletion** instead of sequential per-server deletion:
+
+1. All expired server IDs are collected in a single query
+2. Expired entries are deleted in a single batch operation
+3. This reduces the number of storage operations from O(N) to O(1) for N expired servers
+
+Previously, each expired server was deleted with a separate `await storage.delete(id)` call, which was both slow and prone to partial failures. The batch approach is atomic and significantly faster for large numbers of stale entries.

@@ -496,3 +496,71 @@ A comprehensive overview of all features organized by package and area.
 - **React Router Configuration** -- SPA mode for static Cloudflare Pages deployment
 - **Vite Build Configuration** -- Vite with React Router plugin and path alias
 - **Cloudflare Pages Deployment** -- Static asset deployment with production and QA environments
+
+---
+
+## Security Hardening
+
+94 security issues were identified and resolved across 3 severity waves (CRITICAL/HIGH, MEDIUM, LOW), spanning all packages. The fixes cover input validation, authentication, rate limiting, bounded resources, encryption improvements, key management, and replay protection.
+
+### Server (CF Worker)
+
+- **CORS Origin Allowlist** -- Replaced wildcard CORS (`*`) with an explicit origin allowlist
+- **Rate Limiting** -- Added per-IP rate limiting on all HTTP and WebSocket endpoints
+- **Authentication on Registration** -- Server registration and deletion require HMAC-authenticated requests
+- **Security Headers** -- Added X-Content-Type-Options, X-Frame-Options, and Strict-Transport-Security headers
+- **Generic Error Responses** -- Internal error details are no longer leaked to clients
+- **Audit Logging** -- Security-relevant operations (registration, attestation, deletion) are logged
+- **Input Validation** -- Strict validation for URLs, IDs, semver strings, and hex-encoded values
+- **Timing-Safe Comparisons** -- Replaced naive equality checks with constant-time comparison for secrets and HMACs
+- **Base64url Tokens** -- Session tokens use URL-safe base64 encoding
+- **Storage Bounds** -- Bounded nonce, device, and server storage with eviction policies
+- **Token Validity** -- Reduced build token validity window; separate signing keys for build and session tokens
+- **Separate Signing Keys** -- Build tokens and session tokens use distinct cryptographic keys
+
+### Server (VPS)
+
+- **Connection Limits** -- Maximum concurrent WebSocket connections enforced per server
+- **PeerId Validation** -- PeerId format and length validated on registration
+- **Takeover Prevention** -- Peer re-registration blocked when an active connection already holds the same PeerId
+- **Secure Random** -- Replaced `Math.random()` with cryptographically secure alternatives for security operations
+- **Stats Endpoint Auth** -- Statistics endpoint requires authentication
+- **Resource Limits** -- Bounded rendezvous registrations and chunk announce arrays per peer
+
+### Website
+
+- **DOMPurify SVG Sanitization** -- Mermaid diagram SVG output sanitized with DOMPurify before DOM insertion
+- **Content Security Policy** -- CSP headers configured via `_headers` file with script/style/image source restrictions
+- **Security Headers** -- X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy headers added
+- **Self-Hosted Fonts** -- Google Fonts replaced with locally hosted font files (eliminates third-party tracking)
+- **Download URL Allowlist** -- GitHub release download URLs validated against an explicit domain allowlist
+- **Language Validation** -- Wiki language parameter validated against a known set of supported locales
+- **ARIA Accessibility** -- Navigation, sidebar, and interactive elements have proper ARIA roles and labels
+- **OG Meta Tags** -- Open Graph and Twitter Card meta tags for link previews
+- **Error Boundaries** -- React error boundaries wrap wiki and diagram rendering to prevent full-page crashes
+- **Focus Management** -- Sidebar focus trap and Escape key handling for keyboard navigation
+
+### App — Channels
+
+- **Invite Link Safety** -- Invite links no longer embed private keys; only public manifest and decryption key are encoded
+- **Strict Prefix Validation** -- Channel link decoding rejects payloads that do not match the expected `zajel://channel/` prefix
+- **Chunk Sequence Validation** -- Chunk sequence numbers and indices are validated on receipt to detect out-of-order or replayed chunks
+- **Bounded Chunk Storage** -- Maximum 1000 chunks stored per channel with oldest-first eviction
+
+### App — Groups
+
+- **Group Invitation Verification** -- Incoming group invitations are verified (valid structure, known sender) before acceptance
+- **Sequence Validation + Duplicate Detection** -- Group message sequence numbers are validated; duplicates detected via vector clock comparison
+- **Sender Key Zeroization** -- Sender keys are securely zeroized from memory on group leave
+- **Bounded Message Storage** -- Maximum 5000 messages stored per group with oldest-first eviction
+- **JSON Schema Validation** -- Group and invitation payloads validated against JSON schemas before deserialization
+
+### App — Core Infrastructure
+
+- **HKDF with Both Public Keys** -- Key derivation uses both parties' public keys as HKDF info, preventing key confusion attacks
+- **Session Keys Encrypted at Rest** -- Session keys stored in secure storage (Keychain/Keystore) rather than plaintext SQLite
+- **Nonce-Based Replay Protection** -- Encrypted messages include nonce tracking to detect and reject replayed messages
+- **Socket Permissions + Auth** -- UNIX daemon socket restricted with filesystem permissions and authenticated commands
+- **File Path Traversal Prevention** -- Received file names sanitized to prevent directory traversal attacks
+- **Reconnection with Backoff** -- WebSocket reconnection uses exponential backoff with jitter
+- **Reliable SCTP Delivery** -- WebRTC data channels configured for reliable ordered delivery where message loss is unacceptable
