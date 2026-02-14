@@ -14,7 +14,10 @@ import { DistributedRendezvous, type PartialResult } from '../registry/distribut
 import type { DeadDropResult, LiveMatchResult } from '../registry/rendezvous-registry.js';
 import { logger } from '../utils/logger.js';
 
-import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING } from '../constants.js';
+import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING, ATTESTATION, RENDEZVOUS_LIMITS, CHUNK_LIMITS } from '../constants.js';
+import { ChunkRelay } from './chunk-relay.js';
+import type { Storage } from '../storage/interface.js';
+import { AttestationManager, type AttestationConfig } from '../attestation/attestation-manager.js';
 
 export interface ClientHandlerConfig {
   heartbeatInterval: number;   // Expected heartbeat interval from clients
@@ -165,6 +168,81 @@ interface LinkResponseMessage {
   deviceId?: string;     // Assigned device ID if accepted
 }
 
+// Channel upstream message (subscriber -> VPS -> owner)
+interface UpstreamMessageData {
+  type: 'upstream-message';
+  channelId: string;
+  message: Record<string, unknown>;
+  ephemeralPublicKey: string;
+}
+
+// Channel stream messages
+interface StreamStartMessage {
+  type: 'stream-start';
+  streamId: string;
+  channelId: string;
+  title: string;
+}
+
+interface StreamFrameMessage {
+  type: 'stream-frame';
+  streamId: string;
+  channelId: string;
+  frame: Record<string, unknown>;
+}
+
+interface StreamEndMessage {
+  type: 'stream-end';
+  streamId: string;
+  channelId: string;
+}
+
+// Channel subscription registration (subscriber registers interest)
+interface ChannelSubscribeMessage {
+  type: 'channel-subscribe';
+  channelId: string;
+}
+
+// Channel owner registration (owner registers as the owner)
+interface ChannelOwnerRegisterMessage {
+  type: 'channel-owner-register';
+  channelId: string;
+}
+
+// Chunk relay messages
+interface ChunkAnnounceMessage {
+  type: 'chunk_announce';
+  peerId: string;
+  channelId?: string;
+  chunks: Array<{ chunkId: string; routingHash?: string }>;
+}
+
+interface ChunkRequestMessage {
+  type: 'chunk_request';
+  chunkId: string;
+  channelId: string;
+}
+
+interface ChunkPushMessage {
+  type: 'chunk_push';
+  chunkId: string;
+  channelId: string;
+  data: string | Record<string, unknown>; // JSON object (from client) or string (legacy)
+}
+
+// Attestation messages
+interface AttestRequestMessage {
+  type: 'attest_request';
+  build_token: string;
+  device_id: string;
+}
+
+interface AttestResponseMessage {
+  type: 'attest_response';
+  nonce: string;
+  responses: Array<{ region_index: number; hmac: string }>;
+}
+
 // Pending pair request tracking
 interface PendingPairRequest {
   requesterCode: string;
@@ -213,7 +291,18 @@ type ClientMessage =
   | CallHangupMessage
   | CallIceMessage
   | LinkRequestMessage
-  | LinkResponseMessage;
+  | LinkResponseMessage
+  | UpstreamMessageData
+  | StreamStartMessage
+  | StreamFrameMessage
+  | StreamEndMessage
+  | ChannelSubscribeMessage
+  | ChannelOwnerRegisterMessage
+  | ChunkAnnounceMessage
+  | ChunkRequestMessage
+  | ChunkPushMessage
+  | AttestRequestMessage
+  | AttestResponseMessage;
 
 export class ClientHandler extends EventEmitter {
   private identity: ServerIdentity;
@@ -271,13 +360,38 @@ export class ClientHandler extends EventEmitter {
     collisionAttempts: 0,
   };
 
+  // Channel owner tracking: channelId -> WebSocket of the owner
+  private channelOwners: Map<string, WebSocket> = new Map();
+  // Channel subscriber tracking: channelId -> Set of subscriber WebSockets
+  private channelSubscribers: Map<string, Set<WebSocket>> = new Map();
+  // Active stream tracking: channelId -> stream metadata
+  private activeStreams: Map<string, { streamId: string; title: string; ownerWs: WebSocket }> = new Map();
+  // Upstream rate limiting per WebSocket: ws -> { count, windowStart }
+  private upstreamRateLimits: Map<WebSocket, RateLimitInfo> = new Map();
+  // Upstream message queue for offline owners: channelId -> queued messages
+  private upstreamQueues: Map<string, Array<{ data: object; timestamp: number }>> = new Map();
+
+  // Chunk relay service (optional - only initialized when storage is provided)
+  private chunkRelay: ChunkRelay | null = null;
+  // Maximum queued upstream messages per channel
+  private static readonly MAX_UPSTREAM_QUEUE_SIZE = 100;
+  // Upstream rate limit: max messages per window
+  private static readonly MAX_UPSTREAM_PER_WINDOW = 30;
+
+  // Attestation manager (optional - only initialized when attestation config is provided)
+  private attestationManager: AttestationManager | null = null;
+  // WebSocket -> attestation connection ID mapping
+  private wsToConnectionId: Map<WebSocket, string> = new Map();
+
   constructor(
     identity: ServerIdentity,
     endpoint: string,
     config: ClientHandlerConfig,
     relayRegistry: RelayRegistry,
     distributedRendezvous: DistributedRendezvous,
-    metadata: ServerMetadata = {}
+    metadata: ServerMetadata = {},
+    storage?: Storage,
+    attestationConfig?: AttestationConfig
   ) {
     super();
     this.identity = identity;
@@ -290,6 +404,18 @@ export class ClientHandler extends EventEmitter {
     // Initialize configurable timeout values
     this.pairRequestTimeout = config.pairRequestTimeout ?? PAIRING.DEFAULT_REQUEST_TIMEOUT;
     this.pairRequestWarningTime = config.pairRequestWarningTime ?? PAIRING.DEFAULT_REQUEST_WARNING_TIME;
+
+    // Initialize chunk relay if storage is provided
+    if (storage) {
+      this.chunkRelay = new ChunkRelay(storage);
+      this.chunkRelay.setSendCallback((peerId, message) => this.notifyClient(peerId, message));
+      this.chunkRelay.startCleanup();
+    }
+
+    // Initialize attestation manager if config is provided
+    if (attestationConfig) {
+      this.attestationManager = new AttestationManager(attestationConfig);
+    }
 
     // Forward match notifications to clients
     this.distributedRendezvous.on('match', (peerId, match) => {
@@ -341,6 +467,16 @@ export class ClientHandler extends EventEmitter {
       endpoint: this.endpoint,
       region: this.metadata.region || null,
     });
+
+    // Create attestation session if attestation is configured
+    if (this.attestationManager) {
+      const connectionId = this.attestationManager.createSession();
+      this.wsToConnectionId.set(ws, connectionId);
+
+      // Send server identity proof (Phase 4: Server Identity)
+      const identityProof = this.attestationManager.generateServerIdentityProof();
+      this.send(ws, identityProof);
+    }
   }
 
   /**
@@ -439,6 +575,21 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
+    // Verify peerId consistency for non-register messages that include a peerId.
+    // If the WebSocket is bound to a peerId (relay client), enforce that subsequent
+    // messages use the same peerId. This prevents identity spoofing across messages.
+    if ('peerId' in message && message.type !== 'register') {
+      const boundPeerId = this.wsToClient.get(ws);
+      if (boundPeerId) {
+        if ((message as { peerId: string }).peerId !== boundPeerId) {
+          this.sendError(ws, 'peerId mismatch with registered identity');
+          return;
+        }
+        // Override with bound peerId to prevent spoofing
+        (message as { peerId: string }).peerId = boundPeerId;
+      }
+    }
+
     try {
       switch (message.type) {
         case 'register':
@@ -504,6 +655,47 @@ export class ClientHandler extends EventEmitter {
           this.handleLinkResponse(ws, message as LinkResponseMessage);
           break;
 
+        // Channel upstream and streaming messages
+        case 'upstream-message':
+          this.handleUpstreamMessage(ws, message as UpstreamMessageData);
+          break;
+
+        case 'stream-start':
+          this.handleStreamStart(ws, message as StreamStartMessage);
+          break;
+
+        case 'stream-frame':
+          this.handleStreamFrame(ws, message as StreamFrameMessage);
+          break;
+
+        case 'stream-end':
+          this.handleStreamEnd(ws, message as StreamEndMessage);
+          break;
+
+        case 'channel-subscribe':
+          await this.handleChannelSubscribe(ws, message as ChannelSubscribeMessage);
+          break;
+
+        case 'channel-owner-register':
+          this.handleChannelOwnerRegister(ws, message as ChannelOwnerRegisterMessage);
+          break;
+
+        // Chunk relay messages (attestation-gated)
+        case 'chunk_announce':
+          if (!this.checkAttestation(ws)) return;
+          await this.handleChunkAnnounce(ws, message as ChunkAnnounceMessage);
+          break;
+
+        case 'chunk_request':
+          if (!this.checkAttestation(ws)) return;
+          await this.handleChunkRequest(ws, message as ChunkRequestMessage);
+          break;
+
+        case 'chunk_push':
+          if (!this.checkAttestation(ws)) return;
+          await this.handleChunkPush(ws, message as ChunkPushMessage);
+          break;
+
         case 'update_load':
           this.handleUpdateLoad(ws, message);
           break;
@@ -524,6 +716,15 @@ export class ClientHandler extends EventEmitter {
           this.handleHeartbeat(ws, message);
           break;
 
+        // Attestation messages
+        case 'attest_request':
+          await this.handleAttestRequest(ws, message as AttestRequestMessage);
+          break;
+
+        case 'attest_response':
+          await this.handleAttestResponse(ws, message as AttestResponseMessage);
+          break;
+
         default:
           this.sendError(ws, `Unknown message type: ${(message as { type: string }).type}`);
       }
@@ -542,6 +743,20 @@ export class ClientHandler extends EventEmitter {
 
     if (!peerId) {
       this.sendError(ws, 'Missing required field: peerId');
+      return;
+    }
+
+    // Check if peerId is already registered by a different WebSocket
+    const existingClient = this.clients.get(peerId);
+    if (existingClient && existingClient.ws !== ws) {
+      this.sendError(ws, 'Peer ID already in use by another connection');
+      return;
+    }
+
+    // Check if this WebSocket is already registered with a different peerId
+    const existingPeerId = this.wsToClient.get(ws);
+    if (existingPeerId && existingPeerId !== peerId) {
+      this.sendError(ws, 'Cannot re-register with a different peerId');
       return;
     }
 
@@ -616,11 +831,59 @@ export class ClientHandler extends EventEmitter {
     const dailyPoints = message.dailyPoints || message.daily_points || [];
     const hourlyTokens = message.hourlyTokens || message.hourly_tokens || [];
 
+    // Validate array sizes
+    if (!Array.isArray(dailyPoints) || dailyPoints.length > RENDEZVOUS_LIMITS.MAX_POINTS_PER_MESSAGE) {
+      this.sendError(ws, `Too many daily points (max ${RENDEZVOUS_LIMITS.MAX_POINTS_PER_MESSAGE})`);
+      return;
+    }
+    if (!Array.isArray(hourlyTokens) || hourlyTokens.length > RENDEZVOUS_LIMITS.MAX_TOKENS_PER_MESSAGE) {
+      this.sendError(ws, `Too many hourly tokens (max ${RENDEZVOUS_LIMITS.MAX_TOKENS_PER_MESSAGE})`);
+      return;
+    }
+
+    // Validate array element types and lengths
+    if (!dailyPoints.every(p => typeof p === 'string' && p.length <= RENDEZVOUS_LIMITS.MAX_HASH_LENGTH)) {
+      this.sendError(ws, 'Invalid daily points format');
+      return;
+    }
+    if (!hourlyTokens.every(t => typeof t === 'string' && t.length <= RENDEZVOUS_LIMITS.MAX_HASH_LENGTH)) {
+      this.sendError(ws, 'Invalid hourly tokens format');
+      return;
+    }
+
+    // Validate relayId field size
+    if (relayId && (typeof relayId !== 'string' || relayId.length > RENDEZVOUS_LIMITS.MAX_RELAY_ID_LENGTH)) {
+      this.sendError(ws, 'Invalid relayId');
+      return;
+    }
+
     // Support both single dead drop (legacy) and map (new format)
     // Priority: dead_drops > deadDrops > deadDrop (legacy)
     const deadDropsMap: Record<string, string> =
       message.dead_drops || message.deadDrops || {};
     const legacyDeadDrop = message.deadDrop || '';
+
+    // Validate dead drops map size and values
+    if (Object.keys(deadDropsMap).length > RENDEZVOUS_LIMITS.MAX_POINTS_PER_MESSAGE) {
+      this.sendError(ws, 'Too many dead drops');
+      return;
+    }
+    for (const [key, value] of Object.entries(deadDropsMap)) {
+      if (typeof key !== 'string' || key.length > RENDEZVOUS_LIMITS.MAX_HASH_LENGTH) {
+        this.sendError(ws, 'Invalid dead drop key');
+        return;
+      }
+      if (typeof value !== 'string' || value.length > RENDEZVOUS_LIMITS.MAX_DEAD_DROP_SIZE) {
+        this.sendError(ws, 'Dead drop payload too large (max 4KB)');
+        return;
+      }
+    }
+
+    // Validate legacy dead drop size
+    if (legacyDeadDrop && (typeof legacyDeadDrop !== 'string' || legacyDeadDrop.length > RENDEZVOUS_LIMITS.MAX_DEAD_DROP_SIZE)) {
+      this.sendError(ws, 'Dead drop payload too large (max 4KB)');
+      return;
+    }
 
     // Update client's last seen
     const client = this.clients.get(peerId);
@@ -1495,13 +1758,655 @@ export class ClientHandler extends EventEmitter {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Channel upstream and streaming handlers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handle channel owner registration.
+   * The owner registers to receive upstream messages for their channel.
+   */
+  private handleChannelOwnerRegister(ws: WebSocket, message: ChannelOwnerRegisterMessage): void {
+    const { channelId } = message;
+
+    if (!channelId) {
+      this.sendError(ws, 'Missing required field: channelId');
+      return;
+    }
+
+    this.channelOwners.set(channelId, ws);
+
+    // Flush any queued upstream messages
+    const queue = this.upstreamQueues.get(channelId);
+    if (queue && queue.length > 0) {
+      for (const item of queue) {
+        this.send(ws, item.data);
+      }
+      this.upstreamQueues.delete(channelId);
+    }
+
+    this.send(ws, {
+      type: 'channel-owner-registered',
+      channelId,
+    });
+  }
+
+  /**
+   * Handle channel subscription registration.
+   * Subscribers register to receive stream frames and broadcasts.
+   */
+  private async handleChannelSubscribe(ws: WebSocket, message: ChannelSubscribeMessage): Promise<void> {
+    const { channelId } = message;
+
+    if (!channelId) {
+      this.sendError(ws, 'Missing required field: channelId');
+      return;
+    }
+
+    let subscribers = this.channelSubscribers.get(channelId);
+    if (!subscribers) {
+      subscribers = new Set();
+      this.channelSubscribers.set(channelId, subscribers);
+    }
+    subscribers.add(ws);
+
+    this.send(ws, {
+      type: 'channel-subscribed',
+      channelId,
+    });
+
+    // If there's an active stream, notify the new subscriber
+    const activeStream = this.activeStreams.get(channelId);
+    if (activeStream) {
+      this.send(ws, {
+        type: 'stream-start',
+        streamId: activeStream.streamId,
+        channelId,
+        title: activeStream.title,
+      });
+    }
+
+    // Send existing cached chunks so late-joining subscribers can fetch content.
+    if (this.chunkRelay) {
+      const chunkIds = await this.chunkRelay.getCachedChunkIdsForChannel(channelId);
+      if (chunkIds.length > 0) {
+        this.send(ws, {
+          type: 'chunk_available',
+          channelId,
+          chunkIds,
+        });
+      }
+    }
+  }
+
+  /**
+   * Check upstream rate limit for a WebSocket connection.
+   * Returns true if the upstream message should be allowed.
+   */
+  private checkUpstreamRateLimit(ws: WebSocket): boolean {
+    const now = Date.now();
+    let rateLimitInfo = this.upstreamRateLimits.get(ws);
+
+    if (!rateLimitInfo) {
+      rateLimitInfo = { messageCount: 1, windowStart: now };
+      this.upstreamRateLimits.set(ws, rateLimitInfo);
+      return true;
+    }
+
+    if (now - rateLimitInfo.windowStart >= RATE_LIMIT.WINDOW_MS) {
+      rateLimitInfo.messageCount = 1;
+      rateLimitInfo.windowStart = now;
+      return true;
+    }
+
+    rateLimitInfo.messageCount++;
+
+    if (rateLimitInfo.messageCount > ClientHandler.MAX_UPSTREAM_PER_WINDOW) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Handle upstream message (subscriber -> VPS -> owner).
+   *
+   * The VPS routes the message to the channel owner only.
+   * Rate limited per peer to prevent spam.
+   * Messages are queued if the owner is offline (up to MAX_UPSTREAM_QUEUE_SIZE).
+   */
+  private handleUpstreamMessage(ws: WebSocket, message: UpstreamMessageData): void {
+    const { channelId } = message;
+
+    if (!channelId) {
+      this.sendError(ws, 'Missing required field: channelId');
+      return;
+    }
+
+    if (!message.message) {
+      this.sendError(ws, 'Missing required field: message');
+      return;
+    }
+
+    // Rate limit upstream messages
+    if (!this.checkUpstreamRateLimit(ws)) {
+      this.sendError(ws, 'Upstream rate limit exceeded. Please slow down.');
+      return;
+    }
+
+    const ownerWs = this.channelOwners.get(channelId);
+
+    const forwardData = {
+      type: 'upstream-message',
+      channelId,
+      message: message.message,
+      ephemeralPublicKey: message.ephemeralPublicKey,
+    };
+
+    if (ownerWs && ownerWs.readyState === ownerWs.OPEN) {
+      // Owner is online, forward directly
+      this.send(ownerWs, forwardData);
+    } else {
+      // Owner is offline, queue the message
+      let queue = this.upstreamQueues.get(channelId);
+      if (!queue) {
+        queue = [];
+        this.upstreamQueues.set(channelId, queue);
+      }
+
+      if (queue.length < ClientHandler.MAX_UPSTREAM_QUEUE_SIZE) {
+        queue.push({ data: forwardData, timestamp: Date.now() });
+      }
+      // Silently drop if queue is full (DoS protection)
+    }
+
+    // Acknowledge receipt to the sender
+    this.send(ws, {
+      type: 'upstream-ack',
+      channelId,
+      messageId: (message.message as Record<string, unknown>)['id'] || null,
+    });
+  }
+
+  /**
+   * Handle stream-start from the channel owner.
+   *
+   * Notifies all subscribed peers about the new live stream.
+   * VPS tracks the active stream to notify late-joining subscribers.
+   */
+  private handleStreamStart(ws: WebSocket, message: StreamStartMessage): void {
+    const { streamId, channelId, title } = message;
+
+    if (!streamId || !channelId) {
+      this.sendError(ws, 'Missing required fields: streamId, channelId');
+      return;
+    }
+
+    // Verify this is the channel owner
+    const ownerWs = this.channelOwners.get(channelId);
+    if (ownerWs !== ws) {
+      this.sendError(ws, 'Only the channel owner can start a stream');
+      return;
+    }
+
+    // Track the active stream
+    this.activeStreams.set(channelId, { streamId, title, ownerWs: ws });
+
+    // Fan out to all subscribers
+    const subscribers = this.channelSubscribers.get(channelId);
+    if (subscribers) {
+      const notification = {
+        type: 'stream-start',
+        streamId,
+        channelId,
+        title,
+      };
+      for (const subWs of subscribers) {
+        this.send(subWs, notification);
+      }
+    }
+
+    // Acknowledge
+    this.send(ws, {
+      type: 'stream-started',
+      streamId,
+      channelId,
+      subscriberCount: subscribers?.size || 0,
+    });
+  }
+
+  /**
+   * Handle stream-frame from the channel owner.
+   *
+   * VPS acts as SFU: receives encrypted frame, fans out to all subscribers.
+   * No store-and-forward delay -- pure streaming relay.
+   */
+  private handleStreamFrame(ws: WebSocket, message: StreamFrameMessage): void {
+    const { streamId, channelId, frame } = message;
+
+    if (!streamId || !channelId || !frame) {
+      return; // Silently drop malformed frames for performance
+    }
+
+    // Verify the stream is active and the sender is the owner
+    const activeStream = this.activeStreams.get(channelId);
+    if (!activeStream || activeStream.ownerWs !== ws) {
+      return; // Silently drop unauthorized frames
+    }
+
+    // Fan out to all subscribers (SFU pattern)
+    const subscribers = this.channelSubscribers.get(channelId);
+    if (subscribers) {
+      const frameMsg = {
+        type: 'stream-frame',
+        streamId,
+        channelId,
+        frame,
+      };
+      for (const subWs of subscribers) {
+        this.send(subWs, frameMsg);
+      }
+    }
+  }
+
+  /**
+   * Handle stream-end from the channel owner.
+   *
+   * Notifies all subscribers and cleans up the active stream.
+   */
+  private handleStreamEnd(ws: WebSocket, message: StreamEndMessage): void {
+    const { streamId, channelId } = message;
+
+    if (!streamId || !channelId) {
+      this.sendError(ws, 'Missing required fields: streamId, channelId');
+      return;
+    }
+
+    // Verify the stream is active and the sender is the owner
+    const activeStream = this.activeStreams.get(channelId);
+    if (!activeStream || activeStream.ownerWs !== ws) {
+      this.sendError(ws, 'Cannot end stream: not the owner or no active stream');
+      return;
+    }
+
+    // Clean up the active stream
+    this.activeStreams.delete(channelId);
+
+    // Notify all subscribers
+    const subscribers = this.channelSubscribers.get(channelId);
+    if (subscribers) {
+      const endMsg = {
+        type: 'stream-end',
+        streamId,
+        channelId,
+      };
+      for (const subWs of subscribers) {
+        this.send(subWs, endMsg);
+      }
+    }
+
+    // Acknowledge
+    this.send(ws, {
+      type: 'stream-ended',
+      streamId,
+      channelId,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Attestation handlers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Check if the client is attested or within grace period.
+   * If not, send an error and return false.
+   * If attestation is not configured, always returns true.
+   */
+  private checkAttestation(ws: WebSocket): boolean {
+    if (!this.attestationManager) return true;
+
+    const connectionId = this.wsToConnectionId.get(ws);
+    if (!connectionId) return true; // No attestation session = not tracked
+
+    if (this.attestationManager.isAllowed(connectionId)) {
+      return true;
+    }
+
+    // Client is not attested and grace period expired
+    this.send(ws, {
+      type: 'error',
+      code: ATTESTATION.ERROR_CODE_NOT_ATTESTED,
+      message: 'Attestation required',
+    });
+    return false;
+  }
+
+  /**
+   * Handle attest_request: Client sends build_token and device_id.
+   * VPS forwards to bootstrap's POST /attest/challenge.
+   */
+  private async handleAttestRequest(ws: WebSocket, message: AttestRequestMessage): Promise<void> {
+    if (!this.attestationManager) {
+      this.sendError(ws, 'Attestation not configured');
+      return;
+    }
+
+    const { build_token, device_id } = message;
+
+    if (!build_token) {
+      this.sendError(ws, 'Missing required field: build_token');
+      return;
+    }
+
+    if (!device_id) {
+      this.sendError(ws, 'Missing required field: device_id');
+      return;
+    }
+
+    const connectionId = this.wsToConnectionId.get(ws);
+    if (!connectionId) {
+      this.sendError(ws, 'No attestation session');
+      return;
+    }
+
+    const challenge = await this.attestationManager.requestChallenge(
+      connectionId,
+      build_token,
+      device_id
+    );
+
+    if (!challenge) {
+      this.send(ws, {
+        type: 'attest_error',
+        message: 'Failed to get attestation challenge from bootstrap',
+      });
+      return;
+    }
+
+    this.send(ws, {
+      type: 'attest_challenge',
+      nonce: challenge.nonce,
+      regions: challenge.regions,
+    });
+  }
+
+  /**
+   * Handle attest_response: Client sends HMAC responses for the challenge.
+   * VPS forwards to bootstrap's POST /attest/verify.
+   */
+  private async handleAttestResponse(ws: WebSocket, message: AttestResponseMessage): Promise<void> {
+    if (!this.attestationManager) {
+      this.sendError(ws, 'Attestation not configured');
+      return;
+    }
+
+    const { nonce, responses } = message;
+
+    if (!nonce) {
+      this.sendError(ws, 'Missing required field: nonce');
+      return;
+    }
+
+    if (!responses || !Array.isArray(responses) || responses.length === 0) {
+      this.sendError(ws, 'Missing or empty responses array');
+      return;
+    }
+
+    const connectionId = this.wsToConnectionId.get(ws);
+    if (!connectionId) {
+      this.sendError(ws, 'No attestation session');
+      return;
+    }
+
+    const result = await this.attestationManager.verifyAttestation(
+      connectionId,
+      nonce,
+      responses
+    );
+
+    if (result.valid) {
+      this.send(ws, {
+        type: 'attest_success',
+        session_token: result.session_token || null,
+      });
+    } else {
+      this.send(ws, {
+        type: 'attest_failed',
+        message: 'Attestation verification failed',
+      });
+      // Disconnect client after attestation failure
+      ws.close(ATTESTATION.WS_CLOSE_CODE_ATTESTATION_FAILED, 'Attestation failed');
+    }
+  }
+
+  /**
+   * Get the attestation manager (for testing or external access).
+   */
+  getAttestationManager(): AttestationManager | null {
+    return this.attestationManager;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Chunk relay handlers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handle chunk_announce: peer announces it has chunks.
+   */
+  private async handleChunkAnnounce(ws: WebSocket, message: ChunkAnnounceMessage): Promise<void> {
+    if (!this.chunkRelay) {
+      this.sendError(ws, 'Chunk relay not available');
+      return;
+    }
+
+    const { peerId, channelId, chunks } = message;
+
+    if (!peerId) {
+      this.sendError(ws, 'Missing required field: peerId');
+      return;
+    }
+
+    if (!chunks || !Array.isArray(chunks) || chunks.length === 0) {
+      this.sendError(ws, 'Missing or empty chunks array');
+      return;
+    }
+
+    // Validate chunk array length
+    if (chunks.length > CHUNK_LIMITS.MAX_CHUNKS_PER_ANNOUNCE) {
+      this.sendError(ws, `Too many chunks per announce (max ${CHUNK_LIMITS.MAX_CHUNKS_PER_ANNOUNCE})`);
+      return;
+    }
+
+    // Validate individual chunk entries
+    for (const chunk of chunks) {
+      if (!chunk.chunkId || typeof chunk.chunkId !== 'string' || chunk.chunkId.length > CHUNK_LIMITS.MAX_CHUNK_ID_LENGTH) {
+        this.sendError(ws, 'Invalid chunk entry: chunkId must be a string up to 256 chars');
+        return;
+      }
+      if (chunk.routingHash !== undefined && (typeof chunk.routingHash !== 'string' || chunk.routingHash.length > CHUNK_LIMITS.MAX_ROUTING_HASH_LENGTH)) {
+        this.sendError(ws, 'Invalid chunk entry: routingHash must be a string up to 256 chars');
+        return;
+      }
+    }
+
+    // Register the peer as online for chunk relay
+    this.chunkRelay.registerPeer(peerId, ws);
+
+    const result = await this.chunkRelay.handleAnnounce(peerId, chunks);
+
+    if (result.error) {
+      this.sendError(ws, result.error);
+      return;
+    }
+
+    this.send(ws, {
+      type: 'chunk_announce_ack',
+      registered: result.registered,
+    });
+
+    // Notify channel subscribers about new chunks so they can request them.
+    if (channelId) {
+      const subscribers = this.channelSubscribers.get(channelId);
+      if (subscribers) {
+        const chunkIds = chunks.map(c => c.chunkId);
+        const notification = {
+          type: 'chunk_available',
+          channelId,
+          chunkIds,
+        };
+        for (const subWs of subscribers) {
+          if (subWs !== ws && subWs.readyState === subWs.OPEN) {
+            this.send(subWs, notification);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Handle chunk_request: peer requests a chunk.
+   */
+  private async handleChunkRequest(ws: WebSocket, message: ChunkRequestMessage): Promise<void> {
+    if (!this.chunkRelay) {
+      this.sendError(ws, 'Chunk relay not available');
+      return;
+    }
+
+    const { chunkId, channelId } = message;
+
+    if (!chunkId) {
+      this.sendError(ws, 'Missing required field: chunkId');
+      return;
+    }
+
+    if (!channelId) {
+      this.sendError(ws, 'Missing required field: channelId');
+      return;
+    }
+
+    // Identify the requesting peer
+    const peerId = this.wsToClient.get(ws) || this.wsToPairingCode.get(ws);
+    if (!peerId) {
+      this.sendError(ws, 'Not registered');
+      return;
+    }
+
+    // Register this peer as online for relay purposes
+    this.chunkRelay.registerPeer(peerId, ws);
+
+    const result = await this.chunkRelay.handleRequest(peerId, ws, chunkId, channelId);
+
+    if (result.error) {
+      this.send(ws, {
+        type: 'chunk_error',
+        chunkId,
+        error: result.error,
+      });
+    } else if (!result.served && result.pulling) {
+      // Notify the requester that we're pulling the chunk
+      this.send(ws, {
+        type: 'chunk_pulling',
+        chunkId,
+      });
+    }
+    // If result.served is true, chunk_data was already sent by the relay
+  }
+
+  /**
+   * Handle chunk_push: peer sends chunk data (response to chunk_pull).
+   */
+  private async handleChunkPush(ws: WebSocket, message: ChunkPushMessage): Promise<void> {
+    if (!this.chunkRelay) {
+      this.sendError(ws, 'Chunk relay not available');
+      return;
+    }
+
+    const { chunkId, channelId, data } = message;
+
+    if (!chunkId) {
+      this.sendError(ws, 'Missing required field: chunkId');
+      return;
+    }
+
+    if (!channelId) {
+      this.sendError(ws, 'Missing required field: channelId');
+      return;
+    }
+
+    if (!data) {
+      this.sendError(ws, 'Missing required field: data');
+      return;
+    }
+
+    // Identify the pushing peer
+    const peerId = this.wsToClient.get(ws) || this.wsToPairingCode.get(ws);
+    if (!peerId) {
+      this.sendError(ws, 'Not registered');
+      return;
+    }
+
+    const result = await this.chunkRelay.handlePush(peerId, chunkId, channelId, data);
+
+    if (result.error) {
+      this.sendError(ws, result.error);
+      return;
+    }
+
+    this.send(ws, {
+      type: 'chunk_push_ack',
+      chunkId,
+      cached: result.cached,
+      servedCount: result.servedCount,
+    });
+  }
+
+  /**
+   * Get the chunk relay instance (for testing or external access).
+   */
+  getChunkRelay(): ChunkRelay | null {
+    return this.chunkRelay;
+  }
+
   /**
    * Handle WebSocket disconnect
    */
   async handleDisconnect(ws: WebSocket): Promise<void> {
+    // Clean up attestation session
+    const connectionId = this.wsToConnectionId.get(ws);
+    if (connectionId && this.attestationManager) {
+      this.attestationManager.removeSession(connectionId);
+    }
+    this.wsToConnectionId.delete(ws);
+
     // Clean up rate limiting tracking
     this.wsRateLimits.delete(ws);
     this.wsPairRequestRateLimits.delete(ws);
+    this.upstreamRateLimits.delete(ws);
+
+    // Clean up channel owner registrations
+    for (const [channelId, ownerWs] of this.channelOwners) {
+      if (ownerWs === ws) {
+        this.channelOwners.delete(channelId);
+        // End any active streams for this owner
+        const activeStream = this.activeStreams.get(channelId);
+        if (activeStream && activeStream.ownerWs === ws) {
+          this.activeStreams.delete(channelId);
+          // Notify subscribers that stream ended
+          const subscribers = this.channelSubscribers.get(channelId);
+          if (subscribers) {
+            const endMsg = { type: 'stream-end', streamId: activeStream.streamId, channelId };
+            for (const subWs of subscribers) {
+              this.send(subWs, endMsg);
+            }
+          }
+        }
+      }
+    }
+
+    // Clean up channel subscriber registrations
+    for (const [, subscribers] of this.channelSubscribers) {
+      subscribers.delete(ws);
+    }
 
     // Clean up pairing code mappings (for signaling clients)
     const pairingCode = this.wsToPairingCode.get(ws);
@@ -1572,15 +2477,26 @@ export class ClientHandler extends EventEmitter {
     const peerId = this.wsToClient.get(ws);
     if (!peerId) return;
 
-    // Remove from registries
-    this.relayRegistry.unregister(peerId);
-    await this.distributedRendezvous.unregisterPeer(peerId);
+    // Only clean up if this WebSocket is still the registered one for this peerId
+    const client = this.clients.get(peerId);
+    if (client && client.ws === ws) {
+      // Remove from registries
+      this.relayRegistry.unregister(peerId);
+      await this.distributedRendezvous.unregisterPeer(peerId);
 
-    // Clean up mappings
-    this.clients.delete(peerId);
+      // Clean up chunk relay for this peer
+      if (this.chunkRelay) {
+        await this.chunkRelay.unregisterPeer(peerId);
+      }
+
+      // Clean up mappings
+      this.clients.delete(peerId);
+
+      this.emit('client-disconnected', peerId);
+    }
+
+    // Always clean up the reverse mapping for this WebSocket
     this.wsToClient.delete(ws);
-
-    this.emit('client-disconnected', peerId);
   }
 
   /**
@@ -1746,6 +2662,24 @@ export class ClientHandler extends EventEmitter {
     // Clear rate limiting data
     this.wsRateLimits.clear();
     this.wsPairRequestRateLimits.clear();
+    this.upstreamRateLimits.clear();
+
+    // Clear channel data
+    this.channelOwners.clear();
+    this.channelSubscribers.clear();
+    this.activeStreams.clear();
+    this.upstreamQueues.clear();
+
+    // Shutdown chunk relay
+    if (this.chunkRelay) {
+      this.chunkRelay.shutdown();
+    }
+
+    // Shutdown attestation manager
+    if (this.attestationManager) {
+      this.attestationManager.shutdown();
+    }
+    this.wsToConnectionId.clear();
 
     // Close all relay clients
     for (const [peerId, client] of this.clients) {

@@ -80,11 +80,16 @@ class CryptoService:
         shared_secret = self._private_key.exchange(peer_pub)
 
         # Derive session key using HKDF-SHA256
+        # Include both public keys sorted for deterministic derivation
+        # regardless of role (issue-headless-04: defense-in-depth)
+        keys_sorted = sorted([self._public_key_bytes, peer_pub_bytes])
+        info = HKDF_INFO + keys_sorted[0] + keys_sorted[1]
+
         session_key = HKDF(
             algorithm=SHA256(),
             length=32,
             salt=b"",
-            info=HKDF_INFO,
+            info=info,
         ).derive(shared_secret)
 
         self._session_keys[peer_id] = session_key

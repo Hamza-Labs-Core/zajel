@@ -69,6 +69,18 @@ class FileTransferService:
         self._incoming: dict[str, IncomingTransfer] = {}
         self._on_file_received: Optional[Callable] = None
 
+    @staticmethod
+    def _sanitize_filename(name: str) -> str:
+        """Strip directory components and reject path traversal."""
+        # Use os.path.basename to strip all directory parts
+        basename = os.path.basename(name)
+        # Remove null bytes
+        basename = basename.replace("\0", "")
+        # Reject empty or dot-only names
+        if not basename or basename in (".", ".."):
+            basename = f"unnamed_{uuid.uuid4().hex[:8]}"
+        return basename
+
     async def send_file(
         self,
         peer_id: str,
@@ -144,9 +156,10 @@ class FileTransferService:
 
         if msg_type == "file_start":
             file_id = msg["fileId"]
+            safe_name = self._sanitize_filename(msg["fileName"])
             info = FileTransferProgress(
                 file_id=file_id,
-                file_name=msg["fileName"],
+                file_name=safe_name,
                 total_size=msg["totalSize"],
                 total_chunks=msg["totalChunks"],
             )
@@ -184,8 +197,14 @@ class FileTransferService:
                     return
                 file_data += chunk
 
-            # Save to disk
-            save_path = self._receive_dir / transfer.info.file_name
+            # Save to disk (with path traversal protection)
+            save_path = (self._receive_dir / transfer.info.file_name).resolve()
+            if not str(save_path).startswith(str(self._receive_dir.resolve())):
+                logger.error(
+                    "Path traversal detected in file name: %s",
+                    transfer.info.file_name,
+                )
+                return
             save_path.write_bytes(file_data)
 
             # Compute hash

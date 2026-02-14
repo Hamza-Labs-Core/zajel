@@ -12,8 +12,7 @@ Handles:
 import asyncio
 import json
 import logging
-import random
-import string
+import secrets
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine, Optional
 
@@ -30,7 +29,7 @@ HEARTBEAT_INTERVAL = 30  # seconds
 
 def generate_pairing_code() -> str:
     """Generate a random 6-character pairing code."""
-    return "".join(random.choices(PAIRING_CODE_CHARS, k=PAIRING_CODE_LENGTH))
+    return "".join(secrets.choice(PAIRING_CODE_CHARS) for _ in range(PAIRING_CODE_LENGTH))
 
 
 @dataclass
@@ -102,12 +101,20 @@ class SignalingClient:
         self._rendezvous_matches: asyncio.Queue[RendezvousMatch] = asyncio.Queue()
         self._errors: asyncio.Queue[str] = asyncio.Queue()
 
+        # Channel event queues
+        self._chunk_pulls: asyncio.Queue[dict] = asyncio.Queue()
+        self._chunk_available: asyncio.Queue[dict] = asyncio.Queue()
+        self._chunk_data: asyncio.Queue[dict] = asyncio.Queue()
+
         # Callbacks
         self._on_pair_request: Optional[EventHandler] = None
         self._on_pair_match: Optional[EventHandler] = None
         self._on_webrtc_signal: Optional[EventHandler] = None
         self._on_call_signal: Optional[EventHandler] = None
         self._on_disconnect: Optional[EventHandler] = None
+        self._on_chunk_pull: Optional[EventHandler] = None
+        self._on_chunk_available: Optional[EventHandler] = None
+        self._on_chunk_data: Optional[EventHandler] = None
 
     @property
     def is_connected(self) -> bool:
@@ -292,6 +299,68 @@ class SignalingClient:
         """Wait for a rendezvous match."""
         return await asyncio.wait_for(self._rendezvous_matches.get(), timeout=timeout)
 
+    # ── Channel Signaling ───────────────────────────────────
+
+    async def send_channel_owner_register(self, channel_id: str) -> None:
+        """Register as owner of a channel."""
+        await self._send({
+            "type": "channel-owner-register",
+            "channelId": channel_id,
+        })
+
+    async def send_channel_subscribe(self, channel_id: str) -> None:
+        """Subscribe to a channel."""
+        await self._send({
+            "type": "channel-subscribe",
+            "channelId": channel_id,
+        })
+
+    async def send_chunk_announce(
+        self, peer_id: str, channel_id: str, chunks: list[dict]
+    ) -> None:
+        """Announce that we have chunks available."""
+        await self._send({
+            "type": "chunk_announce",
+            "peerId": peer_id,
+            "channelId": channel_id,
+            "chunks": chunks,
+        })
+
+    async def send_chunk_push(
+        self, chunk_id: str, channel_id: str, data: dict
+    ) -> None:
+        """Push chunk data in response to a chunk_pull."""
+        await self._send({
+            "type": "chunk_push",
+            "peerId": self.pairing_code,
+            "chunkId": chunk_id,
+            "channelId": channel_id,
+            "data": data,
+        })
+
+    async def send_chunk_request(
+        self, peer_id: str, chunk_id: str, channel_id: str
+    ) -> None:
+        """Request a chunk from the relay."""
+        await self._send({
+            "type": "chunk_request",
+            "peerId": peer_id,
+            "chunkId": chunk_id,
+            "channelId": channel_id,
+        })
+
+    async def wait_for_chunk_pull(self, timeout: float = 30) -> dict:
+        """Wait for a chunk_pull from the server."""
+        return await asyncio.wait_for(self._chunk_pulls.get(), timeout=timeout)
+
+    async def wait_for_chunk_available(self, timeout: float = 30) -> dict:
+        """Wait for a chunk_available notification."""
+        return await asyncio.wait_for(self._chunk_available.get(), timeout=timeout)
+
+    async def wait_for_chunk_data(self, timeout: float = 30) -> dict:
+        """Wait for chunk_data delivery."""
+        return await asyncio.wait_for(self._chunk_data.get(), timeout=timeout)
+
     # ── Internal ─────────────────────────────────────────────
 
     async def _send(self, msg: dict) -> None:
@@ -414,6 +483,39 @@ class SignalingClient:
                         meeting_point=m.get("meetingPoint"),
                     )
                 )
+
+            case "channel-owner-registered":
+                logger.info("Registered as channel owner: %s", msg.get("channelId"))
+
+            case "channel-subscribed":
+                logger.info("Subscribed to channel: %s", msg.get("channelId"))
+
+            case "chunk_announce_ack":
+                logger.debug("Chunk announce ack: %s chunks", msg.get("registered"))
+
+            case "chunk_pull":
+                await self._chunk_pulls.put(msg)
+                if self._on_chunk_pull:
+                    await self._on_chunk_pull(msg)
+
+            case "chunk_available":
+                await self._chunk_available.put(msg)
+                if self._on_chunk_available:
+                    await self._on_chunk_available(msg)
+
+            case "chunk_data":
+                await self._chunk_data.put(msg)
+                if self._on_chunk_data:
+                    await self._on_chunk_data(msg)
+
+            case "chunk_pulling":
+                logger.debug("Chunk pulling: %s", msg.get("chunkId"))
+
+            case "chunk_push_ack":
+                logger.debug("Chunk push ack: %s", msg.get("chunkId"))
+
+            case "chunk_error":
+                logger.warning("Chunk error for %s: %s", msg.get("chunkId"), msg.get("error"))
 
             case "error":
                 logger.error("Server error: %s", msg.get("message"))
