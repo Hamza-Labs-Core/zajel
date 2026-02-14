@@ -26,29 +26,31 @@ class ChannelsListScreen extends ConsumerWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Create Channel'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameController,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: 'Channel Name',
-                hintText: 'e.g. Project Updates',
-                border: OutlineInputBorder(),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: 'Channel Name',
+                  hintText: 'e.g. Project Updates',
+                  border: OutlineInputBorder(),
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: descriptionController,
-              decoration: const InputDecoration(
-                labelText: 'Description (optional)',
-                hintText: 'What is this channel about?',
-                border: OutlineInputBorder(),
+              const SizedBox(height: 12),
+              TextField(
+                controller: descriptionController,
+                decoration: const InputDecoration(
+                  labelText: 'Description (optional)',
+                  hintText: 'What is this channel about?',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 2,
               ),
-              maxLines: 2,
-            ),
-          ],
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -91,14 +93,16 @@ class ChannelsListScreen extends ConsumerWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Subscribe to Channel'),
-        content: TextField(
-          controller: linkController,
-          decoration: const InputDecoration(
-            labelText: 'Channel invite link',
-            hintText: 'zajel://channel/...',
-            border: OutlineInputBorder(),
+        content: SingleChildScrollView(
+          child: TextField(
+            controller: linkController,
+            decoration: const InputDecoration(
+              labelText: 'Channel invite link',
+              hintText: 'zajel://channel/...',
+              border: OutlineInputBorder(),
+            ),
+            maxLines: 4,
           ),
-          maxLines: 4,
         ),
         actions: [
           TextButton(

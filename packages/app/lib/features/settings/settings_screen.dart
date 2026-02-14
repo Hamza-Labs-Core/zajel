@@ -425,24 +425,26 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Bootstrap Server'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'The bootstrap server helps discover available VPS servers. '
-              'Only change this if you know what you\'re doing.',
-              style: TextStyle(fontSize: 12),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _serverUrlController,
-              autofocus: true,
-              decoration: const InputDecoration(
-                hintText: 'https://bootstrap.example.com',
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'The bootstrap server helps discover available VPS servers. '
+                'Only change this if you know what you\'re doing.',
+                style: TextStyle(fontSize: 12),
               ),
-            ),
-          ],
+              const SizedBox(height: 16),
+              TextField(
+                controller: _serverUrlController,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: 'https://bootstrap.example.com',
+                ),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
