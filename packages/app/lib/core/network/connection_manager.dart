@@ -130,6 +130,10 @@ class ConnectionManager {
       )>.broadcast();
   final _fileCompleteController =
       StreamController<(String peerId, String fileId)>.broadcast();
+  final _typingController =
+      StreamController<(String peerId, bool isTyping)>.broadcast();
+  final _receiptController =
+      StreamController<(String peerId, String receiptType)>.broadcast();
 
   StreamSubscription? _signalingSubscription;
 
@@ -205,6 +209,12 @@ class ConnectionManager {
 
   /// Stream of file transfer completions.
   Stream<(String, String)> get fileCompletes => _fileCompleteController.stream;
+
+  /// Stream of typing indicator events (peerId, isTyping).
+  Stream<(String, bool)> get typingIndicators => _typingController.stream;
+
+  /// Stream of delivery receipt events (peerId, receiptType: "d" or "r").
+  Stream<(String, String)> get receipts => _receiptController.stream;
 
   /// Current list of peers.
   List<Peer> get currentPeers => _peers.values.toList();
@@ -495,6 +505,15 @@ class ConnectionManager {
     await _webrtcService.sendMessage(peerId, plaintext);
   }
 
+  /// Send a typing indicator to a peer (best-effort, non-critical).
+  Future<void> sendTypingIndicator(String peerId, bool isTyping) async {
+    try {
+      await _webrtcService.sendMessage(peerId, 'typ:${isTyping ? '1' : '0'}');
+    } catch (_) {
+      // Best-effort — typing indicators are non-critical
+    }
+  }
+
   /// Send a file to a peer.
   Future<void> sendFile(
     String peerId,
@@ -544,6 +563,8 @@ class ConnectionManager {
     await _fileChunksController.close();
     await _fileStartController.close();
     await _fileCompleteController.close();
+    await _typingController.close();
+    await _receiptController.close();
     await _pairRequestController.close();
     await _linkRequestController.close();
   }
@@ -555,6 +576,20 @@ class ConnectionManager {
       // Check if this is a message from a linked device (needs to be proxied to a peer)
       if (peerId.startsWith('link_')) {
         _handleLinkedDeviceMessage(peerId, message);
+        return;
+      }
+
+      // Handle typing indicator
+      if (message.startsWith('typ:')) {
+        final isTyping = message == 'typ:1';
+        _typingController.add((peerId, isTyping));
+        return;
+      }
+
+      // Handle delivery receipt
+      if (message.startsWith('rcpt:')) {
+        final receiptType = message.substring(5); // "d" or "r"
+        _receiptController.add((peerId, receiptType));
         return;
       }
 

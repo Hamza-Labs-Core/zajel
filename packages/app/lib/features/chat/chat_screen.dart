@@ -40,6 +40,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   bool _isIncomingCallDialogOpen = false;
   bool _showEmojiPicker = false;
   StreamSubscription<CallState>? _voipStateSubscription;
+  Timer? _typingTimer;
+  bool _isTyping = false;
+  StreamSubscription? _typingSubscription;
+  StreamSubscription? _receiptSubscription;
 
   /// Check if running on desktop platform
   bool get _isDesktop =>
@@ -59,12 +63,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     WidgetsBinding.instance.addObserver(this);
     _listenToMessages();
     _setupVoipListener();
+    _setupTypingListener();
+    _setupReceiptListener();
+
+    // Send read receipt when chat screen is opened
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _sendReadReceipt();
+    });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _messageFocusNode.requestFocus();
+      _sendReadReceipt();
     }
   }
 
@@ -88,6 +100,67 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     });
   }
 
+  void _setupTypingListener() {
+    final connectionManager = ref.read(connectionManagerProvider);
+    _typingSubscription = connectionManager.typingIndicators.listen((event) {
+      final (peerId, isTyping) = event;
+      if (peerId != widget.peerId || !mounted) return;
+      final current = ref.read(peerTypingProvider);
+      if (isTyping) {
+        ref.read(peerTypingProvider.notifier).state = {...current, peerId};
+      } else {
+        ref.read(peerTypingProvider.notifier).state = {...current}..remove(peerId);
+      }
+    });
+  }
+
+  void _setupReceiptListener() {
+    final connectionManager = ref.read(connectionManagerProvider);
+    _receiptSubscription = connectionManager.receipts.listen((event) {
+      final (peerId, receiptType) = event;
+      if (peerId != widget.peerId || !mounted) return;
+
+      final status =
+          receiptType == 'r' ? MessageStatus.read : MessageStatus.delivered;
+      // Update the most recent outgoing message that hasn't reached this status yet
+      final messages = ref.read(chatMessagesProvider(widget.peerId));
+      for (final msg in messages.reversed) {
+        if (msg.isOutgoing && msg.status.index < status.index) {
+          ref
+              .read(chatMessagesProvider(widget.peerId).notifier)
+              .updateMessageStatus(msg.localId, status);
+          break;
+        }
+      }
+    });
+  }
+
+  void _onTextChanged(String text) {
+    if (text.isNotEmpty && !_isTyping) {
+      _isTyping = true;
+      _sendTypingIndicator(true);
+    }
+    _typingTimer?.cancel();
+    _typingTimer = Timer(const Duration(seconds: 3), () {
+      _isTyping = false;
+      _sendTypingIndicator(false);
+    });
+  }
+
+  void _sendTypingIndicator(bool isTyping) {
+    final connectionManager = ref.read(connectionManagerProvider);
+    connectionManager.sendTypingIndicator(widget.peerId, isTyping);
+  }
+
+  void _sendReadReceipt() {
+    try {
+      final connectionManager = ref.read(connectionManagerProvider);
+      connectionManager.sendMessage(widget.peerId, 'rcpt:r');
+    } catch (_) {
+      // Best-effort — don't fail if peer is not connected
+    }
+  }
+
   void _listenToMessages() {
     // Messages are persisted by the global listener in main.dart.
     // Here we just reload from DB when a new message arrives for this peer.
@@ -105,6 +178,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _typingTimer?.cancel();
+    _typingSubscription?.cancel();
+    _receiptSubscription?.cancel();
     _voipStateSubscription?.cancel();
     _messageController.dispose();
     _scrollController.dispose();
@@ -161,6 +237,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               ? _buildEmptyState()
               : _buildMessageList(messages),
         ),
+        _buildTypingIndicator(),
         _buildInputBar(),
         if (_showEmojiPicker)
           FilteredEmojiPicker(
@@ -346,6 +423,25 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     ];
   }
 
+  Widget _buildTypingIndicator() {
+    final typingPeers = ref.watch(peerTypingProvider);
+    if (!typingPeers.contains(widget.peerId)) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          'typing...',
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
+            fontStyle: FontStyle.italic,
+            fontSize: 12,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildEmptyState() {
     return Center(
       child: Padding(
@@ -515,6 +611,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 ),
                 textCapitalization: TextCapitalization.sentences,
                 maxLines: null,
+                onChanged: _onTextChanged,
                 onTap: () {
                   if (_showEmojiPicker) {
                     setState(() => _showEmojiPicker = false);
@@ -550,6 +647,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
+
+    // Cancel typing indicator on send
+    _typingTimer?.cancel();
+    if (_isTyping) {
+      _isTyping = false;
+      _sendTypingIndicator(false);
+    }
 
     setState(() => _isSending = true);
 

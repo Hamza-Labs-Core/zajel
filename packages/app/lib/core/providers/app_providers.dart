@@ -348,6 +348,21 @@ final messagesStreamProvider = StreamProvider<(String, String)>((ref) {
   return connectionManager.messages;
 });
 
+/// Provider for the typing indicator stream.
+final typingStreamProvider = StreamProvider<(String, bool)>((ref) {
+  final connectionManager = ref.watch(connectionManagerProvider);
+  return connectionManager.typingIndicators;
+});
+
+/// Provider for the delivery receipt stream.
+final receiptStreamProvider = StreamProvider<(String, String)>((ref) {
+  final connectionManager = ref.watch(connectionManagerProvider);
+  return connectionManager.receipts;
+});
+
+/// Provider tracking which peers are currently typing.
+final peerTypingProvider = StateProvider<Set<String>>((ref) => {});
+
 /// Provider for message storage (SQLite).
 final messageStorageProvider = Provider<MessageStorage>((ref) {
   final storage = MessageStorage();

@@ -665,7 +665,11 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
 
       // Skip protocol messages — handled by their respective services
       // (e.g. GroupInvitationService) and must not leak into chat.
-      if (message.startsWith('ginv:') || message.startsWith('grp:')) {
+      if (message.startsWith('ginv:') ||
+          message.startsWith('grp:') ||
+          message.startsWith('grm:') ||
+          message.startsWith('typ:') ||
+          message.startsWith('rcpt:')) {
         return;
       }
 
@@ -679,6 +683,13 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
         status: MessageStatus.delivered,
       );
       ref.read(chatMessagesProvider(peerId).notifier).addMessage(msg);
+
+      // Send delivery receipt back to the sender (best-effort)
+      try {
+        connectionManager.sendMessage(peerId, 'rcpt:d');
+      } catch (_) {
+        // Best-effort — don't fail message receipt
+      }
 
       // Show notification
       final settings = ref.read(notificationSettingsProvider);
@@ -695,6 +706,23 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
         content: message,
         settings: settings,
       );
+    });
+
+    // Handle delivery receipts — update outgoing message statuses
+    connectionManager.receipts.listen((event) {
+      final (peerId, receiptType) = event;
+      final status =
+          receiptType == 'r' ? MessageStatus.read : MessageStatus.delivered;
+      final messages = ref.read(chatMessagesProvider(peerId));
+      // Update the most recent outgoing message that hasn't reached this status
+      for (final msg in messages.reversed) {
+        if (msg.isOutgoing && msg.status.index < status.index) {
+          ref
+              .read(chatMessagesProvider(peerId).notifier)
+              .updateMessageStatus(msg.localId, status);
+          break;
+        }
+      }
     });
 
     // Notify on file received

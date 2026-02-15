@@ -296,6 +296,10 @@ class ZajelHeadlessClient:
         self._pending_group_invitations: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
         self._seen_group_invitations: set[str] = set()
 
+        # Typing indicator state
+        self._typing_states: dict[str, bool] = {}  # peer_id -> is_typing
+        self._receipt_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()  # (peer_id, receipt_type)
+
     async def __aenter__(self) -> "ZajelHeadlessClient":
         return self
 
@@ -449,6 +453,56 @@ class ZajelHeadlessClient:
     async def receive_message(self, timeout: float = 30) -> ReceivedMessage:
         """Wait for a text message from any peer."""
         return await asyncio.wait_for(self._message_queue.get(), timeout=timeout)
+
+    # ── Typing Indicators & Delivery Receipts ────────────────
+
+    async def send_typing_indicator(self, peer_id: str, is_typing: bool) -> None:
+        """Send a typing indicator to a peer.
+
+        Args:
+            peer_id: The peer to notify.
+            is_typing: True if typing, False if stopped.
+        """
+        if peer_id not in self._connected_peers:
+            return
+        if not self._crypto.has_session_key(peer_id):
+            return
+        try:
+            payload = f"typ:{'1' if is_typing else '0'}"
+            encrypted = self._crypto.encrypt(peer_id, payload)
+            await self._webrtc.send_message(encrypted)
+            logger.debug("Sent typing indicator to %s: %s", peer_id, is_typing)
+        except Exception as e:
+            logger.debug("Failed to send typing indicator: %s", e)
+
+    async def send_read_receipt(self, peer_id: str) -> None:
+        """Send a read receipt to a peer.
+
+        Args:
+            peer_id: The peer to notify.
+        """
+        if peer_id not in self._connected_peers:
+            return
+        if not self._crypto.has_session_key(peer_id):
+            return
+        try:
+            encrypted = self._crypto.encrypt(peer_id, "rcpt:r")
+            await self._webrtc.send_message(encrypted)
+            logger.debug("Sent read receipt to %s", peer_id)
+        except Exception as e:
+            logger.debug("Failed to send read receipt: %s", e)
+
+    async def wait_for_receipt(self, timeout: float = 30) -> tuple[str, str]:
+        """Wait for a delivery receipt from any peer.
+
+        Returns:
+            (peer_id, receipt_type) where receipt_type is "d" (delivered) or "r" (read).
+        """
+        return await asyncio.wait_for(self._receipt_queue.get(), timeout=timeout)
+
+    def is_peer_typing(self, peer_id: str) -> bool:
+        """Check if a peer is currently typing."""
+        return self._typing_states.get(peer_id, False)
 
     # ── Calls ────────────────────────────────────────────────
 
@@ -2344,6 +2398,26 @@ class ZajelHeadlessClient:
                 try:
                     plaintext = self._crypto.decrypt(peer_id, msg["data"])
 
+                    # Check for typing indicator prefix
+                    if plaintext.startswith("typ:"):
+                        is_typing = plaintext == "typ:1"
+                        self._typing_states[peer_id] = is_typing
+                        if self._loop and self._loop.is_running():
+                            self._loop.create_task(
+                                self._emit_logged("typing", peer_id, is_typing)
+                            )
+                        return
+
+                    # Check for delivery receipt prefix
+                    if plaintext.startswith("rcpt:"):
+                        receipt_type = plaintext[5:]  # "d" or "r"
+                        self._receipt_queue.put_nowait((peer_id, receipt_type))
+                        if self._loop and self._loop.is_running():
+                            self._loop.create_task(
+                                self._emit_logged("receipt", peer_id, receipt_type)
+                            )
+                        return
+
                     # Check for group invitation prefix
                     if plaintext.startswith("ginv:"):
                         self._handle_group_invitation(
@@ -2373,6 +2447,21 @@ class ZajelHeadlessClient:
                         self._loop.create_task(
                             self._emit_logged("message", peer_id, plaintext, "text")
                         )
+
+                    # Send automatic delivery receipt (best-effort)
+                    if self._loop and self._loop.is_running():
+                        async def _send_delivery_receipt(
+                            _peer_id=peer_id,
+                        ):
+                            try:
+                                encrypted = self._crypto.encrypt(
+                                    _peer_id, "rcpt:d"
+                                )
+                                await self._webrtc.send_message(encrypted)
+                            except Exception:
+                                pass
+
+                        self._loop.create_task(_send_delivery_receipt())
                 except Exception as e:
                     logger.error("Decrypt failed for peer %s: %s", peer_id, e)
             else:
