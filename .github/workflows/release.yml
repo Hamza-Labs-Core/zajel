@@ -382,10 +382,6 @@ jobs:
       - name: Build Windows
         run: flutter build windows --release
 
-      - name: Create zip
-        run: |
-          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath zajel-windows.zip
-
       - name: Decode certificate
         if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' }}
         env:
@@ -393,6 +389,21 @@ jobs:
         run: |
           $cert = [System.Convert]::FromBase64String("$env:WINDOWS_CERTIFICATE_BASE64")
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\certificate.pfx", $cert)
+
+      - name: Sign executable
+        if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        env:
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $signtool = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits" -Recurse -Filter signtool.exe | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { throw "signtool.exe not found" }
+          # Sign only the main application executable
+          & $signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f "$env:RUNNER_TEMP\certificate.pfx" /p "$env:WINDOWS_CERTIFICATE_PASSWORD" "build\windows\x64\runner\Release\zajel.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Signing failed" }
+
+      - name: Create zip
+        run: |
+          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath zajel-windows.zip
 
       - name: Create MSIX
         if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' }}
