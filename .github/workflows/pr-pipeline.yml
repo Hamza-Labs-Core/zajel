@@ -909,14 +909,13 @@ jobs:
           APP_VERSION: ${{ needs.tag-prerelease.outputs.version }}
           BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL }}
           ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
-          VPS_DOMAIN: ${{ vars.QA_VPS_DOMAIN }}
           CERTBOT_EMAIL: ${{ vars.CERTBOT_EMAIL || 'admin@hamzalabs.dev' }}
         with:
           host: ${{ vars.QA_VPS_IP }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          envs: APP_VERSION,BOOTSTRAP_URL,ZAJEL_ADMIN_JWT_SECRET,VPS_DOMAIN,CERTBOT_EMAIL
+          envs: APP_VERSION,BOOTSTRAP_URL,ZAJEL_ADMIN_JWT_SECRET,CERTBOT_EMAIL
           script: |
             set -e
 
@@ -933,43 +932,58 @@ jobs:
               sudo npm install -g pm2
             fi
 
-            # Setup TLS with certbot if domain is configured
-            TLS_CERT=""
-            TLS_KEY=""
-            if [ -n "$VPS_DOMAIN" ]; then
-              # Install certbot if not present
-              if ! command -v certbot &> /dev/null; then
-                echo "Installing certbot..."
-                sudo apt-get update -qq
-                sudo apt-get install -y -qq certbot
-              fi
-
-              CERT_DIR="/etc/letsencrypt/live/${VPS_DOMAIN}"
-              if [ ! -f "${CERT_DIR}/fullchain.pem" ]; then
-                echo "Obtaining TLS certificate for ${VPS_DOMAIN}..."
-                # Stop any service on port 80 temporarily for standalone verification
-                sudo certbot certonly --standalone --non-interactive \
-                  --agree-tos -m "${CERTBOT_EMAIL}" \
-                  -d "${VPS_DOMAIN}" \
-                  --preferred-challenges http
-              else
-                echo "TLS certificate exists for ${VPS_DOMAIN}, attempting renewal..."
-                sudo certbot renew --quiet || true
-              fi
-
-              if [ -f "${CERT_DIR}/fullchain.pem" ]; then
-                TLS_CERT="${CERT_DIR}/fullchain.pem"
-                TLS_KEY="${CERT_DIR}/privkey.pem"
-                # Ensure the server user can read the certs
-                sudo chmod 0755 /etc/letsencrypt/live /etc/letsencrypt/archive
-                sudo chmod 0644 "${CERT_DIR}/fullchain.pem" "${CERT_DIR}/../../../archive/${VPS_DOMAIN}/fullchain"*.pem
-                sudo chmod 0640 "${CERT_DIR}/privkey.pem" "${CERT_DIR}/../../../archive/${VPS_DOMAIN}/privkey"*.pem
-                sudo chown root:$(id -gn) "${CERT_DIR}/../../../archive/${VPS_DOMAIN}/privkey"*.pem
-                echo "TLS configured: cert=${TLS_CERT}"
-              else
-                echo "WARNING: Failed to obtain TLS certificate, falling back to plain WS"
-              fi
+            # Get public IP
+            PUBLIC_IP=$(curl -sf http://checkip.amazonaws.com || curl -sf http://ifconfig.me)
+            if [ -z "$PUBLIC_IP" ]; then
+              echo "ERROR: Could not determine public IP"
+              exit 1
             fi
+            echo "Public IP: ${PUBLIC_IP}"
+
+            # Install/upgrade certbot for IP address certificate support (>= 5.3.0)
+            if ! command -v certbot &> /dev/null; then
+              echo "Installing certbot..."
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq python3-pip
+            fi
+            sudo pip3 install --break-system-packages --upgrade certbot 2>/dev/null \
+              || sudo pip3 install --upgrade certbot
+
+            echo "Certbot version: $(certbot --version 2>&1)"
+
+            # Obtain TLS certificate for IP address (Let's Encrypt, 6-day short-lived)
+            CERT_NAME="zajel-vps"
+            CERT_DIR="/etc/letsencrypt/live/${CERT_NAME}"
+            if [ ! -f "${CERT_DIR}/fullchain.pem" ]; then
+              echo "Obtaining TLS certificate for ${PUBLIC_IP}..."
+              sudo certbot certonly --standalone --non-interactive \
+                --agree-tos -m "${CERTBOT_EMAIL}" \
+                --ip-address "${PUBLIC_IP}" \
+                --preferred-profile shortlived \
+                --cert-name "${CERT_NAME}"
+            else
+              echo "TLS certificate exists, attempting renewal..."
+              sudo certbot renew --quiet --cert-name "${CERT_NAME}" || true
+            fi
+
+            if [ ! -f "${CERT_DIR}/fullchain.pem" ]; then
+              echo "ERROR: Failed to obtain TLS certificate for ${PUBLIC_IP}"
+              exit 1
+            fi
+
+            TLS_CERT="${CERT_DIR}/fullchain.pem"
+            TLS_KEY="${CERT_DIR}/privkey.pem"
+
+            # Ensure the server user can read the certs
+            sudo chmod 0755 /etc/letsencrypt/live /etc/letsencrypt/archive
+            sudo chmod 0644 "${CERT_DIR}/../../../archive/${CERT_NAME}/fullchain"*.pem
+            sudo chmod 0640 "${CERT_DIR}/../../../archive/${CERT_NAME}/privkey"*.pem
+            sudo chown root:$(id -gn) "${CERT_DIR}/../../../archive/${CERT_NAME}/privkey"*.pem
+            echo "TLS configured: cert=${TLS_CERT}"
+
+            # Setup auto-renewal cron (6-day certs need frequent renewal)
+            echo "0 3 */3 * * root certbot renew --quiet --deploy-hook 'pm2 restart zajel-server-qa'" \
+              | sudo tee /etc/cron.d/zajel-cert-renew > /dev/null
 
             # Create deployment directory
             sudo mkdir -p /opt/zajel/server-vps-qa
@@ -980,20 +994,12 @@ jobs:
             # Install dependencies
             npm ci --omit=dev
 
-            # Determine public endpoint
-            PUBLIC_IP=$(curl -sf http://checkip.amazonaws.com || curl -sf http://ifconfig.me || echo "localhost")
-            if [ -n "$TLS_CERT" ] && [ -n "$VPS_DOMAIN" ]; then
-              PUBLIC_ENDPOINT="wss://${VPS_DOMAIN}:8443"
-              LISTEN_PORT=8443
-            else
-              PUBLIC_ENDPOINT="ws://${PUBLIC_IP}:8080"
-              LISTEN_PORT=8080
-            fi
+            PUBLIC_ENDPOINT="wss://${PUBLIC_IP}:8443"
 
             # Create QA startup script with env vars
             cat > start-qa.sh << EOF
             #!/bin/bash
-            export ZAJEL_PORT=${LISTEN_PORT}
+            export ZAJEL_PORT=8443
             export ZAJEL_KEY_PATH=./data-qa/server.key
             export ZAJEL_DB_PATH=./data-qa/zajel.db
             export ZAJEL_PUBLIC_ENDPOINT=${PUBLIC_ENDPOINT}
@@ -1001,18 +1007,10 @@ jobs:
             export ZAJEL_BOOTSTRAP_URL=${BOOTSTRAP_URL}
             export ZAJEL_ADMIN_JWT_SECRET=${ZAJEL_ADMIN_JWT_SECRET}
             export ZAJEL_CF_ADMIN_URL=https://admin.zajel.qa.hamzalabs.dev
-            export NODE_ENV=qa
-            export APP_VERSION=${APP_VERSION}
-            EOF
-
-            if [ -n "$TLS_CERT" ]; then
-              cat >> start-qa.sh << EOF
             export ZAJEL_TLS_CERT=${TLS_CERT}
             export ZAJEL_TLS_KEY=${TLS_KEY}
-            EOF
-            fi
-
-            cat >> start-qa.sh << EOF
+            export NODE_ENV=qa
+            export APP_VERSION=${APP_VERSION}
             cd /opt/zajel/server-vps-qa
             exec node dist/index.js
             EOF
@@ -1028,11 +1026,9 @@ jobs:
             pm2 save
 
             # Health check
-            HEALTH_PROTO="http"
-            [ -n "$TLS_CERT" ] && HEALTH_PROTO="https"
             sleep 5
             for i in {1..6}; do
-              if curl -sf -k "${HEALTH_PROTO}://localhost:${LISTEN_PORT}/health" | grep -q "healthy"; then
+              if curl -sf -k "https://localhost:8443/health" | grep -q "healthy"; then
                 echo "Server healthy (${PUBLIC_ENDPOINT})"
                 exit 0
               fi
@@ -1105,26 +1101,17 @@ jobs:
       - name: Resolve signaling URL
         run: |
           URL="${{ vars.VPS_QA_WS_URL }}"
-          # Try WSS domain first, then fall back to WS on IP
-          if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_DOMAIN }}" ]; then
-            DOMAIN="${{ vars.QA_VPS_DOMAIN }}"
-            echo "Probing VPS at ${DOMAIN}:8443 (WSS)..."
-            if timeout 10 curl -sf "https://${DOMAIN}:8443/health" >/dev/null 2>&1; then
-              URL="wss://${DOMAIN}:8443"
-              echo "Reachable and healthy: ${DOMAIN}:8443"
-            fi
-          fi
           if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
-              echo "Probing VPS at $ip:8080 (WS fallback)..."
-              if timeout 10 curl -sf "http://${ip}:8080/health" >/dev/null 2>&1; then
-                URL="ws://${ip}:8080"
-                echo "Reachable and healthy: $ip:8080"
+              echo "Probing VPS at $ip:8443 (WSS)..."
+              if timeout 10 curl -sf "https://${ip}:8443/health" >/dev/null 2>&1; then
+                URL="wss://${ip}:8443"
+                echo "Reachable and healthy: $ip:8443"
                 break
               else
-                echo "Not reachable: $ip:8080"
+                echo "Not reachable: $ip:8443"
               fi
             done
           fi
@@ -1527,25 +1514,17 @@ jobs:
       - name: Resolve signaling URL
         run: |
           URL="${{ vars.VPS_QA_WS_URL }}"
-          if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_DOMAIN }}" ]; then
-            DOMAIN="${{ vars.QA_VPS_DOMAIN }}"
-            echo "Probing VPS at ${DOMAIN}:8443 (WSS)..."
-            if timeout 10 curl -sf "https://${DOMAIN}:8443/health" >/dev/null 2>&1; then
-              URL="wss://${DOMAIN}:8443"
-              echo "Reachable and healthy: ${DOMAIN}:8443"
-            fi
-          fi
           if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
-              echo "Probing VPS at $ip:8080 (WS fallback)..."
-              if timeout 10 curl -sf "http://${ip}:8080/health" >/dev/null 2>&1; then
-                URL="ws://${ip}:8080"
-                echo "Reachable and healthy: $ip:8080"
+              echo "Probing VPS at $ip:8443 (WSS)..."
+              if timeout 10 curl -sf "https://${ip}:8443/health" >/dev/null 2>&1; then
+                URL="wss://${ip}:8443"
+                echo "Reachable and healthy: $ip:8443"
                 break
               else
-                echo "Not reachable: $ip:8080"
+                echo "Not reachable: $ip:8443"
               fi
             done
           fi
@@ -1632,15 +1611,9 @@ jobs:
         shell: bash
         run: |
           URL="${{ vars.VPS_QA_WS_URL }}"
-          if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_DOMAIN }}" ]; then
-            DOMAIN="${{ vars.QA_VPS_DOMAIN }}"
-            if timeout 10 curl -sf "https://${DOMAIN}:8443/health" >/dev/null 2>&1; then
-              URL="wss://${DOMAIN}:8443"
-            fi
-          fi
           if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
             FIRST_IP=$(echo "${{ vars.QA_VPS_IP }}" | cut -d',' -f1 | tr -d ' ')
-            URL="ws://${FIRST_IP}:8080"
+            URL="wss://${FIRST_IP}:8443"
           fi
           echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
           echo "Resolved SIGNALING_URL=$URL"
