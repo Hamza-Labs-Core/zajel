@@ -17,12 +17,13 @@ const MAX_SERVER_ENTRIES = 1000;
 
 /**
  * Validate an ID string for use in storage keys.
- * Allows alphanumeric characters, dots, hyphens, underscores, and colons.
+ * Allows alphanumeric characters, dots, hyphens, underscores, colons,
+ * plus, forward slash, and equals (for base64-encoded keys in serverIds).
  * @param {string} id
  * @returns {boolean}
  */
 function isValidId(id) {
-  return typeof id === 'string' && id.length >= 1 && id.length <= 128 && /^[\w:.-]+$/.test(id);
+  return typeof id === 'string' && id.length >= 1 && id.length <= 128 && /^[\w:.+/=-]+$/.test(id);
 }
 
 export class ServerRegistryDO {

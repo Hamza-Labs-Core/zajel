@@ -645,9 +645,24 @@ describe('Bootstrap Service E2E Tests', () => {
       expect(listData.servers[0].serverId).toBe(serverData.serverId);
     });
 
-    it('should reject server IDs with invalid characters', async () => {
+    it('should accept server IDs with base64 characters', async () => {
       const serverData = {
         serverId: 'ed25519:abc123/def+456==',
+        endpoint: 'wss://special.example.com',
+        publicKey: 'special-key',
+      };
+
+      const registerResponse = await serverRegistry.fetch(
+        createRequest('POST', '/servers', serverData)
+      );
+      expect(registerResponse.status).toBe(200);
+      const data = await registerResponse.json();
+      expect(data.success).toBe(true);
+    });
+
+    it('should reject server IDs with invalid characters', async () => {
+      const serverData = {
+        serverId: 'ed25519:abc 123;def',
         endpoint: 'wss://special.example.com',
         publicKey: 'special-key',
       };
