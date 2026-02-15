@@ -244,6 +244,11 @@ export interface ServerConfig {
     publicEndpoint: string;
     region?: string;
   };
+  tls: {
+    certPath: string;
+    keyPath: string;
+    enabled: boolean;
+  };
   bootstrap: {
     serverUrl: string;          // CF Workers bootstrap server URL
     heartbeatInterval: number;  // How often to ping CF

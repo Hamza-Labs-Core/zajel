@@ -6,7 +6,9 @@
  * rendezvous for peer discovery.
  */
 
-import { createServer, type Server as HttpServer } from 'http';
+import { createServer as createHttpServer, type Server as HttpServer } from 'http';
+import { createServer as createHttpsServer } from 'https';
+import { readFileSync } from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
 import { loadConfig, type ServerConfig } from './config.js';
@@ -84,8 +86,8 @@ export async function createZajelServer(
   // Mutable reference for admin module (set after creation)
   let adminModuleRef: AdminModule | null = null;
 
-  // Create HTTP server
-  const httpServer = createServer(async (req, res) => {
+  // Create HTTP or HTTPS server depending on TLS config
+  const requestHandler = async (req: IncomingMessage, res: import('http').ServerResponse) => {
     // Admin dashboard routes (handled first)
     if (req.url?.startsWith('/admin')) {
       if (adminModuleRef) {
@@ -173,7 +175,19 @@ export async function createZajelServer(
     // Default response
     res.writeHead(404);
     res.end('Not Found');
-  });
+  };
+
+  let httpServer: HttpServer;
+  if (config.tls.enabled) {
+    const tlsOptions = {
+      cert: readFileSync(config.tls.certPath),
+      key: readFileSync(config.tls.keyPath),
+    };
+    httpServer = createHttpsServer(tlsOptions, requestHandler);
+    console.log('[Zajel] TLS enabled');
+  } else {
+    httpServer = createHttpServer(requestHandler);
+  }
 
   // Create WebSocket servers (separate for clients and federation)
   // maxPayload enforces size limits at the protocol level before buffering

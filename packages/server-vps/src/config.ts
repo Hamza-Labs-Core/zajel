@@ -40,6 +40,12 @@ export function loadConfig(): ServerConfig {
       region: process.env['ZAJEL_REGION'],
     },
 
+    tls: {
+      certPath: envString('ZAJEL_TLS_CERT', ''),
+      keyPath: envString('ZAJEL_TLS_KEY', ''),
+      enabled: !!(process.env['ZAJEL_TLS_CERT'] && process.env['ZAJEL_TLS_KEY']),
+    },
+
     bootstrap: {
       // CF Workers bootstrap server URL
       serverUrl: envString('ZAJEL_BOOTSTRAP_URL', 'https://signal.zajel.hamzalabs.dev'),
