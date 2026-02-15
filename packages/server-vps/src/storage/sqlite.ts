@@ -83,7 +83,7 @@ export class SQLiteStorage implements Storage {
 
     const publicKey = new Uint8Array(row.public_key);
     const privateKey = new Uint8Array(row.private_key);
-    const serverId = `ed25519:${row.public_key.toString('base64')}`;
+    const serverId = `ed25519:${row.public_key.toString('base64url')}`;
 
     // Compute node ID from public key
     const { sha256 } = await import('@noble/hashes/sha256');

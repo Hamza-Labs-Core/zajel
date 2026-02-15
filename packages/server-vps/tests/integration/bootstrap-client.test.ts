@@ -249,13 +249,14 @@ describe('Bootstrap Client E2E Tests', () => {
       expect(data.servers[0]!.serverId).toBe(vpsServer.identity.serverId);
     });
 
-    it('should have server ID in expected format ed25519:<base64>', async () => {
+    it('should have server ID in expected format ed25519:<base64url>', async () => {
       vi.useRealTimers();
 
       const config = createTestConfig(VPS_SERVER_PORT_1, mockBootstrapUrl);
       vpsServer = await createZajelServer(config);
 
-      expect(vpsServer.identity.serverId).toMatch(/^ed25519:[A-Za-z0-9+/]+=*$/);
+      // base64url uses - and _ instead of + and /, no padding
+      expect(vpsServer.identity.serverId).toMatch(/^ed25519:[A-Za-z0-9_-]+$/);
     });
 
     it('should include region in registration', async () => {
