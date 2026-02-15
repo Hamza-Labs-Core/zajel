@@ -400,3 +400,159 @@ class TestGroupStorage:
         assert msgs[0].sequence_number == 1
         assert msgs[1].sequence_number == 2
         assert msgs[2].sequence_number == 3
+
+
+# ── Member Removal ────────────────────────────────────────────
+
+
+class TestMemberRemoval:
+    """Tests for group member removal and key cleanup."""
+
+    def _make_group_with_members(self, member_count=3):
+        members = [
+            GroupMember(
+                device_id=f"dev_{i}",
+                display_name=f"User {i}",
+                public_key=f"key_{i}",
+            )
+            for i in range(member_count)
+        ]
+        return Group(
+            id="group-001",
+            name="Test Group",
+            self_device_id="dev_0",
+            members=members,
+            created_by="dev_0",
+        )
+
+    def test_remove_member_from_list(self):
+        """Removing a member should update the member list."""
+        group = self._make_group_with_members(3)
+        assert group.member_count == 3
+
+        # Remove dev_1
+        group.members = [m for m in group.members if m.device_id != "dev_1"]
+        assert group.member_count == 2
+        assert not any(m.device_id == "dev_1" for m in group.members)
+        assert any(m.device_id == "dev_0" for m in group.members)
+        assert any(m.device_id == "dev_2" for m in group.members)
+
+    def test_remove_member_sender_key_cleanup(self):
+        """Removing a member should clear their sender key."""
+        crypto = GroupCryptoService()
+        key_0 = crypto.generate_sender_key()
+        key_1 = crypto.generate_sender_key()
+        key_2 = crypto.generate_sender_key()
+
+        crypto.set_sender_key("g1", "dev_0", key_0)
+        crypto.set_sender_key("g1", "dev_1", key_1)
+        crypto.set_sender_key("g1", "dev_2", key_2)
+
+        # All keys present
+        assert crypto.has_sender_key("g1", "dev_0")
+        assert crypto.has_sender_key("g1", "dev_1")
+        assert crypto.has_sender_key("g1", "dev_2")
+
+        # Remove dev_1's key
+        crypto.remove_sender_key("g1", "dev_1")
+
+        # Only dev_1 key should be gone
+        assert crypto.has_sender_key("g1", "dev_0")
+        assert not crypto.has_sender_key("g1", "dev_1")
+        assert crypto.has_sender_key("g1", "dev_2")
+
+    def test_remove_member_key_zeroized(self):
+        """Removed sender key material should be zeroized."""
+        crypto = GroupCryptoService()
+        key = crypto.generate_sender_key()
+        crypto.set_sender_key("g1", "dev_1", key)
+
+        # Get reference to the key bytes before removal
+        key_ref = crypto.get_sender_key("g1", "dev_1")
+        assert key_ref is not None
+        original_bytes = bytearray(key_ref)  # copy
+
+        # Remove the key
+        crypto.remove_sender_key("g1", "dev_1")
+
+        # The original bytearray should be zeroized
+        assert all(b == 0 for b in key_ref)
+        # But our copy should still have the original bytes
+        assert not all(b == 0 for b in original_bytes)
+
+    def test_remove_nonexistent_member_key_is_safe(self):
+        """Removing a key that doesn't exist should not raise."""
+        crypto = GroupCryptoService()
+        # Should not raise
+        crypto.remove_sender_key("g1", "nonexistent")
+        crypto.remove_sender_key("nonexistent_group", "dev_1")
+
+    def test_key_rotation_after_removal(self):
+        """After removing a member, the remaining members should rotate keys."""
+        crypto = GroupCryptoService()
+        old_key = crypto.generate_sender_key()
+        crypto.set_sender_key("g1", "dev_0", old_key)
+
+        # Rotate: generate a new key and set it
+        new_key = crypto.generate_sender_key()
+        assert new_key != old_key
+
+        crypto.set_sender_key("g1", "dev_0", new_key)
+
+        # Old key should be overwritten
+        retrieved = crypto.get_sender_key("g1", "dev_0")
+        assert retrieved is not None
+        new_key_bytes = base64.b64decode(new_key)
+        assert bytes(retrieved) == new_key_bytes
+
+    def test_removed_member_cannot_decrypt_new_messages(self):
+        """A removed member should not be able to decrypt messages encrypted
+        with a rotated key."""
+        crypto = GroupCryptoService()
+
+        # Initial state: all three members have the same sender key for dev_0
+        original_key = crypto.generate_sender_key()
+        crypto.set_sender_key("g1", "dev_0", original_key)
+
+        # dev_0 sends a message
+        plaintext = b"Hello before removal"
+        encrypted_before = crypto.encrypt(plaintext, "g1", "dev_0")
+
+        # Verify everyone can decrypt with the old key
+        assert crypto.decrypt(encrypted_before, "g1", "dev_0") == plaintext
+
+        # Now rotate dev_0's key (simulating post-removal rotation)
+        new_key = crypto.generate_sender_key()
+        crypto.set_sender_key("g1", "dev_0", new_key)
+
+        # New message with rotated key
+        plaintext_new = b"Hello after removal"
+        encrypted_after = crypto.encrypt(plaintext_new, "g1", "dev_0")
+
+        # Can decrypt new message with new key
+        assert crypto.decrypt(encrypted_after, "g1", "dev_0") == plaintext_new
+
+        # Old encrypted message should fail with new key
+        with pytest.raises(Exception):
+            crypto.decrypt(encrypted_before, "g1", "dev_0")
+
+    def test_storage_persists_after_member_removal(self):
+        """Group storage should correctly reflect member removal."""
+        storage = GroupStorage()
+        group = self._make_group_with_members(3)
+        storage.save_group(group)
+
+        # Verify initial state
+        retrieved = storage.get_group("group-001")
+        assert retrieved is not None
+        assert retrieved.member_count == 3
+
+        # Remove dev_1 and save
+        group.members = [m for m in group.members if m.device_id != "dev_1"]
+        storage.save_group(group)
+
+        # Verify updated state
+        retrieved = storage.get_group("group-001")
+        assert retrieved is not None
+        assert retrieved.member_count == 2
+        assert not any(m.device_id == "dev_1" for m in retrieved.members)

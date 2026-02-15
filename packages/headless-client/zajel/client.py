@@ -17,6 +17,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional
 
@@ -28,12 +29,28 @@ from .channels import (
     Chunk,
     ChunkPayload,
     OwnedChannel,
+    Poll,
+    PollOption,
+    PollResults,
+    PollTracker,
     SubscribedChannel,
+    UpstreamMessage,
+    UpstreamMessageType,
+    UpstreamPayload,
     decode_channel_link,
     encode_channel_link,
     is_channel_link,
 )
 from .crypto import CryptoService
+from .dead_drop import (
+    ConnectionInfo,
+    DeadDrop,
+    DeadDropDecryptionError,
+    LiveMatch,
+    RendezvousResult,
+    create_dead_drop,
+    decrypt_dead_drop,
+)
 from .file_transfer import FileTransferService, FileTransferProgress
 from .groups import (
     Group,
@@ -256,6 +273,11 @@ class ZajelHeadlessClient:
         self._channel_content_queue: asyncio.Queue[tuple[str, ChunkPayload]] = (
             asyncio.Queue()
         )
+        self._poll_tracker = PollTracker()
+        self._polls: dict[str, Poll] = {}  # poll_id -> Poll
+        self._upstream_message_queue: asyncio.Queue[
+            tuple[str, UpstreamPayload]
+        ] = asyncio.Queue()
 
         # Group state
         self._group_storage = GroupStorage()
@@ -939,6 +961,479 @@ class ZajelHeadlessClient:
             self._channel_content_queue.get(), timeout=timeout
         )
 
+    # ── Channel Admin Management ────────────────────────────
+
+    async def appoint_channel_admin(
+        self, channel_id: str, admin_public_key: str, label: str
+    ) -> OwnedChannel:
+        """Appoint an admin to an owned channel.
+
+        Adds the admin's Ed25519 public key to the manifest and re-signs it.
+
+        Args:
+            channel_id: The channel ID.
+            admin_public_key: The admin's Ed25519 public key (base64).
+            label: A label for the admin (e.g., display name).
+
+        Returns:
+            The updated OwnedChannel.
+        """
+        channel = self._channel_storage.get_owned(channel_id)
+        if channel is None:
+            raise RuntimeError(f"Owned channel not found: {channel_id}")
+
+        self._channel_crypto.appoint_admin(channel, admin_public_key, label)
+        self._channel_storage.save_owned(channel)
+
+        logger.info(
+            "Appointed admin '%s' to channel %s", label, channel_id[:16]
+        )
+        return channel
+
+    async def remove_channel_admin(
+        self, channel_id: str, admin_public_key: str
+    ) -> OwnedChannel:
+        """Remove an admin from an owned channel.
+
+        Removes the admin and rotates the encryption key so the removed
+        admin cannot decrypt future content.
+
+        Args:
+            channel_id: The channel ID.
+            admin_public_key: The admin's Ed25519 public key (base64).
+
+        Returns:
+            The updated OwnedChannel.
+        """
+        channel = self._channel_storage.get_owned(channel_id)
+        if channel is None:
+            raise RuntimeError(f"Owned channel not found: {channel_id}")
+
+        self._channel_crypto.remove_admin(channel, admin_public_key)
+        self._channel_storage.save_owned(channel)
+
+        logger.info(
+            "Removed admin from channel %s (key rotated)", channel_id[:16]
+        )
+        return channel
+
+    # ── Channel Key Rotation ─────────────────────────────────
+
+    async def rotate_channel_key(self, channel_id: str) -> OwnedChannel:
+        """Rotate the encryption key for an owned channel.
+
+        Generates a new X25519 encryption keypair, increments the key epoch,
+        and re-signs the manifest. Previous key holders cannot decrypt
+        content encrypted with the new key.
+
+        Args:
+            channel_id: The channel ID.
+
+        Returns:
+            The updated OwnedChannel with new encryption keys.
+        """
+        channel = self._channel_storage.get_owned(channel_id)
+        if channel is None:
+            raise RuntimeError(f"Owned channel not found: {channel_id}")
+
+        old_epoch = channel.manifest.key_epoch
+        self._channel_crypto.rotate_encryption_key(channel)
+        self._channel_storage.save_owned(channel)
+
+        logger.info(
+            "Rotated encryption key for channel %s (epoch %d -> %d)",
+            channel_id[:16],
+            old_epoch,
+            channel.manifest.key_epoch,
+        )
+        return channel
+
+    # ── Upstream Messaging (Replies/Reactions) ────────────────
+
+    async def send_channel_reply(
+        self, channel_id: str, chunk_id: str, content: str
+    ) -> UpstreamMessage:
+        """Send a reply to a channel message as a subscriber.
+
+        The reply is encrypted with the owner's public key so only the
+        owner can read it. The VPS acts as a blind relay.
+
+        Args:
+            channel_id: The channel ID.
+            chunk_id: The chunk ID being replied to.
+            content: The reply text.
+
+        Returns:
+            The UpstreamMessage that was sent.
+        """
+        channel = self._channel_storage.get_channel(channel_id)
+        if channel is None:
+            raise RuntimeError(f"Not subscribed to channel {channel_id}")
+
+        if not channel.manifest.rules.replies_enabled:
+            raise RuntimeError("Replies are disabled for this channel")
+
+        payload = UpstreamPayload(
+            type=UpstreamMessageType.reply,
+            content=content,
+            reply_to=chunk_id,
+        )
+
+        msg = self._channel_crypto.encrypt_upstream(
+            payload=payload,
+            owner_encrypt_pub_b64=channel.manifest.current_encrypt_key,
+            channel_id=channel_id,
+            msg_type=UpstreamMessageType.reply,
+        )
+
+        # Send via signaling if connected
+        if self._signaling.is_connected:
+            ws_message = {
+                "type": "upstream-message",
+                "channelId": channel_id,
+                "message": msg.to_dict(),
+                "ephemeralPublicKey": msg._ephemeral_x25519_pub_b64,  # type: ignore[attr-defined]
+            }
+            await self._signaling.send_raw(ws_message)
+
+        logger.info(
+            "Sent reply to chunk %s in channel %s",
+            chunk_id,
+            channel_id[:16],
+        )
+        return msg
+
+    async def send_channel_reaction(
+        self, channel_id: str, chunk_id: str, reaction: str
+    ) -> UpstreamMessage:
+        """Send a reaction to a channel message as a subscriber.
+
+        Args:
+            channel_id: The channel ID.
+            chunk_id: The chunk ID being reacted to.
+            reaction: The emoji/reaction identifier.
+
+        Returns:
+            The UpstreamMessage that was sent.
+        """
+        channel = self._channel_storage.get_channel(channel_id)
+        if channel is None:
+            raise RuntimeError(f"Not subscribed to channel {channel_id}")
+
+        payload = UpstreamPayload(
+            type=UpstreamMessageType.reaction,
+            content=reaction,
+            reply_to=chunk_id,
+        )
+
+        msg = self._channel_crypto.encrypt_upstream(
+            payload=payload,
+            owner_encrypt_pub_b64=channel.manifest.current_encrypt_key,
+            channel_id=channel_id,
+            msg_type=UpstreamMessageType.reaction,
+        )
+
+        if self._signaling.is_connected:
+            ws_message = {
+                "type": "upstream-message",
+                "channelId": channel_id,
+                "message": msg.to_dict(),
+                "ephemeralPublicKey": msg._ephemeral_x25519_pub_b64,  # type: ignore[attr-defined]
+            }
+            await self._signaling.send_raw(ws_message)
+
+        logger.info(
+            "Sent reaction '%s' to chunk %s in channel %s",
+            reaction,
+            chunk_id,
+            channel_id[:16],
+        )
+        return msg
+
+    async def receive_upstream_message(
+        self,
+        channel_id: str,
+        upstream_data: dict,
+    ) -> UpstreamPayload:
+        """Receive and decrypt an upstream message as the channel owner.
+
+        Args:
+            channel_id: The channel ID.
+            upstream_data: The upstream message data dict with 'message' and
+                'ephemeralPublicKey' fields.
+
+        Returns:
+            The decrypted UpstreamPayload.
+        """
+        channel = self._channel_storage.get_owned(channel_id)
+        if channel is None:
+            raise RuntimeError(f"Owned channel not found: {channel_id}")
+
+        message = UpstreamMessage.from_dict(upstream_data["message"])
+        ephemeral_pub = upstream_data["ephemeralPublicKey"]
+
+        payload = self._channel_crypto.decrypt_upstream(
+            message=message,
+            encryption_private_key_b64=channel.encryption_key_private,
+            ephemeral_x25519_pub_b64=ephemeral_pub,
+        )
+
+        self._upstream_message_queue.put_nowait((channel_id, payload))
+        await self._events.emit(
+            "upstream_message", channel_id, payload
+        )
+
+        logger.info(
+            "Received upstream %s in channel %s",
+            payload.type.value,
+            channel_id[:16],
+        )
+        return payload
+
+    async def wait_for_upstream_message(
+        self, timeout: float = 30
+    ) -> tuple[str, UpstreamPayload]:
+        """Wait for an upstream message from any owned channel.
+
+        Returns:
+            (channel_id, payload) tuple.
+        """
+        return await asyncio.wait_for(
+            self._upstream_message_queue.get(), timeout=timeout
+        )
+
+    # ── Polling ──────────────────────────────────────────────
+
+    async def create_channel_poll(
+        self,
+        channel_id: str,
+        question: str,
+        options: list[str],
+        allow_multiple: bool = False,
+        closes_at: Optional[datetime] = None,
+    ) -> tuple[Poll, list[Chunk]]:
+        """Create a poll and broadcast it as channel chunks.
+
+        Only the channel owner can create polls.
+
+        Args:
+            channel_id: The channel ID.
+            question: The poll question.
+            options: List of option labels (at least 2).
+            allow_multiple: Whether multiple selections are allowed.
+            closes_at: When the poll closes (None = never).
+
+        Returns:
+            (poll, chunks) tuple.
+        """
+        channel = self._channel_storage.get_owned(channel_id)
+        if channel is None:
+            raise RuntimeError(f"Owned channel not found: {channel_id}")
+
+        if not channel.manifest.rules.polls_enabled:
+            raise RuntimeError("Polls are disabled for this channel")
+
+        if len(options) < 2:
+            raise RuntimeError("A poll must have at least 2 options")
+
+        from datetime import datetime as dt, timezone as tz
+
+        poll_id = f"poll_{uuid.uuid4().hex[:8]}"
+        poll = Poll(
+            poll_id=poll_id,
+            question=question,
+            options=[
+                PollOption(index=i, label=label) for i, label in enumerate(options)
+            ],
+            allow_multiple=allow_multiple,
+            created_at=dt.now(tz.utc),
+            closes_at=closes_at,
+        )
+
+        # Initialize vote tracking
+        self._poll_tracker.init_poll(poll_id)
+        self._polls[poll_id] = poll
+
+        channel.sequence += 1
+        routing_hash = self._channel_crypto.derive_routing_hash(
+            channel.encryption_key_private
+        )
+
+        chunks = self._channel_crypto.create_poll_chunks(
+            poll=poll,
+            channel=channel,
+            sequence=channel.sequence,
+            routing_hash=routing_hash,
+        )
+
+        # Store chunks locally
+        for chunk in chunks:
+            channel.chunks[chunk.chunk_id] = chunk
+
+        # Announce and push chunks
+        if self._signaling.is_connected:
+            chunk_list = [
+                {"chunkId": c.chunk_id, "routingHash": c.routing_hash}
+                for c in chunks
+            ]
+            await self._signaling.send_chunk_announce(
+                self._pairing_code or "",
+                channel_id,
+                chunk_list,
+            )
+            for chunk in chunks:
+                await self._signaling.send_chunk_push(
+                    chunk.chunk_id, channel_id, chunk.to_dict()
+                )
+
+        logger.info(
+            "Created poll '%s' in channel %s (%d options)",
+            question,
+            channel_id[:16],
+            len(options),
+        )
+        return poll, chunks
+
+    async def cast_channel_vote(
+        self, channel_id: str, poll_id: str, option_index: int
+    ) -> UpstreamMessage:
+        """Cast a vote on a channel poll as a subscriber.
+
+        The vote is sent upstream encrypted -- only the owner can see it.
+
+        Args:
+            channel_id: The channel ID.
+            poll_id: The poll being voted on.
+            option_index: The index of the selected option.
+
+        Returns:
+            The UpstreamMessage that was sent.
+        """
+        channel = self._channel_storage.get_channel(channel_id)
+        if channel is None:
+            raise RuntimeError(f"Not subscribed to channel {channel_id}")
+
+        if not channel.manifest.rules.polls_enabled:
+            raise RuntimeError("Polls are disabled for this channel")
+
+        payload = UpstreamPayload(
+            type=UpstreamMessageType.vote,
+            content="",
+            poll_id=poll_id,
+            vote_option_index=option_index,
+        )
+
+        msg = self._channel_crypto.encrypt_upstream(
+            payload=payload,
+            owner_encrypt_pub_b64=channel.manifest.current_encrypt_key,
+            channel_id=channel_id,
+            msg_type=UpstreamMessageType.vote,
+        )
+
+        if self._signaling.is_connected:
+            ws_message = {
+                "type": "upstream-message",
+                "channelId": channel_id,
+                "message": msg.to_dict(),
+                "ephemeralPublicKey": msg._ephemeral_x25519_pub_b64,  # type: ignore[attr-defined]
+            }
+            await self._signaling.send_raw(ws_message)
+
+        logger.info(
+            "Cast vote on poll %s (option %d) in channel %s",
+            poll_id,
+            option_index,
+            channel_id[:16],
+        )
+        return msg
+
+    async def tally_channel_poll(
+        self,
+        channel_id: str,
+        poll_id: str,
+        is_final: bool = False,
+    ) -> tuple[PollResults, list[Chunk]]:
+        """Tally votes for a poll and broadcast results.
+
+        Only the channel owner can tally votes.
+
+        Args:
+            channel_id: The channel ID.
+            poll_id: The poll ID.
+            is_final: Whether these are final results (poll is closed).
+
+        Returns:
+            (results, chunks) tuple.
+        """
+        channel = self._channel_storage.get_owned(channel_id)
+        if channel is None:
+            raise RuntimeError(f"Owned channel not found: {channel_id}")
+
+        poll = self._polls.get(poll_id)
+        if poll is None:
+            raise RuntimeError(f"Poll not found: {poll_id}")
+
+        results = self._poll_tracker.tally(poll)
+        results.is_final = is_final
+
+        channel.sequence += 1
+        routing_hash = self._channel_crypto.derive_routing_hash(
+            channel.encryption_key_private
+        )
+
+        chunks = self._channel_crypto.create_poll_results_chunks(
+            results=results,
+            poll=poll,
+            channel=channel,
+            sequence=channel.sequence,
+            routing_hash=routing_hash,
+            is_final=is_final,
+        )
+
+        # Store chunks locally
+        for chunk in chunks:
+            channel.chunks[chunk.chunk_id] = chunk
+
+        # Announce and push chunks
+        if self._signaling.is_connected:
+            chunk_list = [
+                {"chunkId": c.chunk_id, "routingHash": c.routing_hash}
+                for c in chunks
+            ]
+            await self._signaling.send_chunk_announce(
+                self._pairing_code or "",
+                channel_id,
+                chunk_list,
+            )
+            for chunk in chunks:
+                await self._signaling.send_chunk_push(
+                    chunk.chunk_id, channel_id, chunk.to_dict()
+                )
+
+        logger.info(
+            "Tallied poll %s in channel %s (%d votes, final=%s)",
+            poll_id,
+            channel_id[:16],
+            results.total_votes,
+            is_final,
+        )
+        return results, chunks
+
+    def record_poll_vote(
+        self, poll_id: str, option_index: int, sender_key: str
+    ) -> bool:
+        """Record a vote from a decrypted upstream message (owner-side).
+
+        Args:
+            poll_id: The poll ID.
+            option_index: The selected option index.
+            sender_key: The sender's ephemeral key (for dedup).
+
+        Returns:
+            True if the vote was recorded, False if duplicate.
+        """
+        return self._poll_tracker.record_vote(poll_id, option_index, sender_key)
+
     # ── Groups ──────────────────────────────────────────────
 
     async def create_group(self, name: str) -> Group:
@@ -1180,6 +1675,261 @@ class ZajelHeadlessClient:
         self._group_crypto.clear_group_keys(group_id)
         self._group_storage.delete_group(group_id)
         logger.info("Left group %s", group_id[:8])
+
+    async def remove_group_member(
+        self,
+        group_id: str,
+        member_device_id: str,
+    ) -> Group:
+        """Remove a member from a group.
+
+        After removal:
+        1. The member's sender key is cleared
+        2. The member is removed from the group's member list
+        3. Our sender key is rotated (new key generated)
+        4. A system message is broadcast to remaining members
+        5. The new sender key is distributed to remaining members
+
+        Matches the Flutter app's removeMember + rotateOwnKey flow.
+
+        Args:
+            group_id: The group ID.
+            member_device_id: The device ID of the member to remove.
+
+        Returns:
+            The updated Group with the member removed.
+
+        Raises:
+            RuntimeError: If the group is not found or the member is not
+                in the group.
+        """
+        group = self._group_storage.get_group(group_id)
+        if group is None:
+            raise RuntimeError(f"Group not found: {group_id}")
+
+        if not any(m.device_id == member_device_id for m in group.members):
+            raise RuntimeError(
+                f"Member {member_device_id} not in group {group_id}"
+            )
+
+        # Remove the member's sender key (zeroized)
+        self._group_crypto.remove_sender_key(group_id, member_device_id)
+
+        # Remove from member list
+        group.members = [
+            m for m in group.members if m.device_id != member_device_id
+        ]
+        self._group_storage.save_group(group)
+
+        # Rotate our own sender key for forward secrecy
+        device_id = group.self_device_id
+        new_sender_key = self._group_crypto.generate_sender_key()
+        self._group_crypto.set_sender_key(group_id, device_id, new_sender_key)
+
+        # Send a system message notifying remaining members of the removal
+        # and distribute the new sender key
+        removal_notification = json.dumps({
+            "type": "member_removed",
+            "groupId": group_id,
+            "removedDeviceId": member_device_id,
+            "removedBy": device_id,
+            "newSenderKey": new_sender_key,
+        })
+
+        # Broadcast the notification to remaining connected peers
+        for member in group.other_members:
+            peer_id = member.device_id
+            if peer_id in self._connected_peers and self._crypto.has_session_key(peer_id):
+                try:
+                    payload = f"grm:{removal_notification}"
+                    cipher = self._crypto.encrypt(peer_id, payload)
+                    await self._webrtc.send_message(cipher)
+                    logger.debug(
+                        "Sent removal notification to %s in '%s'",
+                        peer_id, group.name,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to send removal notification to %s: %s",
+                        peer_id, e,
+                    )
+
+        logger.info(
+            "Removed %s from group '%s' and rotated sender key",
+            member_device_id, group.name,
+        )
+        return group
+
+    def _handle_group_member_removal(
+        self, from_peer_id: str, payload: str
+    ) -> None:
+        """Handle incoming group member removal notification (grm: protocol).
+
+        Processes:
+        1. Removes the member from the group
+        2. Clears their sender key
+        3. Updates the remover's sender key to the new rotated key
+
+        Args:
+            from_peer_id: The peer who sent the removal notification.
+            payload: JSON string with removal details.
+        """
+        try:
+            data = json.loads(payload)
+            group_id = data["groupId"]
+            removed_device_id = data["removedDeviceId"]
+            removed_by = data["removedBy"]
+            new_sender_key = data["newSenderKey"]
+
+            # Verify the notification came from the peer who claims to have done the removal
+            if removed_by != from_peer_id:
+                logger.warning(
+                    "Removal notification mismatch: removedBy=%s but from=%s. Ignoring.",
+                    removed_by, from_peer_id,
+                )
+                return
+
+            group = self._group_storage.get_group(group_id)
+            if group is None:
+                logger.warning(
+                    "Removal notification for unknown group %s", group_id[:8]
+                )
+                return
+
+            # Remove the member's sender key
+            self._group_crypto.remove_sender_key(group_id, removed_device_id)
+
+            # Remove from member list
+            group.members = [
+                m for m in group.members if m.device_id != removed_device_id
+            ]
+            self._group_storage.save_group(group)
+
+            # Update the remover's sender key (they rotated)
+            self._group_crypto.set_sender_key(
+                group_id, removed_by, new_sender_key
+            )
+
+            logger.info(
+                "Processed member removal: %s removed from '%s' by %s",
+                removed_device_id, group.name, removed_by,
+            )
+
+        except Exception as e:
+            logger.error(
+                "Failed to handle group member removal from %s: %s",
+                from_peer_id, e,
+            )
+
+    # ── Dead Drop Handling ──────────────────────────────────
+
+    def handle_rendezvous_result(self, result: dict) -> RendezvousResult:
+        """Process a rendezvous result from the signaling server.
+
+        Parses the raw message dict into a RendezvousResult,
+        handling both live matches and dead drops.
+
+        For live matches, we'd initiate a WebRTC connection (handled
+        by the existing rendezvous_match flow).
+        For dead drops, we decrypt them using our session keys and
+        extract the peer's connection info.
+
+        Args:
+            result: The raw rendezvous result dict from the server.
+
+        Returns:
+            The parsed RendezvousResult.
+        """
+        parsed = RendezvousResult.from_dict(result)
+
+        if not parsed.success:
+            logger.error("Rendezvous failed: %s", parsed.error)
+            return parsed
+
+        # Process dead drops
+        for drop in parsed.dead_drops:
+            peer_id = drop.peer_id
+            if peer_id is None:
+                logger.warning("Dead drop without peer ID, skipping")
+                continue
+
+            if not self._crypto.has_session_key(peer_id):
+                logger.warning(
+                    "No session key for dead drop peer %s, skipping", peer_id
+                )
+                continue
+
+            try:
+                conn_info = decrypt_dead_drop(
+                    self._crypto, peer_id, drop.encrypted_payload
+                )
+                logger.info(
+                    "Decrypted dead drop from %s (relay: %s, source: %s)",
+                    peer_id,
+                    conn_info.relay_id,
+                    conn_info.source_id,
+                )
+            except (DeadDropDecryptionError, RuntimeError) as e:
+                logger.error("Failed to decrypt dead drop from %s: %s", peer_id, e)
+
+        # Live matches are already handled by the rendezvous_match queue
+        for match in parsed.live_matches:
+            logger.info(
+                "Live match: peer=%s relay=%s",
+                match.peer_id, match.relay_id,
+            )
+
+        return parsed
+
+    def create_dead_drop_payload(
+        self,
+        peer_id: str,
+        relay_id: str = "",
+        source_id: str = "",
+    ) -> str:
+        """Create an encrypted dead drop payload for a peer.
+
+        Encrypts our connection info (public key, relay, source) with
+        the session key shared with the peer. The peer can decrypt it
+        when they find our dead drop at a meeting point.
+
+        Args:
+            peer_id: The peer who will decrypt this dead drop.
+            relay_id: Our relay server ID.
+            source_id: Our source ID on the relay.
+
+        Returns:
+            Base64-encoded encrypted payload.
+
+        Raises:
+            RuntimeError: If no session key exists for peer_id.
+        """
+        conn_info = ConnectionInfo(
+            public_key=self._crypto.public_key_base64,
+            relay_id=relay_id,
+            source_id=source_id or self._pairing_code or "",
+        )
+        return create_dead_drop(self._crypto, peer_id, conn_info)
+
+    def decrypt_dead_drop_payload(
+        self,
+        peer_id: str,
+        encrypted_payload: str,
+    ) -> ConnectionInfo:
+        """Decrypt a dead drop payload from a peer.
+
+        Args:
+            peer_id: The peer who encrypted this dead drop.
+            encrypted_payload: Base64-encoded encrypted payload.
+
+        Returns:
+            The decrypted ConnectionInfo.
+
+        Raises:
+            RuntimeError: If no session key exists for peer_id.
+            DeadDropDecryptionError: If decryption or parsing fails.
+        """
+        return decrypt_dead_drop(self._crypto, peer_id, encrypted_payload)
 
     async def wait_for_group_invitation(
         self, timeout: float = 30
@@ -1604,6 +2354,13 @@ class ZajelHeadlessClient:
                     # Check for group message prefix
                     if plaintext.startswith("grp:"):
                         self._handle_group_data(
+                            peer_id, plaintext[4:]
+                        )
+                        return
+
+                    # Check for group member removal prefix
+                    if plaintext.startswith("grm:"):
+                        self._handle_group_member_removal(
                             peer_id, plaintext[4:]
                         )
                         return

@@ -104,6 +104,7 @@ class SignalingClient:
         self._webrtc_signals: asyncio.Queue[WebRTCSignal] = asyncio.Queue()
         self._call_signals: asyncio.Queue[CallSignal] = asyncio.Queue()
         self._rendezvous_matches: asyncio.Queue[RendezvousMatch] = asyncio.Queue()
+        self._rendezvous_results: asyncio.Queue[dict] = asyncio.Queue()
         self._errors: asyncio.Queue[str] = asyncio.Queue()
 
         # Channel event queues
@@ -117,6 +118,7 @@ class SignalingClient:
         self._on_webrtc_signal: Optional[EventHandler] = None
         self._on_call_signal: Optional[EventHandler] = None
         self._on_disconnect: Optional[EventHandler] = None
+        self._on_rendezvous_result: Optional[EventHandler] = None
         self._on_chunk_pull: Optional[EventHandler] = None
         self._on_chunk_available: Optional[EventHandler] = None
         self._on_chunk_data: Optional[EventHandler] = None
@@ -322,6 +324,10 @@ class SignalingClient:
         """Wait for a rendezvous match."""
         return await asyncio.wait_for(self._rendezvous_matches.get(), timeout=timeout)
 
+    async def wait_for_rendezvous_result(self, timeout: float = 60) -> dict:
+        """Wait for a full rendezvous result (includes dead drops and live matches)."""
+        return await asyncio.wait_for(self._rendezvous_results.get(), timeout=timeout)
+
     # ── Channel Signaling ───────────────────────────────────
 
     async def send_channel_owner_register(self, channel_id: str) -> None:
@@ -385,6 +391,10 @@ class SignalingClient:
         return await asyncio.wait_for(self._chunk_data.get(), timeout=timeout)
 
     # ── Internal ─────────────────────────────────────────────
+
+    async def send_raw(self, msg: dict) -> None:
+        """Send a raw JSON message to the signaling server."""
+        await self._send(msg)
 
     async def _send(self, msg: dict) -> None:
         if self._ws is None:
@@ -542,6 +552,10 @@ class SignalingClient:
                         await self._rendezvous_matches.put(
                             RendezvousMatch(peer_id=m["peerId"], relay_id=m.get("relayId"))
                         )
+                    # Queue the full result (including dead drops)
+                    await self._rendezvous_results.put(msg)
+                    if self._on_rendezvous_result:
+                        await self._on_rendezvous_result(msg)
 
                 case "rendezvous_partial":
                     local = msg.get("local", {})
@@ -549,6 +563,10 @@ class SignalingClient:
                         await self._rendezvous_matches.put(
                             RendezvousMatch(peer_id=m["peerId"], relay_id=m.get("relayId"))
                         )
+                    # Queue as rendezvous result too (including dead drops)
+                    await self._rendezvous_results.put(local)
+                    if self._on_rendezvous_result:
+                        await self._on_rendezvous_result(local)
 
                 case "rendezvous_match":
                     m = msg.get("match", msg)
