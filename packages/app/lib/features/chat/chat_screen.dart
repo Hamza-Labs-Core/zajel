@@ -109,7 +109,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       if (isTyping) {
         ref.read(peerTypingProvider.notifier).state = {...current, peerId};
       } else {
-        ref.read(peerTypingProvider.notifier).state = {...current}..remove(peerId);
+        ref.read(peerTypingProvider.notifier).state = {...current}
+          ..remove(peerId);
       }
     });
   }
@@ -433,7 +434,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         child: Text(
           'typing...',
           style: TextStyle(
-            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
+            color:
+                Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
             fontStyle: FontStyle.italic,
             fontSize: 12,
           ),
