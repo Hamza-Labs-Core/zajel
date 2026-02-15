@@ -18,5 +18,7 @@ elif _platform == "linux":
     from platforms.linux_config import *  # noqa: F401,F403
 elif _platform == "windows":
     from platforms.windows_config import *  # noqa: F401,F403
+elif _platform == "ios":
+    from platforms.ios_config import *  # noqa: F401,F403
 else:
     raise ValueError(f"Unknown platform: {_platform}")

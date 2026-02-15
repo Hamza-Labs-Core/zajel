@@ -87,6 +87,9 @@ dist/
 .venv/
 *.egg-info/
 
+# SQLite databases
+*.db
+
 # Claude Code / Serena
 .claude/
 .serena/

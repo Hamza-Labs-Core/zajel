@@ -14,9 +14,9 @@ from typing import Any, Optional
 
 logger = logging.getLogger("zajel.protocol")
 
-# Data channel labels (must match Dart app)
-MESSAGE_CHANNEL_LABEL = "zajel_message"
-FILE_CHANNEL_LABEL = "zajel_file"
+# Data channel labels (must match Dart app: lib/core/constants.dart WebRTCConstants)
+MESSAGE_CHANNEL_LABEL = "messages"
+FILE_CHANNEL_LABEL = "files"
 
 # File transfer constants
 FILE_CHUNK_SIZE = 4096  # bytes
@@ -106,14 +106,21 @@ class FileCompleteMessage:
     """Signals the end of a file transfer."""
 
     file_id: str
+    sha256: str = ""
 
     def to_json(self) -> str:
-        return json.dumps({"type": "file_complete", "fileId": self.file_id})
+        d = {"type": "file_complete", "fileId": self.file_id}
+        if self.sha256:
+            d["sha256"] = self.sha256
+        return json.dumps(d)
 
     @staticmethod
     def from_json(data: str) -> "FileCompleteMessage":
         msg = json.loads(data)
-        return FileCompleteMessage(file_id=msg["fileId"])
+        return FileCompleteMessage(
+            file_id=msg["fileId"],
+            sha256=msg.get("sha256", ""),
+        )
 
 
 def parse_channel_message(data: str) -> dict[str, Any]:
