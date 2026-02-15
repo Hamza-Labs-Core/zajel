@@ -453,6 +453,13 @@ describe('Bootstrap Client E2E Tests', () => {
 
   describe('Stats Endpoint (Test Plan 2.5)', () => {
     let vpsServer: ZajelServer | null = null;
+    const STATS_TEST_SECRET = 'test-stats-secret-bootstrap';
+    let originalStatsSecret: string | undefined;
+
+    beforeEach(() => {
+      originalStatsSecret = process.env['STATS_SECRET'];
+      process.env['STATS_SECRET'] = STATS_TEST_SECRET;
+    });
 
     afterEach(async () => {
       vi.useRealTimers();
@@ -460,6 +467,23 @@ describe('Bootstrap Client E2E Tests', () => {
         await vpsServer.shutdown();
         vpsServer = null;
       }
+      if (originalStatsSecret !== undefined) {
+        process.env['STATS_SECRET'] = originalStatsSecret;
+      } else {
+        delete process.env['STATS_SECRET'];
+      }
+    });
+
+    const statsHeaders = { 'Authorization': `Bearer ${STATS_TEST_SECRET}` };
+
+    it('should reject stats without auth', async () => {
+      vi.useRealTimers();
+
+      const config = createTestConfig(VPS_SERVER_PORT_1, mockBootstrapUrl, 'eu-west');
+      vpsServer = await createZajelServer(config);
+
+      const response = await fetch(`http://127.0.0.1:${VPS_SERVER_PORT_1}/stats`);
+      expect(response.status).toBe(401);
     });
 
     it('should return server stats including serverId', async () => {
@@ -468,7 +492,7 @@ describe('Bootstrap Client E2E Tests', () => {
       const config = createTestConfig(VPS_SERVER_PORT_1, mockBootstrapUrl, 'eu-west');
       vpsServer = await createZajelServer(config);
 
-      const response = await fetch(`http://127.0.0.1:${VPS_SERVER_PORT_1}/stats`);
+      const response = await fetch(`http://127.0.0.1:${VPS_SERVER_PORT_1}/stats`, { headers: statsHeaders });
       expect(response.status).toBe(200);
 
       const data = await response.json() as {
@@ -488,7 +512,7 @@ describe('Bootstrap Client E2E Tests', () => {
       const config = createTestConfig(VPS_SERVER_PORT_1, mockBootstrapUrl);
       vpsServer = await createZajelServer(config);
 
-      const response = await fetch(`http://127.0.0.1:${VPS_SERVER_PORT_1}/stats`);
+      const response = await fetch(`http://127.0.0.1:${VPS_SERVER_PORT_1}/stats`, { headers: statsHeaders });
       const data = await response.json() as { nodeId: string };
 
       expect(data.nodeId).toBe(vpsServer.identity.nodeId);
@@ -500,7 +524,7 @@ describe('Bootstrap Client E2E Tests', () => {
       const config = createTestConfig(VPS_SERVER_PORT_1, mockBootstrapUrl);
       vpsServer = await createZajelServer(config);
 
-      const response = await fetch(`http://127.0.0.1:${VPS_SERVER_PORT_1}/stats`);
+      const response = await fetch(`http://127.0.0.1:${VPS_SERVER_PORT_1}/stats`, { headers: statsHeaders });
       const data = await response.json() as { endpoint: string };
 
       expect(data.endpoint).toBe(config.network!.publicEndpoint);
@@ -512,7 +536,7 @@ describe('Bootstrap Client E2E Tests', () => {
       const config = createTestConfig(VPS_SERVER_PORT_1, mockBootstrapUrl, 'asia-pacific');
       vpsServer = await createZajelServer(config);
 
-      const response = await fetch(`http://127.0.0.1:${VPS_SERVER_PORT_1}/stats`);
+      const response = await fetch(`http://127.0.0.1:${VPS_SERVER_PORT_1}/stats`, { headers: statsHeaders });
       const data = await response.json() as { region: string };
 
       expect(data.region).toBe('asia-pacific');
@@ -524,7 +548,7 @@ describe('Bootstrap Client E2E Tests', () => {
       const config = createTestConfig(VPS_SERVER_PORT_1, mockBootstrapUrl);
       vpsServer = await createZajelServer(config);
 
-      const response = await fetch(`http://127.0.0.1:${VPS_SERVER_PORT_1}/stats`);
+      const response = await fetch(`http://127.0.0.1:${VPS_SERVER_PORT_1}/stats`, { headers: statsHeaders });
       const data = await response.json() as { uptime: number };
 
       expect(data.uptime).toBeGreaterThanOrEqual(0);
@@ -533,6 +557,13 @@ describe('Bootstrap Client E2E Tests', () => {
 
   describe('Metrics Endpoint', () => {
     let vpsServer: ZajelServer | null = null;
+    const METRICS_TEST_SECRET = 'test-metrics-secret-bootstrap';
+    let originalStatsSecret: string | undefined;
+
+    beforeEach(() => {
+      originalStatsSecret = process.env['STATS_SECRET'];
+      process.env['STATS_SECRET'] = METRICS_TEST_SECRET;
+    });
 
     afterEach(async () => {
       vi.useRealTimers();
@@ -540,6 +571,21 @@ describe('Bootstrap Client E2E Tests', () => {
         await vpsServer.shutdown();
         vpsServer = null;
       }
+      if (originalStatsSecret !== undefined) {
+        process.env['STATS_SECRET'] = originalStatsSecret;
+      } else {
+        delete process.env['STATS_SECRET'];
+      }
+    });
+
+    it('should reject metrics without auth', async () => {
+      vi.useRealTimers();
+
+      const config = createTestConfig(VPS_SERVER_PORT_1, mockBootstrapUrl);
+      vpsServer = await createZajelServer(config);
+
+      const response = await fetch(`http://127.0.0.1:${VPS_SERVER_PORT_1}/metrics`);
+      expect(response.status).toBe(401);
     });
 
     it('should return metrics including pairing code entropy', async () => {
@@ -548,7 +594,9 @@ describe('Bootstrap Client E2E Tests', () => {
       const config = createTestConfig(VPS_SERVER_PORT_1, mockBootstrapUrl);
       vpsServer = await createZajelServer(config);
 
-      const response = await fetch(`http://127.0.0.1:${VPS_SERVER_PORT_1}/metrics`);
+      const response = await fetch(`http://127.0.0.1:${VPS_SERVER_PORT_1}/metrics`, {
+        headers: { 'Authorization': `Bearer ${METRICS_TEST_SECRET}` },
+      });
       expect(response.status).toBe(200);
 
       const data = await response.json() as {

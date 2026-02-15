@@ -12,8 +12,7 @@ Handles:
 import asyncio
 import json
 import logging
-import random
-import string
+import secrets
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine, Optional
 
@@ -30,7 +29,7 @@ HEARTBEAT_INTERVAL = 30  # seconds
 
 def generate_pairing_code() -> str:
     """Generate a random 6-character pairing code."""
-    return "".join(random.choices(PAIRING_CODE_CHARS, k=PAIRING_CODE_LENGTH))
+    return "".join(secrets.choice(PAIRING_CODE_CHARS) for _ in range(PAIRING_CODE_LENGTH))
 
 
 @dataclass
@@ -85,8 +84,13 @@ class SignalingClient:
     """WebSocket-based signaling client for the Zajel protocol."""
 
     def __init__(self, url: str, pairing_code: Optional[str] = None):
+        if not url.startswith(("ws://", "wss://")):
+            raise ValueError(
+                f"Invalid signaling URL: {url}. Must start with ws:// or wss://"
+            )
         self.url = url
         self.pairing_code = pairing_code or generate_pairing_code()
+        self._public_key_b64: Optional[str] = None
         self._ws: Optional[ClientConnection] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._receive_task: Optional[asyncio.Task] = None
@@ -100,7 +104,13 @@ class SignalingClient:
         self._webrtc_signals: asyncio.Queue[WebRTCSignal] = asyncio.Queue()
         self._call_signals: asyncio.Queue[CallSignal] = asyncio.Queue()
         self._rendezvous_matches: asyncio.Queue[RendezvousMatch] = asyncio.Queue()
+        self._rendezvous_results: asyncio.Queue[dict] = asyncio.Queue()
         self._errors: asyncio.Queue[str] = asyncio.Queue()
+
+        # Channel event queues
+        self._chunk_pulls: asyncio.Queue[dict] = asyncio.Queue()
+        self._chunk_available: asyncio.Queue[dict] = asyncio.Queue()
+        self._chunk_data: asyncio.Queue[dict] = asyncio.Queue()
 
         # Callbacks
         self._on_pair_request: Optional[EventHandler] = None
@@ -108,6 +118,10 @@ class SignalingClient:
         self._on_webrtc_signal: Optional[EventHandler] = None
         self._on_call_signal: Optional[EventHandler] = None
         self._on_disconnect: Optional[EventHandler] = None
+        self._on_rendezvous_result: Optional[EventHandler] = None
+        self._on_chunk_pull: Optional[EventHandler] = None
+        self._on_chunk_available: Optional[EventHandler] = None
+        self._on_chunk_data: Optional[EventHandler] = None
 
     @property
     def is_connected(self) -> bool:
@@ -122,6 +136,20 @@ class SignalingClient:
         Returns:
             Our pairing code.
         """
+        if self.url.startswith("ws://"):
+            logger.warning(
+                "INSECURE: Using unencrypted WebSocket connection to %s. "
+                "Signaling traffic (including public keys and pairing codes) "
+                "will be visible to network observers. Use wss:// in production.",
+                self.url,
+            )
+        elif not self.url.startswith("wss://"):
+            raise ValueError(
+                f"Invalid signaling URL scheme: {self.url}. "
+                "Use wss:// for secure connections or ws:// for local development."
+            )
+
+        self._public_key_b64 = public_key_b64
         logger.info("Connecting to %s with code %s", self.url, self.pairing_code)
         self._ws = await websockets.connect(self.url)
         self._connected.set()
@@ -150,6 +178,10 @@ class SignalingClient:
             self._heartbeat_task = None
         if self._receive_task:
             self._receive_task.cancel()
+            try:
+                await self._receive_task
+            except asyncio.CancelledError:
+                pass
             self._receive_task = None
         if self._ws:
             await self._ws.close()
@@ -292,7 +324,77 @@ class SignalingClient:
         """Wait for a rendezvous match."""
         return await asyncio.wait_for(self._rendezvous_matches.get(), timeout=timeout)
 
+    async def wait_for_rendezvous_result(self, timeout: float = 60) -> dict:
+        """Wait for a full rendezvous result (includes dead drops and live matches)."""
+        return await asyncio.wait_for(self._rendezvous_results.get(), timeout=timeout)
+
+    # ── Channel Signaling ───────────────────────────────────
+
+    async def send_channel_owner_register(self, channel_id: str) -> None:
+        """Register as owner of a channel."""
+        await self._send({
+            "type": "channel-owner-register",
+            "channelId": channel_id,
+        })
+
+    async def send_channel_subscribe(self, channel_id: str) -> None:
+        """Subscribe to a channel."""
+        await self._send({
+            "type": "channel-subscribe",
+            "channelId": channel_id,
+        })
+
+    async def send_chunk_announce(
+        self, peer_id: str, channel_id: str, chunks: list[dict]
+    ) -> None:
+        """Announce that we have chunks available."""
+        await self._send({
+            "type": "chunk_announce",
+            "peerId": peer_id,
+            "channelId": channel_id,
+            "chunks": chunks,
+        })
+
+    async def send_chunk_push(
+        self, chunk_id: str, channel_id: str, data: dict
+    ) -> None:
+        """Push chunk data in response to a chunk_pull."""
+        await self._send({
+            "type": "chunk_push",
+            "peerId": self.pairing_code,
+            "chunkId": chunk_id,
+            "channelId": channel_id,
+            "data": data,
+        })
+
+    async def send_chunk_request(
+        self, peer_id: str, chunk_id: str, channel_id: str
+    ) -> None:
+        """Request a chunk from the relay."""
+        await self._send({
+            "type": "chunk_request",
+            "peerId": peer_id,
+            "chunkId": chunk_id,
+            "channelId": channel_id,
+        })
+
+    async def wait_for_chunk_pull(self, timeout: float = 30) -> dict:
+        """Wait for a chunk_pull from the server."""
+        return await asyncio.wait_for(self._chunk_pulls.get(), timeout=timeout)
+
+    async def wait_for_chunk_available(self, timeout: float = 30) -> dict:
+        """Wait for a chunk_available notification."""
+        return await asyncio.wait_for(self._chunk_available.get(), timeout=timeout)
+
+    async def wait_for_chunk_data(self, timeout: float = 30) -> dict:
+        """Wait for chunk_data delivery."""
+        return await asyncio.wait_for(self._chunk_data.get(), timeout=timeout)
+
     # ── Internal ─────────────────────────────────────────────
+
+    async def send_raw(self, msg: dict) -> None:
+        """Send a raw JSON message to the signaling server."""
+        await self._send(msg)
 
     async def _send(self, msg: dict) -> None:
         if self._ws is None:
@@ -312,112 +414,210 @@ class SignalingClient:
         except Exception as e:
             logger.error("Heartbeat error: %s", e)
 
+    async def _reconnect(self) -> None:
+        """Reconnect to the signaling server and re-register."""
+        if self._public_key_b64 is None:
+            raise RuntimeError("Cannot reconnect: no stored public key")
+
+        logger.info("Reconnecting to %s...", self.url)
+        self._ws = await websockets.connect(self.url)
+        self._connected.set()
+
+        # Re-register with the same pairing code
+        await self._send({
+            "type": "register",
+            "pairingCode": self.pairing_code,
+            "publicKey": self._public_key_b64,
+        })
+
+        # Restart heartbeat
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
+        logger.info("Reconnected and re-registered as %s", self.pairing_code)
+
     async def _receive_loop(self) -> None:
-        try:
-            async for raw in self._ws:
-                try:
-                    msg = json.loads(raw)
-                    await self._handle_message(msg)
-                except json.JSONDecodeError:
-                    logger.warning("Non-JSON message: %s", raw[:100])
-        except websockets.ConnectionClosed:
-            logger.info("WebSocket connection closed")
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error("Receive loop error: %s", e)
-        finally:
+        backoff = 1
+        max_backoff = 60
+
+        while True:
+            try:
+                async for raw in self._ws:
+                    backoff = 1  # Reset on successful message
+                    try:
+                        msg = json.loads(raw)
+                        await self._handle_message(msg)
+                    except json.JSONDecodeError:
+                        logger.warning("Non-JSON message: %s", raw[:100])
+            except websockets.ConnectionClosed:
+                logger.warning("WebSocket closed, reconnecting in %ds...", backoff)
+            except asyncio.CancelledError:
+                return  # Intentional shutdown
+            except Exception as e:
+                logger.error("Receive loop error: %s, reconnecting in %ds...", e, backoff)
+
             self._connected.clear()
-            if self._on_disconnect:
-                await self._on_disconnect()
+
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
+
+            try:
+                await self._reconnect()
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.error("Reconnect failed: %s", e)
+                continue
 
     async def _handle_message(self, msg: dict) -> None:
         msg_type = msg.get("type", "")
         logger.debug("RX: %s", msg_type)
 
-        match msg_type:
-            case "registered":
-                self._registered.set()
+        try:
+            match msg_type:
+                case "registered":
+                    self._registered.set()
 
-            case "pong":
-                pass  # Heartbeat response
+                case "pong":
+                    pass  # Heartbeat response
 
-            case "pair_incoming":
-                req = PairRequest(
-                    from_code=msg["fromCode"],
-                    from_public_key=msg["fromPublicKey"],
-                    proposed_name=msg.get("proposedName"),
-                )
-                await self._pair_requests.put(req)
-                if self._on_pair_request:
-                    await self._on_pair_request(req)
+                case "pair_incoming":
+                    if not all(k in msg for k in ("fromCode", "fromPublicKey")):
+                        logger.warning("Malformed pair_incoming: missing required fields")
+                        return
+                    req = PairRequest(
+                        from_code=msg["fromCode"],
+                        from_public_key=msg["fromPublicKey"],
+                        proposed_name=msg.get("proposedName"),
+                    )
+                    await self._pair_requests.put(req)
+                    if self._on_pair_request:
+                        await self._on_pair_request(req)
 
-            case "pair_matched":
-                match = PairMatch(
-                    peer_code=msg["peerCode"],
-                    peer_public_key=msg["peerPublicKey"],
-                    is_initiator=msg["isInitiator"],
-                )
-                await self._pair_matches.put(match)
-                if self._on_pair_match:
-                    await self._on_pair_match(match)
+                case "pair_matched":
+                    if not all(k in msg for k in ("peerCode", "peerPublicKey", "isInitiator")):
+                        logger.warning("Malformed pair_matched: missing required fields")
+                        return
+                    pair_match = PairMatch(
+                        peer_code=msg["peerCode"],
+                        peer_public_key=msg["peerPublicKey"],
+                        is_initiator=msg["isInitiator"],
+                    )
+                    await self._pair_matches.put(pair_match)
+                    if self._on_pair_match:
+                        await self._on_pair_match(pair_match)
 
-            case "pair_rejected":
-                await self._pair_rejections.put(msg["peerCode"])
+                case "pair_rejected":
+                    if "peerCode" not in msg:
+                        logger.warning("Malformed pair_rejected: missing peerCode")
+                        return
+                    await self._pair_rejections.put(msg["peerCode"])
 
-            case "pair_timeout":
-                logger.warning("Pair timeout for %s", msg.get("peerCode"))
+                case "pair_timeout":
+                    logger.warning("Pair timeout for %s", msg.get("peerCode"))
 
-            case "pair_error":
-                logger.error("Pair error: %s", msg.get("error"))
-                await self._errors.put(msg.get("error", "unknown"))
+                case "pair_error":
+                    logger.error("Pair error: %s", msg.get("error"))
+                    await self._errors.put(msg.get("error", "unknown"))
 
-            case "offer" | "answer" | "ice_candidate":
-                signal = WebRTCSignal(
-                    signal_type=msg_type,
-                    from_code=msg["from"],
-                    payload=msg["payload"],
-                )
-                await self._webrtc_signals.put(signal)
-                if self._on_webrtc_signal:
-                    await self._on_webrtc_signal(signal)
+                case "offer" | "answer" | "ice_candidate":
+                    if not all(k in msg for k in ("from", "payload")):
+                        logger.warning("Malformed %s: missing required fields", msg_type)
+                        return
+                    signal = WebRTCSignal(
+                        signal_type=msg_type,
+                        from_code=msg["from"],
+                        payload=msg["payload"],
+                    )
+                    await self._webrtc_signals.put(signal)
+                    if self._on_webrtc_signal:
+                        await self._on_webrtc_signal(signal)
 
-            case "call_offer" | "call_answer" | "call_reject" | "call_hangup" | "call_ice":
-                signal = CallSignal(
-                    signal_type=msg_type,
-                    from_code=msg["from"],
-                    payload=msg["payload"],
-                )
-                await self._call_signals.put(signal)
-                if self._on_call_signal:
-                    await self._on_call_signal(signal)
+                case "call_offer" | "call_answer" | "call_reject" | "call_hangup" | "call_ice":
+                    if not all(k in msg for k in ("from", "payload")):
+                        logger.warning("Malformed %s: missing required fields", msg_type)
+                        return
+                    signal = CallSignal(
+                        signal_type=msg_type,
+                        from_code=msg["from"],
+                        payload=msg["payload"],
+                    )
+                    await self._call_signals.put(signal)
+                    if self._on_call_signal:
+                        await self._on_call_signal(signal)
 
-            case "rendezvous_result":
-                for m in msg.get("liveMatches", []):
+                case "rendezvous_result":
+                    for m in msg.get("liveMatches", []):
+                        await self._rendezvous_matches.put(
+                            RendezvousMatch(peer_id=m["peerId"], relay_id=m.get("relayId"))
+                        )
+                    # Queue the full result (including dead drops)
+                    await self._rendezvous_results.put(msg)
+                    if self._on_rendezvous_result:
+                        await self._on_rendezvous_result(msg)
+
+                case "rendezvous_partial":
+                    local = msg.get("local", {})
+                    for m in local.get("liveMatches", []):
+                        await self._rendezvous_matches.put(
+                            RendezvousMatch(peer_id=m["peerId"], relay_id=m.get("relayId"))
+                        )
+                    # Queue as rendezvous result too (including dead drops)
+                    await self._rendezvous_results.put(local)
+                    if self._on_rendezvous_result:
+                        await self._on_rendezvous_result(local)
+
+                case "rendezvous_match":
+                    m = msg.get("match", msg)
                     await self._rendezvous_matches.put(
-                        RendezvousMatch(peer_id=m["peerId"], relay_id=m.get("relayId"))
+                        RendezvousMatch(
+                            peer_id=m["peerId"],
+                            relay_id=m.get("relayId"),
+                            meeting_point=m.get("meetingPoint"),
+                        )
                     )
 
-            case "rendezvous_partial":
-                local = msg.get("local", {})
-                for m in local.get("liveMatches", []):
-                    await self._rendezvous_matches.put(
-                        RendezvousMatch(peer_id=m["peerId"], relay_id=m.get("relayId"))
-                    )
+                case "channel-owner-registered":
+                    logger.info("Registered as channel owner: %s", msg.get("channelId"))
 
-            case "rendezvous_match":
-                m = msg.get("match", msg)
-                await self._rendezvous_matches.put(
-                    RendezvousMatch(
-                        peer_id=m["peerId"],
-                        relay_id=m.get("relayId"),
-                        meeting_point=m.get("meetingPoint"),
-                    )
-                )
+                case "channel-subscribed":
+                    logger.info("Subscribed to channel: %s", msg.get("channelId"))
 
-            case "error":
-                logger.error("Server error: %s", msg.get("message"))
-                await self._errors.put(msg.get("message", "unknown"))
+                case "chunk_announce_ack":
+                    logger.debug("Chunk announce ack: %s chunks", msg.get("registered"))
 
-            case _:
-                logger.debug("Unhandled message type: %s", msg_type)
+                case "chunk_pull":
+                    await self._chunk_pulls.put(msg)
+                    if self._on_chunk_pull:
+                        await self._on_chunk_pull(msg)
+
+                case "chunk_available":
+                    await self._chunk_available.put(msg)
+                    if self._on_chunk_available:
+                        await self._on_chunk_available(msg)
+
+                case "chunk_data":
+                    await self._chunk_data.put(msg)
+                    if self._on_chunk_data:
+                        await self._on_chunk_data(msg)
+
+                case "chunk_pulling":
+                    logger.debug("Chunk pulling: %s", msg.get("chunkId"))
+
+                case "chunk_push_ack":
+                    logger.debug("Chunk push ack: %s", msg.get("chunkId"))
+
+                case "chunk_error":
+                    logger.warning("Chunk error for %s: %s", msg.get("chunkId"), msg.get("error"))
+
+                case "error":
+                    logger.error("Server error: %s", msg.get("message"))
+                    await self._errors.put(msg.get("message", "unknown"))
+
+                case _:
+                    logger.debug("Unhandled message type: %s", msg_type)
+        except (KeyError, TypeError, ValueError) as e:
+            logger.warning(
+                "Error processing %s message: %s", msg_type, e
+            )

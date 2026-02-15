@@ -60,9 +60,13 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               alignment: Alignment.topRight,
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: TextButton(
-                  onPressed: _skip,
-                  child: const Text('Skip'),
+                child: Semantics(
+                  label: 'Skip',
+                  button: true,
+                  child: TextButton(
+                    onPressed: _skip,
+                    child: const Text('Skip'),
+                  ),
                 ),
               ),
             ),
@@ -108,16 +112,24 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                     ),
                   ),
                   // Next / Get Started button
-                  ElevatedButton(
-                    onPressed: _nextPage,
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 32,
-                        vertical: 14,
+                  Semantics(
+                    label: _currentPage == _totalPages - 1
+                        ? 'Get Started'
+                        : 'Next',
+                    button: true,
+                    child: ElevatedButton(
+                      onPressed: _nextPage,
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 32,
+                          vertical: 14,
+                        ),
                       ),
-                    ),
-                    child: Text(
-                      _currentPage == _totalPages - 1 ? 'Get Started' : 'Next',
+                      child: Text(
+                        _currentPage == _totalPages - 1
+                            ? 'Get Started'
+                            : 'Next',
+                      ),
                     ),
                   ),
                 ],
