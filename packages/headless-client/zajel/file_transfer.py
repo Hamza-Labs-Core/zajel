@@ -12,6 +12,7 @@ import hashlib
 import logging
 import math
 import os
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +28,11 @@ from .protocol import (
 )
 
 logger = logging.getLogger("zajel.file_transfer")
+
+MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
+MAX_CHUNKS = 10000
+MAX_CONCURRENT_TRANSFERS = 10
+TRANSFER_TIMEOUT = 300  # 5 minutes
 
 
 @dataclass
@@ -51,6 +57,7 @@ class IncomingTransfer:
     info: FileTransferProgress
     chunks: dict[int, bytes] = field(default_factory=dict)
     complete_event: asyncio.Event = field(default_factory=asyncio.Event)
+    _started_at: float = field(default_factory=time.time)
 
 
 class FileTransferService:
@@ -67,7 +74,31 @@ class FileTransferService:
         self._receive_dir = Path(receive_dir)
         self._receive_dir.mkdir(parents=True, exist_ok=True)
         self._incoming: dict[str, IncomingTransfer] = {}
+        self._new_transfer_event: asyncio.Event = asyncio.Event()
         self._on_file_received: Optional[Callable] = None
+
+    def _cleanup_stale_transfers(self) -> None:
+        """Remove transfers that have been inactive too long."""
+        now = time.time()
+        stale = [
+            fid for fid, t in self._incoming.items()
+            if not t.info.completed and now - t._started_at > TRANSFER_TIMEOUT
+        ]
+        for fid in stale:
+            logger.warning("Cleaning up stale transfer: %s", fid)
+            del self._incoming[fid]
+
+    @staticmethod
+    def _sanitize_filename(name: str) -> str:
+        """Strip directory components and reject path traversal."""
+        # Use os.path.basename to strip all directory parts
+        basename = os.path.basename(name)
+        # Remove null bytes
+        basename = basename.replace("\0", "")
+        # Reject empty or dot-only names
+        if not basename or basename in (".", ".."):
+            basename = f"unnamed_{uuid.uuid4().hex[:8]}"
+        return basename
 
     async def send_file(
         self,
@@ -125,8 +156,9 @@ class FileTransferService:
             # Delay between chunks to avoid overwhelming the channel
             await asyncio.sleep(CHUNK_SEND_DELAY_MS / 1000)
 
-        # Send file_complete
-        complete_msg = FileCompleteMessage(file_id=file_id)
+        # Send file_complete with hash
+        file_hash = hashlib.sha256(file_data).hexdigest()
+        complete_msg = FileCompleteMessage(file_id=file_id, sha256=file_hash)
         encrypted = self._crypto.encrypt(peer_id, complete_msg.to_json())
         self._send_fn(encrypted)
 
@@ -144,13 +176,49 @@ class FileTransferService:
 
         if msg_type == "file_start":
             file_id = msg["fileId"]
+            total_size = msg.get("totalSize", 0)
+            total_chunks = msg.get("totalChunks", 0)
+
+            # Validate file size
+            if total_size <= 0 or total_size > MAX_FILE_SIZE:
+                logger.warning(
+                    "Rejected file transfer %s: size %d exceeds limit %d",
+                    file_id, total_size, MAX_FILE_SIZE,
+                )
+                return
+
+            # Validate chunk count
+            if total_chunks <= 0 or total_chunks > MAX_CHUNKS:
+                logger.warning(
+                    "Rejected file transfer %s: %d chunks exceeds limit %d",
+                    file_id, total_chunks, MAX_CHUNKS,
+                )
+                return
+
+            # Validate consistency
+            if total_size > total_chunks * FILE_CHUNK_SIZE:
+                logger.warning(
+                    "Rejected file transfer %s: size/chunks mismatch",
+                    file_id,
+                )
+                return
+
+            # Limit concurrent transfers
+            self._cleanup_stale_transfers()
+            active = sum(1 for t in self._incoming.values() if not t.info.completed)
+            if active >= MAX_CONCURRENT_TRANSFERS:
+                logger.warning("Rejected file transfer %s: too many concurrent transfers", file_id)
+                return
+
+            safe_name = self._sanitize_filename(msg["fileName"])
             info = FileTransferProgress(
                 file_id=file_id,
-                file_name=msg["fileName"],
-                total_size=msg["totalSize"],
-                total_chunks=msg["totalChunks"],
+                file_name=safe_name,
+                total_size=total_size,
+                total_chunks=total_chunks,
             )
             self._incoming[file_id] = IncomingTransfer(info=info)
+            self._new_transfer_event.set()
             logger.info(
                 "Receiving file: %s (%d bytes, %d chunks)",
                 info.file_name, info.total_size, info.total_chunks,
@@ -164,9 +232,18 @@ class FileTransferService:
                 return
 
             chunk_data = base64.b64decode(msg["data"])
+            transfer.info.bytes_received += len(chunk_data)
+
+            if transfer.info.bytes_received > transfer.info.total_size * 1.1:  # 10% tolerance
+                logger.warning(
+                    "File transfer %s: received bytes (%d) exceed declared size (%d)",
+                    file_id, transfer.info.bytes_received, transfer.info.total_size,
+                )
+                del self._incoming[file_id]
+                return
+
             transfer.chunks[msg["chunkIndex"]] = chunk_data
             transfer.info.received_chunks += 1
-            transfer.info.bytes_received += len(chunk_data)
 
         elif msg_type == "file_complete":
             file_id = msg["fileId"]
@@ -184,12 +261,26 @@ class FileTransferService:
                     return
                 file_data += chunk
 
-            # Save to disk
-            save_path = self._receive_dir / transfer.info.file_name
-            save_path.write_bytes(file_data)
-
-            # Compute hash
+            # Compute hash and verify against sender's hash
             sha256 = hashlib.sha256(file_data).hexdigest()
+            expected_sha256 = msg.get("sha256", "")
+            if expected_sha256 and sha256 != expected_sha256:
+                logger.error(
+                    "File hash mismatch for %s: expected %s, got %s",
+                    file_id, expected_sha256, sha256,
+                )
+                del self._incoming[file_id]
+                return
+
+            # Save to disk (with path traversal protection)
+            save_path = (self._receive_dir / transfer.info.file_name).resolve()
+            if not str(save_path).startswith(str(self._receive_dir.resolve())):
+                logger.error(
+                    "Path traversal detected in file name: %s",
+                    transfer.info.file_name,
+                )
+                return
+            save_path.write_bytes(file_data)
 
             transfer.info.completed = True
             transfer.info.file_path = str(save_path)
@@ -207,23 +298,44 @@ class FileTransferService:
     async def wait_for_file(self, timeout: float = 60) -> FileTransferProgress:
         """Wait for a file transfer to complete.
 
+        Args:
+            timeout: Maximum time to wait in seconds (applies to overall wait).
+
         Returns:
             The completed file transfer progress info.
+
+        Raises:
+            TimeoutError: If no file transfer completes within the timeout.
         """
-        # Wait for any incoming transfer to complete
+        deadline = asyncio.get_event_loop().time() + timeout
         while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("File transfer timed out")
+
+            # Check for any incomplete transfers
             for transfer in self._incoming.values():
                 if not transfer.info.completed:
                     try:
                         await asyncio.wait_for(
-                            transfer.complete_event.wait(), timeout=timeout
+                            transfer.complete_event.wait(),
+                            timeout=remaining,
                         )
                         return transfer.info
                     except asyncio.TimeoutError:
                         raise TimeoutError("File transfer timed out")
 
-            # No pending transfers, wait briefly
-            await asyncio.sleep(0.1)
+            # No pending transfers -- wait for a new one to arrive
+            self._new_transfer_event.clear()
+            try:
+                await asyncio.wait_for(
+                    self._new_transfer_event.wait(),
+                    timeout=remaining,
+                )
+            except asyncio.TimeoutError:
+                raise TimeoutError(
+                    "File transfer timed out (no transfer started)"
+                )
 
     def get_transfer(self, file_id: str) -> Optional[FileTransferProgress]:
         """Get the progress of a file transfer."""
