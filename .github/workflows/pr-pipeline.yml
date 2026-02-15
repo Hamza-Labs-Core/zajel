@@ -1002,7 +1002,7 @@ jobs:
     needs: [unit-tests, build-android]
     # Run on PR events always, and on workflow_dispatch unless skip_e2e is true
     if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-4-cores
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -1175,7 +1175,7 @@ jobs:
           echo "Waiting for emulator to boot..."
           sleep 5
           adb -s emulator-5554 wait-for-device
-          timeout 180 adb -s emulator-5554 shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 2; done'
+          timeout 300 adb -s emulator-5554 shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 2; done'
           echo "Emulator booted"
           adb devices
 
