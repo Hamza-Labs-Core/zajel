@@ -995,6 +995,14 @@ jobs:
 
             PUBLIC_ENDPOINT="wss://${PUBLIC_IP}:8443"
 
+            # Validate required env vars from CI
+            echo "BOOTSTRAP_URL=${BOOTSTRAP_URL}"
+            echo "APP_VERSION=${APP_VERSION}"
+            if [ -z "${BOOTSTRAP_URL}" ]; then
+              echo "ERROR: BOOTSTRAP_URL not set"
+              exit 1
+            fi
+
             # Create QA startup script with env vars
             cat > start-qa.sh << EOF
             #!/bin/bash
@@ -1015,6 +1023,13 @@ jobs:
             EOF
             chmod +x start-qa.sh
 
+            # Verify the generated script has the bootstrap URL
+            if ! grep -q "ZAJEL_BOOTSTRAP_URL=https" start-qa.sh; then
+              echo "ERROR: start-qa.sh missing BOOTSTRAP_URL"
+              cat start-qa.sh
+              exit 1
+            fi
+
             mkdir -p data-qa
 
             # Stop existing QA server
@@ -1026,18 +1041,39 @@ jobs:
 
             # Health check
             sleep 5
+            HEALTHY=false
             for i in {1..6}; do
               if curl -sf -k "https://localhost:8443/health" | grep -q "healthy"; then
                 echo "Server healthy (${PUBLIC_ENDPOINT})"
-                exit 0
+                HEALTHY=true
+                break
               fi
               echo "Waiting for server... ($i/6)"
               sleep 5
             done
 
-            echo "Health check failed"
-            pm2 logs zajel-server-qa --lines 50 --nostream
-            exit 1
+            if [ "$HEALTHY" = false ]; then
+              echo "Health check failed"
+              pm2 logs zajel-server-qa --lines 50 --nostream
+              exit 1
+            fi
+
+            # Verify bootstrap registration (server should self-register on startup)
+            sleep 5
+            SERVER_ID=$(curl -sf -k "https://localhost:8443/health" | python3 -c "import sys,json; print(json.load(sys.stdin).get('serverId',''))" 2>/dev/null || true)
+            BOOTSTRAP_SERVERS=$(curl -sf "${BOOTSTRAP_URL}/servers" 2>/dev/null || echo '{"servers":[]}')
+
+            if echo "$BOOTSTRAP_SERVERS" | grep -q "${SERVER_ID}"; then
+              echo "Bootstrap registration verified: ${SERVER_ID}"
+            else
+              echo "Server not in bootstrap, registering manually..."
+              PUB_KEY=$(echo "${SERVER_ID}" | sed 's/^ed25519://')
+              curl -sf -X POST "${BOOTSTRAP_URL}/servers" \
+                -H "Content-Type: application/json" \
+                -d "{\"serverId\":\"${SERVER_ID}\",\"endpoint\":\"${PUBLIC_ENDPOINT}\",\"publicKey\":\"${PUB_KEY}\",\"region\":\"qa\"}" \
+                && echo "Manually registered with bootstrap" \
+                || echo "WARNING: Manual bootstrap registration failed"
+            fi
 
       - name: Release deployment lock
         if: always()
@@ -1055,7 +1091,7 @@ jobs:
   # ============================================
   e2e-tests:
     name: E2E Tests
-    needs: [unit-tests, build-android]
+    needs: [unit-tests, build-android, deploy-vps]
     # Run on PR events always, and on workflow_dispatch unless skip_e2e is true
     if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
     runs-on: ubuntu-latest
@@ -1392,7 +1428,7 @@ jobs:
   # ============================================
   e2e-linux:
     name: E2E Tests (Linux)
-    needs: [unit-tests]
+    needs: [unit-tests, deploy-vps]
     if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1589,7 +1625,7 @@ jobs:
   # ============================================
   e2e-windows:
     name: E2E Tests (Windows)
-    needs: [build-windows]
+    needs: [build-windows, deploy-vps]
     if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
     runs-on: windows-latest
     timeout-minutes: 30
