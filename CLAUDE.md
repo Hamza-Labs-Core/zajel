@@ -3,6 +3,8 @@
 ## Behavioral Rules
 
 - **NEVER dismiss failures** — Do not say things like "this is not related to your/our code changes", "this is a pre-existing issue", or any variation that deflects responsibility for CI/test failures. Every failure on the branch is our problem to investigate and fix.
+- **NO informational tests** — Every test in CI must be a real gate. Never use `|| true`, `exit 0`, `set +e`, or any pattern that swallows test failures.
+- **NEVER remove tests** — If a test fails, fix it. Do not delete, skip, or comment out tests to make CI pass.
 
 ## Licensing & IP Guidelines
 
