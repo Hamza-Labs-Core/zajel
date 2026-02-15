@@ -975,9 +975,9 @@ jobs:
 
             # Ensure the server user can read the certs
             sudo chmod 0755 /etc/letsencrypt/live /etc/letsencrypt/archive
-            sudo chmod 0644 "${CERT_DIR}/../../../archive/${CERT_NAME}/fullchain"*.pem
-            sudo chmod 0640 "${CERT_DIR}/../../../archive/${CERT_NAME}/privkey"*.pem
-            sudo chown root:$(id -gn) "${CERT_DIR}/../../../archive/${CERT_NAME}/privkey"*.pem
+            sudo chmod 0644 /etc/letsencrypt/archive/${CERT_NAME}/fullchain*.pem
+            sudo chmod 0640 /etc/letsencrypt/archive/${CERT_NAME}/privkey*.pem
+            sudo chown root:$(id -gn) /etc/letsencrypt/archive/${CERT_NAME}/privkey*.pem
             echo "TLS configured: cert=${TLS_CERT}"
 
             # Setup auto-renewal cron (6-day certs need frequent renewal)
