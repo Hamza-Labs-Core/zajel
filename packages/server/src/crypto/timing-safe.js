@@ -15,10 +15,10 @@ export function timingSafeEqual(a, b) {
 
   if (bufA.byteLength !== bufB.byteLength) {
     // Still do a full comparison to avoid leaking length info through timing.
-    // Compare bufA against itself so the loop takes the same time.
+    const minLen = Math.min(bufA.byteLength, bufB.byteLength);
     let dummy = 0;
-    for (let i = 0; i < bufA.byteLength; i++) {
-      dummy |= bufA[i] ^ bufA[i];
+    for (let i = 0; i < minLen; i++) {
+      dummy |= bufA[i] ^ bufB[i];
     }
     // Prevent dead-code elimination
     void dummy;

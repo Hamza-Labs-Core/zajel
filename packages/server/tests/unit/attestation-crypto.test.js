@@ -23,7 +23,7 @@ import {
   verifySessionToken,
   compareVersions,
 } from '../../src/crypto/attestation.js';
-import { hexToBytes } from '../../src/crypto/signing.js';
+
 
 describe('Attestation Crypto Utilities', () => {
   let seedHex;

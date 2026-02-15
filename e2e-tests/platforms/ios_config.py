@@ -9,6 +9,12 @@ Environment variables:
 
 import os
 
+__all__ = [
+    "APP_PATH", "SIMULATOR_UDID", "SIGNALING_URL",
+    "APP_LAUNCH_TIMEOUT", "ELEMENT_WAIT_TIMEOUT", "CONNECTION_TIMEOUT",
+    "P2P_CONNECTION_TIMEOUT",
+]
+
 # App configuration
 APP_PATH = os.environ.get("IOS_APP_PATH", "")
 SIMULATOR_UDID = os.environ.get("IOS_SIMULATOR_UDID", "")

@@ -5,7 +5,7 @@
  * Uses Web Crypto API (available in Cloudflare Workers runtime).
  */
 
-import { hexToBytes, bytesToBase64 } from './signing.js';
+import { hexToBytes } from './signing.js';
 
 /**
  * Encode a string to base64url (RFC 4648 Section 5).

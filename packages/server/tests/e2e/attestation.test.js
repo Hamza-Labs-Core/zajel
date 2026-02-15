@@ -16,7 +16,7 @@
  * - CORS headers on all endpoints
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { AttestationRegistryDO } from '../../src/durable-objects/attestation-registry-do.js';
 import {
   importAttestationSigningKey,

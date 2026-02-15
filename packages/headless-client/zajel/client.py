@@ -24,7 +24,6 @@ from typing import Any, Callable, Coroutine, Optional
 from .channels import (
     ChannelCryptoService,
     ChannelManifest,
-    ChannelRules,
     ChannelStorage,
     Chunk,
     ChunkPayload,
@@ -39,14 +38,11 @@ from .channels import (
     UpstreamPayload,
     decode_channel_link,
     encode_channel_link,
-    is_channel_link,
 )
 from .crypto import CryptoService
 from .dead_drop import (
     ConnectionInfo,
-    DeadDrop,
     DeadDropDecryptionError,
-    LiveMatch,
     RendezvousResult,
     create_dead_drop,
     decrypt_dead_drop,
