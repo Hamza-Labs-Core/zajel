@@ -30,14 +30,6 @@
       "tag": "v3",
       "new_classes": ["ServerRegistryDO"],
       "deleted_classes": ["SignalingRoom", "RelayRegistryDO"]
-    },
-    {
-      "tag": "v4",
-      "new_classes": ["AttestationRegistryDO"]
-    },
-    {
-      "tag": "v5",
-      "deleted_classes": ["AttestationRegistryDO"]
     }
   ],
 
