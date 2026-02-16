@@ -61,6 +61,10 @@ elif PLATFORM == "windows":
     from platforms.windows_config import (
         APP_PATH, SIGNALING_URL, APP_LAUNCH_TIMEOUT,
     )
+elif PLATFORM == "ios":
+    from platforms.ios_config import (
+        APP_PATH, SIGNALING_URL, APP_LAUNCH_TIMEOUT,
+    )
 else:
     SIGNALING_URL = os.environ.get("SIGNALING_URL", "")
 
@@ -316,11 +320,26 @@ class HeadlessBob:
         from zajel.client import ZajelHeadlessClient
         self._client = ZajelHeadlessClient(signaling_url=signaling_url, **kwargs)
         self.pairing_code = None
-        self.connected_peer = None
+        self._connected_peer = None
 
     def _run_loop(self):
         asyncio.set_event_loop(self._loop)
         self._loop.run_forever()
+
+    @property
+    def connected_peer(self):
+        """Return the connected peer, checking auto-accept peers if needed."""
+        if self._connected_peer is not None:
+            return self._connected_peer
+        # Auto-accept may have connected a peer without explicit pair_with()
+        peers = self._client.get_connected_peers()
+        if peers:
+            return next(iter(peers.values()))
+        return None
+
+    @connected_peer.setter
+    def connected_peer(self, value):
+        self._connected_peer = value
 
     def _run(self, coro, timeout=120):
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
@@ -331,14 +350,21 @@ class HeadlessBob:
         return self.pairing_code
 
     def pair_with(self, code: str):
-        self.connected_peer = self._run(self._client.pair_with(code))
-        return self.connected_peer
+        self._connected_peer = self._run(self._client.pair_with(code))
+        return self._connected_peer
+
+    def pair_with_async(self, code: str):
+        """Start pairing in background, returns a Future."""
+        future = asyncio.run_coroutine_threadsafe(
+            self._client.pair_with(code), self._loop
+        )
+        return future
 
     def wait_for_pair(self, timeout=60):
-        self.connected_peer = self._run(
+        self._connected_peer = self._run(
             self._client.wait_for_pair(timeout=timeout), timeout=timeout + 10
         )
-        return self.connected_peer
+        return self._connected_peer
 
     def send_text(self, peer_id: str, text: str):
         self._run(self._client.send_text(peer_id, text))
@@ -355,6 +381,90 @@ class HeadlessBob:
         return self._run(
             self._client.receive_file(timeout=timeout), timeout=timeout + 10
         )
+
+    # ── Channel methods ──────────────────────────────────────
+
+    def create_channel(self, name: str, description: str = ""):
+        return self._run(self._client.create_channel(name, description))
+
+    def get_channel_invite_link(self, channel_id: str) -> str:
+        return self._client.get_channel_invite_link(channel_id)
+
+    def publish_channel_message(self, channel_id: str, text: str):
+        return self._run(
+            self._client.publish_channel_message(channel_id, text)
+        )
+
+    def subscribe_channel(self, invite_link: str):
+        return self._run(self._client.subscribe_channel(invite_link))
+
+    def get_subscribed_channels(self):
+        return self._run(self._client.get_subscribed_channels())
+
+    def get_channel(self, channel_id: str):
+        return self._run(self._client.get_channel(channel_id))
+
+    def unsubscribe_channel(self, channel_id: str):
+        self._run(self._client.unsubscribe_channel(channel_id))
+
+    def receive_channel_chunk(self, channel_id: str, chunk_data: dict):
+        return self._run(
+            self._client.receive_channel_chunk(channel_id, chunk_data)
+        )
+
+    def receive_channel_content(self, timeout=30):
+        return self._run(
+            self._client.receive_channel_content(timeout=timeout),
+            timeout=timeout + 10,
+        )
+
+    # ── Group methods ────────────────────────────────────────
+
+    def create_group(self, name: str):
+        return self._run(self._client.create_group(name))
+
+    def get_groups(self):
+        return self._run(self._client.get_groups())
+
+    def get_group(self, group_id: str):
+        return self._run(self._client.get_group(group_id))
+
+    def add_group_member(self, group_id, member, sender_key):
+        return self._run(
+            self._client.add_group_member(group_id, member, sender_key)
+        )
+
+    def send_group_message(self, group_id: str, content: str):
+        return self._run(
+            self._client.send_group_message(group_id, content)
+        )
+
+    def receive_group_message(self, group_id, author_device_id, encrypted_bytes):
+        return self._run(
+            self._client.receive_group_message(
+                group_id, author_device_id, encrypted_bytes
+            )
+        )
+
+    def wait_for_group_message(self, timeout=30):
+        return self._run(
+            self._client.wait_for_group_message(timeout=timeout),
+            timeout=timeout + 10,
+        )
+
+    def wait_for_group_invitation(self, timeout=30):
+        return self._run(
+            self._client.wait_for_group_invitation(timeout=timeout),
+            timeout=timeout + 10,
+        )
+
+    def get_group_messages(self, group_id: str, limit=None):
+        return self._run(
+            self._client.get_group_messages(group_id, limit=limit)
+        )
+
+    def leave_group(self, group_id: str):
+        self._run(self._client.leave_group(group_id))
 
     def disconnect(self):
         try:
