@@ -1717,13 +1717,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Delete pre-release tag
+      - name: Delete pre-release tag and any draft releases
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="v${{ env.VERSION }}"
+
+          # Delete all draft releases (tag may already be gone, so list by isDraft)
+          DRAFTS=$(gh release list --limit 50 --json tagName,isDraft \
+            --jq '[.[] | select(.isDraft)] | .[].tagName')
+          for D in $DRAFTS; do
+            echo "Deleting draft release $D..."
+            gh release delete "$D" --yes --cleanup-tag 2>/dev/null || true
+          done
+
+          # Also try deleting by tag name in case it's not a draft yet
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
           git push origin :refs/tags/$TAG 2>/dev/null || true
-          echo "Deleted tag: $TAG"
+          echo "Cleanup complete for $TAG"
 
   # ============================================
   # Summary
