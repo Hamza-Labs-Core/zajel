@@ -13,7 +13,7 @@
 
 import * as crypto from 'crypto';
 import { logger } from '../utils/logger.js';
-import { ATTESTATION } from '../constants.js';
+
 
 // ---------------------------------------------------------------------------
 // Types

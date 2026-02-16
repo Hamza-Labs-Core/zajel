@@ -26,7 +26,7 @@ import {
   verifySessionToken,
   importVerifyKey,
 } from '../../src/crypto/attestation.js';
-import { hexToBytes } from '../../src/crypto/signing.js';
+
 import worker from '../../src/index.js';
 
 // --- Test helpers ---
