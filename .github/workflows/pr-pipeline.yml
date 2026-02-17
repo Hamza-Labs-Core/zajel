@@ -1177,9 +1177,9 @@ jobs:
           no-dtls
           no-cli
           fingerprint
-          no-loopback-peers
           allowed-peer-ip=10.0.0.0-10.255.255.255
           allowed-peer-ip=127.0.0.0-127.255.255.255
+          allowed-peer-ip=172.16.0.0-172.31.255.255
           log-file=/tmp/coturn.log
           CONF
 
