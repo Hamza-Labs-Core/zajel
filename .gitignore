@@ -89,6 +89,7 @@ dist/
 
 # SQLite databases
 *.db
+*.db.key
 
 # Claude Code / Serena
 .claude/
