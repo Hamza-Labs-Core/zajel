@@ -349,5 +349,66 @@ void main() {
         expect(decrypted, specialMessage);
       });
     });
+
+    group('tagFromPublicKey', () {
+      test('returns 4-character uppercase hex string', () async {
+        await cryptoService.initialize();
+        final publicKey = await cryptoService.getPublicKeyBase64();
+
+        final tag = CryptoService.tagFromPublicKey(publicKey);
+
+        expect(tag.length, 4);
+        expect(tag, matches(RegExp(r'^[0-9A-F]{4}$')));
+      });
+
+      test('is consistent with peerIdFromPublicKey', () async {
+        await cryptoService.initialize();
+        final publicKey = await cryptoService.getPublicKeyBase64();
+
+        final tag = CryptoService.tagFromPublicKey(publicKey);
+        final peerId = CryptoService.peerIdFromPublicKey(publicKey);
+
+        // Both use same SHA-256 hash; tag is first 4 chars, peerId is first 16
+        expect(peerId.substring(0, 4), tag);
+      });
+
+      test('is deterministic for same key', () async {
+        await cryptoService.initialize();
+        final publicKey = await cryptoService.getPublicKeyBase64();
+
+        final tag1 = CryptoService.tagFromPublicKey(publicKey);
+        final tag2 = CryptoService.tagFromPublicKey(publicKey);
+
+        expect(tag1, tag2);
+      });
+
+      test('produces different tags for different keys', () async {
+        final alice = CryptoService(secureStorage: FakeSecureStorage());
+        final bob = CryptoService(secureStorage: FakeSecureStorage());
+        await alice.initialize();
+        await bob.initialize();
+
+        final aliceTag =
+            CryptoService.tagFromPublicKey(await alice.getPublicKeyBase64());
+        final bobTag =
+            CryptoService.tagFromPublicKey(await bob.getPublicKeyBase64());
+
+        // Technically could collide (1 in 65536) but extremely unlikely
+        expect(aliceTag, isNot(bobTag));
+      });
+
+      test('works with known base64 input', () {
+        // A fixed 32-byte key as base64
+        final knownKey = base64Encode(List.filled(32, 0));
+
+        final tag = CryptoService.tagFromPublicKey(knownKey);
+
+        expect(tag.length, 4);
+        expect(tag, matches(RegExp(r'^[0-9A-F]{4}$')));
+        // Should be stable across runs
+        final tag2 = CryptoService.tagFromPublicKey(knownKey);
+        expect(tag, tag2);
+      });
+    });
   });
 }

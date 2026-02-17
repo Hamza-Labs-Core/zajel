@@ -117,7 +117,7 @@ class GroupsListScreen extends ConsumerWidget {
 
     if (result == true && nameController.text.trim().isNotEmpty) {
       final groupService = ref.read(groupServiceProvider);
-      final displayName = ref.read(displayNameProvider);
+      final displayName = ref.read(usernameProvider);
       final cryptoService = ref.read(cryptoServiceProvider);
       final publicKey = cryptoService.publicKeyBase64;
       final pairingCode = ref.read(pairingCodeProvider) ?? 'unknown';

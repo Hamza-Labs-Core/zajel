@@ -106,7 +106,7 @@ enum CensorshipType {
 /// Service for generating rotating routing hashes and managing
 /// censorship resistance features.
 ///
-/// Routing hashes are derived using HMAC(channel_secret, "epoch:<period>")
+/// Routing hashes are derived using `HMAC(channel_secret, "epoch:<period>")`
 /// so all channel members compute the same hash for a given epoch, while
 /// the VPS relay sees an opaque, rotating identifier.
 class RoutingHashService {

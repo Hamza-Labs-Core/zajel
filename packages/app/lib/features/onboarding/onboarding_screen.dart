@@ -15,18 +15,27 @@ class OnboardingScreen extends ConsumerStatefulWidget {
 
 class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   final _pageController = PageController();
+  final _usernameController = TextEditingController();
   int _currentPage = 0;
+  bool _usernameValid = false;
 
-  static const _totalPages = 4;
+  static const _totalPages = 5;
 
   @override
   void dispose() {
     _pageController.dispose();
+    _usernameController.dispose();
     super.dispose();
   }
 
   Future<void> _completeOnboarding() async {
     final prefs = ref.read(sharedPreferencesProvider);
+    // Save username
+    final username = _usernameController.text.trim();
+    if (username.isNotEmpty) {
+      await prefs.setString('username', username);
+      ref.read(usernameProvider.notifier).state = username;
+    }
     await prefs.setBool('hasSeenOnboarding', true);
     ref.read(hasSeenOnboardingProvider.notifier).state = true;
     if (mounted) {
@@ -35,6 +44,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   void _nextPage() {
+    // Block Next on username page if invalid
+    if (_currentPage == 1 && !_usernameValid) return;
+
     if (_currentPage < _totalPages - 1) {
       _pageController.nextPage(
         duration: const Duration(milliseconds: 300),
@@ -46,6 +58,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   void _skip() {
+    // Set default username when skipping
+    final prefs = ref.read(sharedPreferencesProvider);
+    prefs.setString('username', 'Anonymous');
+    ref.read(usernameProvider.notifier).state = 'Anonymous';
     _completeOnboarding();
   }
 
@@ -60,13 +76,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               alignment: Alignment.topRight,
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: Semantics(
-                  label: 'Skip',
-                  button: true,
-                  child: TextButton(
-                    onPressed: _skip,
-                    child: const Text('Skip'),
-                  ),
+                child: TextButton(
+                  onPressed: _skip,
+                  child: const Text('Skip'),
                 ),
               ),
             ),
@@ -79,6 +91,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 },
                 children: [
                   _buildWelcomePage(context),
+                  _buildUsernamePage(context),
                   _buildIdentityPage(context),
                   _buildConnectPage(context),
                   _buildGetStartedPage(context),
@@ -112,24 +125,18 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                     ),
                   ),
                   // Next / Get Started button
-                  Semantics(
-                    label: _currentPage == _totalPages - 1
-                        ? 'Get Started'
-                        : 'Next',
-                    button: true,
-                    child: ElevatedButton(
-                      onPressed: _nextPage,
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 32,
-                          vertical: 14,
-                        ),
+                  ElevatedButton(
+                    onPressed: (_currentPage == 1 && !_usernameValid)
+                        ? null
+                        : _nextPage,
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 32,
+                        vertical: 14,
                       ),
-                      child: Text(
-                        _currentPage == _totalPages - 1
-                            ? 'Get Started'
-                            : 'Next',
-                      ),
+                    ),
+                    child: Text(
+                      _currentPage == _totalPages - 1 ? 'Get Started' : 'Next',
                     ),
                   ),
                 ],
@@ -170,6 +177,66 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                   height: 1.5,
                 ),
             textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUsernamePage(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 32),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.person,
+            size: 80,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          const SizedBox(height: 32),
+          Text(
+            'Choose a Username',
+            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'This is how others will see you. '
+            'A unique tag will be added based on your encryption key.',
+            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  height: 1.5,
+                ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 24),
+          TextField(
+            controller: _usernameController,
+            autofocus: true,
+            maxLength: 32,
+            decoration: const InputDecoration(
+              hintText: 'Enter your username',
+              border: OutlineInputBorder(),
+              counterText: '',
+            ),
+            onChanged: (value) {
+              final trimmed = value.trim();
+              setState(() {
+                _usernameValid = trimmed.isNotEmpty &&
+                    trimmed.length <= 32 &&
+                    !trimmed.contains('#');
+              });
+            },
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Max 32 characters. The # character is not allowed.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
           ),
         ],
       ),

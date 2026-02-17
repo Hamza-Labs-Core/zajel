@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/models/models.dart';
 import '../../core/providers/app_providers.dart';
+import '../../core/utils/identity_utils.dart';
 import '../../shared/widgets/relative_time.dart';
 import '../chat/chat_screen.dart';
 
@@ -110,7 +111,7 @@ class _ConversationSidebar extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final peersAsync = ref.watch(visiblePeersProvider);
-    final displayName = ref.watch(displayNameProvider);
+    final identity = ref.watch(userIdentityProvider);
     final pairingCode = ref.watch(pairingCodeProvider);
     final signalingState = ref.watch(signalingDisplayStateProvider);
 
@@ -118,14 +119,12 @@ class _ConversationSidebar extends ConsumerWidget {
       children: [
         // Header
         _SidebarHeader(
-          displayName: displayName,
+          displayName: identity,
           pairingCode: pairingCode,
           signalingState: signalingState,
           onSettings: () => context.push('/settings'),
           onConnect: () => context.push('/connect'),
           onContacts: () => context.push('/contacts'),
-          onChannels: () => context.push('/channels'),
-          onGroups: () => context.push('/groups'),
         ),
         const Divider(height: 1),
         // Peer list
@@ -204,8 +203,6 @@ class _SidebarHeader extends StatelessWidget {
   final VoidCallback onSettings;
   final VoidCallback onConnect;
   final VoidCallback onContacts;
-  final VoidCallback onChannels;
-  final VoidCallback onGroups;
 
   const _SidebarHeader({
     required this.displayName,
@@ -214,8 +211,6 @@ class _SidebarHeader extends StatelessWidget {
     required this.onSettings,
     required this.onConnect,
     required this.onContacts,
-    required this.onChannels,
-    required this.onGroups,
   });
 
   @override
@@ -273,16 +268,6 @@ class _SidebarHeader extends StatelessWidget {
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.rss_feed, size: 20),
-            onPressed: onChannels,
-            tooltip: 'Channels',
-          ),
-          IconButton(
-            icon: const Icon(Icons.group, size: 20),
-            onPressed: onGroups,
-            tooltip: 'Groups',
-          ),
-          IconButton(
             icon: const Icon(Icons.contacts, size: 20),
             onPressed: onContacts,
             tooltip: 'Contacts',
@@ -312,7 +297,7 @@ class _ConversationTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final aliases = ref.watch(peerAliasesProvider);
-    final name = aliases[peer.id] ?? peer.displayName;
+    final name = resolvePeerDisplayName(peer, alias: aliases[peer.id]);
     final lastMessage = ref.watch(lastMessageProvider(peer.id));
     final isOnline = peer.connectionState == PeerConnectionState.connected;
 

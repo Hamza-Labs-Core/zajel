@@ -21,6 +21,8 @@ typedef OnConnectionStateCallback = void Function(
     String peerId, PeerConnectionState state);
 typedef OnSignalingMessageCallback = void Function(
     String peerId, Map<String, dynamic> message);
+typedef OnHandshakeCompleteCallback = void Function(
+    String peerId, String publicKey, String? username);
 
 /// Signaling event for stream-based signaling message delivery.
 /// This replaces the callback-based approach to avoid race conditions
@@ -76,6 +78,7 @@ class WebRTCService {
   OnFileStartCallback? onFileStart;
   OnFileCompleteCallback? onFileComplete;
   OnConnectionStateCallback? onConnectionStateChange;
+  OnHandshakeCompleteCallback? onHandshakeComplete;
   @Deprecated('Use signalingEvents stream instead to avoid race conditions')
   OnSignalingMessageCallback? onSignalingMessage;
 
@@ -299,18 +302,22 @@ class WebRTCService {
   }
 
   /// Perform cryptographic handshake after connection is established.
-  Future<void> performHandshake(String peerId) async {
+  Future<void> performHandshake(String peerId, {String? username}) async {
     final connection = _connections[peerId];
     if (connection == null || connection.messageChannel == null) {
       throw WebRTCException('No connection to peer: $peerId');
     }
 
-    // Send our public key
+    // Send our public key and username
     final publicKey = await _cryptoService.getPublicKeyBase64();
-    final handshakeMessage = jsonEncode({
+    final handshakeData = <String, dynamic>{
       'type': 'handshake',
       'publicKey': publicKey,
-    });
+    };
+    if (username != null) {
+      handshakeData['username'] = username;
+    }
+    final handshakeMessage = jsonEncode(handshakeData);
 
     connection.messageChannel!.send(RTCDataChannelMessage(handshakeMessage));
   }
@@ -491,11 +498,19 @@ class WebRTCService {
       final json = jsonDecode(text) as Map<String, dynamic>;
       if (json['type'] == 'handshake') {
         final publicKey = json['publicKey'] as String;
+        final username = json['username'] as String?;
         await _cryptoService.establishSession(peerId, publicKey);
-        _updateConnectionState(
-          _connections[peerId]!,
-          PeerConnectionState.connected,
-        );
+        // Notify ConnectionManager via callback so it can update peer username
+        // and control the state transition to connected.
+        if (onHandshakeComplete != null) {
+          onHandshakeComplete!(peerId, publicKey, username);
+        } else {
+          // Fallback: transition directly if no callback is registered
+          _updateConnectionState(
+            _connections[peerId]!,
+            PeerConnectionState.connected,
+          );
+        }
         return;
       }
     } catch (_) {

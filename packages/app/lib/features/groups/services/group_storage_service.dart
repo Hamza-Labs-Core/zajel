@@ -275,7 +275,7 @@ class GroupStorageService {
     String senderKeyBase64,
   ) async {
     await _secureStorage.write(
-      key: '${_secureKeyPrefix}${groupId}_sender_$deviceId',
+      key: '$_secureKeyPrefix${groupId}_sender_$deviceId',
       value: senderKeyBase64,
     );
   }
@@ -283,7 +283,7 @@ class GroupStorageService {
   /// Load a sender key for a member from secure storage.
   Future<String?> loadSenderKey(String groupId, String deviceId) async {
     return _secureStorage.read(
-      key: '${_secureKeyPrefix}${groupId}_sender_$deviceId',
+      key: '$_secureKeyPrefix${groupId}_sender_$deviceId',
     );
   }
 
@@ -292,7 +292,7 @@ class GroupStorageService {
   /// Returns {deviceId: base64Key}.
   Future<Map<String, String>> loadAllSenderKeys(String groupId) async {
     final allKeys = await _secureStorage.readAll();
-    final prefix = '${_secureKeyPrefix}${groupId}_sender_';
+    final prefix = '$_secureKeyPrefix${groupId}_sender_';
     final groupKeys = <String, String>{};
 
     for (final entry in allKeys.entries) {
@@ -308,14 +308,14 @@ class GroupStorageService {
   /// Delete a sender key for a member.
   Future<void> deleteSenderKey(String groupId, String deviceId) async {
     await _secureStorage.delete(
-      key: '${_secureKeyPrefix}${groupId}_sender_$deviceId',
+      key: '$_secureKeyPrefix${groupId}_sender_$deviceId',
     );
   }
 
   /// Delete all sender keys for a group.
   Future<void> _deleteSenderKeys(String groupId) async {
     final allKeys = await _secureStorage.readAll();
-    final prefix = '${_secureKeyPrefix}${groupId}_sender_';
+    final prefix = '$_secureKeyPrefix${groupId}_sender_';
     for (final key in allKeys.keys) {
       if (key.startsWith(prefix)) {
         await _secureStorage.delete(key: key);

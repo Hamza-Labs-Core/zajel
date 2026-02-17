@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -736,20 +735,18 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
           adminLabel: labelController.text.trim(),
         );
         ref.invalidate(channelByIdProvider(widget.channelId));
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                  'Admin "${labelController.text.trim()}" added successfully'),
-            ),
-          );
-        }
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                'Admin "${labelController.text.trim()}" added successfully'),
+          ),
+        );
       } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to add admin: $e')),
-          );
-        }
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to add admin: $e')),
+        );
       }
     }
 
@@ -824,19 +821,17 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
           adminPublicKey: admin.key,
         );
         ref.invalidate(channelByIdProvider(widget.channelId));
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Admin "${admin.label}" removed successfully'),
-            ),
-          );
-        }
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Admin "${admin.label}" removed successfully'),
+          ),
+        );
       } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to remove admin: $e')),
-          );
-        }
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to remove admin: $e')),
+        );
       }
     }
   }

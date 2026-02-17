@@ -5,18 +5,17 @@ import 'package:go_router/go_router.dart';
 import '../../core/models/models.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/storage/trusted_peers_storage.dart';
+import '../../core/utils/identity_utils.dart';
 import '../../shared/widgets/relative_time.dart';
 
 /// Provider for all trusted peers as contacts.
 final contactsProvider = FutureProvider<List<TrustedPeer>>((ref) async {
   final storage = ref.watch(trustedPeersStorageProvider);
-  // Re-fetch when a trusted peer is migrated (ID change after reconnection).
-  ref.watch(trustedPeerVersionProvider);
   final peers = await storage.getAllPeers();
   return peers.where((p) => !p.isBlocked).toList()
     ..sort((a, b) {
-      final aName = a.alias ?? a.displayName;
-      final bName = b.alias ?? b.displayName;
+      final aName = resolveTrustedPeerDisplayName(a);
+      final bName = resolveTrustedPeerDisplayName(b);
       return aName.toLowerCase().compareTo(bName.toLowerCase());
     });
 });
@@ -62,7 +61,7 @@ class _ContactsScreenState extends ConsumerState<ContactsScreen> {
                 final filtered = _searchQuery.isEmpty
                     ? contacts
                     : contacts.where((c) {
-                        final name = (c.alias ?? c.displayName).toLowerCase();
+                        final name = resolveTrustedPeerDisplayName(c).toLowerCase();
                         return name.contains(_searchQuery.toLowerCase());
                       }).toList();
 
@@ -103,21 +102,15 @@ class _ContactTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final displayName = contact.alias ?? contact.displayName;
+    final displayName = resolveTrustedPeerDisplayName(contact);
     final peersAsync = ref.watch(visiblePeersProvider);
 
-    // Check if this contact is currently online.
-    // Match by publicKey in addition to ID because peer IDs change after
-    // migration (peer reconnected with new pairing code, same public key).
+    // Check if this contact is currently online
     bool isOnline = false;
-    Peer? livePeer;
     peersAsync.whenData((peers) {
-      livePeer = peers
-          .where((p) =>
-              p.id == contact.id ||
-              (p.publicKey != null && p.publicKey == contact.publicKey))
-          .firstOrNull;
-      isOnline = livePeer?.connectionState == PeerConnectionState.connected;
+      isOnline = peers.any((p) =>
+          p.id == contact.id &&
+          p.connectionState == PeerConnectionState.connected);
     });
 
     return ListTile(
@@ -154,14 +147,14 @@ class _ContactTile extends ConsumerWidget {
             )
           : null,
       onTap: () {
-        // Set selected peer and navigate to chat.
-        // Use the live peer (matched by publicKey) so the correct ID is used
-        // after migration (peer reconnected with a new pairing code).
-        if (livePeer != null) {
-          ref.read(selectedPeerProvider.notifier).state = livePeer;
-        }
-        final chatId = livePeer?.id ?? contact.id;
-        context.push('/chat/$chatId');
+        // Set selected peer and navigate to chat
+        peersAsync.whenData((peers) {
+          final peer = peers.where((p) => p.id == contact.id).firstOrNull;
+          if (peer != null) {
+            ref.read(selectedPeerProvider.notifier).state = peer;
+          }
+        });
+        context.push('/chat/${contact.id}');
       },
       onLongPress: () => context.push('/contacts/${contact.id}'),
     );

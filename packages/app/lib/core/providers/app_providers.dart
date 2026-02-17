@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -48,33 +46,11 @@ class ThemeModeNotifier extends StateNotifier<ThemeMode> {
 
   static ThemeMode _load(SharedPreferences prefs) {
     final value = prefs.getString(_key);
-    final mode = switch (value) {
+    return switch (value) {
       'light' => ThemeMode.light,
       'dark' => ThemeMode.dark,
       _ => ThemeMode.system,
     };
-
-    // On Linux, the xdg-desktop-portal Settings interface is often
-    // unavailable (e.g. missing XDG_CURRENT_DESKTOP), so Flutter can't
-    // detect system dark mode. Fall back to reading gsettings directly.
-    if (mode == ThemeMode.system && Platform.isLinux) {
-      return _resolveLinuxSystemTheme();
-    }
-    return mode;
-  }
-
-  static ThemeMode _resolveLinuxSystemTheme() {
-    try {
-      final result = Process.runSync(
-        'gsettings',
-        ['get', 'org.gnome.desktop.interface', 'color-scheme'],
-      );
-      if (result.exitCode == 0) {
-        final value = (result.stdout as String).trim();
-        if (value.contains('dark')) return ThemeMode.dark;
-      }
-    } catch (_) {}
-    return ThemeMode.system;
   }
 
   Future<void> setThemeMode(ThemeMode mode) async {
@@ -96,10 +72,27 @@ final hasSeenOnboardingProvider = StateProvider<bool>((ref) {
   return prefs.getBool('hasSeenOnboarding') ?? false;
 });
 
-/// Provider for the user's display name.
-final displayNameProvider = StateProvider<String>((ref) {
+/// Provider for the user's username (Discord-style, without tag).
+/// Reads 'username' key first, falls back to 'displayName' for migration.
+final usernameProvider = StateProvider<String>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
-  return prefs.getString('displayName') ?? 'Anonymous';
+  return prefs.getString('username') ??
+      prefs.getString('displayName') ??
+      'Anonymous';
+});
+
+/// Provider for the user's full identity string: "Username#TAG".
+/// The tag is derived deterministically from the public key.
+final userIdentityProvider = Provider<String>((ref) {
+  final username = ref.watch(usernameProvider);
+  try {
+    final cryptoService = ref.watch(cryptoServiceProvider);
+    final tag = CryptoService.tagFromPublicKey(cryptoService.publicKeyBase64);
+    return '$username#$tag';
+  } catch (_) {
+    // CryptoService not initialized yet
+    return username;
+  }
 });
 
 /// Provider for notification settings with SharedPreferences persistence.
@@ -108,13 +101,6 @@ final notificationSettingsProvider =
         (ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
   return NotificationSettingsNotifier(prefs);
-});
-
-/// Provider for auto-delete messages setting.
-/// When enabled, messages older than 24 hours are deleted on app startup.
-final autoDeleteMessagesProvider = StateProvider<bool>((ref) {
-  final prefs = ref.watch(sharedPreferencesProvider);
-  return prefs.getBool('autoDeleteMessages') ?? false;
 });
 
 /// Provider for crypto service.
@@ -254,32 +240,17 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
   final trustedPeersStorage = ref.watch(trustedPeersStorageProvider);
   final meetingPointService = ref.watch(meetingPointServiceProvider);
   final blockedNotifier = ref.watch(blockedPeersProvider.notifier);
+  final username = ref.watch(usernameProvider);
 
-  final messageStorage = ref.watch(messageStorageProvider);
-
-  final manager = ConnectionManager(
+  return ConnectionManager(
     cryptoService: cryptoService,
     webrtcService: webrtcService,
     deviceLinkService: deviceLinkService,
     trustedPeersStorage: trustedPeersStorage,
     meetingPointService: meetingPointService,
     isPublicKeyBlocked: blockedNotifier.isBlocked,
+    username: username,
   );
-  manager.setMessageStorage(messageStorage);
-
-  // Refresh contacts list when a trusted peer is migrated (ID change).
-  manager.onTrustedPeersChanged = () {
-    ref.read(trustedPeerVersionProvider.notifier).state++;
-  };
-
-  // After message migration (old peer → new peer), invalidate the chat
-  // messages providers for both IDs so the UI loads the correct messages.
-  manager.onPeerMessagesMigrated = (oldPeerId, newPeerId) {
-    ref.invalidate(chatMessagesProvider(oldPeerId));
-    ref.invalidate(chatMessagesProvider(newPeerId));
-  };
-
-  return manager;
 });
 
 /// Provider for the list of linked devices.
@@ -348,21 +319,6 @@ final messagesStreamProvider = StreamProvider<(String, String)>((ref) {
   return connectionManager.messages;
 });
 
-/// Provider for the typing indicator stream.
-final typingStreamProvider = StreamProvider<(String, bool)>((ref) {
-  final connectionManager = ref.watch(connectionManagerProvider);
-  return connectionManager.typingIndicators;
-});
-
-/// Provider for the delivery receipt stream.
-final receiptStreamProvider = StreamProvider<(String, String)>((ref) {
-  final connectionManager = ref.watch(connectionManagerProvider);
-  return connectionManager.receipts;
-});
-
-/// Provider tracking which peers are currently typing.
-final peerTypingProvider = StateProvider<Set<String>>((ref) => {});
-
 /// Provider for message storage (SQLite).
 final messageStorageProvider = Provider<MessageStorage>((ref) {
   final storage = MessageStorage();
@@ -390,10 +346,10 @@ class ChatMessagesNotifier extends StateNotifier<List<Message>> {
 
   Future<void> _loadMessages() async {
     if (_loaded) return;
-    _loaded = true;
     final messages = await _storage.getMessages(peerId);
     if (mounted) {
       state = messages;
+      _loaded = true;
     }
   }
 
@@ -564,10 +520,6 @@ class BlockedPeersNotifier extends StateNotifier<Set<String>> {
   }
 }
 
-/// Version counter incremented when trusted peers storage changes
-/// (e.g., after peer migration). Watched by [contactsProvider] to refresh.
-final trustedPeerVersionProvider = StateProvider<int>((ref) => 0);
-
 /// Provider for signaling connection status.
 final signalingConnectedProvider = StateProvider<bool>((ref) => false);
 
@@ -584,7 +536,7 @@ final signalingDisplayStateProvider =
 });
 
 /// Default bootstrap server URL (CF Workers).
-/// Can be overridden at build time with --dart-define=BOOTSTRAP_URL=<url>
+/// Can be overridden at build time with `--dart-define=BOOTSTRAP_URL=<url>`.
 const defaultBootstrapUrl = 'https://signal.zajel.hamzalabs.dev';
 
 /// Effective bootstrap URL (compile-time override or default).
@@ -630,7 +582,7 @@ final discoveredServersProvider =
 final selectedServerProvider = StateProvider<DiscoveredServer?>((ref) => null);
 
 /// Provider for the signaling server URL (from selected VPS server).
-/// Can be overridden at build time with --dart-define=SIGNALING_URL=<url>
+/// Can be overridden at build time with `--dart-define=SIGNALING_URL=<url>`.
 final signalingServerUrlProvider = Provider<String?>((ref) {
   // If a direct signaling URL is provided via --dart-define, use it
   if (Environment.hasDirectSignalingUrl) {

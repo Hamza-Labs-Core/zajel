@@ -214,7 +214,7 @@ void main() {
       final epoch3Channel =
           await channelService.rotateEncryptionKey(channel: epoch2Channel);
 
-      final makePayload = (String text) => ChunkPayload(
+      ChunkPayload makePayload(String text) => ChunkPayload(
             type: ContentType.text,
             payload: Uint8List.fromList(utf8.encode(text)),
             timestamp: DateTime.utc(2026, 2, 10),

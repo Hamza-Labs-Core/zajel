@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -14,6 +13,7 @@ import '../../core/media/media_service.dart';
 import '../../core/models/models.dart';
 import '../../core/network/voip_service.dart';
 import '../../core/providers/app_providers.dart';
+import '../../core/utils/identity_utils.dart';
 import '../call/call_screen.dart';
 import '../call/incoming_call_dialog.dart';
 import 'widgets/filtered_emoji_picker.dart';
@@ -40,10 +40,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   bool _isIncomingCallDialogOpen = false;
   bool _showEmojiPicker = false;
   StreamSubscription<CallState>? _voipStateSubscription;
-  Timer? _typingTimer;
-  bool _isTyping = false;
-  StreamSubscription? _typingSubscription;
-  StreamSubscription? _receiptSubscription;
 
   /// Check if running on desktop platform
   bool get _isDesktop =>
@@ -63,20 +59,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     WidgetsBinding.instance.addObserver(this);
     _listenToMessages();
     _setupVoipListener();
-    _setupTypingListener();
-    _setupReceiptListener();
-
-    // Send read receipt when chat screen is opened
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _sendReadReceipt();
-    });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _messageFocusNode.requestFocus();
-      _sendReadReceipt();
     }
   }
 
@@ -100,68 +88,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     });
   }
 
-  void _setupTypingListener() {
-    final connectionManager = ref.read(connectionManagerProvider);
-    _typingSubscription = connectionManager.typingIndicators.listen((event) {
-      final (peerId, isTyping) = event;
-      if (peerId != widget.peerId || !mounted) return;
-      final current = ref.read(peerTypingProvider);
-      if (isTyping) {
-        ref.read(peerTypingProvider.notifier).state = {...current, peerId};
-      } else {
-        ref.read(peerTypingProvider.notifier).state = {...current}
-          ..remove(peerId);
-      }
-    });
-  }
-
-  void _setupReceiptListener() {
-    final connectionManager = ref.read(connectionManagerProvider);
-    _receiptSubscription = connectionManager.receipts.listen((event) {
-      final (peerId, receiptType) = event;
-      if (peerId != widget.peerId || !mounted) return;
-
-      final status =
-          receiptType == 'r' ? MessageStatus.read : MessageStatus.delivered;
-      // Update the most recent outgoing message that hasn't reached this status yet
-      final messages = ref.read(chatMessagesProvider(widget.peerId));
-      for (final msg in messages.reversed) {
-        if (msg.isOutgoing && msg.status.index < status.index) {
-          ref
-              .read(chatMessagesProvider(widget.peerId).notifier)
-              .updateMessageStatus(msg.localId, status);
-          break;
-        }
-      }
-    });
-  }
-
-  void _onTextChanged(String text) {
-    if (text.isNotEmpty && !_isTyping) {
-      _isTyping = true;
-      _sendTypingIndicator(true);
-    }
-    _typingTimer?.cancel();
-    _typingTimer = Timer(const Duration(seconds: 3), () {
-      _isTyping = false;
-      _sendTypingIndicator(false);
-    });
-  }
-
-  void _sendTypingIndicator(bool isTyping) {
-    final connectionManager = ref.read(connectionManagerProvider);
-    connectionManager.sendTypingIndicator(widget.peerId, isTyping);
-  }
-
-  void _sendReadReceipt() {
-    try {
-      final connectionManager = ref.read(connectionManagerProvider);
-      connectionManager.sendMessage(widget.peerId, 'rcpt:r');
-    } catch (_) {
-      // Best-effort — don't fail if peer is not connected
-    }
-  }
-
   void _listenToMessages() {
     // Messages are persisted by the global listener in main.dart.
     // Here we just reload from DB when a new message arrives for this peer.
@@ -179,9 +105,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _typingTimer?.cancel();
-    _typingSubscription?.cancel();
-    _receiptSubscription?.cancel();
     _voipStateSubscription?.cancel();
     _messageController.dispose();
     _scrollController.dispose();
@@ -203,14 +126,29 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     return KeyEventResult.ignored;
   }
 
+  /// Fallback for platforms where IME inserts the newline before onKeyEvent fires.
+  /// Detects trailing newline (without Shift) and triggers send instead.
+  void _handleTextChanged(String text) {
+    if (!_isDesktop || _isSending) return;
+
+    if (text.endsWith('\n') && !HardwareKeyboard.instance.isShiftPressed) {
+      // Remove the newline that was inserted by the IME
+      _messageController.text = text.substring(0, text.length - 1);
+      _messageController.selection = TextSelection.collapsed(
+        offset: _messageController.text.length,
+      );
+      _sendMessage();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final peer = ref.watch(selectedPeerProvider);
     final messages = ref.watch(chatMessagesProvider(widget.peerId));
     final aliases = ref.watch(peerAliasesProvider);
-    final peerName = (peer != null ? aliases[peer.id] : null) ??
-        peer?.displayName ??
-        'Unknown';
+    final peerName = peer != null
+        ? resolvePeerDisplayName(peer, alias: aliases[peer.id])
+        : 'Unknown';
 
     final body = Column(
       children: [
@@ -238,7 +176,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               ? _buildEmptyState()
               : _buildMessageList(messages),
         ),
-        _buildTypingIndicator(),
         _buildInputBar(),
         if (_showEmojiPicker)
           FilteredEmojiPicker(
@@ -424,26 +361,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     ];
   }
 
-  Widget _buildTypingIndicator() {
-    final typingPeers = ref.watch(peerTypingProvider);
-    if (!typingPeers.contains(widget.peerId)) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Text(
-          'typing...',
-          style: TextStyle(
-            color:
-                Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
-            fontStyle: FontStyle.italic,
-            fontSize: 12,
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildEmptyState() {
     return Center(
       child: Padding(
@@ -572,7 +489,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         color: Theme.of(context).colorScheme.surface,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, -2),
           ),
@@ -613,12 +530,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 ),
                 textCapitalization: TextCapitalization.sentences,
                 maxLines: null,
-                onChanged: _onTextChanged,
                 onTap: () {
                   if (_showEmojiPicker) {
                     setState(() => _showEmojiPicker = false);
                   }
                 },
+                // Fallback for desktop platforms where the IME processes Enter
+                // before FocusNode.onKeyEvent fires (e.g. Linux GTK).
+                // Detects the inserted newline and triggers send instead.
+                onChanged: _isDesktop ? _handleTextChanged : null,
                 // On mobile, onSubmitted handles send; on desktop, key handler does
                 onSubmitted: _isDesktop ? null : (_) => _sendMessage(),
               ),
@@ -649,13 +569,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
-
-    // Cancel typing indicator on send
-    _typingTimer?.cancel();
-    if (_isTyping) {
-      _isTyping = false;
-      _sendTypingIndicator(false);
-    }
 
     setState(() => _isSending = true);
 
@@ -805,7 +718,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     if (voipService == null || voipService.currentCall == null) return;
 
     final call = voipService.currentCall!;
-    final callerName = peer?.displayName ?? 'Unknown';
+    final aliases = ref.read(peerAliasesProvider);
+    final callerName = peer != null
+        ? resolvePeerDisplayName(peer, alias: aliases[peer.id])
+        : 'Unknown';
 
     _isIncomingCallDialogOpen = true;
 
@@ -842,7 +758,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   void _navigateToCallScreen(VoIPService voipService, MediaService mediaService,
       {bool withVideo = false}) {
     final peer = ref.read(selectedPeerProvider);
-    final peerName = peer?.displayName ?? 'Unknown';
+    final aliases = ref.read(peerAliasesProvider);
+    final peerName = peer != null
+        ? resolvePeerDisplayName(peer, alias: aliases[peer.id])
+        : 'Unknown';
 
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -859,7 +778,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   Future<void> _showRenameDialog(Peer? peer) async {
     if (peer == null) return;
     final aliases = ref.read(peerAliasesProvider);
-    final currentName = aliases[peer.id] ?? peer.displayName;
+    final currentName = resolvePeerDisplayName(peer, alias: aliases[peer.id]);
     final controller = TextEditingController(text: currentName);
     final newName = await showDialog<String>(
       context: _dialogContext,
@@ -910,7 +829,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       builder: (ctx) => AlertDialog(
         title: const Text('Delete Conversation?'),
         content: Text(
-          'Delete conversation with ${peer.displayName}? This will remove all messages and the connection.',
+          'Delete conversation with ${resolvePeerDisplayName(peer, alias: ref.read(peerAliasesProvider)[peer.id])}? This will remove all messages and the connection.',
         ),
         actions: [
           TextButton(
@@ -988,7 +907,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
                 const SizedBox(height: 16),
-                _InfoRow(label: 'Name', value: peer.displayName),
+                _InfoRow(label: 'Name', value: resolvePeerDisplayName(peer, alias: ref.read(peerAliasesProvider)[peer.id])),
                 _InfoRow(label: 'ID', value: peer.id),
                 if (peer.ipAddress != null)
                   _InfoRow(label: 'IP', value: peer.ipAddress!),
@@ -1047,109 +966,59 @@ class _MessageBubble extends StatelessWidget {
 
   const _MessageBubble({required this.message, this.onOpenFile});
 
-  void _showMessageMenu(BuildContext context, TapDownDetails details) {
-    final isTextMessage = message.type == MessageType.text;
-    if (!isTextMessage) return;
-
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final position = RelativeRect.fromRect(
-      details.globalPosition & const Size(1, 1),
-      Offset.zero & overlay.size,
-    );
-
-    showMenu<String>(
-      context: context,
-      position: position,
-      items: [
-        const PopupMenuItem<String>(
-          value: 'copy',
-          child: Row(
-            children: [
-              Icon(Icons.copy, size: 18),
-              SizedBox(width: 8),
-              Text('Copy'),
-            ],
-          ),
-        ),
-      ],
-    ).then((value) {
-      if (value == 'copy') {
-        Clipboard.setData(ClipboardData(text: message.content));
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Message copied to clipboard'),
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     final isOutgoing = message.isOutgoing;
-    final isTextMessage = message.type == MessageType.text;
 
     return Align(
       alignment: isOutgoing ? Alignment.centerRight : Alignment.centerLeft,
-      child: GestureDetector(
-        onSecondaryTapDown: isTextMessage
-            ? (details) => _showMessageMenu(context, details)
-            : null,
-        onLongPressStart: isTextMessage
-            ? (details) => _showMessageMenu(
-                  context,
-                  TapDownDetails(globalPosition: details.globalPosition),
-                )
-            : null,
-        child: Container(
-          margin: const EdgeInsets.only(bottom: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.75,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.75,
+        ),
+        decoration: BoxDecoration(
+          color: isOutgoing
+              ? Theme.of(context).colorScheme.primary
+              : Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(20).copyWith(
+            bottomRight: isOutgoing ? const Radius.circular(4) : null,
+            bottomLeft: !isOutgoing ? const Radius.circular(4) : null,
           ),
-          decoration: BoxDecoration(
-            color: isOutgoing
-                ? Theme.of(context).colorScheme.primary
-                : Theme.of(context).colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(20).copyWith(
-              bottomRight: isOutgoing ? const Radius.circular(4) : null,
-              bottomLeft: !isOutgoing ? const Radius.circular(4) : null,
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              if (message.type == MessageType.file)
-                _buildFileContent(context, isOutgoing)
-              else
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            if (message.type == MessageType.file)
+              _buildFileContent(context, isOutgoing)
+            else
+              Text(
+                message.content,
+                style: TextStyle(
+                  color: isOutgoing ? Colors.white : null,
+                ),
+              ),
+            const SizedBox(height: 4),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
                 Text(
-                  message.content,
+                  _formatTime(message.timestamp),
                   style: TextStyle(
-                    color: isOutgoing ? Colors.white : null,
+                    fontSize: 11,
+                    color: isOutgoing
+                        ? Colors.white.withValues(alpha: 0.7)
+                        : Colors.grey,
                   ),
                 ),
-              const SizedBox(height: 4),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    _formatTime(message.timestamp),
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: isOutgoing
-                          ? Colors.white.withOpacity(0.7)
-                          : Colors.grey,
-                    ),
-                  ),
-                  if (isOutgoing) ...[
-                    const SizedBox(width: 4),
-                    _buildStatusIcon(),
-                  ],
+                if (isOutgoing) ...[
+                  const SizedBox(width: 4),
+                  _buildStatusIcon(),
                 ],
-              ),
-            ],
-          ),
+              ],
+            ),
+          ],
         ),
       ),
     );
@@ -1184,7 +1053,7 @@ class _MessageBubble extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 12,
                     color: isOutgoing
-                        ? Colors.white.withOpacity(0.7)
+                        ? Colors.white.withValues(alpha: 0.7)
                         : Colors.grey,
                   ),
                 ),

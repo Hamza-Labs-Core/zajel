@@ -1597,7 +1597,8 @@ Global Providers (Singleton Services)
 
 Configuration Providers
 ├─ sharedPreferencesProvider
-├─ displayNameProvider
+├─ usernameProvider
+├─ userIdentityProvider
 ├─ bootstrapServerUrlProvider
 └─ selectedServerProvider
 

@@ -118,7 +118,7 @@ Widget _buildTestWidget({
     overrides: [
       sharedPreferencesProvider.overrideWithValue(prefs),
       pairingCodeProvider.overrideWith((ref) => 'my-device'),
-      displayNameProvider.overrideWith((ref) => 'Test User'),
+      usernameProvider.overrideWith((ref) => 'Test User'),
       groupsProvider.overrideWith((ref) async => groups),
       if (groupById != null)
         groupByIdProvider(groupById.id).overrideWith((ref) async => groupById),

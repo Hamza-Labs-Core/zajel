@@ -9,7 +9,6 @@ import '../config/environment.dart';
 import '../crypto/crypto_service.dart';
 import '../logging/logger_service.dart';
 import '../models/models.dart';
-import '../storage/message_storage.dart';
 import '../storage/trusted_peers_storage.dart';
 import 'device_link_service.dart';
 import 'meeting_point_service.dart';
@@ -130,10 +129,6 @@ class ConnectionManager {
       )>.broadcast();
   final _fileCompleteController =
       StreamController<(String peerId, String fileId)>.broadcast();
-  final _typingController =
-      StreamController<(String peerId, bool isTyping)>.broadcast();
-  final _receiptController =
-      StreamController<(String peerId, String receiptType)>.broadcast();
 
   StreamSubscription? _signalingSubscription;
 
@@ -154,18 +149,21 @@ class ConnectionManager {
   /// Callback to check if a public key is blocked.
   bool Function(String publicKey)? _isPublicKeyBlocked;
 
-  /// Message storage for migrating messages when a trusted peer reconnects
-  /// with a new pairing code.
-  MessageStorage? _messageStorage;
+  /// Maps signaling codes to stable peer IDs for trusted peer reconnections.
+  /// When a trusted peer reconnects with a new pairing code, the WebRTC layer
+  /// uses the new code, but the rest of the app uses the original stable ID
+  /// so that messages and conversations are preserved.
+  final Map<String, String> _codeToStableId = {};
+  final Map<String, String> _stableIdToCode = {};
 
-  /// Callback invoked after trusted peers are migrated (ID change).
-  /// Used by the provider layer to refresh the contacts list.
-  void Function()? onTrustedPeersChanged;
+  /// Resolve a WebRTC/signaling code to the stable peer ID used by the app.
+  String _toStableId(String code) => _codeToStableId[code] ?? code;
 
-  /// Callback invoked after messages are migrated from an old peer ID to a new
-  /// one. The provider layer uses this to invalidate the [chatMessagesProvider]
-  /// for both old and new IDs so the UI shows the correct messages.
-  void Function(String oldPeerId, String newPeerId)? onPeerMessagesMigrated;
+  /// Resolve a stable peer ID to the current signaling code for WebRTC.
+  String _toCode(String stableId) => _stableIdToCode[stableId] ?? stableId;
+
+  /// Our username for handshake exchange.
+  final String _username;
 
   ConnectionManager({
     required CryptoService cryptoService,
@@ -174,23 +172,20 @@ class ConnectionManager {
     required TrustedPeersStorage trustedPeersStorage,
     required MeetingPointService meetingPointService,
     bool Function(String publicKey)? isPublicKeyBlocked,
+    String username = 'Anonymous',
   })  : _cryptoService = cryptoService,
         _webrtcService = webrtcService,
         _deviceLinkService = deviceLinkService,
         _trustedPeersStorage = trustedPeersStorage,
         _meetingPointService = meetingPointService,
-        _isPublicKeyBlocked = isPublicKeyBlocked {
+        _isPublicKeyBlocked = isPublicKeyBlocked,
+        _username = username {
     _setupCallbacks();
   }
 
   /// Update the blocked check callback (for provider updates).
   void setBlockedCheck(bool Function(String publicKey) callback) {
     _isPublicKeyBlocked = callback;
-  }
-
-  /// Set the message storage for peer migration.
-  void setMessageStorage(MessageStorage storage) {
-    _messageStorage = storage;
   }
 
   /// Stream of all known peers.
@@ -209,12 +204,6 @@ class ConnectionManager {
 
   /// Stream of file transfer completions.
   Stream<(String, String)> get fileCompletes => _fileCompleteController.stream;
-
-  /// Stream of typing indicator events (peerId, isTyping).
-  Stream<(String, bool)> get typingIndicators => _typingController.stream;
-
-  /// Stream of delivery receipt events (peerId, receiptType: "d" or "r").
-  Stream<(String, String)> get receipts => _receiptController.stream;
 
   /// Current list of peers.
   List<Peer> get currentPeers => _peers.values.toList();
@@ -247,6 +236,7 @@ class ConnectionManager {
       _peers[trusted.id] = Peer(
         id: trusted.id,
         displayName: trusted.alias ?? trusted.displayName,
+        username: trusted.username,
         publicKey: trusted.publicKey,
         connectionState: PeerConnectionState.disconnected,
         lastSeen: trusted.lastSeen ?? trusted.trustedAt,
@@ -353,6 +343,10 @@ class ConnectionManager {
       await state.client.dispose();
     }
     _signalingState = SignalingDisconnected();
+
+    // Clear peer ID mappings — new session will have new pairing codes
+    _codeToStableId.clear();
+    _stableIdToCode.clear();
   }
 
   /// Request to connect to a peer using their pairing code.
@@ -394,7 +388,8 @@ class ConnectionManager {
     // Using captured state.client - guaranteed non-null by pattern match
     logger.info(
         'ConnectionManager', 'Sending pair_request for code: $normalizedCode');
-    state.client.requestPairing(normalizedCode, proposedName: proposedName);
+    state.client.requestPairing(normalizedCode,
+        proposedName: proposedName ?? _username);
   }
 
   /// Respond to an incoming pair request.
@@ -502,16 +497,8 @@ class ConnectionManager {
 
   /// Send a message to a peer.
   Future<void> sendMessage(String peerId, String plaintext) async {
-    await _webrtcService.sendMessage(peerId, plaintext);
-  }
-
-  /// Send a typing indicator to a peer (best-effort, non-critical).
-  Future<void> sendTypingIndicator(String peerId, bool isTyping) async {
-    try {
-      await _webrtcService.sendMessage(peerId, 'typ:${isTyping ? '1' : '0'}');
-    } catch (_) {
-      // Best-effort — typing indicators are non-critical
-    }
+    // Translate stable ID to signaling code for WebRTC layer
+    await _webrtcService.sendMessage(_toCode(peerId), plaintext);
   }
 
   /// Send a file to a peer.
@@ -521,18 +508,19 @@ class ConnectionManager {
     Uint8List data,
   ) async {
     final fileId = const Uuid().v4();
-    await _webrtcService.sendFile(peerId, fileId, fileName, data);
+    // Translate stable ID to signaling code for WebRTC layer
+    await _webrtcService.sendFile(_toCode(peerId), fileId, fileName, data);
   }
 
   /// Disconnect from a peer.
   Future<void> disconnectPeer(String peerId) async {
-    await _webrtcService.closeConnection(peerId);
+    await _webrtcService.closeConnection(_toCode(peerId));
     _updatePeerState(peerId, PeerConnectionState.disconnected);
   }
 
   /// Cancel an ongoing connection attempt.
   Future<void> cancelConnection(String peerId) async {
-    await _webrtcService.closeConnection(peerId);
+    await _webrtcService.closeConnection(_toCode(peerId));
     _updatePeerState(peerId, PeerConnectionState.disconnected);
   }
 
@@ -563,8 +551,6 @@ class ConnectionManager {
     await _fileChunksController.close();
     await _fileStartController.close();
     await _fileCompleteController.close();
-    await _typingController.close();
-    await _receiptController.close();
     await _pairRequestController.close();
     await _linkRequestController.close();
   }
@@ -572,74 +558,85 @@ class ConnectionManager {
   // Private methods
 
   void _setupCallbacks() {
+    // Handle handshake completion: update peer username and transition to connected
+    _webrtcService.onHandshakeComplete = (peerId, publicKey, username) {
+      final stableId = _toStableId(peerId);
+      final peer = _peers[stableId];
+      if (peer != null) {
+        _peers[stableId] = peer.copyWith(
+          username: username,
+        );
+      }
+      _updatePeerState(stableId, PeerConnectionState.connected);
+    };
+
     _webrtcService.onMessage = (peerId, message) {
+      // Translate signaling code to stable peer ID for reconnected peers
+      final stableId = _toStableId(peerId);
+
       // Check if this is a message from a linked device (needs to be proxied to a peer)
-      if (peerId.startsWith('link_')) {
-        _handleLinkedDeviceMessage(peerId, message);
-        return;
-      }
-
-      // Handle typing indicator
-      if (message.startsWith('typ:')) {
-        final isTyping = message == 'typ:1';
-        _typingController.add((peerId, isTyping));
-        return;
-      }
-
-      // Handle delivery receipt
-      if (message.startsWith('rcpt:')) {
-        final receiptType = message.substring(5); // "d" or "r"
-        _receiptController.add((peerId, receiptType));
+      if (stableId.startsWith('link_')) {
+        _handleLinkedDeviceMessage(stableId, message);
         return;
       }
 
       // Emit to UI — persistence is handled by the global listener in main.dart
-      _messagesController.add((peerId, message));
+      _messagesController.add((stableId, message));
 
       // Also forward to all connected linked devices
       _deviceLinkService.broadcastToLinkedDevices(
-        fromPeerId: peerId,
+        fromPeerId: stableId,
         plaintext: message,
       );
     };
 
     _webrtcService.onFileChunk = (peerId, fileId, chunk, index, total) {
-      _fileChunksController.add((peerId, fileId, chunk, index, total));
+      final stableId = _toStableId(peerId);
+      _fileChunksController.add((stableId, fileId, chunk, index, total));
     };
 
     _webrtcService.onFileStart =
         (peerId, fileId, fileName, totalSize, totalChunks) {
+      final stableId = _toStableId(peerId);
       _fileStartController
-          .add((peerId, fileId, fileName, totalSize, totalChunks));
+          .add((stableId, fileId, fileName, totalSize, totalChunks));
     };
 
     _webrtcService.onFileComplete = (peerId, fileId) {
-      _fileCompleteController.add((peerId, fileId));
+      final stableId = _toStableId(peerId);
+      _fileCompleteController.add((stableId, fileId));
     };
 
     _webrtcService.onConnectionStateChange = (peerId, state) {
+      // Translate signaling code to stable peer ID for reconnected peers
+      final stableId = _toStableId(peerId);
+
       // Check if this is a linked device connection state change
-      if (peerId.startsWith('link_')) {
+      if (stableId.startsWith('link_')) {
         if (state == PeerConnectionState.connected) {
-          _deviceLinkService.handleDeviceConnected(peerId);
+          _deviceLinkService.handleDeviceConnected(stableId);
         } else if (state == PeerConnectionState.disconnected ||
             state == PeerConnectionState.failed) {
-          _deviceLinkService.handleDeviceDisconnected(peerId);
+          _deviceLinkService.handleDeviceDisconnected(stableId);
         }
         return;
       }
 
-      _updatePeerState(peerId, state);
+      _updatePeerState(stableId, state);
 
-      // Persist peer as trusted after successful connection (handshake complete)
+      // Persist peer as trusted after successful connection (handshake complete).
+      // TrustedPeer.fromPeer derives the ID from the public key, so
+      // saving is idempotent — reconnections just update the entry.
       if (state == PeerConnectionState.connected) {
-        final peer = _peers[peerId];
+        final peer = _peers[stableId];
         if (peer != null && peer.publicKey != null) {
-          _trustedPeersStorage.savePeer(TrustedPeer.fromPeer(peer)).then((_) {
-            logger.info('ConnectionManager', 'Saved trusted peer: $peerId');
+          _trustedPeersStorage
+              .savePeer(TrustedPeer.fromPeer(peer))
+              .then((_) {
+            logger.info('ConnectionManager', 'Saved trusted peer: $stableId');
           }).catchError((e) {
             logger.error(
-                'ConnectionManager', 'Failed to save trusted peer: $peerId', e);
+                'ConnectionManager', 'Failed to save trusted peer: $stableId', e);
           });
         }
       }
@@ -650,9 +647,9 @@ class ConnectionManager {
           // Send state update to linked device
           _deviceLinkService.proxyMessageToDevice(
             toDeviceId: device.id,
-            fromPeerId: peerId,
+            fromPeerId: stableId,
             plaintext:
-                '{"type":"peer_state","peerId":"$peerId","state":"${state.name}"}',
+                '{"type":"peer_state","peerId":"$stableId","state":"${state.name}"}',
           );
         }
       }
@@ -692,76 +689,6 @@ class ConnectionManager {
       );
     } catch (e) {
       return null;
-    }
-  }
-
-  /// Migrate a trusted peer's identity when they reconnect with a new pairing code.
-  ///
-  /// When a previously-trusted peer restarts their app, they get a new ephemeral
-  /// pairing code but the same public key. This method detects that situation and:
-  /// 1. Migrates message history from the old ID to the new one
-  /// 2. Carries over the display name and alias
-  /// 3. Removes the old duplicate entry from the peers map
-  /// 4. Updates trusted peer storage with the new ID
-  Future<void> _migrateTrustedPeerIfNeeded(
-      String newPeerCode, String peerPublicKey) async {
-    try {
-      final stalePeers =
-          await _trustedPeersStorage.getAllPeersByPublicKey(peerPublicKey);
-
-      // Filter out the new peer code if it already exists
-      final toMigrate = stalePeers.where((p) => p.id != newPeerCode).toList();
-      if (toMigrate.isEmpty) return;
-
-      // Use the most recently seen entry for display name / alias
-      toMigrate.sort((a, b) =>
-          (b.lastSeen ?? b.trustedAt).compareTo(a.lastSeen ?? a.trustedAt));
-      final primary = toMigrate.first;
-
-      logger.info('ConnectionManager',
-          'Migrating ${toMigrate.length} stale peer(s) → $newPeerCode (same pubkey)');
-
-      // Migrate message history from ALL stale IDs to the new peer ID
-      for (final stale in toMigrate) {
-        if (_messageStorage != null) {
-          final migrated =
-              await _messageStorage!.migrateMessages(stale.id, newPeerCode);
-          logger.debug('ConnectionManager',
-              'Migrated $migrated messages from ${stale.id} to $newPeerCode');
-        }
-        // Remove old entry from peers map
-        _peers.remove(stale.id);
-        // Remove old entry from trusted storage
-        await _trustedPeersStorage.removePeer(stale.id);
-        // Notify the provider layer so it invalidates chat message providers
-        // for both the old and new peer IDs.
-        onPeerMessagesMigrated?.call(stale.id, newPeerCode);
-      }
-
-      // Carry over display name and alias from the primary (most recent) entry
-      _peers[newPeerCode] = Peer(
-        id: newPeerCode,
-        displayName: primary.alias ?? primary.displayName,
-        publicKey: peerPublicKey,
-        connectionState: PeerConnectionState.connecting,
-        lastSeen: DateTime.now(),
-        isLocal: false,
-      );
-
-      // Save the consolidated trusted peer entry
-      await _trustedPeersStorage.savePeer(TrustedPeer(
-        id: newPeerCode,
-        displayName: primary.alias ?? primary.displayName,
-        publicKey: peerPublicKey,
-        trustedAt: primary.trustedAt,
-        lastSeen: DateTime.now(),
-        alias: primary.alias,
-      ));
-
-      _notifyPeersChanged();
-      onTrustedPeersChanged?.call();
-    } catch (e) {
-      logger.error('ConnectionManager', 'Failed to migrate trusted peer', e);
     }
   }
 
@@ -812,20 +739,48 @@ class ConnectionManager {
             isInitiator: final isInitiator
           ):
           // Pairing approved by both sides - start WebRTC connection
-          // Check if this public key belongs to an existing trusted peer
-          // with a different ID (peer reconnected with new pairing code)
-          await _migrateTrustedPeerIfNeeded(peerCode, peerPublicKey);
+          // Derive a stable peer ID from the public key (like a phone number).
+          // This ensures the same peer always maps to the same conversation
+          // regardless of which pairing code was used for this session.
+          final stableId = CryptoService.peerIdFromPublicKey(peerPublicKey);
 
-          // Update or create peer with public key for blocking support
-          _peers[peerCode] = Peer(
-            id: peerCode,
-            displayName: _peers[peerCode]?.displayName ?? 'Peer $peerCode',
+          // Set up aliasing: signaling code ↔ stable ID
+          _codeToStableId[peerCode] = stableId;
+          _stableIdToCode[stableId] = peerCode;
+          _peers.remove(peerCode); // Remove placeholder under pairing code
+
+          // Check if this is a reconnection (existing trusted peer)
+          final existingTrusted =
+              await _trustedPeersStorage.getPeer(stableId);
+          final isReconnection = existingTrusted != null;
+
+          if (isReconnection) {
+            logger.info('ConnectionManager',
+                'Reconnection: $peerCode → $stableId (${existingTrusted.displayName})');
+          } else {
+            logger.info('ConnectionManager',
+                'New peer: $peerCode → $stableId');
+          }
+
+          // Create/update peer under the stable ID
+          _peers[stableId] = Peer(
+            id: stableId,
+            displayName: existingTrusted?.alias ??
+                existingTrusted?.displayName ??
+                _peers[stableId]?.displayName ??
+                'Peer $stableId',
+            username: existingTrusted?.username ?? _peers[stableId]?.username,
             publicKey: peerPublicKey,
             connectionState: PeerConnectionState.connecting,
             lastSeen: DateTime.now(),
             isLocal: false,
           );
           _notifyPeersChanged();
+
+          // Store public key under stable ID for fingerprint lookups
+          _cryptoService.setPeerPublicKey(stableId, peerPublicKey);
+
+          // Start WebRTC using the signaling code (WebRTC layer uses codes)
           await _startWebRTCConnection(peerCode, peerPublicKey, isInitiator);
           break;
 
@@ -867,12 +822,15 @@ class ConnectionManager {
           final client = signalingState.client;
 
           // Offer from matched peer (we're the non-initiator)
-          // Get public key from crypto service (stored during pairing)
+          // Use stable ID (may have been remapped in PairMatched handler)
+          final stableId = _toStableId(from);
           final peerPublicKey = _cryptoService.getPeerPublicKey(from);
-          if (!_peers.containsKey(from) || _peers[from]?.publicKey == null) {
-            _peers[from] = Peer(
-              id: from,
-              displayName: _peers[from]?.displayName ?? 'Peer $from',
+          if (!_peers.containsKey(stableId) ||
+              _peers[stableId]?.publicKey == null) {
+            _peers[stableId] = Peer(
+              id: stableId,
+              displayName:
+                  _peers[stableId]?.displayName ?? 'Peer $stableId',
               publicKey: peerPublicKey,
               connectionState: PeerConnectionState.connecting,
               lastSeen: DateTime.now(),
@@ -907,7 +865,7 @@ class ConnectionManager {
           break;
 
         case SignalingPeerLeft(peerId: final peerId):
-          _updatePeerState(peerId, PeerConnectionState.disconnected);
+          _updatePeerState(_toStableId(peerId), PeerConnectionState.disconnected);
           break;
 
         case SignalingError(message: final _):
@@ -962,9 +920,9 @@ class ConnectionManager {
       );
       _notifyPeersChanged();
 
-      // Perform handshake when connected
+      // Perform handshake when connected (translate to signaling code for WebRTC)
       if (state == PeerConnectionState.handshaking) {
-        _webrtcService.performHandshake(peerId);
+        _webrtcService.performHandshake(_toCode(peerId), username: _username);
       }
     }
   }
@@ -977,6 +935,8 @@ class ConnectionManager {
     return _generateSecurePairingCode();
   }
 
+  /// Derive a collision-safe stable peer ID from a public key.
+  ///
   // ==========================================================================
   // Trusted Peer Reconnection via Meeting Points
   // ==========================================================================
@@ -1226,7 +1186,7 @@ class ConnectionManager {
   void _handleLiveMatch(String matchedPeerId) {
     if (matchedPeerId.isEmpty) return;
 
-    // Skip if already connected or connecting to this peer (by pairing code)
+    // Skip if already connected or connecting to this peer
     final existingPeer = _peers[matchedPeerId];
     if (existingPeer != null &&
         (existingPeer.connectionState == PeerConnectionState.connected ||

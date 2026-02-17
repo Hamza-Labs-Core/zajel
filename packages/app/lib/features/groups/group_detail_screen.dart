@@ -346,6 +346,7 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
     ).then((value) {
       if (value == 'copy') {
         Clipboard.setData(ClipboardData(text: content));
+        if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Message copied to clipboard'),
@@ -443,19 +444,17 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
 
           ref.invalidate(groupByIdProvider(widget.groupId));
 
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Invitation sent to ${selectedPeer.displayName}'),
-              ),
-            );
-          }
+          if (!context.mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Invitation sent to ${selectedPeer.displayName}'),
+            ),
+          );
         } catch (e) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Failed to add member: $e')),
-            );
-          }
+          if (!context.mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to add member: $e')),
+          );
         }
       }
     });

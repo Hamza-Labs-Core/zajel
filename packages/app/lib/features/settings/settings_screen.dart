@@ -8,8 +8,6 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/logging/logger_service.dart';
 import '../../core/providers/app_providers.dart';
-import '../channels/providers/channel_providers.dart';
-import '../groups/providers/group_providers.dart';
 
 /// Settings screen for app configuration.
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -20,26 +18,26 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  final _displayNameController = TextEditingController();
+  final _usernameController = TextEditingController();
   final _serverUrlController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    _displayNameController.text = ref.read(displayNameProvider);
+    _usernameController.text = ref.read(usernameProvider);
     _serverUrlController.text = ref.read(bootstrapServerUrlProvider);
   }
 
   @override
   void dispose() {
-    _displayNameController.dispose();
+    _usernameController.dispose();
     _serverUrlController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final displayName = ref.watch(displayNameProvider);
+    final identity = ref.watch(userIdentityProvider);
     final externalEnabled = ref.watch(signalingConnectedProvider);
     final pairingCode = ref.watch(pairingCodeProvider);
 
@@ -54,7 +52,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             context,
             title: 'Profile',
             children: [
-              _buildProfileTile(displayName),
+              _buildProfileTile(identity),
             ],
           ),
           const SizedBox(height: 24),
@@ -95,9 +93,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ListTile(
                 leading: const Icon(Icons.lock),
                 title: const Text('End-to-End Encryption'),
-                subtitle: const Text(
-                  'X25519 + ChaCha20-Poly1305 — always on, cannot be disabled',
-                ),
+                subtitle: const Text('Always enabled'),
                 trailing: Icon(
                   Icons.check_circle,
                   color: Colors.green.shade700,
@@ -107,43 +103,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 leading: const Icon(Icons.refresh),
                 title: const Text('Regenerate Keys'),
                 subtitle: const Text(
-                  'Creates a new identity — all peers must re-pair with you',
+                  'Create new encryption keys (disconnects all peers)',
                 ),
                 onTap: () => _showRegenerateKeysDialog(context),
               ),
               SwitchListTile(
                 secondary: const Icon(Icons.delete_sweep),
                 title: const Text('Auto-delete Messages'),
-                subtitle: const Text(
-                  'Removes messages older than 24 hours each time the app starts',
-                ),
-                value: ref.watch(autoDeleteMessagesProvider),
-                onChanged: (value) async {
-                  ref.read(autoDeleteMessagesProvider.notifier).state = value;
-                  final prefs = ref.read(sharedPreferencesProvider);
-                  await prefs.setBool('autoDeleteMessages', value);
-                  if (value) {
-                    final storage = ref.read(messageStorageProvider);
-                    final cutoff =
-                        DateTime.now().subtract(const Duration(hours: 24));
-                    final deleted =
-                        await storage.deleteMessagesOlderThan(cutoff);
-                    if (mounted && deleted > 0) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Deleted $deleted old messages'),
-                        ),
-                      );
-                    }
-                  }
+                subtitle: const Text('Delete messages after 24 hours'),
+                value: false, // TODO: Implement
+                onChanged: (value) {
+                  // TODO: Implement auto-delete
                 },
               ),
               ListTile(
                 leading: const Icon(Icons.block),
                 title: const Text('Blocked Users'),
-                subtitle: const Text(
-                  'Blocked by public key — cannot bypass by changing codes',
-                ),
+                subtitle: const Text('Manage blocked peers'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => context.push('/settings/blocked'),
               ),
@@ -170,9 +146,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ListTile(
                 leading: const Icon(Icons.dns),
                 title: const Text('Bootstrap Server'),
-                subtitle: Text(
-                  'Discovers relay servers — ${ref.watch(bootstrapServerUrlProvider)}',
-                ),
+                subtitle: Text(ref.watch(bootstrapServerUrlProvider)),
                 onTap: () => _showBootstrapUrlDialog(context),
               ),
             ],
@@ -185,8 +159,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ListTile(
                 leading: const Icon(Icons.description),
                 title: const Text('Export Logs'),
-                subtitle: const Text(
-                  'Share log files for troubleshooting — no messages included',
+                subtitle: Text(
+                  logger.logDirectoryPath ?? 'Logs not initialized',
+                  overflow: TextOverflow.ellipsis,
                 ),
                 trailing: const Icon(Icons.share),
                 onTap: () => _exportLogs(context),
@@ -201,7 +176,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ListTile(
                 leading: const Icon(Icons.delete_outline),
                 title: const Text('Clear Logs'),
-                subtitle: const Text('Permanently delete all log files'),
+                subtitle: const Text('Delete all log files'),
                 onTap: () => _showClearLogsDialog(context),
               ),
             ],
@@ -346,36 +321,38 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  Widget _buildProfileTile(String displayName) {
+  Widget _buildProfileTile(String identity) {
     return ListTile(
       leading: CircleAvatar(
         backgroundColor: Theme.of(context).colorScheme.primaryContainer,
         child: Text(
-          displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
+          identity.isNotEmpty ? identity[0].toUpperCase() : '?',
           style: TextStyle(
             color: Theme.of(context).colorScheme.onPrimaryContainer,
           ),
         ),
       ),
-      title: Text(displayName),
-      subtitle: const Text('Tap to change display name'),
+      title: Text(identity),
+      subtitle: const Text('Tap to change username. Your #TAG is derived from your encryption key.'),
       trailing: const Icon(Icons.edit),
-      onTap: () => _showDisplayNameDialog(context),
+      onTap: () => _showUsernameDialog(context),
     );
   }
 
-  Future<void> _showDisplayNameDialog(BuildContext context) async {
-    _displayNameController.text = ref.read(displayNameProvider);
+  Future<void> _showUsernameDialog(BuildContext context) async {
+    _usernameController.text = ref.read(usernameProvider);
 
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Display Name'),
+        title: const Text('Username'),
         content: TextField(
-          controller: _displayNameController,
+          controller: _usernameController,
           autofocus: true,
+          maxLength: 32,
           decoration: const InputDecoration(
-            hintText: 'Enter your display name',
+            hintText: 'Enter your username',
+            counterText: '',
           ),
         ),
         actions: [
@@ -385,7 +362,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
           ElevatedButton(
             onPressed: () {
-              Navigator.pop(context, _displayNameController.text);
+              final text = _usernameController.text.trim();
+              if (text.isNotEmpty && !text.contains('#')) {
+                Navigator.pop(context, text);
+              }
             },
             child: const Text('Save'),
           ),
@@ -394,9 +374,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
 
     if (result != null && result.isNotEmpty) {
-      ref.read(displayNameProvider.notifier).state = result;
+      ref.read(usernameProvider.notifier).state = result;
       final prefs = ref.read(sharedPreferencesProvider);
-      await prefs.setString('displayName', result);
+      await prefs.setString('username', result);
     }
   }
 
@@ -412,7 +392,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       leading: const Icon(Icons.cloud_done),
       title: const Text('Connected Server'),
       subtitle: Text(
-        'Relay for signaling and pairing — ${selectedServer.region}',
+        '${selectedServer.region} - ${selectedServer.endpoint}',
         overflow: TextOverflow.ellipsis,
       ),
     );
@@ -425,26 +405,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Bootstrap Server'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'The bootstrap server helps discover available VPS servers. '
-                'Only change this if you know what you\'re doing.',
-                style: TextStyle(fontSize: 12),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'The bootstrap server helps discover available VPS servers. '
+              'Only change this if you know what you\'re doing.',
+              style: TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _serverUrlController,
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: 'https://bootstrap.example.com',
               ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _serverUrlController,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  hintText: 'https://bootstrap.example.com',
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -506,20 +484,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final cryptoService = ref.read(cryptoServiceProvider);
       await cryptoService.regenerateIdentityKeys();
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Keys regenerated')),
-        );
-      }
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Keys regenerated')),
+      );
     }
   }
 
   Future<void> _launchUrl(String urlString) async {
     final url = Uri.parse(urlString);
+    final messenger = ScaffoldMessenger.of(context);
     if (await canLaunchUrl(url)) {
       await launchUrl(url, mode: LaunchMode.externalApplication);
-    } else if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
+    } else {
+      messenger.showSnackBar(
         SnackBar(content: Text('Could not open $urlString')),
       );
     }
@@ -554,25 +532,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
 
     if (confirmed == true) {
-      // Clear message storage
-      final messageStorage = ref.read(messageStorageProvider);
-      await messageStorage.deleteAllMessages();
-
-      // Clear channel storage
-      final channelService = ref.read(channelServiceProvider);
-      final channels = await channelService.getAllChannels();
-      for (final channel in channels) {
-        await channelService.deleteChannel(channel.id);
-      }
-
-      // Clear group storage
-      final groupService = ref.read(groupServiceProvider);
-      final groups = await groupService.getAllGroups();
-      for (final group in groups) {
-        await groupService.deleteGroup(group.id);
-      }
-
-      // Clear crypto sessions and regenerate keys
       final cryptoService = ref.read(cryptoServiceProvider);
       await cryptoService.clearAllSessions();
       await cryptoService.regenerateIdentityKeys();
@@ -580,59 +539,52 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.clear();
 
-      // Refresh providers
-      ref.invalidate(channelsProvider);
-      ref.invalidate(groupsProvider);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('All data cleared')),
-        );
-      }
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('All data cleared')),
+      );
     }
   }
 
   Future<void> _exportLogs(BuildContext context) async {
     try {
       // Show loading indicator
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Row(
-              children: [
-                SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-                SizedBox(width: 12),
-                Text('Preparing logs...'),
-              ],
-            ),
-            duration: Duration(seconds: 1),
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              SizedBox(width: 12),
+              Text('Preparing logs...'),
+            ],
           ),
-        );
-      }
+          duration: Duration(seconds: 1),
+        ),
+      );
 
       await logger.exportLogs();
       logger.info('Settings', 'Logs exported successfully');
     } catch (e) {
       logger.error('Settings', 'Failed to export logs', e);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to export logs: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to export logs: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
   Future<void> _showLogViewer(BuildContext context) async {
     final logContent = await logger.getCurrentLogContent();
 
-    if (!mounted) return;
+    if (!context.mounted) return;
 
     await showModalBottomSheet(
       context: context,
@@ -722,11 +674,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (confirmed == true) {
       await logger.clearLogs();
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Logs cleared')),
-        );
-      }
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Logs cleared')),
+      );
     }
   }
 }

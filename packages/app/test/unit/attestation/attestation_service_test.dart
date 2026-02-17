@@ -17,7 +17,7 @@ void main() {
       secureStorage = FakeSecureStorage();
     });
 
-    AttestationService _createService({
+    AttestationService createService({
       required http_testing.MockClient httpClient,
     }) {
       final client = AttestationClient(
@@ -44,7 +44,7 @@ void main() {
           }),
         );
 
-        final service = _createService(
+        final service = createService(
           httpClient:
               http_testing.MockClient((req) async => http.Response('', 500)),
         );
@@ -70,7 +70,7 @@ void main() {
         );
 
         // Registration will fail because there's no build token
-        final service = _createService(
+        final service = createService(
           httpClient:
               http_testing.MockClient((req) async => http.Response('', 500)),
         );
@@ -87,7 +87,7 @@ void main() {
       test('stores token on successful registration', () async {
         final futureMs =
             DateTime.now().add(const Duration(hours: 1)).millisecondsSinceEpoch;
-        final service = _createService(
+        final service = createService(
           httpClient: http_testing.MockClient((request) async {
             return http.Response(
               jsonEncode({
@@ -126,7 +126,7 @@ void main() {
       });
 
       test('returns null on registration failure', () async {
-        final service = _createService(
+        final service = createService(
           httpClient: http_testing.MockClient((request) async {
             return http.Response('Unauthorized', 401);
           }),
@@ -151,7 +151,7 @@ void main() {
       test('clears cached and stored token', () async {
         final futureMs =
             DateTime.now().add(const Duration(hours: 1)).millisecondsSinceEpoch;
-        final service = _createService(
+        final service = createService(
           httpClient: http_testing.MockClient((request) async {
             return http.Response(
               jsonEncode({
@@ -189,7 +189,7 @@ void main() {
 
     group('currentToken', () {
       test('returns null when no token cached', () {
-        final service = _createService(
+        final service = createService(
           httpClient:
               http_testing.MockClient((req) async => http.Response('', 500)),
         );
