@@ -57,7 +57,11 @@ class TestHeadlessPairing:
 
     @pytest.mark.single_device
     def test_headless_pairs_with_app_code(self, alice, app_helper, headless_bob):
-        """Bob (headless) enters Alice's code → both connect."""
+        """Bob (headless) enters Alice's code → both connect.
+
+        The app is built with E2E_TEST=true, so it auto-accepts incoming
+        pair requests — no manual "Accept" tap is needed.
+        """
         helper = app_helper(alice)
         helper.wait_for_app_ready()
 
@@ -66,17 +70,9 @@ class TestHeadlessPairing:
         alice_code = helper.get_pairing_code_from_connect_screen()
         print(f"Alice's pairing code: {alice_code}")
 
-        # Bob (headless) starts pairing in background (non-blocking)
-        # because Alice needs to tap "Accept" on the connection request dialog
-        import concurrent.futures
-        future = headless_bob.pair_with_async(alice_code)
-
-        # Wait for the Connection Request dialog to appear and tap Accept
-        time.sleep(3)
-        helper._find("Accept", timeout=15).click()
-
-        # Wait for Bob's pair_with to complete
-        future.result(timeout=60)
+        # Bob (headless) pairs with Alice's code.
+        # The app auto-accepts in E2E mode, so this completes without UI interaction.
+        headless_bob.pair_with(alice_code)
 
         time.sleep(P2P_CONNECTION_TIMEOUT)
 
