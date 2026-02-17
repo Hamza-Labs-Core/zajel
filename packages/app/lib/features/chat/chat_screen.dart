@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -14,6 +13,7 @@ import '../../core/media/media_service.dart';
 import '../../core/models/models.dart';
 import '../../core/network/voip_service.dart';
 import '../../core/providers/app_providers.dart';
+import '../../core/utils/identity_utils.dart';
 import '../call/call_screen.dart';
 import '../call/incoming_call_dialog.dart';
 import 'widgets/filtered_emoji_picker.dart';
@@ -126,14 +126,29 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     return KeyEventResult.ignored;
   }
 
+  /// Fallback for platforms where IME inserts the newline before onKeyEvent fires.
+  /// Detects trailing newline (without Shift) and triggers send instead.
+  void _handleTextChanged(String text) {
+    if (!_isDesktop || _isSending) return;
+
+    if (text.endsWith('\n') && !HardwareKeyboard.instance.isShiftPressed) {
+      // Remove the newline that was inserted by the IME
+      _messageController.text = text.substring(0, text.length - 1);
+      _messageController.selection = TextSelection.collapsed(
+        offset: _messageController.text.length,
+      );
+      _sendMessage();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final peer = ref.watch(selectedPeerProvider);
     final messages = ref.watch(chatMessagesProvider(widget.peerId));
     final aliases = ref.watch(peerAliasesProvider);
-    final peerName = (peer != null ? aliases[peer.id] : null) ??
-        peer?.displayName ??
-        'Unknown';
+    final peerName = peer != null
+        ? resolvePeerDisplayName(peer, alias: aliases[peer.id])
+        : 'Unknown';
 
     final body = Column(
       children: [
@@ -474,7 +489,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         color: Theme.of(context).colorScheme.surface,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, -2),
           ),
@@ -520,6 +535,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                     setState(() => _showEmojiPicker = false);
                   }
                 },
+                // Fallback for desktop platforms where the IME processes Enter
+                // before FocusNode.onKeyEvent fires (e.g. Linux GTK).
+                // Detects the inserted newline and triggers send instead.
+                onChanged: _isDesktop ? _handleTextChanged : null,
                 // On mobile, onSubmitted handles send; on desktop, key handler does
                 onSubmitted: _isDesktop ? null : (_) => _sendMessage(),
               ),
@@ -699,7 +718,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     if (voipService == null || voipService.currentCall == null) return;
 
     final call = voipService.currentCall!;
-    final callerName = peer?.displayName ?? 'Unknown';
+    final aliases = ref.read(peerAliasesProvider);
+    final callerName = peer != null
+        ? resolvePeerDisplayName(peer, alias: aliases[peer.id])
+        : 'Unknown';
 
     _isIncomingCallDialogOpen = true;
 
@@ -736,7 +758,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   void _navigateToCallScreen(VoIPService voipService, MediaService mediaService,
       {bool withVideo = false}) {
     final peer = ref.read(selectedPeerProvider);
-    final peerName = peer?.displayName ?? 'Unknown';
+    final aliases = ref.read(peerAliasesProvider);
+    final peerName = peer != null
+        ? resolvePeerDisplayName(peer, alias: aliases[peer.id])
+        : 'Unknown';
 
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -753,7 +778,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   Future<void> _showRenameDialog(Peer? peer) async {
     if (peer == null) return;
     final aliases = ref.read(peerAliasesProvider);
-    final currentName = aliases[peer.id] ?? peer.displayName;
+    final currentName = resolvePeerDisplayName(peer, alias: aliases[peer.id]);
     final controller = TextEditingController(text: currentName);
     final newName = await showDialog<String>(
       context: _dialogContext,
@@ -804,7 +829,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       builder: (ctx) => AlertDialog(
         title: const Text('Delete Conversation?'),
         content: Text(
-          'Delete conversation with ${peer.displayName}? This will remove all messages and the connection.',
+          'Delete conversation with ${resolvePeerDisplayName(peer, alias: ref.read(peerAliasesProvider)[peer.id])}? This will remove all messages and the connection.',
         ),
         actions: [
           TextButton(
@@ -882,7 +907,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
                 const SizedBox(height: 16),
-                _InfoRow(label: 'Name', value: peer.displayName),
+                _InfoRow(label: 'Name', value: resolvePeerDisplayName(peer, alias: ref.read(peerAliasesProvider)[peer.id])),
                 _InfoRow(label: 'ID', value: peer.id),
                 if (peer.ipAddress != null)
                   _InfoRow(label: 'IP', value: peer.ipAddress!),
@@ -983,7 +1008,7 @@ class _MessageBubble extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 11,
                     color: isOutgoing
-                        ? Colors.white.withOpacity(0.7)
+                        ? Colors.white.withValues(alpha: 0.7)
                         : Colors.grey,
                   ),
                 ),
@@ -1028,7 +1053,7 @@ class _MessageBubble extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 12,
                     color: isOutgoing
-                        ? Colors.white.withOpacity(0.7)
+                        ? Colors.white.withValues(alpha: 0.7)
                         : Colors.grey,
                   ),
                 ),

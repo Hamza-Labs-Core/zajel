@@ -19,6 +19,7 @@ import 'core/notifications/call_foreground_service.dart';
 import 'core/providers/app_providers.dart';
 import 'features/call/call_screen.dart';
 import 'features/call/incoming_call_dialog.dart';
+import 'core/utils/identity_utils.dart';
 import 'shared/theme/app_theme.dart';
 
 const bool _isE2eTest = bool.fromEnvironment('E2E_TEST');
@@ -622,10 +623,11 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       // Show notification
       final settings = ref.read(notificationSettingsProvider);
       String peerName = peerId;
+      final aliases = ref.read(peerAliasesProvider);
       final peersAsync = ref.read(peersProvider);
       peersAsync.whenData((peers) {
         final peer = peers.where((p) => p.id == peerId).firstOrNull;
-        if (peer != null) peerName = peer.displayName;
+        if (peer != null) peerName = resolvePeerDisplayName(peer, alias: aliases[peer.id]);
       });
 
       notificationService.showMessageNotification(
@@ -644,10 +646,11 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       final transfer = fileReceiveService.getTransfer(fileId);
 
       String peerName = peerId;
+      final aliases = ref.read(peerAliasesProvider);
       final peersAsync = ref.read(peersProvider);
       peersAsync.whenData((peers) {
         final peer = peers.where((p) => p.id == peerId).firstOrNull;
-        if (peer != null) peerName = peer.displayName;
+        if (peer != null) peerName = resolvePeerDisplayName(peer, alias: aliases[peer.id]);
       });
 
       notificationService.showFileNotification(
@@ -678,8 +681,9 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
 
           if (wasOnline != isOnline) {
             final settings = ref.read(notificationSettingsProvider);
+            final aliases = ref.read(peerAliasesProvider);
             notificationService.showPeerStatusNotification(
-              peerName: peer.displayName,
+              peerName: resolvePeerDisplayName(peer, alias: aliases[peer.id]),
               connected: isOnline,
               settings: settings,
             );
@@ -707,11 +711,12 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
             if (call != null) {
               final settings = ref.read(notificationSettingsProvider);
               String callerName = call.peerId;
+              final aliases = ref.read(peerAliasesProvider);
               final peersAsync = ref.read(peersProvider);
               peersAsync.whenData((peers) {
                 final peer =
                     peers.where((p) => p.id == call.peerId).firstOrNull;
-                if (peer != null) callerName = peer.displayName;
+                if (peer != null) callerName = resolvePeerDisplayName(peer, alias: aliases[peer.id]);
               });
               final notificationService = ref.read(notificationServiceProvider);
               notificationService.showCallNotification(
@@ -775,10 +780,11 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     // Try to get caller name from peers list
     final peersAsync = ref.read(peersProvider);
     String callerName = call.peerId;
+    final aliases = ref.read(peerAliasesProvider);
     peersAsync.whenData((peers) {
       final peer = peers.where((p) => p.id == call.peerId).firstOrNull;
       if (peer != null) {
-        callerName = peer.displayName;
+        callerName = resolvePeerDisplayName(peer, alias: aliases[peer.id]);
       }
     });
 

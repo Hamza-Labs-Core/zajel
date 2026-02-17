@@ -72,10 +72,27 @@ final hasSeenOnboardingProvider = StateProvider<bool>((ref) {
   return prefs.getBool('hasSeenOnboarding') ?? false;
 });
 
-/// Provider for the user's display name.
-final displayNameProvider = StateProvider<String>((ref) {
+/// Provider for the user's username (Discord-style, without tag).
+/// Reads 'username' key first, falls back to 'displayName' for migration.
+final usernameProvider = StateProvider<String>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
-  return prefs.getString('displayName') ?? 'Anonymous';
+  return prefs.getString('username') ??
+      prefs.getString('displayName') ??
+      'Anonymous';
+});
+
+/// Provider for the user's full identity string: "Username#TAG".
+/// The tag is derived deterministically from the public key.
+final userIdentityProvider = Provider<String>((ref) {
+  final username = ref.watch(usernameProvider);
+  try {
+    final cryptoService = ref.watch(cryptoServiceProvider);
+    final tag = CryptoService.tagFromPublicKey(cryptoService.publicKeyBase64);
+    return '$username#$tag';
+  } catch (_) {
+    // CryptoService not initialized yet
+    return username;
+  }
 });
 
 /// Provider for notification settings with SharedPreferences persistence.
@@ -223,6 +240,7 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
   final trustedPeersStorage = ref.watch(trustedPeersStorageProvider);
   final meetingPointService = ref.watch(meetingPointServiceProvider);
   final blockedNotifier = ref.watch(blockedPeersProvider.notifier);
+  final username = ref.watch(usernameProvider);
 
   return ConnectionManager(
     cryptoService: cryptoService,
@@ -231,6 +249,7 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
     trustedPeersStorage: trustedPeersStorage,
     meetingPointService: meetingPointService,
     isPublicKeyBlocked: blockedNotifier.isBlocked,
+    username: username,
   );
 });
 
@@ -517,7 +536,7 @@ final signalingDisplayStateProvider =
 });
 
 /// Default bootstrap server URL (CF Workers).
-/// Can be overridden at build time with --dart-define=BOOTSTRAP_URL=<url>
+/// Can be overridden at build time with `--dart-define=BOOTSTRAP_URL=<url>`.
 const defaultBootstrapUrl = 'https://signal.zajel.hamzalabs.dev';
 
 /// Effective bootstrap URL (compile-time override or default).
@@ -563,7 +582,7 @@ final discoveredServersProvider =
 final selectedServerProvider = StateProvider<DiscoveredServer?>((ref) => null);
 
 /// Provider for the signaling server URL (from selected VPS server).
-/// Can be overridden at build time with --dart-define=SIGNALING_URL=<url>
+/// Can be overridden at build time with `--dart-define=SIGNALING_URL=<url>`.
 final signalingServerUrlProvider = Provider<String?>((ref) {
   // If a direct signaling URL is provided via --dart-define, use it
   if (Environment.hasDirectSignalingUrl) {

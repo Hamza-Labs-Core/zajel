@@ -18,26 +18,26 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  final _displayNameController = TextEditingController();
+  final _usernameController = TextEditingController();
   final _serverUrlController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    _displayNameController.text = ref.read(displayNameProvider);
+    _usernameController.text = ref.read(usernameProvider);
     _serverUrlController.text = ref.read(bootstrapServerUrlProvider);
   }
 
   @override
   void dispose() {
-    _displayNameController.dispose();
+    _usernameController.dispose();
     _serverUrlController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final displayName = ref.watch(displayNameProvider);
+    final identity = ref.watch(userIdentityProvider);
     final externalEnabled = ref.watch(signalingConnectedProvider);
     final pairingCode = ref.watch(pairingCodeProvider);
 
@@ -52,7 +52,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             context,
             title: 'Profile',
             children: [
-              _buildProfileTile(displayName),
+              _buildProfileTile(identity),
             ],
           ),
           const SizedBox(height: 24),
@@ -321,36 +321,38 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  Widget _buildProfileTile(String displayName) {
+  Widget _buildProfileTile(String identity) {
     return ListTile(
       leading: CircleAvatar(
         backgroundColor: Theme.of(context).colorScheme.primaryContainer,
         child: Text(
-          displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
+          identity.isNotEmpty ? identity[0].toUpperCase() : '?',
           style: TextStyle(
             color: Theme.of(context).colorScheme.onPrimaryContainer,
           ),
         ),
       ),
-      title: Text(displayName),
-      subtitle: const Text('Tap to change display name'),
+      title: Text(identity),
+      subtitle: const Text('Tap to change username. Your #TAG is derived from your encryption key.'),
       trailing: const Icon(Icons.edit),
-      onTap: () => _showDisplayNameDialog(context),
+      onTap: () => _showUsernameDialog(context),
     );
   }
 
-  Future<void> _showDisplayNameDialog(BuildContext context) async {
-    _displayNameController.text = ref.read(displayNameProvider);
+  Future<void> _showUsernameDialog(BuildContext context) async {
+    _usernameController.text = ref.read(usernameProvider);
 
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Display Name'),
+        title: const Text('Username'),
         content: TextField(
-          controller: _displayNameController,
+          controller: _usernameController,
           autofocus: true,
+          maxLength: 32,
           decoration: const InputDecoration(
-            hintText: 'Enter your display name',
+            hintText: 'Enter your username',
+            counterText: '',
           ),
         ),
         actions: [
@@ -360,7 +362,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
           ElevatedButton(
             onPressed: () {
-              Navigator.pop(context, _displayNameController.text);
+              final text = _usernameController.text.trim();
+              if (text.isNotEmpty && !text.contains('#')) {
+                Navigator.pop(context, text);
+              }
             },
             child: const Text('Save'),
           ),
@@ -369,9 +374,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
 
     if (result != null && result.isNotEmpty) {
-      ref.read(displayNameProvider.notifier).state = result;
+      ref.read(usernameProvider.notifier).state = result;
       final prefs = ref.read(sharedPreferencesProvider);
-      await prefs.setString('displayName', result);
+      await prefs.setString('username', result);
     }
   }
 
@@ -479,20 +484,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final cryptoService = ref.read(cryptoServiceProvider);
       await cryptoService.regenerateIdentityKeys();
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Keys regenerated')),
-        );
-      }
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Keys regenerated')),
+      );
     }
   }
 
   Future<void> _launchUrl(String urlString) async {
     final url = Uri.parse(urlString);
+    final messenger = ScaffoldMessenger.of(context);
     if (await canLaunchUrl(url)) {
       await launchUrl(url, mode: LaunchMode.externalApplication);
-    } else if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
+    } else {
+      messenger.showSnackBar(
         SnackBar(content: Text('Could not open $urlString')),
       );
     }
@@ -534,55 +539,52 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.clear();
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('All data cleared')),
-        );
-      }
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('All data cleared')),
+      );
     }
   }
 
   Future<void> _exportLogs(BuildContext context) async {
     try {
       // Show loading indicator
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Row(
-              children: [
-                SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-                SizedBox(width: 12),
-                Text('Preparing logs...'),
-              ],
-            ),
-            duration: Duration(seconds: 1),
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              SizedBox(width: 12),
+              Text('Preparing logs...'),
+            ],
           ),
-        );
-      }
+          duration: Duration(seconds: 1),
+        ),
+      );
 
       await logger.exportLogs();
       logger.info('Settings', 'Logs exported successfully');
     } catch (e) {
       logger.error('Settings', 'Failed to export logs', e);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to export logs: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to export logs: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
   Future<void> _showLogViewer(BuildContext context) async {
     final logContent = await logger.getCurrentLogContent();
 
-    if (!mounted) return;
+    if (!context.mounted) return;
 
     await showModalBottomSheet(
       context: context,
@@ -672,11 +674,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (confirmed == true) {
       await logger.clearLogs();
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Logs cleared')),
-        );
-      }
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Logs cleared')),
+      );
     }
   }
 }

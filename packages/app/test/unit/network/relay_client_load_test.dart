@@ -24,7 +24,7 @@ void main() {
 
       when(() => mockWebRTC.onMessage).thenReturn(null);
       when(() => mockWebRTC.onConnectionStateChange).thenReturn(null);
-      when(() => mockWebRTC.onSignalingMessage).thenReturn(null);
+      when(() => mockWebRTC.signalingEvents).thenAnswer((_) => const Stream.empty());
       when(() => mockWebRTC.closeConnection(any())).thenAnswer((_) async {});
       when(() => mockSignaling.isConnected).thenReturn(true);
 

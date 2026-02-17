@@ -56,6 +56,27 @@ class CryptoService {
     return _publicKeyBase64Cache!;
   }
 
+  /// Derive a stable peer ID from a public key (like a phone number).
+  ///
+  /// Uses first 16 characters of SHA-256 hex hash, uppercased.
+  /// 16 hex chars = 64 bits → birthday collision at ~4 billion users.
+  static String peerIdFromPublicKey(String publicKeyBase64) {
+    final publicKeyBytes = base64Decode(publicKeyBase64);
+    final hash = crypto.sha256.convert(publicKeyBytes);
+    final hexStr = hash.toString().toUpperCase();
+    return hexStr.substring(0, 16);
+  }
+
+  /// Derive a short tag from a public key for Discord-style identity display.
+  ///
+  /// Returns first 4 hex chars of SHA-256, uppercased (same hash as peerIdFromPublicKey).
+  /// Used as the #TAG portion of "Username#TAG".
+  static String tagFromPublicKey(String publicKeyBase64) {
+    final publicKeyBytes = base64Decode(publicKeyBase64);
+    final hash = crypto.sha256.convert(publicKeyBytes);
+    return hash.toString().substring(0, 4).toUpperCase();
+  }
+
   /// Store a peer's public key for later verification.
   void setPeerPublicKey(String peerId, String publicKeyBase64) {
     _peerPublicKeys[peerId] = publicKeyBase64;

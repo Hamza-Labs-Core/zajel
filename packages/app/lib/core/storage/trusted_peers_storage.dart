@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import '../crypto/crypto_service.dart';
 import '../models/peer.dart';
 
 /// Storage interface for managing trusted peers.
@@ -53,6 +54,10 @@ abstract class TrustedPeersStorage {
   /// Check if a peer is trusted by their public key.
   Future<bool> isTrustedByPublicKey(String publicKey);
 
+  /// Find a trusted peer by their public key.
+  /// Returns null if no peer with this public key exists.
+  Future<TrustedPeer?> getPeerByPublicKey(String publicKey);
+
   /// Clear all trusted peers.
   Future<void> clear();
 }
@@ -67,6 +72,12 @@ class TrustedPeer {
 
   /// Human-readable name for the peer.
   final String displayName;
+
+  /// The peer's chosen username (Discord-style, without tag).
+  final String? username;
+
+  /// Short tag derived from the peer's public key (first 4 hex chars of SHA-256).
+  final String? tag;
 
   /// The peer's public key (base64 encoded).
   final String publicKey;
@@ -92,6 +103,8 @@ class TrustedPeer {
   const TrustedPeer({
     required this.id,
     required this.displayName,
+    this.username,
+    this.tag,
     required this.publicKey,
     required this.trustedAt,
     this.lastSeen,
@@ -104,6 +117,8 @@ class TrustedPeer {
   TrustedPeer copyWith({
     String? id,
     String? displayName,
+    String? username,
+    String? tag,
     String? publicKey,
     DateTime? trustedAt,
     DateTime? lastSeen,
@@ -117,6 +132,8 @@ class TrustedPeer {
     return TrustedPeer(
       id: id ?? this.id,
       displayName: displayName ?? this.displayName,
+      username: username ?? this.username,
+      tag: tag ?? this.tag,
       publicKey: publicKey ?? this.publicKey,
       trustedAt: trustedAt ?? this.trustedAt,
       lastSeen: lastSeen ?? this.lastSeen,
@@ -132,6 +149,8 @@ class TrustedPeer {
     return TrustedPeer(
       id: json['id'] as String,
       displayName: json['displayName'] as String,
+      username: json['username'] as String?,
+      tag: json['tag'] as String?,
       publicKey: json['publicKey'] as String,
       trustedAt: DateTime.parse(json['trustedAt'] as String),
       lastSeen: json['lastSeen'] != null
@@ -150,6 +169,8 @@ class TrustedPeer {
   Map<String, dynamic> toJson() => {
         'id': id,
         'displayName': displayName,
+        'username': username,
+        'tag': tag,
         'publicKey': publicKey,
         'trustedAt': trustedAt.toIso8601String(),
         'lastSeen': lastSeen?.toIso8601String(),
@@ -160,6 +181,9 @@ class TrustedPeer {
       };
 
   /// Create from a connected Peer.
+  ///
+  /// The peer's ID must already be set to the collision-safe stable ID
+  /// (derived from the public key by ConnectionManager._resolveStablePeerId).
   factory TrustedPeer.fromPeer(Peer peer) {
     if (peer.publicKey == null) {
       throw ArgumentError('Peer must have a public key to be trusted');
@@ -167,6 +191,8 @@ class TrustedPeer {
     return TrustedPeer(
       id: peer.id,
       displayName: peer.displayName,
+      username: peer.username,
+      tag: CryptoService.tagFromPublicKey(peer.publicKey!),
       publicKey: peer.publicKey!,
       trustedAt: DateTime.now().toUtc(),
       lastSeen: peer.lastSeen,
