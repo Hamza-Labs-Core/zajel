@@ -576,7 +576,7 @@ class LinuxAppHelper:
 
     def change_display_name(self, name: str):
         """Change the display name in settings."""
-        self.click("Tap to change display name")
+        self.click("Tap to change username")
         time.sleep(0.5)
         field = self._find_text_field(timeout=10)
         field.clear()

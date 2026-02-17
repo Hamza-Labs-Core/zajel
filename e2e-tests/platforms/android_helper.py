@@ -470,7 +470,7 @@ class AppHelper:
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.common.by import By
 
-        self._find("Tap to change display name", timeout=10).click()
+        self._find("Tap to change username", timeout=10).click()
         import time as _time
         _time.sleep(1)
 
