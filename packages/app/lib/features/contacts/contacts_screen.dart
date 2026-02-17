@@ -61,7 +61,8 @@ class _ContactsScreenState extends ConsumerState<ContactsScreen> {
                 final filtered = _searchQuery.isEmpty
                     ? contacts
                     : contacts.where((c) {
-                        final name = resolveTrustedPeerDisplayName(c).toLowerCase();
+                        final name =
+                            resolveTrustedPeerDisplayName(c).toLowerCase();
                         return name.contains(_searchQuery.toLowerCase());
                       }).toList();
 

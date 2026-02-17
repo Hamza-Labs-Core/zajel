@@ -630,13 +630,11 @@ class ConnectionManager {
       if (state == PeerConnectionState.connected) {
         final peer = _peers[stableId];
         if (peer != null && peer.publicKey != null) {
-          _trustedPeersStorage
-              .savePeer(TrustedPeer.fromPeer(peer))
-              .then((_) {
+          _trustedPeersStorage.savePeer(TrustedPeer.fromPeer(peer)).then((_) {
             logger.info('ConnectionManager', 'Saved trusted peer: $stableId');
           }).catchError((e) {
-            logger.error(
-                'ConnectionManager', 'Failed to save trusted peer: $stableId', e);
+            logger.error('ConnectionManager',
+                'Failed to save trusted peer: $stableId', e);
           });
         }
       }
@@ -750,16 +748,14 @@ class ConnectionManager {
           _peers.remove(peerCode); // Remove placeholder under pairing code
 
           // Check if this is a reconnection (existing trusted peer)
-          final existingTrusted =
-              await _trustedPeersStorage.getPeer(stableId);
+          final existingTrusted = await _trustedPeersStorage.getPeer(stableId);
           final isReconnection = existingTrusted != null;
 
           if (isReconnection) {
             logger.info('ConnectionManager',
                 'Reconnection: $peerCode → $stableId (${existingTrusted.displayName})');
           } else {
-            logger.info('ConnectionManager',
-                'New peer: $peerCode → $stableId');
+            logger.info('ConnectionManager', 'New peer: $peerCode → $stableId');
           }
 
           // Create/update peer under the stable ID
@@ -829,8 +825,7 @@ class ConnectionManager {
               _peers[stableId]?.publicKey == null) {
             _peers[stableId] = Peer(
               id: stableId,
-              displayName:
-                  _peers[stableId]?.displayName ?? 'Peer $stableId',
+              displayName: _peers[stableId]?.displayName ?? 'Peer $stableId',
               publicKey: peerPublicKey,
               connectionState: PeerConnectionState.connecting,
               lastSeen: DateTime.now(),
@@ -865,7 +860,8 @@ class ConnectionManager {
           break;
 
         case SignalingPeerLeft(peerId: final peerId):
-          _updatePeerState(_toStableId(peerId), PeerConnectionState.disconnected);
+          _updatePeerState(
+              _toStableId(peerId), PeerConnectionState.disconnected);
           break;
 
         case SignalingError(message: final _):

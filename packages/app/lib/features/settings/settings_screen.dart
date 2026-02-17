@@ -333,7 +333,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ),
       ),
       title: Text(identity),
-      subtitle: const Text('Tap to change username. Your #TAG is derived from your encryption key.'),
+      subtitle: const Text(
+          'Tap to change username. Your #TAG is derived from your encryption key.'),
       trailing: const Icon(Icons.edit),
       onTap: () => _showUsernameDialog(context),
     );

@@ -907,7 +907,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
                 const SizedBox(height: 16),
-                _InfoRow(label: 'Name', value: resolvePeerDisplayName(peer, alias: ref.read(peerAliasesProvider)[peer.id])),
+                _InfoRow(
+                    label: 'Name',
+                    value: resolvePeerDisplayName(peer,
+                        alias: ref.read(peerAliasesProvider)[peer.id])),
                 _InfoRow(label: 'ID', value: peer.id),
                 if (peer.ipAddress != null)
                   _InfoRow(label: 'IP', value: peer.ipAddress!),
