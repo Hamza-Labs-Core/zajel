@@ -21,8 +21,9 @@ APPIUM_PORT = 4723
 SERVER_COUNT = int(os.environ.get("APPIUM_SERVER_COUNT", "2"))
 APK_PATH = os.environ.get("APK_PATH", "/tmp/zajel-test.apk")
 
-# Signaling server for headless client tests
-SIGNALING_URL = os.environ.get("SIGNALING_URL", "ws://localhost:8080/ws")
+# Signaling server for headless client tests.
+# If empty, the headless_bob fixture discovers servers from BOOTSTRAP_URL.
+SIGNALING_URL = os.environ.get("SIGNALING_URL", "")
 
 # Timeouts (in seconds)
 APP_LAUNCH_TIMEOUT = 60

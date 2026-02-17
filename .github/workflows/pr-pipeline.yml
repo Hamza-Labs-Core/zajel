@@ -228,7 +228,6 @@ jobs:
             --dart-define=ENV=qa \
             --dart-define=VERSION=${{ env.VERSION }} \
             --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
-            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }} \
             --dart-define=E2E_TEST=true \
             --dart-define=TURN_URL=turn:10.0.2.2:3478 \
             --dart-define=TURN_USER=${{ secrets.TURN_USER || 'ci-turn' }} \
@@ -271,8 +270,7 @@ jobs:
           flutter build ios --release --no-codesign \
             --dart-define=ENV=qa \
             --dart-define=VERSION=${{ env.VERSION }} \
-            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
-            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }}
 
           # Create IPA-like archive for distribution
           cd build/ios/iphoneos
@@ -328,7 +326,6 @@ jobs:
             --dart-define=ENV=qa \
             --dart-define=VERSION=${{ env.VERSION }} \
             --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
-            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }} \
             --dart-define=E2E_TEST=true
 
           cd build/linux/x64/release/bundle
@@ -379,8 +376,7 @@ jobs:
           flutter build macos --release \
             --dart-define=ENV=qa \
             --dart-define=VERSION=${{ env.VERSION }} \
-            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
-            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }}
 
           cd build/macos/Build/Products/Release
           zip -r zajel-${{ env.VERSION }}-macos.zip zajel.app
@@ -471,7 +467,6 @@ jobs:
             --dart-define=ENV=qa `
             --dart-define=VERSION=${{ env.VERSION }} `
             --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} `
-            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }} `
             --dart-define=E2E_TEST=true
 
           Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath zajel-${{ env.VERSION }}-windows.zip
@@ -511,8 +506,7 @@ jobs:
           flutter build web --release \
             --dart-define=ENV=qa \
             --dart-define=VERSION=${{ env.VERSION }} \
-            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
-            --dart-define=SIGNALING_URL=${{ vars.VPS_QA_WS_URL || '' }}
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }}
 
           cd build/web
           zip -r zajel-${{ env.VERSION }}-web.zip *

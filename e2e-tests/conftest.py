@@ -345,6 +345,11 @@ class HeadlessBob:
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         return future.result(timeout=timeout)
 
+    @property
+    def pairing_codes(self) -> list[str]:
+        """All pairing codes (single-element list for single-server bob)."""
+        return [self.pairing_code] if self.pairing_code else []
+
     def connect(self) -> str:
         self.pairing_code = self._run(self._client.connect())
         return self.pairing_code
@@ -471,8 +476,162 @@ class HeadlessBob:
             self._run(self._client.disconnect(), timeout=10)
         except Exception as e:
             logger.warning("Disconnect failed: %s", e)
+        # Cancel remaining tasks to prevent "Task was destroyed" warnings
+        # (e.g. a pair_with coroutine still waiting on the wrong server)
+        async def _cancel_pending():
+            tasks = [
+                t for t in asyncio.all_tasks(self._loop)
+                if t is not asyncio.current_task()
+            ]
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            self._run(_cancel_pending(), timeout=5)
+        except Exception:
+            pass
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join(timeout=5)
+
+
+def _resolve_signaling_urls() -> list[str]:
+    """Resolve signaling server URLs.
+
+    If SIGNALING_URL is set, use it directly.
+    Otherwise, discover servers from BOOTSTRAP_URL (same source the app uses).
+    """
+    if SIGNALING_URL:
+        return [SIGNALING_URL]
+
+    bootstrap_url = os.environ.get("BOOTSTRAP_URL", "")
+    if not bootstrap_url:
+        return []
+
+    try:
+        import urllib.request
+        import json
+        req = urllib.request.Request(
+            f"{bootstrap_url}/servers",
+            headers={"User-Agent": "ZajelE2E/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        servers = data.get("servers", [])
+        # Sort by lastSeen descending (most recent first), matching app's selectServer()
+        servers.sort(key=lambda s: s.get("lastSeen", 0), reverse=True)
+        urls = []
+        for s in servers:
+            ep = s.get("endpoint", "")
+            if ep.startswith(("ws://", "wss://")):
+                urls.append(ep)
+            elif ep.startswith("https://"):
+                urls.append(ep.replace("https://", "wss://", 1))
+            elif ep.startswith("http://"):
+                urls.append(ep.replace("http://", "ws://", 1))
+        return urls
+    except Exception as e:
+        logger.warning("Bootstrap discovery failed: %s", e)
+        return []
+
+
+def _build_ice_servers():
+    turn_url = os.environ.get("TURN_URL", "")
+    turn_user = os.environ.get("TURN_USER", "")
+    turn_pass = os.environ.get("TURN_PASS", "")
+    if not turn_url:
+        return None
+    # NOTE: This STUN URL is also defined in:
+    #   - packages/headless-client/zajel/webrtc.py (DEFAULT_ICE_SERVERS)
+    #   - packages/app/lib/core/constants.dart (defaultIceServers)
+    # Keep all three in sync when changing.
+    return [
+        {"urls": "stun:stun.l.google.com:19302"},
+        {"urls": turn_url, "username": turn_user, "credential": turn_pass},
+    ]
+
+
+class MultiServerBob:
+    """Wrapper that connects a HeadlessBob to each discovered server.
+
+    The app discovers a server via bootstrap and may connect to any of them.
+    MultiServerBob connects to ALL servers so that pair_with() succeeds
+    regardless of which server the app chose.  Only the Bob instance on the
+    matching server will complete the pair; the others stay idle.
+    """
+
+    def __init__(self, bobs: list[HeadlessBob]):
+        self._bobs = bobs
+        self._active: HeadlessBob | None = None
+
+    # Delegate common read-only attributes to the first (or active) bob
+    @property
+    def pairing_code(self):
+        return self._bobs[0].pairing_code
+
+    @property
+    def pairing_codes(self) -> list[str]:
+        """All pairing codes, one per server."""
+        return [b.pairing_code for b in self._bobs]
+
+    @property
+    def connected_peer(self):
+        if self._active:
+            return self._active.connected_peer
+        for b in self._bobs:
+            peer = b.connected_peer
+            if peer is not None:
+                self._active = b
+                return peer
+        return None
+
+    @connected_peer.setter
+    def connected_peer(self, value):
+        if self._active:
+            self._active.connected_peer = value
+
+    def pair_with(self, code: str):
+        """Try pair_with on each server; the one holding the target code succeeds.
+
+        Uses a short timeout per attempt since the signaling server responds
+        quickly with pair_error if the code isn't registered there.
+        """
+        last_err = None
+        for b in self._bobs:
+            try:
+                # Short timeout: if the code is on this server, pairing completes
+                # within seconds. If not, we get a pair_error immediately and the
+                # wait_for_pair_match times out — 15s is enough to detect that.
+                result = b._run(b._client.pair_with(code), timeout=30)
+                b._connected_peer = result
+                self._active = b
+                return result
+            except Exception as e:
+                last_err = e
+                continue
+        raise RuntimeError(
+            f"pair_with({code}) failed on all {len(self._bobs)} servers: {last_err}"
+        )
+
+    def wait_for_pair(self, timeout=60):
+        if self._active:
+            return self._active.wait_for_pair(timeout=timeout)
+        for b in self._bobs:
+            try:
+                result = b.wait_for_pair(timeout=timeout)
+                self._active = b
+                return result
+            except Exception:
+                continue
+        raise RuntimeError("wait_for_pair failed on all servers")
+
+    def __getattr__(self, name):
+        """Forward all other method calls to the active bob (or first bob)."""
+        target = self._active or self._bobs[0]
+        return getattr(target, name)
+
+    def disconnect(self):
+        for b in self._bobs:
+            b.disconnect()
 
 
 @pytest.fixture(scope="function")
@@ -480,33 +639,32 @@ def headless_bob():
     """Headless client acting as Bob for cross-platform tests.
 
     Connects to the signaling server, auto-accepts pair requests.
-    Tests use headless_bob.pairing_code to pair Alice (app) with Bob.
+    Uses SIGNALING_URL if set, otherwise discovers servers from BOOTSTRAP_URL.
+    When multiple servers are discovered, connects to all of them so that
+    pair_with() works regardless of which server the app chose.
     """
-    if not SIGNALING_URL:
-        pytest.skip("SIGNALING_URL not set -- headless tests require a signaling server")
+    signaling_urls = _resolve_signaling_urls()
+    if not signaling_urls:
+        pytest.skip("No signaling server available (set SIGNALING_URL or BOOTSTRAP_URL)")
 
-    turn_url = os.environ.get("TURN_URL", "")
-    turn_user = os.environ.get("TURN_USER", "")
-    turn_pass = os.environ.get("TURN_PASS", "")
+    ice_servers = _build_ice_servers()
 
-    ice_servers = None
-    if turn_url:
-        # NOTE: This STUN URL is also defined in:
-        #   - packages/headless-client/zajel/webrtc.py (DEFAULT_ICE_SERVERS)
-        #   - packages/app/lib/core/constants.dart (defaultIceServers)
-        # Keep all three in sync when changing.
-        ice_servers = [
-            {"urls": "stun:stun.l.google.com:19302"},
-            {"urls": turn_url, "username": turn_user, "credential": turn_pass},
-        ]
+    bobs = []
+    for i, url in enumerate(signaling_urls):
+        bob = HeadlessBob(
+            signaling_url=url,
+            name=f"HeadlessBob-{i}",
+            auto_accept_pairs=True,
+            log_level="DEBUG",
+            ice_servers=ice_servers,
+        )
+        bob.connect()
+        bobs.append(bob)
 
-    bob = HeadlessBob(
-        signaling_url=SIGNALING_URL,
-        name="HeadlessBob",
-        auto_accept_pairs=True,
-        log_level="DEBUG",
-        ice_servers=ice_servers,
-    )
-    bob.connect()
-    yield bob
-    bob.disconnect()
+    if len(bobs) == 1:
+        yield bobs[0]
+    else:
+        yield MultiServerBob(bobs)
+
+    for bob in bobs:
+        bob.disconnect()
