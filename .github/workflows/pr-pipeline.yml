@@ -11,6 +11,11 @@ on:
         required: false
         default: 'false'
         type: boolean
+      force_build:
+        description: 'Force all builds (ignore change detection)'
+        required: false
+        default: 'false'
+        type: boolean
 
 concurrency:
   group: pr-${{ github.event.pull_request.number || github.run_id }}
@@ -59,6 +64,48 @@ jobs:
 
           echo "Computed version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+  # ============================================
+  # Detect which packages changed (for deploy skipping)
+  # ============================================
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+      server_vps: ${{ steps.filter.outputs.server_vps }}
+      admin: ${{ steps.filter.outputs.admin }}
+      website: ${{ steps.filter.outputs.website }}
+      ci: ${{ steps.filter.outputs.ci }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            server:
+              - 'packages/server/**'
+            server_vps:
+              - 'packages/server-vps/**'
+            admin:
+              - 'packages/admin-cf/**'
+            website:
+              - 'packages/website/**'
+            ci:
+              - '.github/workflows/pr-pipeline.yml'
+
+      - name: Log detected changes
+        run: |
+          echo "Change detection results (for deploy jobs):"
+          echo "  server:     ${{ steps.filter.outputs.server }}"
+          echo "  server_vps: ${{ steps.filter.outputs.server_vps }}"
+          echo "  admin:      ${{ steps.filter.outputs.admin }}"
+          echo "  website:    ${{ steps.filter.outputs.website }}"
+          echo "  ci:         ${{ steps.filter.outputs.ci }}"
+          echo "  force:      ${{ github.event.inputs.force_build || 'false' }}"
+          echo ""
+          echo "Build jobs use per-artifact SHA comparison (not paths-filter)"
 
   # ============================================
   # PHASE 1: Tests
@@ -195,6 +242,12 @@ jobs:
 
   # ============================================
   # PHASE 3: Builds & Server Deployments (parallel)
+  #
+  # Build jobs use per-artifact SHA comparison:
+  #   1. Download previous artifact (contains .build-sha with the commit that built it)
+  #   2. git diff <last-build-sha>..HEAD -- packages/app/ .github/workflows/pr-pipeline.yml
+  #   3. If changes → rebuild. If no changes → reuse artifact.
+  #   4. On successful build, save current SHA in .build-sha alongside artifact.
   # ============================================
   build-android:
     name: Build Android
@@ -204,24 +257,75 @@ jobs:
       VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download previous artifact
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: pr-pipeline.yml
+          branch: ${{ github.head_ref || github.ref_name }}
+          name: android-build
+          path: ./reused-artifact
+          workflow_conclusion: success
+          search_artifacts: true
+          if_no_artifact_found: warn
+
+      - name: Check if rebuild needed
+        id: check
+        run: |
+          if [[ "${{ github.event.inputs.force_build }}" == "true" ]]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Force build requested"
+            exit 0
+          fi
+
+          if [ ! -f ./reused-artifact/.build-sha ]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "No previous successful build found"
+            exit 0
+          fi
+
+          PREV_SHA=$(cat ./reused-artifact/.build-sha)
+          echo "Previous build commit: $PREV_SHA"
+
+          if ! git cat-file -e "$PREV_SHA" 2>/dev/null; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Previous build commit $PREV_SHA not in history (force-push?)"
+            exit 0
+          fi
+
+          CHANGES=$(git diff --name-only "$PREV_SHA" HEAD -- packages/app/ .github/workflows/pr-pipeline.yml)
+          if [ -n "$CHANGES" ]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Changes detected since last build ($PREV_SHA):"
+            echo "$CHANGES"
+          else
+            echo "needed=false" >> $GITHUB_OUTPUT
+            echo "No relevant changes since last successful build ($PREV_SHA) — reusing artifact"
+          fi
 
       - name: Setup Java
+        if: steps.check.outputs.needed == 'true'
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
       - name: Setup Flutter
+        if: steps.check.outputs.needed == 'true'
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
       - name: Install dependencies
+        if: steps.check.outputs.needed == 'true'
         working-directory: packages/app
         run: flutter pub get
 
       - name: Build APK with QA config
+        if: steps.check.outputs.needed == 'true'
         working-directory: packages/app
         run: |
           flutter build apk --release \
@@ -235,11 +339,26 @@ jobs:
 
           mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/zajel-${{ env.VERSION }}-android.apk
 
+      - name: Save build commit SHA
+        if: steps.check.outputs.needed == 'true'
+        run: echo "${{ github.sha }}" > packages/app/build/app/outputs/flutter-apk/.build-sha
+
       - name: Upload Android artifact
+        if: steps.check.outputs.needed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: android-build
-          path: packages/app/build/app/outputs/flutter-apk/zajel-${{ env.VERSION }}-android.apk
+          path: |
+            packages/app/build/app/outputs/flutter-apk/zajel-${{ env.VERSION }}-android.apk
+            packages/app/build/app/outputs/flutter-apk/.build-sha
+          retention-days: 1
+
+      - name: Upload reused artifact
+        if: steps.check.outputs.needed == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build
+          path: ./reused-artifact/
           retention-days: 1
 
   # ----------------------------------------
@@ -253,18 +372,68 @@ jobs:
       VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download previous artifact
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: pr-pipeline.yml
+          branch: ${{ github.head_ref || github.ref_name }}
+          name: ios-build
+          path: ./reused-artifact
+          workflow_conclusion: success
+          search_artifacts: true
+          if_no_artifact_found: warn
+
+      - name: Check if rebuild needed
+        id: check
+        run: |
+          if [[ "${{ github.event.inputs.force_build }}" == "true" ]]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Force build requested"
+            exit 0
+          fi
+
+          if [ ! -f ./reused-artifact/.build-sha ]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "No previous successful build found"
+            exit 0
+          fi
+
+          PREV_SHA=$(cat ./reused-artifact/.build-sha)
+          echo "Previous build commit: $PREV_SHA"
+
+          if ! git cat-file -e "$PREV_SHA" 2>/dev/null; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Previous build commit $PREV_SHA not in history (force-push?)"
+            exit 0
+          fi
+
+          CHANGES=$(git diff --name-only "$PREV_SHA" HEAD -- packages/app/ .github/workflows/pr-pipeline.yml)
+          if [ -n "$CHANGES" ]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Changes detected since last build ($PREV_SHA):"
+            echo "$CHANGES"
+          else
+            echo "needed=false" >> $GITHUB_OUTPUT
+            echo "No relevant changes since last successful build ($PREV_SHA) — reusing artifact"
+          fi
 
       - name: Setup Flutter
+        if: steps.check.outputs.needed == 'true'
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
       - name: Install dependencies
+        if: steps.check.outputs.needed == 'true'
         working-directory: packages/app
         run: flutter pub get
 
       - name: Build iOS (no codesign)
+        if: steps.check.outputs.needed == 'true'
         working-directory: packages/app
         run: |
           flutter build ios --release --no-codesign \
@@ -279,11 +448,26 @@ jobs:
           zip -r zajel-${{ env.VERSION }}-ios.ipa Payload
           mv zajel-${{ env.VERSION }}-ios.ipa ../../../
 
+      - name: Save build commit SHA
+        if: steps.check.outputs.needed == 'true'
+        run: echo "${{ github.sha }}" > packages/app/.build-sha
+
       - name: Upload iOS artifact
+        if: steps.check.outputs.needed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ios-build
-          path: packages/app/zajel-${{ env.VERSION }}-ios.ipa
+          path: |
+            packages/app/zajel-${{ env.VERSION }}-ios.ipa
+            packages/app/.build-sha
+          retention-days: 1
+
+      - name: Upload reused artifact
+        if: steps.check.outputs.needed == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build
+          path: ./reused-artifact/
           retention-days: 1
 
   # ----------------------------------------
@@ -297,29 +481,81 @@ jobs:
       VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download previous artifact
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: pr-pipeline.yml
+          branch: ${{ github.head_ref || github.ref_name }}
+          name: linux-build
+          path: ./reused-artifact
+          workflow_conclusion: success
+          search_artifacts: true
+          if_no_artifact_found: warn
+
+      - name: Check if rebuild needed
+        id: check
+        run: |
+          if [[ "${{ github.event.inputs.force_build }}" == "true" ]]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Force build requested"
+            exit 0
+          fi
+
+          if [ ! -f ./reused-artifact/.build-sha ]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "No previous successful build found"
+            exit 0
+          fi
+
+          PREV_SHA=$(cat ./reused-artifact/.build-sha)
+          echo "Previous build commit: $PREV_SHA"
+
+          if ! git cat-file -e "$PREV_SHA" 2>/dev/null; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Previous build commit $PREV_SHA not in history (force-push?)"
+            exit 0
+          fi
+
+          CHANGES=$(git diff --name-only "$PREV_SHA" HEAD -- packages/app/ .github/workflows/pr-pipeline.yml)
+          if [ -n "$CHANGES" ]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Changes detected since last build ($PREV_SHA):"
+            echo "$CHANGES"
+          else
+            echo "needed=false" >> $GITHUB_OUTPUT
+            echo "No relevant changes since last successful build ($PREV_SHA) — reusing artifact"
+          fi
 
       - name: Install Linux dependencies
+        if: steps.check.outputs.needed == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libsecret-1-dev libjsoncpp-dev libsqlite3-dev
 
       - name: Setup Flutter
+        if: steps.check.outputs.needed == 'true'
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
       - name: Enable Linux desktop
+        if: steps.check.outputs.needed == 'true'
         working-directory: packages/app
         run: |
           flutter config --enable-linux-desktop
           flutter create --platforms=linux . || true
 
       - name: Install dependencies
+        if: steps.check.outputs.needed == 'true'
         working-directory: packages/app
         run: flutter pub get
 
       - name: Build Linux
+        if: steps.check.outputs.needed == 'true'
         working-directory: packages/app
         run: |
           flutter build linux --release \
@@ -335,11 +571,26 @@ jobs:
       # NOTE: Linux E2E runs in the e2e-linux job with ALSA→PulseAudio routing
       # and software rendering to handle headless CI (no GPU, no audio device).
 
+      - name: Save build commit SHA
+        if: steps.check.outputs.needed == 'true'
+        run: echo "${{ github.sha }}" > packages/app/.build-sha
+
       - name: Upload Linux artifact
+        if: steps.check.outputs.needed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: linux-build
-          path: packages/app/zajel-${{ env.VERSION }}-linux-x64.tar.gz
+          path: |
+            packages/app/zajel-${{ env.VERSION }}-linux-x64.tar.gz
+            packages/app/.build-sha
+          retention-days: 1
+
+      - name: Upload reused artifact
+        if: steps.check.outputs.needed == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: ./reused-artifact/
           retention-days: 1
 
   # ----------------------------------------
@@ -353,24 +604,75 @@ jobs:
       VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download previous artifact
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: pr-pipeline.yml
+          branch: ${{ github.head_ref || github.ref_name }}
+          name: macos-build
+          path: ./reused-artifact
+          workflow_conclusion: success
+          search_artifacts: true
+          if_no_artifact_found: warn
+
+      - name: Check if rebuild needed
+        id: check
+        run: |
+          if [[ "${{ github.event.inputs.force_build }}" == "true" ]]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Force build requested"
+            exit 0
+          fi
+
+          if [ ! -f ./reused-artifact/.build-sha ]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "No previous successful build found"
+            exit 0
+          fi
+
+          PREV_SHA=$(cat ./reused-artifact/.build-sha)
+          echo "Previous build commit: $PREV_SHA"
+
+          if ! git cat-file -e "$PREV_SHA" 2>/dev/null; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Previous build commit $PREV_SHA not in history (force-push?)"
+            exit 0
+          fi
+
+          CHANGES=$(git diff --name-only "$PREV_SHA" HEAD -- packages/app/ .github/workflows/pr-pipeline.yml)
+          if [ -n "$CHANGES" ]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Changes detected since last build ($PREV_SHA):"
+            echo "$CHANGES"
+          else
+            echo "needed=false" >> $GITHUB_OUTPUT
+            echo "No relevant changes since last successful build ($PREV_SHA) — reusing artifact"
+          fi
 
       - name: Setup Flutter
+        if: steps.check.outputs.needed == 'true'
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
       - name: Enable macOS desktop and prepare
+        if: steps.check.outputs.needed == 'true'
         working-directory: packages/app
         run: |
           flutter config --enable-macos-desktop
           flutter create --platforms=macos . || true
 
       - name: Install dependencies
+        if: steps.check.outputs.needed == 'true'
         working-directory: packages/app
         run: flutter pub get
 
       - name: Build macOS
+        if: steps.check.outputs.needed == 'true'
         working-directory: packages/app
         run: |
           flutter build macos --release \
@@ -386,11 +688,26 @@ jobs:
       # due to sandbox/entitlement issues with audio/camera access. The build
       # success validates the binary. Android E2E tests verify full app launch.
 
+      - name: Save build commit SHA
+        if: steps.check.outputs.needed == 'true'
+        run: echo "${{ github.sha }}" > packages/app/.build-sha
+
       - name: Upload macOS artifact
+        if: steps.check.outputs.needed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: macos-build
-          path: packages/app/zajel-${{ env.VERSION }}-macos.zip
+          path: |
+            packages/app/zajel-${{ env.VERSION }}-macos.zip
+            packages/app/.build-sha
+          retention-days: 1
+
+      - name: Upload reused artifact
+        if: steps.check.outputs.needed == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: ./reused-artifact/
           retention-days: 1
 
   # ----------------------------------------
@@ -404,14 +721,64 @@ jobs:
       VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download previous artifact
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: pr-pipeline.yml
+          branch: ${{ github.head_ref || github.ref_name }}
+          name: windows-build
+          path: ./reused-artifact
+          workflow_conclusion: success
+          search_artifacts: true
+          if_no_artifact_found: warn
+
+      - name: Check if rebuild needed
+        id: check
+        shell: bash
+        run: |
+          if [[ "${{ github.event.inputs.force_build }}" == "true" ]]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Force build requested"
+            exit 0
+          fi
+
+          if [ ! -f ./reused-artifact/.build-sha ]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "No previous successful build found"
+            exit 0
+          fi
+
+          PREV_SHA=$(cat ./reused-artifact/.build-sha)
+          echo "Previous build commit: $PREV_SHA"
+
+          if ! git cat-file -e "$PREV_SHA" 2>/dev/null; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Previous build commit $PREV_SHA not in history (force-push?)"
+            exit 0
+          fi
+
+          CHANGES=$(git diff --name-only "$PREV_SHA" HEAD -- packages/app/ .github/workflows/pr-pipeline.yml)
+          if [ -n "$CHANGES" ]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Changes detected since last build ($PREV_SHA):"
+            echo "$CHANGES"
+          else
+            echo "needed=false" >> $GITHUB_OUTPUT
+            echo "No relevant changes since last successful build ($PREV_SHA) — reusing artifact"
+          fi
 
       - name: Setup Flutter
+        if: steps.check.outputs.needed == 'true'
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
       - name: Install OpenSSL
+        if: steps.check.outputs.needed == 'true'
         run: |
           # Install OpenSSL with development files (no pinned version - use latest available)
           choco install openssl -y --no-progress
@@ -453,14 +820,17 @@ jobs:
           dir "$opensslRoot\include\openssl\" | Select-Object -First 5
 
       - name: Enable Windows desktop
+        if: steps.check.outputs.needed == 'true'
         working-directory: packages/app
         run: flutter config --enable-windows-desktop
 
       - name: Install dependencies
+        if: steps.check.outputs.needed == 'true'
         working-directory: packages/app
         run: flutter pub get
 
       - name: Build Windows
+        if: steps.check.outputs.needed == 'true'
         working-directory: packages/app
         run: |
           flutter build windows --release `
@@ -471,11 +841,27 @@ jobs:
 
           Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath zajel-${{ env.VERSION }}-windows.zip
 
+      - name: Save build commit SHA
+        if: steps.check.outputs.needed == 'true'
+        shell: bash
+        run: echo "${{ github.sha }}" > packages/app/.build-sha
+
       - name: Upload Windows artifact
+        if: steps.check.outputs.needed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: packages/app/zajel-${{ env.VERSION }}-windows.zip
+          path: |
+            packages/app/zajel-${{ env.VERSION }}-windows.zip
+            packages/app/.build-sha
+          retention-days: 1
+
+      - name: Upload reused artifact
+        if: steps.check.outputs.needed == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: ./reused-artifact/
           retention-days: 1
 
   # ----------------------------------------
@@ -489,18 +875,68 @@ jobs:
       VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download previous artifact
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: pr-pipeline.yml
+          branch: ${{ github.head_ref || github.ref_name }}
+          name: web-build
+          path: ./reused-artifact
+          workflow_conclusion: success
+          search_artifacts: true
+          if_no_artifact_found: warn
+
+      - name: Check if rebuild needed
+        id: check
+        run: |
+          if [[ "${{ github.event.inputs.force_build }}" == "true" ]]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Force build requested"
+            exit 0
+          fi
+
+          if [ ! -f ./reused-artifact/.build-sha ]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "No previous successful build found"
+            exit 0
+          fi
+
+          PREV_SHA=$(cat ./reused-artifact/.build-sha)
+          echo "Previous build commit: $PREV_SHA"
+
+          if ! git cat-file -e "$PREV_SHA" 2>/dev/null; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Previous build commit $PREV_SHA not in history (force-push?)"
+            exit 0
+          fi
+
+          CHANGES=$(git diff --name-only "$PREV_SHA" HEAD -- packages/app/ .github/workflows/pr-pipeline.yml)
+          if [ -n "$CHANGES" ]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "Changes detected since last build ($PREV_SHA):"
+            echo "$CHANGES"
+          else
+            echo "needed=false" >> $GITHUB_OUTPUT
+            echo "No relevant changes since last successful build ($PREV_SHA) — reusing artifact"
+          fi
 
       - name: Setup Flutter
+        if: steps.check.outputs.needed == 'true'
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
       - name: Install dependencies
+        if: steps.check.outputs.needed == 'true'
         working-directory: packages/app
         run: flutter pub get
 
       - name: Build Web
+        if: steps.check.outputs.needed == 'true'
         working-directory: packages/app
         run: |
           flutter build web --release \
@@ -513,6 +949,7 @@ jobs:
           mv zajel-${{ env.VERSION }}-web.zip ../../
 
       - name: Smoke test - serve web app
+        if: steps.check.outputs.needed == 'true'
         working-directory: packages/app
         run: |
           # Serve the web build briefly and check it returns valid HTML
@@ -534,11 +971,26 @@ jobs:
             exit 1
           fi
 
+      - name: Save build commit SHA
+        if: steps.check.outputs.needed == 'true'
+        run: echo "${{ github.sha }}" > packages/app/.build-sha
+
       - name: Upload Web artifact
+        if: steps.check.outputs.needed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: web-build
-          path: packages/app/zajel-${{ env.VERSION }}-web.zip
+          path: |
+            packages/app/zajel-${{ env.VERSION }}-web.zip
+            packages/app/.build-sha
+          retention-days: 1
+
+      - name: Upload reused artifact
+        if: steps.check.outputs.needed == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: ./reused-artifact/
           retention-days: 1
 
   # Phase 3 gate - after all builds and deployments
@@ -547,6 +999,17 @@ jobs:
     # Note: deploy-vps removed from dependencies - VPS deployment failures should not block pipeline
     # E2E tests now run on GitHub Actions runners with hardware-accelerated emulators
     needs: [build-android, build-ios, build-linux, build-macos, build-windows, build-web, deploy-cf-signaling, deploy-cf-admin, deploy-cf-website]
+    if: |
+      always() &&
+      needs.build-android.result == 'success' &&
+      needs.build-ios.result == 'success' &&
+      needs.build-linux.result == 'success' &&
+      needs.build-macos.result == 'success' &&
+      needs.build-windows.result == 'success' &&
+      needs.build-web.result == 'success' &&
+      (needs.deploy-cf-signaling.result == 'success' || needs.deploy-cf-signaling.result == 'skipped') &&
+      (needs.deploy-cf-admin.result == 'success' || needs.deploy-cf-admin.result == 'skipped') &&
+      (needs.deploy-cf-website.result == 'success' || needs.deploy-cf-website.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - run: echo "All builds and deployments completed"
@@ -623,7 +1086,7 @@ jobs:
         run: |
           mkdir -p release-assets
 
-          # Move all artifacts to release-assets with proper names
+          # Move all artifacts to release-assets with proper names (excludes .build-sha metadata)
           find ./artifacts -type f \( -name "*.apk" -o -name "*.ipa" -o -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} ./release-assets/ \;
 
           ls -la release-assets/
@@ -682,7 +1145,11 @@ jobs:
   # ============================================
   deploy-cf-signaling:
     name: Deploy CF Signaling
-    needs: [tag-prerelease]
+    needs: [tag-prerelease, detect-changes]
+    if: |
+      needs.detect-changes.outputs.server == 'true' ||
+      needs.detect-changes.outputs.ci == 'true' ||
+      github.event.inputs.force_build == 'true'
     runs-on: ubuntu-latest
     environment: qa
     env:
@@ -735,7 +1202,11 @@ jobs:
 
   deploy-cf-admin:
     name: Deploy CF Admin
-    needs: [tag-prerelease]
+    needs: [tag-prerelease, detect-changes]
+    if: |
+      needs.detect-changes.outputs.admin == 'true' ||
+      needs.detect-changes.outputs.ci == 'true' ||
+      github.event.inputs.force_build == 'true'
     runs-on: ubuntu-latest
     environment: qa
     env:
@@ -788,7 +1259,11 @@ jobs:
 
   deploy-cf-website:
     name: Deploy CF Website
-    needs: [tag-prerelease]
+    needs: [tag-prerelease, detect-changes]
+    if: |
+      needs.detect-changes.outputs.website == 'true' ||
+      needs.detect-changes.outputs.ci == 'true' ||
+      github.event.inputs.force_build == 'true'
     runs-on: ubuntu-latest
     environment: qa
     env:
@@ -843,7 +1318,11 @@ jobs:
 
   deploy-vps:
     name: Deploy QA VPS
-    needs: [tag-prerelease]
+    needs: [tag-prerelease, detect-changes]
+    if: |
+      needs.detect-changes.outputs.server_vps == 'true' ||
+      needs.detect-changes.outputs.ci == 'true' ||
+      github.event.inputs.force_build == 'true'
     runs-on: ubuntu-latest
     environment: qa
     env:
@@ -1087,7 +1566,13 @@ jobs:
     name: E2E Tests
     needs: [unit-tests, build-android, deploy-vps]
     # Run on PR events always, and on workflow_dispatch unless skip_e2e is true
-    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
+    # Tolerate skipped deploy-vps (VPS code unchanged)
+    if: |
+      always() &&
+      needs.unit-tests.result == 'success' &&
+      needs.build-android.result == 'success' &&
+      (needs.deploy-vps.result == 'success' || needs.deploy-vps.result == 'skipped') &&
+      (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -1426,7 +1911,12 @@ jobs:
   e2e-linux:
     name: E2E Tests (Linux)
     needs: [unit-tests, deploy-vps]
-    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
+    # Tolerate skipped deploy-vps (VPS code unchanged)
+    if: |
+      always() &&
+      needs.unit-tests.result == 'success' &&
+      (needs.deploy-vps.result == 'success' || needs.deploy-vps.result == 'skipped') &&
+      (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -1623,7 +2113,12 @@ jobs:
   e2e-windows:
     name: E2E Tests (Windows)
     needs: [build-windows, deploy-vps]
-    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
+    # Tolerate skipped deploy-vps (VPS code unchanged)
+    if: |
+      always() &&
+      needs.build-windows.result == 'success' &&
+      (needs.deploy-vps.result == 'success' || needs.deploy-vps.result == 'skipped') &&
+      (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true))
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -1735,7 +2230,7 @@ jobs:
   # ============================================
   summary:
     name: Pipeline Summary
-    needs: [phase-1-tests, phase-2-tag, phase-3-build-deploy, phase-5-e2e]
+    needs: [detect-changes, phase-1-tests, phase-2-tag, phase-3-build-deploy, phase-5-e2e]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1743,6 +2238,20 @@ jobs:
         run: |
           echo "## PR Pipeline Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Change Detection" >> $GITHUB_STEP_SUMMARY
+          echo "Build jobs compare against their last successful build commit (SHA-based)." >> $GITHUB_STEP_SUMMARY
+          echo "Deploy jobs use paths-filter against the base branch." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy Target | Changed |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| packages/server (CF signaling) | ${{ needs.detect-changes.outputs.server }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| packages/server-vps (VPS) | ${{ needs.detect-changes.outputs.server_vps }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| packages/admin-cf | ${{ needs.detect-changes.outputs.admin }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| packages/website | ${{ needs.detect-changes.outputs.website }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| CI workflow | ${{ needs.detect-changes.outputs.ci }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Force build | ${{ github.event.inputs.force_build || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Phase Results" >> $GITHUB_STEP_SUMMARY
           echo "| Phase | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Phase 1: Tests | ${{ needs.phase-1-tests.result }} |" >> $GITHUB_STEP_SUMMARY
