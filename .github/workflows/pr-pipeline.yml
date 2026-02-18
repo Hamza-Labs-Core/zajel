@@ -1157,6 +1157,9 @@ jobs:
           TURN_PASS_SECRET: ${{ secrets.TURN_PASS || 'ci-turn-pass' }}
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq coturn
+          # Stop the default coturn service that auto-starts on install
+          sudo systemctl stop coturn 2>/dev/null || true
+          sudo systemctl disable coturn 2>/dev/null || true
           HOST_IP=$(hostname -I | awk '{print $1}')
           echo "Host IP for TURN: $HOST_IP"
 
