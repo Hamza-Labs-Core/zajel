@@ -1157,15 +1157,13 @@ jobs:
           TURN_PASS_SECRET: ${{ secrets.TURN_PASS || 'ci-turn-pass' }}
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq coturn
-          # Stop the default coturn service that auto-starts on install
-          sudo systemctl stop coturn 2>/dev/null || true
-          sudo systemctl disable coturn 2>/dev/null || true
           HOST_IP=$(hostname -I | awk '{print $1}')
           echo "Host IP for TURN: $HOST_IP"
 
           TURN_USER="$TURN_USER_SECRET"
           TURN_PASS="$TURN_PASS_SECRET"
 
+          # Overwrite the default config used by the coturn systemd service
           sudo tee /etc/turnserver.conf > /dev/null <<CONF
           listening-ip=0.0.0.0
           listening-port=3478
@@ -1184,21 +1182,22 @@ jobs:
           log-file=/tmp/coturn.log
           CONF
 
-          sudo turnserver -c /etc/turnserver.conf &
+          # Restart the systemd service so it picks up our config
+          sudo systemctl restart coturn
+          sleep 2
 
-          # Wait for coturn to start listening (retry loop instead of fixed sleep)
-          for i in $(seq 1 10); do
-            if ss -tlnp | grep -q ':3478'; then
-              echo "coturn running on port 3478 (ready after ${i}s)"
-              break
-            fi
-            if [ "$i" -eq 10 ]; then
-              echo "ERROR: coturn failed to start within 10s"
-              cat /tmp/coturn.log
-              exit 1
-            fi
-            sleep 1
-          done
+          # Verify coturn is running with our config
+          if ss -tlnp | grep -q ':3478'; then
+            echo "coturn running on port 3478"
+          else
+            echo "ERROR: coturn failed to start"
+            sudo systemctl status coturn || true
+            cat /tmp/coturn.log 2>/dev/null || true
+            exit 1
+          fi
+          echo "coturn config:"
+          cat /etc/turnserver.conf
+          echo "---"
 
           # Android emulator reaches the host via 10.0.2.2 (SLiRP gateway),
           # NOT the host's LAN IP. HeadlessBob runs on the host itself.
