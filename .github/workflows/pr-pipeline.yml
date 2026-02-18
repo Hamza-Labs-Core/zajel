@@ -1177,7 +1177,7 @@ jobs:
           no-dtls
           no-cli
           fingerprint
-          allowed-peer-ip=0.0.0.0-255.255.255.255
+          verbose
           log-file=/tmp/coturn.log
           CONF
 
