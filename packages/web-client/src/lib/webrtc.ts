@@ -16,7 +16,7 @@ import { handleError, ErrorCodes } from './errors';
 
 export interface WebRTCEvents {
   onStateChange: (state: RTCPeerConnectionState) => void;
-  onHandshake: (publicKey: string) => void;
+  onHandshake: (publicKey: string, stableId?: string) => void;
   onMessage: (data: string) => void;
   // Legacy file transfer events (still supported)
   onFileStart: (fileId: string, fileName: string, totalSize: number, totalChunks: number, chunkHashes?: string[]) => void;
@@ -180,7 +180,7 @@ export class WebRTCService {
         // Check if it's a handshake message with proper validation
         const handshakeResult = validateHandshake(parsed);
         if (handshakeResult.success) {
-          this.events.onHandshake(handshakeResult.data.publicKey);
+          this.events.onHandshake(handshakeResult.data.publicKey, handshakeResult.data.stableId);
           return;
         }
         // Not a valid handshake, could be some other JSON - treat as message
@@ -263,9 +263,9 @@ export class WebRTCService {
     };
   }
 
-  sendHandshake(publicKey: string): void {
+  sendHandshake(publicKey: string, stableId?: string): void {
     if (this.messageChannel?.readyState === 'open') {
-      const msg: HandshakeMessage = { type: 'handshake', publicKey };
+      const msg: HandshakeMessage = { type: 'handshake', publicKey, ...(stableId && { stableId }) };
       this.messageChannel.send(JSON.stringify(msg));
     }
   }

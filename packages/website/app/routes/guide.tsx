@@ -7,6 +7,15 @@ export const meta: MetaFunction = () => {
   return [
     { title: "User Guide - Zajel" },
     { name: "description", content: "Learn how to use Zajel for secure peer-to-peer messaging" },
+    { property: "og:title", content: "User Guide - Zajel" },
+    { property: "og:description", content: "Learn how to use Zajel for secure peer-to-peer messaging" },
+    { property: "og:type", content: "article" },
+    { property: "og:url", content: "https://zajel.app/guide" },
+    { property: "og:image", content: "https://zajel.app/og-image.png" },
+    { name: "twitter:card", content: "summary_large_image" },
+    { name: "twitter:title", content: "User Guide - Zajel" },
+    { name: "twitter:description", content: "Learn how to use Zajel for secure peer-to-peer messaging" },
+    { name: "twitter:image", content: "https://zajel.app/og-image.png" },
   ];
 };
 

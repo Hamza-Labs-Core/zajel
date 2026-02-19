@@ -1,10 +1,6 @@
-import 'dart:io' show Platform;
-
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../models/message.dart';
 
@@ -20,15 +16,12 @@ class MessageStorage {
   Database? _db;
 
   /// Open the database, creating it if necessary.
+  ///
+  /// On desktop platforms (Linux, Windows, macOS), the sqflite FFI backend
+  /// must be initialized once before any database is opened. This is done
+  /// centrally in `main()` — do NOT call `sqfliteFfiInit()` here.
   Future<void> initialize() async {
     if (_db != null) return;
-
-    // sqflite requires FFI initialization on desktop platforms
-    if (!kIsWeb &&
-        (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
-      sqfliteFfiInit();
-      databaseFactory = databaseFactoryFfi;
-    }
 
     final dir = await getApplicationDocumentsDirectory();
     final path = join(dir.path, _dbName);
@@ -97,8 +90,12 @@ class MessageStorage {
     );
   }
 
-  /// Get messages for a peer, ordered by timestamp ascending.
-  /// Returns the most recent [limit] messages, offset by [offset].
+  /// Get the most recent [limit] messages for a peer, returned in
+  /// chronological order (oldest first).
+  ///
+  /// The query fetches the newest rows by sorting DESC, then reverses the
+  /// result so the caller receives messages in ascending timestamp order
+  /// (suitable for display in a chat view).
   Future<List<Message>> getMessages(
     String peerId, {
     int limit = 100,
@@ -111,12 +108,12 @@ class MessageStorage {
       _tableName,
       where: 'peerId = ?',
       whereArgs: [peerId],
-      orderBy: 'timestamp ASC',
+      orderBy: 'timestamp DESC',
       limit: limit,
       offset: offset,
     );
 
-    return rows.map(_rowToMessage).toList();
+    return rows.map(_rowToMessage).toList().reversed.toList();
   }
 
   /// Get the last message for a peer (for conversation list preview).
@@ -148,6 +145,22 @@ class MessageStorage {
     return Sqflite.firstIntValue(result) ?? 0;
   }
 
+  /// Migrate all messages from one peerId to another.
+  ///
+  /// Used when a trusted peer reconnects with a new pairing code.
+  /// Moves all message history to the new ID so conversations are preserved.
+  Future<int> migrateMessages(String fromPeerId, String toPeerId) async {
+    final db = _db;
+    if (db == null) return 0;
+
+    return db.update(
+      _tableName,
+      {'peerId': toPeerId},
+      where: 'peerId = ?',
+      whereArgs: [fromPeerId],
+    );
+  }
+
   /// Delete all messages for a peer.
   Future<void> deleteMessages(String peerId) async {
     final db = _db;
@@ -158,6 +171,38 @@ class MessageStorage {
       where: 'peerId = ?',
       whereArgs: [peerId],
     );
+  }
+
+  /// Delete messages older than [cutoff].
+  /// Returns the number of deleted rows.
+  Future<int> deleteMessagesOlderThan(DateTime cutoff) async {
+    final db = _db;
+    if (db == null) return 0;
+
+    return db.delete(
+      _tableName,
+      where: 'timestamp < ?',
+      whereArgs: [cutoff.toIso8601String()],
+    );
+  }
+
+  /// Get attachment file paths for messages older than [cutoff].
+  /// Returns non-null attachmentPath values from messages that will be deleted.
+  Future<List<String>> getAttachmentPathsOlderThan(DateTime cutoff) async {
+    final db = _db;
+    if (db == null) return [];
+
+    final rows = await db.query(
+      _tableName,
+      columns: ['attachmentPath'],
+      where: 'timestamp < ? AND attachmentPath IS NOT NULL',
+      whereArgs: [cutoff.toIso8601String()],
+    );
+
+    return rows
+        .map((row) => row['attachmentPath'] as String?)
+        .whereType<String>()
+        .toList();
   }
 
   /// Delete all messages.

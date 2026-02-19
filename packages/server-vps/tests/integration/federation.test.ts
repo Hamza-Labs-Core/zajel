@@ -800,17 +800,28 @@ describe('Federation E2E Tests', () => {
     });
 
     it('should include region in stats endpoint', { timeout: 20000 }, async () => {
+      const testSecret = 'test-stats-secret-federation';
+      const originalSecret = process.env['STATS_SECRET'];
+      process.env['STATS_SECRET'] = testSecret;
+
       const port1 = getNextPort();
       const config1 = createTestConfig(port1, mockBootstrapUrl, 'europe-west');
       const server1 = await createZajelServer(config1);
 
       try {
-        const response = await fetch(`http://127.0.0.1:${port1}/stats`);
+        const response = await fetch(`http://127.0.0.1:${port1}/stats`, {
+          headers: { 'Authorization': `Bearer ${testSecret}` },
+        });
         const data = await response.json() as { region: string };
 
         expect(data.region).toBe('europe-west');
       } finally {
         await server1.shutdown();
+        if (originalSecret !== undefined) {
+          process.env['STATS_SECRET'] = originalSecret;
+        } else {
+          delete process.env['STATS_SECRET'];
+        }
       }
     });
   });

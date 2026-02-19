@@ -2,6 +2,12 @@
 
 import os
 
+__all__ = [
+    "APP_PATH", "DATA_DIR_1", "DATA_DIR_2", "SIGNALING_URL",
+    "APP_LAUNCH_TIMEOUT", "ELEMENT_WAIT_TIMEOUT", "CONNECTION_TIMEOUT",
+    "P2P_CONNECTION_TIMEOUT", "CALL_CONNECT_TIMEOUT",
+]
+
 # Path to the built Flutter Linux app
 APP_PATH = os.environ.get(
     "ZAJEL_APP_PATH",

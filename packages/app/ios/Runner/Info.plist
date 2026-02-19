@@ -86,6 +86,11 @@
 			</dict>
 		</dict>
 	</dict>
+	<!-- Background modes for background sync -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
 	<!-- Camera permission for QR scanning -->
 	<key>NSCameraUsageDescription</key>
 	<string>Zajel needs camera access to scan QR codes for device pairing</string>

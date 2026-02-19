@@ -14,7 +14,7 @@ export interface WebRTCCallbacks {
   /** Called when WebRTC connection state changes */
   onStateChange: (state: RTCPeerConnectionState) => void;
   /** Called when handshake message is received from peer */
-  onHandshake: (publicKey: string) => void;
+  onHandshake: (publicKey: string, stableId?: string) => void;
   /** Called when encrypted message is received */
   onMessage: (encryptedData: string) => void;
   /** Called when file transfer starts */
@@ -51,7 +51,7 @@ export interface UseWebRTCReturn {
   /** Handle incoming ICE candidate */
   handleIceCandidate: (candidate: RTCIceCandidateInit) => Promise<void>;
   /** Send handshake message */
-  sendHandshake: (publicKey: string) => void;
+  sendHandshake: (publicKey: string, stableId?: string) => void;
   /** Send encrypted message */
   sendMessage: (encryptedData: string) => void;
   /** Send file start message */
@@ -91,7 +91,7 @@ export function useWebRTC(callbacks: WebRTCCallbacks): UseWebRTCReturn {
   const initialize = useCallback((signaling: SignalingClient) => {
     const webrtc = new WebRTCService(signaling, {
       onStateChange: (state) => callbacksRef.current.onStateChange(state),
-      onHandshake: (publicKey) => callbacksRef.current.onHandshake(publicKey),
+      onHandshake: (publicKey, stableId) => callbacksRef.current.onHandshake(publicKey, stableId),
       onMessage: (data) => callbacksRef.current.onMessage(data),
       onFileStart: (fileId, fileName, totalSize, totalChunks, chunkHashes) => {
         callbacksRef.current.onFileStart(fileId, fileName, totalSize, totalChunks, chunkHashes);
@@ -131,8 +131,8 @@ export function useWebRTC(callbacks: WebRTCCallbacks): UseWebRTCReturn {
     await webrtcRef.current?.handleIceCandidate(candidate);
   }, []);
 
-  const sendHandshake = useCallback((publicKey: string) => {
-    webrtcRef.current?.sendHandshake(publicKey);
+  const sendHandshake = useCallback((publicKey: string, stableId?: string) => {
+    webrtcRef.current?.sendHandshake(publicKey, stableId);
   }, []);
 
   const sendMessage = useCallback((encryptedData: string) => {

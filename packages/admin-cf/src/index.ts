@@ -598,6 +598,18 @@ function serveDashboard(): Response {
           state.token = data.data.token;
           state.user = data.data.user;
           localStorage.setItem('zajel_admin_token', state.token);
+
+          // Check if we should redirect back to a VPS dashboard
+          const params = new URLSearchParams(window.location.search);
+          const redirectUrl = params.get('redirect');
+          if (redirectUrl) {
+            // Redirect back to VPS with token
+            const url = new URL(redirectUrl);
+            url.searchParams.set('token', state.token);
+            window.location.href = url.toString();
+            return;
+          }
+
           await loadData();
           render();
         } else {
@@ -669,9 +681,11 @@ function serveDashboard(): Response {
 
     // Navigate to VPS dashboard
     function openVpsDashboard(server) {
-      const url = server.endpoint.replace('wss://', 'https://').replace('ws://', 'http://');
+      // Convert WS endpoint to HTTP base URL (strip any path component)
+      const wsUrl = new URL(server.endpoint.replace('wss://', 'https://').replace('ws://', 'http://'));
+      const baseUrl = wsUrl.protocol + '//' + wsUrl.host;
       // Pass token in URL for initial auth
-      window.open(url + '/admin/?token=' + encodeURIComponent(state.token), '_blank');
+      window.open(baseUrl + '/admin/?token=' + encodeURIComponent(state.token), '_blank');
     }
 
     // Render
