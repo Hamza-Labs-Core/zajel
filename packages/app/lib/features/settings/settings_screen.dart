@@ -274,7 +274,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           Padding(
             padding: const EdgeInsets.only(left: 56, right: 16, bottom: 8),
             child: DropdownButtonFormField<int>(
-              value: durationMinutes,
+              initialValue: durationMinutes,
               decoration: const InputDecoration(
                 labelText: 'Delete after',
                 border: OutlineInputBorder(),

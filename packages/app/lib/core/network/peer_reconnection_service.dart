@@ -115,6 +115,7 @@ class PeerReconnectionService with SubscriptionManager {
     return null;
   }
 
+  // ignore: unused_element
   Future<String?> _createDeadDrop(String peerId, ConnectionInfo info) async {
     try {
       final plaintext = info.toJsonString();

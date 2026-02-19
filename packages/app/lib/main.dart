@@ -689,8 +689,9 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       final peersAsync = ref.read(peersProvider);
       peersAsync.whenData((peers) {
         final peer = peers.where((p) => p.id == peerId).firstOrNull;
-        if (peer != null)
+        if (peer != null) {
           peerName = resolvePeerDisplayName(peer, alias: aliases[peer.id]);
+        }
       });
 
       notificationService.showMessageNotification(
@@ -759,9 +760,10 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
               peersAsync.whenData((peers) {
                 final peer =
                     peers.where((p) => p.id == call.peerId).firstOrNull;
-                if (peer != null)
+                if (peer != null) {
                   callerName =
                       resolvePeerDisplayName(peer, alias: aliases[peer.id]);
+                }
               });
               final notificationService = ref.read(notificationServiceProvider);
               notificationService.showCallNotification(

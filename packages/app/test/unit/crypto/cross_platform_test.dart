@@ -1,8 +1,8 @@
-/// Cross-platform crypto interop test.
-///
-/// Verifies that the Dart crypto implementation produces the same
-/// session keys and ciphertexts as the Python headless client.
-/// Uses deterministic keys for reproducibility.
+// Cross-platform crypto interop test.
+//
+// Verifies that the Dart crypto implementation produces the same
+// session keys and ciphertexts as the Python headless client.
+// Uses deterministic keys for reproducibility.
 import 'dart:convert';
 import 'dart:typed_data';
 

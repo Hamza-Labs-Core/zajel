@@ -13,32 +13,32 @@ void main() {
 
     test('defaults to enabled', () {
       final notifier = PrivacyScreenNotifier(prefs);
-      expect(notifier.debugState, isTrue);
+      expect(notifier.state, isTrue);
     });
 
     test('loads saved state from prefs', () async {
       await prefs.setBool('privacyScreenEnabled', false);
       final notifier = PrivacyScreenNotifier(prefs);
-      expect(notifier.debugState, isFalse);
+      expect(notifier.state, isFalse);
     });
 
     test('setEnabled persists to prefs', () async {
       final notifier = PrivacyScreenNotifier(prefs);
       await notifier.setEnabled(false);
 
-      expect(notifier.debugState, isFalse);
+      expect(notifier.state, isFalse);
       expect(prefs.getBool('privacyScreenEnabled'), isFalse);
     });
 
     test('toggle on and off', () async {
       final notifier = PrivacyScreenNotifier(prefs);
-      expect(notifier.debugState, isTrue);
+      expect(notifier.state, isTrue);
 
       await notifier.setEnabled(false);
-      expect(notifier.debugState, isFalse);
+      expect(notifier.state, isFalse);
 
       await notifier.setEnabled(true);
-      expect(notifier.debugState, isTrue);
+      expect(notifier.state, isTrue);
     });
   });
 }

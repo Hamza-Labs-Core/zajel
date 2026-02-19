@@ -41,8 +41,8 @@ void main() {
 
     test('loads default settings when prefs are empty', () {
       final notifier = AutoDeleteSettingsNotifier(prefs);
-      expect(notifier.debugState.enabled, isFalse);
-      expect(notifier.debugState.duration, const Duration(hours: 24));
+      expect(notifier.state.enabled, isFalse);
+      expect(notifier.state.duration, const Duration(hours: 24));
     });
 
     test('loads saved settings from prefs', () async {
@@ -50,15 +50,15 @@ void main() {
       await prefs.setInt('autoDeleteDurationMinutes', 60);
 
       final notifier = AutoDeleteSettingsNotifier(prefs);
-      expect(notifier.debugState.enabled, isTrue);
-      expect(notifier.debugState.duration, const Duration(hours: 1));
+      expect(notifier.state.enabled, isTrue);
+      expect(notifier.state.duration, const Duration(hours: 1));
     });
 
     test('setEnabled persists to prefs', () async {
       final notifier = AutoDeleteSettingsNotifier(prefs);
       await notifier.setEnabled(true);
 
-      expect(notifier.debugState.enabled, isTrue);
+      expect(notifier.state.enabled, isTrue);
       expect(prefs.getBool('autoDeleteEnabled'), isTrue);
     });
 
@@ -66,7 +66,7 @@ void main() {
       final notifier = AutoDeleteSettingsNotifier(prefs);
       await notifier.setDuration(const Duration(days: 7));
 
-      expect(notifier.debugState.duration, const Duration(days: 7));
+      expect(notifier.state.duration, const Duration(days: 7));
       expect(prefs.getInt('autoDeleteDurationMinutes'), 7 * 24 * 60);
     });
 
@@ -77,8 +77,8 @@ void main() {
       await notifier.setEnabled(false);
       await notifier.setEnabled(true);
 
-      expect(notifier.debugState.enabled, isTrue);
-      expect(notifier.debugState.duration, const Duration(hours: 6));
+      expect(notifier.state.enabled, isTrue);
+      expect(notifier.state.duration, const Duration(hours: 6));
     });
   });
 }
