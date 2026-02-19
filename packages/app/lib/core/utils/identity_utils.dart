@@ -8,10 +8,8 @@ import '../storage/trusted_peers_storage.dart';
 String resolvePeerDisplayName(Peer peer, {String? alias}) {
   if (alias != null && alias.isNotEmpty) return alias;
 
-  if (peer.username != null &&
-      peer.username!.isNotEmpty &&
-      peer.publicKey != null) {
-    final tag = CryptoService.tagFromPublicKey(peer.publicKey!);
+  if (peer.username != null && peer.username!.isNotEmpty) {
+    final tag = CryptoService.tagFromStableId(peer.id);
     return '${peer.username}#$tag';
   }
 

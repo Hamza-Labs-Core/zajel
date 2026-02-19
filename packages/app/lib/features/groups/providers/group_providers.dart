@@ -76,13 +76,13 @@ final groupInvitationServiceProvider = Provider<GroupInvitationService>((ref) {
   final connectionManager = ref.watch(connectionManagerProvider);
   final groupService = ref.watch(groupServiceProvider);
   final cryptoService = ref.watch(groupCryptoServiceProvider);
-  final pairingCode = ref.watch(pairingCodeProvider) ?? '';
+  final appCryptoService = ref.watch(cryptoServiceProvider);
 
   final service = GroupInvitationService(
     connectionManager: connectionManager,
     groupService: groupService,
     cryptoService: cryptoService,
-    selfDeviceId: pairingCode,
+    selfDeviceId: appCryptoService.stableId,
   );
 
   // Wire up the callback: when a group invitation is received and accepted,

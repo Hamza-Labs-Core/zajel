@@ -65,11 +65,11 @@ void main() {
       SharedPreferences.setMockInitialValues({'username': 'Alice'});
       final prefs = await SharedPreferences.getInstance();
 
-      // Initialize a real crypto service to get a valid public key
-      final crypto = CryptoService(secureStorage: FakeSecureStorage());
+      // Initialize a real crypto service with SharedPreferences for stableId
+      final crypto =
+          CryptoService(secureStorage: FakeSecureStorage(), prefs: prefs);
       await crypto.initialize();
-      final expectedTag =
-          CryptoService.tagFromPublicKey(crypto.publicKeyBase64);
+      final expectedTag = CryptoService.tagFromStableId(crypto.stableId);
 
       final container = ProviderContainer(
         overrides: [
@@ -105,9 +105,10 @@ void main() {
       SharedPreferences.setMockInitialValues({'username': 'Alice'});
       final prefs = await SharedPreferences.getInstance();
 
-      final crypto = CryptoService(secureStorage: FakeSecureStorage());
+      final crypto =
+          CryptoService(secureStorage: FakeSecureStorage(), prefs: prefs);
       await crypto.initialize();
-      final tag = CryptoService.tagFromPublicKey(crypto.publicKeyBase64);
+      final tag = CryptoService.tagFromStableId(crypto.stableId);
 
       final container = ProviderContainer(
         overrides: [

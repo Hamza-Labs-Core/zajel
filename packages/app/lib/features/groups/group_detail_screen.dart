@@ -264,11 +264,11 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
     try {
       final groupService = ref.read(groupServiceProvider);
       final connectionService = ref.read(groupConnectionServiceProvider);
-      final pairingCode = ref.read(pairingCodeProvider) ?? 'unknown';
+      final cryptoService = ref.read(cryptoServiceProvider);
 
       final result = await groupService.sendMessage(
         groupId: widget.groupId,
-        selfDeviceId: pairingCode,
+        selfDeviceId: cryptoService.stableId,
         content: text,
       );
 

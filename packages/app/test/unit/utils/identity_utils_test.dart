@@ -9,13 +9,15 @@ import 'package:zajel/core/utils/identity_utils.dart';
 void main() {
   // A fixed 32-byte key for deterministic tag derivation
   final knownPublicKey = base64Encode(List.filled(32, 42));
-  final knownTag = CryptoService.tagFromPublicKey(knownPublicKey);
+  // Tag is now derived from the stableId (peer.id), not the publicKey
+  const testPeerId = 'ABCDEF1234567890';
+  final knownTag = CryptoService.tagFromStableId(testPeerId); // 'ABCD'
   final testDate = DateTime(2024, 6, 15);
 
   group('resolvePeerDisplayName', () {
     test('returns alias when provided and non-empty', () {
       final peer = Peer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: 'Bob',
         username: 'Bob',
         publicKey: knownPublicKey,
@@ -28,7 +30,7 @@ void main() {
 
     test('ignores empty alias', () {
       final peer = Peer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: 'Bob',
         username: 'Bob',
         publicKey: knownPublicKey,
@@ -41,7 +43,7 @@ void main() {
 
     test('returns username#tag when username and publicKey present', () {
       final peer = Peer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: 'Bob',
         username: 'Bob',
         publicKey: knownPublicKey,
@@ -54,7 +56,7 @@ void main() {
 
     test('skips username#tag when username is null', () {
       final peer = Peer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: 'Bob',
         publicKey: knownPublicKey,
         lastSeen: testDate,
@@ -66,7 +68,7 @@ void main() {
 
     test('skips username#tag when username is empty', () {
       final peer = Peer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: 'Bob',
         username: '',
         publicKey: knownPublicKey,
@@ -77,22 +79,22 @@ void main() {
       expect(name, 'Bob');
     });
 
-    test('skips username#tag when publicKey is null', () {
+    test('returns username#tag even when publicKey is null (tag from stableId)', () {
       final peer = Peer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: 'Bob',
         username: 'Bob',
         lastSeen: testDate,
       );
 
       final name = resolvePeerDisplayName(peer);
-      // Falls through to displayName since tag can't be derived without publicKey
-      expect(name, 'Bob');
+      // Tag is now derived from stableId (peer.id), not publicKey
+      expect(name, 'Bob#$knownTag');
     });
 
     test('returns displayName when no username/publicKey', () {
       final peer = Peer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: 'Bob',
         lastSeen: testDate,
       );
@@ -103,18 +105,18 @@ void main() {
 
     test('returns "Peer {id prefix}" when displayName is empty', () {
       final peer = Peer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: '',
         lastSeen: testDate,
       );
 
       final name = resolvePeerDisplayName(peer);
-      expect(name, 'Peer abcdef12');
+      expect(name, 'Peer ABCDEF12');
     });
 
     test('alias takes priority over everything', () {
       final peer = Peer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: 'Bob',
         username: 'Bob',
         publicKey: knownPublicKey,
@@ -129,7 +131,7 @@ void main() {
   group('resolveTrustedPeerDisplayName', () {
     test('returns alias when provided and non-empty', () {
       final peer = TrustedPeer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: 'Alice',
         username: 'Alice',
         tag: 'A1B2',
@@ -144,7 +146,7 @@ void main() {
 
     test('returns username#tag when no alias', () {
       final peer = TrustedPeer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: 'Alice',
         username: 'Alice',
         tag: 'A1B2',
@@ -158,7 +160,7 @@ void main() {
 
     test('skips username#tag when username is null', () {
       final peer = TrustedPeer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: 'Alice',
         tag: 'A1B2',
         publicKey: knownPublicKey,
@@ -171,7 +173,7 @@ void main() {
 
     test('skips username#tag when username is empty', () {
       final peer = TrustedPeer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: 'Alice',
         username: '',
         tag: 'A1B2',
@@ -185,7 +187,7 @@ void main() {
 
     test('skips username#tag when tag is null', () {
       final peer = TrustedPeer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: 'Alice',
         username: 'Alice',
         publicKey: knownPublicKey,
@@ -199,7 +201,7 @@ void main() {
 
     test('returns displayName when no username/tag', () {
       final peer = TrustedPeer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: 'Old Peer',
         publicKey: knownPublicKey,
         trustedAt: testDate,
@@ -211,19 +213,19 @@ void main() {
 
     test('returns "Peer {id prefix}" when displayName is empty', () {
       final peer = TrustedPeer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: '',
         publicKey: knownPublicKey,
         trustedAt: testDate,
       );
 
       final name = resolveTrustedPeerDisplayName(peer);
-      expect(name, 'Peer abcdef12');
+      expect(name, 'Peer ABCDEF12');
     });
 
     test('ignores empty alias', () {
       final peer = TrustedPeer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: 'Alice',
         username: 'Alice',
         tag: 'A1B2',
@@ -242,7 +244,7 @@ void main() {
     test('same priority order produces same results', () {
       // Create matching Peer and TrustedPeer with username+tag
       final peer = Peer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: 'Alice',
         username: 'Alice',
         publicKey: knownPublicKey,
@@ -250,7 +252,7 @@ void main() {
       );
 
       final trustedPeer = TrustedPeer(
-        id: 'abcdef1234567890',
+        id: testPeerId,
         displayName: 'Alice',
         username: 'Alice',
         tag: knownTag,

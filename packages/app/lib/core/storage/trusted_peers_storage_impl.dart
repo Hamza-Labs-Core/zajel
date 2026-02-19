@@ -69,7 +69,11 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
   Future<Uint8List?> getPublicKeyBytes(String peerId) async {
     final peer = await getPeer(peerId);
     if (peer == null) return null;
-    return base64Decode(peer.publicKey);
+    try {
+      return base64Decode(peer.publicKey);
+    } on FormatException {
+      return null;
+    }
   }
 
   @override

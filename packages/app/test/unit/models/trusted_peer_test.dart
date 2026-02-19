@@ -8,7 +8,9 @@ import 'package:zajel/core/storage/trusted_peers_storage.dart';
 void main() {
   // A fixed 32-byte key for deterministic tests
   final knownPublicKey = base64Encode(List.filled(32, 42));
-  final knownTag = CryptoService.tagFromPublicKey(knownPublicKey);
+  // Tag is now derived from stableId (peer.id), not publicKey
+  const testPeerId = 'ABCDEF1234567890';
+  final knownTag = CryptoService.tagFromStableId(testPeerId);
 
   final testTrustedAt = DateTime(2024, 6, 15, 12, 0);
   final testLastSeen = DateTime(2024, 6, 16, 10, 0);
@@ -178,7 +180,7 @@ void main() {
     group('fromPeer factory', () {
       test('extracts username from Peer', () {
         final peer = Peer(
-          id: 'peer-1',
+          id: testPeerId,
           displayName: 'Alice',
           username: 'Alice',
           publicKey: knownPublicKey,
@@ -193,23 +195,23 @@ void main() {
         expect(trusted.publicKey, knownPublicKey);
       });
 
-      test('derives tag from publicKey via CryptoService', () {
+      test('derives tag from stableId via CryptoService', () {
         final peer = Peer(
-          id: 'peer-1',
+          id: testPeerId,
           displayName: 'Bob',
           publicKey: knownPublicKey,
           lastSeen: testLastSeen,
         );
 
         final trusted = TrustedPeer.fromPeer(peer);
-        final expectedTag = CryptoService.tagFromPublicKey(knownPublicKey);
+        final expectedTag = CryptoService.tagFromStableId(testPeerId);
 
         expect(trusted.tag, expectedTag);
       });
 
       test('handles null username from Peer', () {
         final peer = Peer(
-          id: 'peer-1',
+          id: testPeerId,
           displayName: 'OldPeer',
           publicKey: knownPublicKey,
           lastSeen: testLastSeen,

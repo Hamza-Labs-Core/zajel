@@ -1,38 +1,48 @@
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:crypto/crypto.dart' as crypto;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../constants.dart';
+import '../logging/logger_service.dart';
 
 /// Cryptographic service implementing X25519 key exchange and ChaCha20-Poly1305 encryption.
 ///
-/// This implements a simplified Double Ratchet-like protocol for forward secrecy:
-/// 1. Generate ephemeral X25519 key pairs each session
-/// 2. Derive shared secrets using ECDH
-/// 3. Use HKDF to derive message keys
-/// 4. Encrypt with ChaCha20-Poly1305 AEAD
+/// Session-based encryption:
+/// 1. Long-lived X25519 identity keys (persisted in secure storage)
+/// 2. ECDH shared secret derived per peer
+/// 3. HKDF-SHA256 derives a session key from the shared secret
+/// 4. ChaCha20-Poly1305 AEAD encrypts each message with a random nonce
+///
+/// Note: This does NOT implement Double Ratchet or forward secrecy.
+/// Session keys persist until the peer disconnects or the app is reset.
 class CryptoService {
   static const _keyPrefix = 'zajel_key_';
   static const _sessionKeyPrefix = 'zajel_session_';
+  static const _stableIdKey = 'zajel_stable_id';
 
   final FlutterSecureStorage _secureStorage;
+  final SharedPreferences? _prefs;
   final X25519 _x25519 = X25519();
   final Chacha20 _chacha20 = Chacha20.poly1305Aead();
   late final Hkdf _hkdf;
 
   SimpleKeyPair? _identityKeyPair;
   String? _publicKeyBase64Cache;
+  String? _stableId;
   final Map<String, SecretKey> _sessionKeys = {};
   final Map<String, String> _peerPublicKeys = {};
 
-  CryptoService({FlutterSecureStorage? secureStorage})
+  CryptoService({FlutterSecureStorage? secureStorage, SharedPreferences? prefs})
       : _secureStorage = secureStorage ??
             const FlutterSecureStorage(
               aOptions: AndroidOptions(encryptedSharedPreferences: true),
-            ) {
+            ),
+        _prefs = prefs {
     _hkdf = Hkdf(
         hmac: Hmac.sha256(), outputLength: CryptoConstants.hkdfOutputLength);
   }
@@ -45,6 +55,7 @@ class CryptoService {
       final publicKey = await _identityKeyPair!.extractPublicKey();
       _publicKeyBase64Cache = base64Encode(Uint8List.fromList(publicKey.bytes));
     }
+    await _loadOrGenerateStableId();
   }
 
   /// Get our public key as a base64 string (synchronous, requires initialize() first).
@@ -54,6 +65,19 @@ class CryptoService {
           'CryptoService not initialized. Call initialize() first.');
     }
     return _publicKeyBase64Cache!;
+  }
+
+  /// Get our stable ID (synchronous, requires initialize() first).
+  ///
+  /// The stable ID is a persistent 16 hex-char identity anchor that survives
+  /// key rotation. Unlike the public-key-derived peer ID, this is randomly
+  /// generated once and stored in SharedPreferences (resilient storage).
+  String get stableId {
+    if (_stableId == null) {
+      throw CryptoException(
+          'CryptoService not initialized. Call initialize() first.');
+    }
+    return _stableId!;
   }
 
   /// Derive a stable peer ID from a public key (like a phone number).
@@ -71,15 +95,34 @@ class CryptoService {
   ///
   /// Returns first 4 hex chars of SHA-256, uppercased (same hash as peerIdFromPublicKey).
   /// Used as the #TAG portion of "Username#TAG".
+  @Deprecated('Use tagFromStableId instead — tags should be key-independent')
   static String tagFromPublicKey(String publicKeyBase64) {
     final publicKeyBytes = base64Decode(publicKeyBase64);
     final hash = crypto.sha256.convert(publicKeyBytes);
     return hash.toString().substring(0, 4).toUpperCase();
   }
 
+  /// Derive a short tag from a stable ID for Discord-style identity display.
+  ///
+  /// Returns first 4 characters of the stableId, uppercased.
+  /// Used as the #TAG portion of "Username#TAG".
+  /// Unlike the deprecated tagFromPublicKey, this survives key rotation.
+  static String tagFromStableId(String stableId) {
+    if (stableId.length < 4) {
+      throw ArgumentError(
+          'stableId must be at least 4 characters, got ${stableId.length}');
+    }
+    return stableId.substring(0, 4).toUpperCase();
+  }
+
   /// Store a peer's public key for later verification.
   void setPeerPublicKey(String peerId, String publicKeyBase64) {
     _peerPublicKeys[peerId] = publicKeyBase64;
+  }
+
+  /// Remove a peer's stored public key (cleanup after re-keying).
+  void removePeerPublicKey(String peerId) {
+    _peerPublicKeys.remove(peerId);
   }
 
   /// Get a stored peer's public key.
@@ -230,6 +273,18 @@ class CryptoService {
       nonce: const [],
     );
 
+    // Diagnostic: log key fingerprints for cross-platform debugging
+    final sessionKeyBytes = await sessionKey.extractBytes();
+    final sessionKeyHash = crypto.sha256.convert(sessionKeyBytes).toString();
+    final sharedSecretHash =
+        crypto.sha256.convert(sharedSecretBytes).toString();
+    logger.info('CryptoService',
+        'establishSession($peerId): '
+        'ourPub=${publicKeyBase64.substring(0, 8)}… '
+        'peerPub=${peerPublicKeyBase64.substring(0, 8)}… '
+        'sharedHash=${sharedSecretHash.substring(0, 16)} '
+        'sessionHash=${sessionKeyHash.substring(0, 16)}');
+
     // Store session key
     _sessionKeys[peerId] = sessionKey;
 
@@ -246,6 +301,9 @@ class CryptoService {
   Future<String> encrypt(String peerId, String plaintext) async {
     final sessionKey = await _getSessionKey(peerId);
     if (sessionKey == null) {
+      // Log all known session keys for debugging
+      logger.warning('CryptoService',
+          'No session for peer=$peerId. Known sessions: ${_sessionKeys.keys.toList()}');
       throw CryptoException('No session established with peer: $peerId');
     }
 
@@ -333,7 +391,7 @@ class CryptoService {
     }
   }
 
-  /// Regenerate identity keys (for maximum privacy, do this each app start).
+  /// Regenerate identity keys. Called from Settings when user explicitly requests it.
   Future<void> regenerateIdentityKeys() async {
     _identityKeyPair = await _x25519.newKeyPair();
     await _persistIdentityKeys();
@@ -353,15 +411,61 @@ class CryptoService {
         _identityKeyPair = await _x25519.newKeyPairFromSeed(privateKeyBytes);
         return;
       }
-    } catch (_) {
-      // Intentionally silent: Storage read failures (corrupted data, storage API errors,
-      // or invalid base64) are handled by generating new keys. This is expected behavior
-      // on first run or after storage is cleared.
+    } catch (e) {
+      // Storage corruption or API error — generating new keys will break
+      // existing peer trust relationships, so log a visible warning.
+      logger.warning('CryptoService',
+          'Failed to load identity keys from storage, generating new keys. '
+          'Existing peer trust relationships will be broken. Error: $e');
     }
 
     // Generate new identity keys
     _identityKeyPair = await _x25519.newKeyPair();
     await _persistIdentityKeys();
+  }
+
+  /// Load stableId from SharedPreferences or generate a new one.
+  ///
+  /// Migration strategy:
+  /// - If SharedPreferences has a stored stableId, use it.
+  /// - If not (existing install), derive from current publicKey for backward compat.
+  /// - If still not available (fresh install, no prefs), generate 16 random hex chars.
+  Future<void> _loadOrGenerateStableId() async {
+    // Try to load from SharedPreferences
+    final stored = _prefs?.getString(_stableIdKey);
+    if (stored != null && stored.length == 16) {
+      _stableId = stored;
+      return;
+    }
+
+    // Migration: derive from existing publicKey (matches old peerIdFromPublicKey)
+    if (_publicKeyBase64Cache != null) {
+      _stableId = peerIdFromPublicKey(_publicKeyBase64Cache!);
+    } else {
+      // Fresh install with no SharedPreferences: generate random 16 hex chars
+      _stableId = _generateRandomHex(16);
+    }
+
+    // Persist for future runs
+    if (_prefs != null) {
+      await _prefs.setString(_stableIdKey, _stableId!);
+    } else {
+      // No SharedPreferences injected — stableId is ephemeral this session.
+      // In production, prefs MUST be injected via cryptoServiceProvider.
+      assert(() {
+        // ignore: avoid_print
+        print('WARNING: CryptoService._prefs is null — stableId will not persist across restarts');
+        return true;
+      }());
+    }
+  }
+
+  /// Generate a cryptographically random hex string of the given length.
+  static String _generateRandomHex(int length) {
+    final random = Random.secure();
+    final bytes = List<int>.generate((length / 2).ceil(), (_) => random.nextInt(256));
+    final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return hex.substring(0, length).toUpperCase();
   }
 
   Future<void> _persistIdentityKeys() async {
@@ -398,9 +502,9 @@ class CryptoService {
         _sessionKeys[peerId] = sessionKey;
         return sessionKey;
       }
-    } catch (_) {
-      // Intentionally silent: Session key loading failure is handled by returning null.
-      // Caller will establish a new session with fresh key exchange if no key is found.
+    } catch (e) {
+      logger.debug('CryptoService',
+          'Session key load failed for $peerId - will re-establish on next connection. Error: $e');
     }
 
     return null;

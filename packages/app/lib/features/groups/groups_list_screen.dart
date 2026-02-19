@@ -120,11 +120,10 @@ class GroupsListScreen extends ConsumerWidget {
       final displayName = ref.read(usernameProvider);
       final cryptoService = ref.read(cryptoServiceProvider);
       final publicKey = cryptoService.publicKeyBase64;
-      final pairingCode = ref.read(pairingCodeProvider) ?? 'unknown';
 
       await groupService.createGroup(
         name: nameController.text.trim(),
-        selfDeviceId: pairingCode,
+        selfDeviceId: cryptoService.stableId,
         selfDisplayName: displayName,
         selfPublicKey: publicKey,
       );

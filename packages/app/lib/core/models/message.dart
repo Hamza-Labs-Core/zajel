@@ -2,11 +2,11 @@ import 'package:equatable/equatable.dart';
 
 /// Represents an encrypted message between peers.
 ///
-/// Messages are end-to-end encrypted using the Double Ratchet algorithm.
+/// Messages are end-to-end encrypted using X25519 + ChaCha20-Poly1305.
 /// For maximum privacy:
 /// - No persistent message IDs are sent over the network
 /// - Timestamps are local only
-/// - Message content is encrypted with forward secrecy
+/// - Message content is encrypted with a per-peer session key
 class Message extends Equatable {
   final String localId; // Local-only identifier
   final String peerId;

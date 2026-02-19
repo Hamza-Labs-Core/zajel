@@ -192,7 +192,7 @@ class TrustedPeer {
       id: peer.id,
       displayName: peer.displayName,
       username: peer.username,
-      tag: CryptoService.tagFromPublicKey(peer.publicKey!),
+      tag: CryptoService.tagFromStableId(peer.id),
       publicKey: peer.publicKey!,
       trustedAt: DateTime.now().toUtc(),
       lastSeen: peer.lastSeen,

@@ -255,7 +255,8 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
 
     if (confirmed == true && _peer != null) {
       await ref.read(blockedPeersProvider.notifier).block(
-            _peer!.publicKey,
+            _peer!.id,
+            publicKey: _peer!.publicKey,
             displayName: resolveTrustedPeerDisplayName(_peer!),
           );
       if (!context.mounted) return;

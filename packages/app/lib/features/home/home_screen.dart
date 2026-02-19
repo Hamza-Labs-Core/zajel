@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/logging/logger_service.dart';
 import '../../core/models/models.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/utils/identity_utils.dart';
@@ -482,8 +483,8 @@ class _PeerCard extends ConsumerWidget {
       final connectionManager = ref.read(connectionManagerProvider);
       try {
         await connectionManager.disconnectPeer(peer.id);
-      } catch (_) {
-        // Best-effort disconnect
+      } catch (e) {
+        logger.debug('HomeScreen', 'Best-effort disconnect failed for ${peer.id}: $e');
       }
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -519,9 +520,9 @@ class _PeerCard extends ConsumerWidget {
     );
 
     if (confirmed == true) {
-      final keyToBlock = peer.publicKey ?? peer.id;
       await ref.read(blockedPeersProvider.notifier).block(
-            keyToBlock,
+            peer.id,
+            publicKey: peer.publicKey,
             displayName: _displayName(ref),
           );
       if (context.mounted) {
