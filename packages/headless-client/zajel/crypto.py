@@ -282,3 +282,34 @@ class CryptoService:
             tokens.append(token)
 
         return tokens
+
+    @staticmethod
+    def compute_safety_number(
+        public_key_a_base64: str, public_key_b_base64: str
+    ) -> str:
+        """Compute a shared safety number from two public keys.
+
+        Both peers compute the same number by sorting keys lexicographically
+        before hashing. Returns a 60-digit string.
+
+        Compatible with the Dart and TypeScript implementations.
+        """
+        bytes_a = base64.b64decode(public_key_a_base64)
+        bytes_b = base64.b64decode(public_key_b_base64)
+
+        # Sort lexicographically
+        if bytes_a <= bytes_b:
+            combined = bytes_a + bytes_b
+        else:
+            combined = bytes_b + bytes_a
+
+        hash_bytes = hashlib.sha256(combined).digest()
+
+        # Format: pairs of bytes → 5-digit number (mod 100000)
+        result = ""
+        for i in range(0, 24, 2):
+            if i + 1 < len(hash_bytes):
+                val = ((hash_bytes[i] << 8) | hash_bytes[i + 1]) % 100000
+                result += str(val).zfill(5)
+
+        return result[:60]

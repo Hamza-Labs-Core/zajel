@@ -18,6 +18,7 @@ import '../../core/utils/identity_utils.dart';
 import '../call/call_screen.dart';
 import '../call/incoming_call_dialog.dart';
 import 'widgets/filtered_emoji_picker.dart';
+import 'widgets/safety_number_screen.dart';
 
 /// Chat screen for messaging with a peer.
 class ChatScreen extends ConsumerStatefulWidget {
@@ -169,6 +170,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         ? resolvePeerDisplayName(peer, alias: aliases[peer.id])
         : 'Unknown';
 
+    final pendingKeyChanges = ref.watch(pendingKeyChangesProvider);
+
     final body = Column(
       children: [
         if (peer?.connectionState != PeerConnectionState.connected)
@@ -189,6 +192,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 ),
               ],
             ),
+          ),
+        if (pendingKeyChanges.valueOrNull?.containsKey(widget.peerId) == true)
+          _KeyChangeBanner(
+            peerId: widget.peerId,
+            peerName: peerName,
+            onVerify: () => _showSafetyNumberScreen(context, widget.peerId),
+            onDismiss: () => _acknowledgeKeyChange(widget.peerId),
           ),
         Expanded(
           child: messages.isEmpty
@@ -424,12 +434,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         return Column(
           children: [
             if (showDate) _buildDateDivider(message.timestamp),
-            _MessageBubble(
-              message: message,
-              onOpenFile: message.attachmentPath != null
-                  ? () => _openFile(message.attachmentPath!)
-                  : null,
-            ),
+            if (message.type == MessageType.system)
+              _SystemMessageBubble(
+                message: message,
+                onTap: () => _showSafetyNumberScreen(context, widget.peerId),
+              )
+            else
+              _MessageBubble(
+                message: message,
+                onOpenFile: message.attachmentPath != null
+                    ? () => _openFile(message.attachmentPath!)
+                    : null,
+              ),
           ],
         );
       },
@@ -908,6 +924,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       return Colors.green;
     }
     return Colors.grey;
+  }
+
+  void _showSafetyNumberScreen(BuildContext context, String peerId) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SafetyNumberScreen(peerId: peerId),
+      ),
+    );
+  }
+
+  Future<void> _acknowledgeKeyChange(String peerId) async {
+    final storage = ref.read(trustedPeersStorageProvider);
+    await storage.acknowledgeKeyChange(peerId);
+    ref.invalidate(pendingKeyChangesProvider);
   }
 
   void _showPeerInfo(BuildContext context, Peer? peer) {
@@ -1484,6 +1514,91 @@ class _FingerprintCard extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Warning banner shown when a peer's public key has changed.
+class _KeyChangeBanner extends StatelessWidget {
+  final String peerId;
+  final String peerName;
+  final VoidCallback onVerify;
+  final VoidCallback onDismiss;
+
+  const _KeyChangeBanner({
+    required this.peerId,
+    required this.peerName,
+    required this.onVerify,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      color: Colors.amber.shade50,
+      child: Row(
+        children: [
+          Icon(Icons.warning_amber_rounded,
+              size: 20, color: Colors.amber.shade800),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'The safety number with $peerName has changed. '
+              'This could mean they reinstalled the app or their device changed.',
+              style: TextStyle(fontSize: 13, color: Colors.amber.shade900),
+            ),
+          ),
+          TextButton(
+            onPressed: onVerify,
+            child: const Text('Verify'),
+          ),
+          TextButton(
+            onPressed: onDismiss,
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// System message bubble — centered, no bubble, for key change notifications etc.
+class _SystemMessageBubble extends StatelessWidget {
+  final Message message;
+  final VoidCallback? onTap;
+
+  const _SystemMessageBubble({required this.message, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.lock_outline,
+                size: 14, color: Theme.of(context).colorScheme.outline),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                message.content,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.outline,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -15,6 +15,19 @@ function formatFingerprint(hex: string): string {
   return hex.match(/.{1,4}/g)?.join(' ').toUpperCase() || hex.toUpperCase();
 }
 
+/**
+ * Format hash bytes into a 60-digit safety number.
+ * Takes pairs of bytes, converts to a 5-digit number (mod 100000).
+ */
+function formatSafetyNumber(hashBytes: Uint8Array): string {
+  let result = '';
+  for (let i = 0; i < 24 && i + 1 < hashBytes.length; i += 2) {
+    const val = ((hashBytes[i] << 8) | hashBytes[i + 1]) % 100000;
+    result += val.toString().padStart(5, '0');
+  }
+  return result.substring(0, 60);
+}
+
 export interface KeyPair {
   privateKey: Uint8Array;
   publicKey: Uint8Array;
@@ -167,11 +180,51 @@ export class CryptoService {
     return formatFingerprint(bytesToHex(hash));
   }
 
-  // TODO: Additional key verification improvements:
-  // - Implement Safety Numbers (like Signal) for visual verification
-  // - Add QR code scanning for in-person key verification
-  // - Consider implementing a Trust On First Use (TOFU) model with warnings on key changes
-  // Note: Handshake verification is now implemented via verifyPeerKey() method
+  /**
+   * Compute a shared safety number from two public keys.
+   *
+   * Both peers compute the same number by sorting keys lexicographically
+   * before hashing. Returns a 60-digit string.
+   */
+  static computeSafetyNumber(publicKeyABase64: string, publicKeyBBase64: string): string {
+    const bytesA = Uint8Array.from(atob(publicKeyABase64), (c) => c.charCodeAt(0));
+    const bytesB = Uint8Array.from(atob(publicKeyBBase64), (c) => c.charCodeAt(0));
+
+    // Sort lexicographically
+    let cmp = 0;
+    for (let i = 0; i < Math.min(bytesA.length, bytesB.length) && cmp === 0; i++) {
+      cmp = bytesA[i] - bytesB[i];
+    }
+    if (cmp === 0) cmp = bytesA.length - bytesB.length;
+
+    const combined = new Uint8Array(bytesA.length + bytesB.length);
+    if (cmp <= 0) {
+      combined.set(bytesA, 0);
+      combined.set(bytesB, bytesA.length);
+    } else {
+      combined.set(bytesB, 0);
+      combined.set(bytesA, bytesB.length);
+    }
+
+    const hash = sha256(combined);
+    return formatSafetyNumber(hash);
+  }
+
+  /**
+   * Format a safety number for display as groups of 5 digits.
+   */
+  static formatSafetyNumberForDisplay(safetyNumber: string): string {
+    const groups: string[] = [];
+    for (let i = 0; i < safetyNumber.length; i += 5) {
+      groups.push(safetyNumber.substring(i, i + 5));
+    }
+    const lines: string[] = [];
+    for (let i = 0; i < groups.length; i += 4) {
+      lines.push(groups.slice(i, i + 4).join(' '));
+    }
+    return lines.join('\n');
+  }
+
   establishSession(peerId: string, peerPublicKeyBase64: string): void {
     if (!this.keyPair) {
       throw new CryptoError('CryptoService not initialized', ErrorCodes.CRYPTO_NOT_INITIALIZED);

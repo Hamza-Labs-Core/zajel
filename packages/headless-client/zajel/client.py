@@ -86,6 +86,8 @@ class ConnectedPeer:
     public_key: str
     display_name: Optional[str] = None
     is_initiator: bool = False
+    previous_public_key: Optional[str] = None
+    key_rotated: bool = False
 
 
 @dataclass
@@ -2381,10 +2383,22 @@ class ZajelHeadlessClient:
                     expected_pub = peer_entry.public_key if peer_entry else None
                     if expected_pub and peer_pub_key != expected_pub:
                         logger.warning(
-                            "Handshake public key mismatch for %s: "
-                            "expected %s, got %s",
+                            "Key rotation detected for %s: "
+                            "old=%s, new=%s",
                             peer_id, expected_pub[:16], peer_pub_key[:16],
                         )
+                        # Record key rotation on the peer entry
+                        if peer_entry:
+                            peer_entry.previous_public_key = expected_pub
+                            peer_entry.public_key = peer_pub_key
+                            peer_entry.key_rotated = True
+                        if self._loop and self._loop.is_running():
+                            self._loop.create_task(
+                                self._emit_logged(
+                                    "key_changed", peer_id,
+                                    expected_pub, peer_pub_key,
+                                )
+                            )
                     self._crypto.perform_key_exchange(peer_id, peer_pub_key)
                     logger.info("Key exchange completed with %s", peer_id)
                 else:
