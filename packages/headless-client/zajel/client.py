@@ -13,6 +13,7 @@ Provides the high-level API for interacting with the Zajel protocol:
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import uuid
@@ -2368,6 +2369,10 @@ class ZajelHeadlessClient:
             # Key exchange — use tracked WebRTC peer ID (issue-headless-05)
             peer_pub_key = msg["publicKey"]
             peer_id = self._webrtc_peer_id
+            logger.info(
+                "Received handshake from peer_id=%s: peerPub=%s…",
+                peer_id, peer_pub_key[:8] if peer_pub_key else "None",
+            )
             # Check both connected and pending peers (issue-headless-14)
             if peer_id and (peer_id in self._connected_peers or peer_id in self._pending_peers):
                 if not self._crypto.has_session_key(peer_id):
@@ -2459,7 +2464,16 @@ class ZajelHeadlessClient:
 
                         self._loop.create_task(_send_delivery_receipt())
                 except Exception as e:
-                    logger.error("Decrypt failed for peer %s: %s", peer_id, e)
+                    # Log diagnostic info for decrypt failures
+                    session_hash = hashlib.sha256(
+                        self._crypto.get_session_key(peer_id) or b""
+                    ).hexdigest()[:16]
+                    logger.error(
+                        "Decrypt failed for peer %s: %s "
+                        "(sessionHash=%s, dataLen=%d, data[:32]=%s)",
+                        peer_id, e, session_hash,
+                        len(msg["data"]), msg["data"][:32],
+                    )
             else:
                 logger.warning("No session key for WebRTC peer %s", peer_id)
 

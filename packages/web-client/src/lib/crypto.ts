@@ -20,94 +20,64 @@ export interface KeyPair {
   publicKey: Uint8Array;
 }
 
-// Replay protection constants
-
 /**
- * Bitmap-based sliding window for replay protection.
- * Uses RFC 4303 (IPsec ESP) anti-replay algorithm.
- * Memory: O(1) - fixed ~12 bytes per peer instead of unbounded Set growth.
+ * Nonce-based replay protection.
+ *
+ * Tracks seen nonces per peer to detect replayed ciphertexts.
+ * Each message uses a random 12-byte nonce — replaying the exact same
+ * ciphertext reuses the same nonce, which we detect via a bounded Set.
+ *
+ * This matches the Dart and Python clients' replay detection approach
+ * and ensures cross-client interop (no sequence number in wire format).
+ *
+ * Memory: bounded to MAX_NONCE_HISTORY per peer (~30 bytes × 10000 = ~300KB).
  */
-interface ReplayWindow {
-  highestSeq: number;  // Highest sequence number seen
-  bitmap: bigint;      // 64-bit bitmap of seen sequences within window
-}
+const MAX_NONCE_HISTORY = 10000;
 
 export class CryptoService {
   private keyPair: KeyPair | null = null;
   private sessionKeys = new Map<string, Uint8Array>();
-  private sendCounters = new Map<string, number>();
-  // Bitmap-based replay windows (replaces Set-based seenSequences + receiveCounters)
-  private replayWindows = new Map<string, ReplayWindow>();
-  // Separate counters for binary data (file chunks) to avoid interference with text messages
-  private sendBytesCounters = new Map<string, number>();
-  private replayWindowsBytes = new Map<string, ReplayWindow>();
+  // Nonce-based replay detection (matches Dart/Python wire format — no sequence numbers)
+  private seenNonces = new Map<string, Set<string>>();
+  private seenNoncesBytes = new Map<string, Set<string>>();
   // Store peer public keys for handshake verification (prevents MITM attacks)
   private peerPublicKeys = new Map<string, string>();
   // Track session creation time for expiration (forward secrecy)
   private sessionCreatedAt = new Map<string, number>();
 
   /**
-   * Check if a sequence number should be accepted (not a replay).
-   * Uses RFC 4303 anti-replay algorithm with bitmap sliding window.
+   * Check if a nonce has been seen before (replay detection).
    *
-   * This approach provides:
-   * - O(1) time complexity for all operations
-   * - O(1) memory: ~12 bytes per peer regardless of message patterns
-   * - No cleanup needed - inherently bounded by bitmap size
-   *
-   * @param windows - The map of replay windows to use
+   * @param nonceMap - The map of seen-nonce sets to use
    * @param peerId - The peer identifier
-   * @param seq - The sequence number to check
-   * @returns true if sequence is valid (not a replay), false if replay detected
+   * @param nonce - The 12-byte nonce from the ciphertext
+   * @returns true if nonce is new (not a replay), false if replay detected
    */
-  private checkAndUpdateReplayWindow(
-    windows: Map<string, ReplayWindow>,
+  private checkAndRecordNonce(
+    nonceMap: Map<string, Set<string>>,
     peerId: string,
-    seq: number
+    nonce: Uint8Array
   ): boolean {
-    let window = windows.get(peerId);
-    if (!window) {
-      window = { highestSeq: 0, bitmap: 0n };
-      windows.set(peerId, window);
+    let seen = nonceMap.get(peerId);
+    if (!seen) {
+      seen = new Set<string>();
+      nonceMap.set(peerId, seen);
     }
 
-    if (seq === 0) {
-      // Sequence 0 is invalid (we start from 1)
-      return false;
+    const nonceHex = bytesToHex(nonce);
+    if (seen.has(nonceHex)) {
+      return false; // Replay detected
     }
 
-    if (seq > window.highestSeq) {
-      // New highest sequence - advance the window
-      const shift = seq - window.highestSeq;
-      if (shift >= CRYPTO.SEQUENCE_WINDOW) {
-        // Jump is larger than window - reset bitmap, only new seq is set
-        window.bitmap = 1n;
-      } else {
-        // Shift the bitmap and set the new sequence bit
-        window.bitmap = (window.bitmap << BigInt(shift)) | 1n;
-        // Mask to window size to prevent unbounded growth
-        window.bitmap &= (1n << BigInt(CRYPTO.SEQUENCE_WINDOW)) - 1n;
-      }
-      window.highestSeq = seq;
-      return true;
+    seen.add(nonceHex);
+
+    // Evict oldest half when set grows too large
+    if (seen.size > MAX_NONCE_HISTORY) {
+      const entries = Array.from(seen);
+      const keep = entries.slice(entries.length >> 1);
+      nonceMap.set(peerId, new Set(keep));
     }
 
-    if (seq <= window.highestSeq - CRYPTO.SEQUENCE_WINDOW) {
-      // Sequence is too old (outside the window)
-      return false;
-    }
-
-    // Sequence is within the window - check if already seen
-    const bitPosition = window.highestSeq - seq;
-    const bit = 1n << BigInt(bitPosition);
-
-    if ((window.bitmap & bit) !== 0n) {
-      // Already seen - replay detected
-      return false;
-    }
-
-    // Mark as seen and accept
-    window.bitmap |= bit;
     return true;
   }
 
@@ -237,7 +207,7 @@ export class CryptoService {
     );
 
     // Derive session key using HKDF
-    const info = new TextEncoder().encode(`zajel_session_${peerId}`);
+    const info = new TextEncoder().encode('zajel_session');
     const sessionKey = hkdf(sha256, sharedSecret, undefined, info, 32);
 
     this.sessionKeys.set(peerId, sessionKey);
@@ -292,10 +262,8 @@ export class CryptoService {
   clearSession(peerId: string): void {
     this.sessionKeys.delete(peerId);
     this.peerPublicKeys.delete(peerId);
-    this.sendCounters.delete(peerId);
-    this.replayWindows.delete(peerId);
-    this.sendBytesCounters.delete(peerId);
-    this.replayWindowsBytes.delete(peerId);
+    this.seenNonces.delete(peerId);
+    this.seenNoncesBytes.delete(peerId);
     this.sessionCreatedAt.delete(peerId);
   }
 
@@ -310,29 +278,14 @@ export class CryptoService {
       throw new CryptoError('Session expired, please reconnect', ErrorCodes.CRYPTO_SESSION_EXPIRED);
     }
 
-    // Increment and get sequence number for replay protection
-    const currentSeq = this.sendCounters.get(peerId) || 0;
-    if (currentSeq >= 0xFFFFFFFF) {
-      throw new CryptoError('Counter exhausted, session rekeying required', ErrorCodes.CRYPTO_COUNTER_EXHAUSTED);
-    }
-    const seq = currentSeq + 1;
-    this.sendCounters.set(peerId, seq);
-
-    // Prepend 4-byte sequence number to plaintext (big-endian)
-    const seqBytes = new Uint8Array(4);
-    new DataView(seqBytes.buffer).setUint32(0, seq, false);
-
     const plaintextBytes = new TextEncoder().encode(plaintext);
-    const combined = new Uint8Array(4 + plaintextBytes.length);
-    combined.set(seqBytes);
-    combined.set(plaintextBytes, 4);
-
     const nonce = crypto.getRandomValues(new Uint8Array(CRYPTO.NONCE_SIZE));
 
     const cipher = chacha20poly1305(sessionKey, nonce);
-    const ciphertext = cipher.encrypt(combined);
+    const ciphertext = cipher.encrypt(plaintextBytes);
 
-    // Combine: nonce + ciphertext
+    // Wire format: nonce(12) + ciphertext (includes 16-byte MAC)
+    // Matches Dart and Python clients for cross-client interop
     const result = new Uint8Array(nonce.length + ciphertext.length);
     result.set(nonce);
     result.set(ciphertext, nonce.length);
@@ -357,19 +310,14 @@ export class CryptoService {
     const nonce = data.slice(0, CRYPTO.NONCE_SIZE);
     const ciphertext = data.slice(CRYPTO.NONCE_SIZE);
 
-    const cipher = chacha20poly1305(sessionKey, nonce);
-    const combined = cipher.decrypt(ciphertext);
-
-    // Extract and verify sequence number for replay protection
-    const seq = new DataView(combined.buffer, combined.byteOffset, 4).getUint32(0, false);
-
-    // Check for replay attacks using bitmap sliding window (O(1) memory)
-    if (!this.checkAndUpdateReplayWindow(this.replayWindows, peerId, seq)) {
+    // Nonce-based replay detection: reject if we've seen this nonce before
+    if (!this.checkAndRecordNonce(this.seenNonces, peerId, nonce)) {
       throw new CryptoError('Replay attack detected', ErrorCodes.CRYPTO_REPLAY_DETECTED);
     }
 
-    // Extract plaintext (skip 4-byte sequence number)
-    const plaintextBytes = combined.slice(4);
+    const cipher = chacha20poly1305(sessionKey, nonce);
+    const plaintextBytes = cipher.decrypt(ciphertext);
+
     return new TextDecoder().decode(plaintextBytes);
   }
 
@@ -384,26 +332,11 @@ export class CryptoService {
       throw new CryptoError('Session expired, please reconnect', ErrorCodes.CRYPTO_SESSION_EXPIRED);
     }
 
-    // Increment and get sequence number for replay protection
-    const currentSeq = this.sendBytesCounters.get(peerId) || 0;
-    if (currentSeq >= 0xFFFFFFFF) {
-      throw new CryptoError('Counter exhausted, session rekeying required', ErrorCodes.CRYPTO_COUNTER_EXHAUSTED);
-    }
-    const seq = currentSeq + 1;
-    this.sendBytesCounters.set(peerId, seq);
-
-    // Prepend 4-byte sequence number to data (big-endian)
-    const seqBytes = new Uint8Array(4);
-    new DataView(seqBytes.buffer).setUint32(0, seq, false);
-
-    const combined = new Uint8Array(4 + data.length);
-    combined.set(seqBytes);
-    combined.set(data, 4);
-
     const nonce = crypto.getRandomValues(new Uint8Array(CRYPTO.NONCE_SIZE));
     const cipher = chacha20poly1305(sessionKey, nonce);
-    const ciphertext = cipher.encrypt(combined);
+    const ciphertext = cipher.encrypt(data);
 
+    // Wire format: nonce(12) + ciphertext (includes 16-byte MAC)
     const result = new Uint8Array(nonce.length + ciphertext.length);
     result.set(nonce);
     result.set(ciphertext, nonce.length);
@@ -425,19 +358,13 @@ export class CryptoService {
     const nonce = data.slice(0, CRYPTO.NONCE_SIZE);
     const ciphertext = data.slice(CRYPTO.NONCE_SIZE);
 
-    const cipher = chacha20poly1305(sessionKey, nonce);
-    const combined = cipher.decrypt(ciphertext);
-
-    // Extract and verify sequence number for replay protection
-    const seq = new DataView(combined.buffer, combined.byteOffset, 4).getUint32(0, false);
-
-    // Check for replay attacks using bitmap sliding window (O(1) memory)
-    if (!this.checkAndUpdateReplayWindow(this.replayWindowsBytes, peerId, seq)) {
+    // Nonce-based replay detection for binary channel
+    if (!this.checkAndRecordNonce(this.seenNoncesBytes, peerId, nonce)) {
       throw new CryptoError('Replay attack detected', ErrorCodes.CRYPTO_REPLAY_DETECTED);
     }
 
-    // Return data without the 4-byte sequence number
-    return combined.slice(4);
+    const cipher = chacha20poly1305(sessionKey, nonce);
+    return cipher.decrypt(ciphertext);
   }
 }
 

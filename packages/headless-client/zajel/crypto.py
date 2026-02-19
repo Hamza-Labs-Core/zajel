@@ -10,6 +10,7 @@ Implements:
 import base64
 import hashlib
 import hmac
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -21,6 +22,8 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+logger = logging.getLogger(__name__)
 
 # Constants matching the Dart app
 NONCE_SIZE = 12
@@ -84,20 +87,29 @@ class CryptoService:
         shared_secret = self._private_key.exchange(peer_pub)
 
         # Derive session key using HKDF-SHA256
-        # Include both public keys sorted for deterministic derivation
-        # regardless of role (issue-headless-04: defense-in-depth)
-        keys_sorted = sorted([self._public_key_bytes, peer_pub_bytes])
-        info = HKDF_INFO + keys_sorted[0] + keys_sorted[1]
-
+        # Info must match Dart app's establishSession() and web client's establishSession()
+        # All clients use HKDF_INFO = b"zajel_session" for interop
         session_key = HKDF(
             algorithm=SHA256(),
             length=32,
             salt=b"",
-            info=info,
+            info=HKDF_INFO,
         ).derive(shared_secret)
 
         self._session_keys[peer_id] = session_key
         self._seen_nonces[peer_id] = set()  # Reset for new session
+
+        # Diagnostic: log key fingerprints for cross-platform debugging
+        shared_hash = hashlib.sha256(shared_secret).hexdigest()[:16]
+        session_hash = hashlib.sha256(session_key).hexdigest()[:16]
+        our_pub = self.public_key_base64[:8]
+        peer_pub = peer_public_key_b64[:8]
+        logger.info(
+            "perform_key_exchange(%s): ourPub=%s… peerPub=%s… "
+            "sharedHash=%s sessionHash=%s",
+            peer_id, our_pub, peer_pub, shared_hash, session_hash,
+        )
+
         return session_key
 
     def encrypt(self, peer_id: str, plaintext: str) -> str:
@@ -200,6 +212,42 @@ class CryptoService:
             day = now + timedelta(days=offset)
             date_str = day.strftime("%Y-%m-%d")
             hash_input = keys[0] + keys[1] + (DAILY_SALT + date_str).encode()
+            h = hashlib.sha256(hash_input).digest()
+            point = DAILY_PREFIX + base64.urlsafe_b64encode(h).decode()[:22]
+            points.append(point)
+
+        return points
+
+    def derive_daily_points_from_ids(
+        self,
+        my_stable_id: str,
+        peer_stable_id: str,
+        days_offset: tuple[int, ...] = (-1, 0, 1),
+    ) -> list[str]:
+        """Derive daily meeting points from two stable IDs.
+
+        Unlike derive_daily_points which uses public key bytes, this uses
+        persistent stable IDs that survive key rotation.
+
+        Args:
+            my_stable_id: Our stable ID (16 hex chars).
+            peer_stable_id: Peer's stable ID (16 hex chars).
+            days_offset: Day offsets from today.
+
+        Returns:
+            List of daily meeting point strings.
+        """
+        # Sort IDs lexicographically so both sides get same result
+        ids = sorted([my_stable_id, peer_stable_id])
+        now = datetime.now(timezone.utc)
+
+        points = []
+        for offset in days_offset:
+            day = now + timedelta(days=offset)
+            date_str = day.strftime("%Y-%m-%d")
+            hash_input = (
+                ids[0].encode() + ids[1].encode() + (DAILY_SALT + date_str).encode()
+            )
             h = hashlib.sha256(hash_input).digest()
             point = DAILY_PREFIX + base64.urlsafe_b64encode(h).decode()[:22]
             points.append(point)

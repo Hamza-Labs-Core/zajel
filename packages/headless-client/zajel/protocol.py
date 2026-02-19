@@ -36,14 +36,21 @@ class HandshakeMessage:
     """Key exchange handshake sent on data channel open."""
 
     public_key: str  # base64
+    stable_id: str | None = None  # 16 hex chars, optional for backward compat
 
     def to_json(self) -> str:
-        return json.dumps({"type": "handshake", "publicKey": self.public_key})
+        data: dict = {"type": "handshake", "publicKey": self.public_key}
+        if self.stable_id is not None:
+            data["stableId"] = self.stable_id
+        return json.dumps(data)
 
     @staticmethod
     def from_json(data: str) -> "HandshakeMessage":
         msg = json.loads(data)
-        return HandshakeMessage(public_key=msg["publicKey"])
+        return HandshakeMessage(
+            public_key=msg["publicKey"],
+            stable_id=msg.get("stableId"),
+        )
 
 
 @dataclass
@@ -137,6 +144,11 @@ def parse_channel_message(data: str) -> dict[str, Any]:
         msg = json.loads(data)
         if isinstance(msg, dict) and "type" in msg:
             return msg
+        # Valid JSON but no 'type' field — likely encrypted content
+        logger.debug(
+            "Parsed JSON without 'type' field, treating as encrypted text: keys=%s",
+            list(msg.keys()) if isinstance(msg, dict) else type(msg).__name__,
+        )
     except (json.JSONDecodeError, TypeError):
         pass
 

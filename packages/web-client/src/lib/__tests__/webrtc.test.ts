@@ -555,7 +555,7 @@ describe('WebRTCService', () => {
         const validPeerKey = 'peer-key-123456789012345678901234567890';
         messageChannel!.simulateMessage(JSON.stringify({ type: 'handshake', publicKey: validPeerKey }));
 
-        expect(events.onHandshake).toHaveBeenCalledWith(validPeerKey);
+        expect(events.onHandshake).toHaveBeenCalledWith(validPeerKey, undefined);
       });
 
       it('should receive message events on initiator channel', () => {
@@ -588,7 +588,7 @@ describe('WebRTCService', () => {
         const validPeerKey = 'peer-key-123456789012345678901234567890';
         channel.simulateMessage(JSON.stringify({ type: 'handshake', publicKey: validPeerKey }));
 
-        expect(events.onHandshake).toHaveBeenCalledWith(validPeerKey);
+        expect(events.onHandshake).toHaveBeenCalledWith(validPeerKey, undefined);
       });
 
       it('should emit message events for encrypted messages (non-JSON)', () => {

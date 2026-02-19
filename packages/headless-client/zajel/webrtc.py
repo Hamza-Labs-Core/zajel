@@ -195,7 +195,7 @@ class WebRTCService:
             candidate.sdpMLineIndex = candidate_dict.get("sdpMLineIndex", 0)
             await self._pc.addIceCandidate(candidate)
         except Exception as e:
-            logger.debug("ICE candidate add error (non-fatal): %s", e)
+            logger.info("ICE candidate add error (non-fatal): %s", e)
 
     async def send_message(self, data: str) -> None:
         """Send data on the message channel."""
