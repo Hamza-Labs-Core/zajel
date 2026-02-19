@@ -35,7 +35,7 @@ android {
         applicationId = "com.zajel.zajel"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = 23  // Required by androidx.camera:camera-core (mobile_scanner)
+        minSdk = flutter.minSdkVersion  // Required by androidx.camera:camera-core (mobile_scanner)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

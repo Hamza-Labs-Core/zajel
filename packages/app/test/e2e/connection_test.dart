@@ -873,7 +873,8 @@ void main() {
       expect(restored.isLocal, equals(original.isLocal));
     });
 
-    test('Peer equality is based on id, displayName, and publicKey', () {
+    test('Peer equality is based on id, displayName, publicKey, connectionState, and isLocal',
+        () {
       // Arrange
       final peer1 = Peer(
         id: 'peer1',
@@ -886,8 +887,7 @@ void main() {
         id: 'peer1',
         displayName: 'Test Peer',
         publicKey: 'key1',
-        lastSeen: DateTime(2024, 6, 1), // Different lastSeen
-        connectionState: PeerConnectionState.connected, // Different state
+        lastSeen: DateTime(2024, 6, 1), // Different lastSeen — not in props
       );
 
       final peer3 = Peer(
@@ -897,9 +897,18 @@ void main() {
         lastSeen: DateTime(2024, 1, 1),
       );
 
+      final peer4 = Peer(
+        id: 'peer1',
+        displayName: 'Test Peer',
+        publicKey: 'key1',
+        lastSeen: DateTime(2024, 1, 1),
+        connectionState: PeerConnectionState.connected, // Different state
+      );
+
       // Assert
-      expect(peer1, equals(peer2)); // Same id, displayName, publicKey
+      expect(peer1, equals(peer2)); // Same props, only lastSeen differs
       expect(peer1, isNot(equals(peer3))); // Different id
+      expect(peer1, isNot(equals(peer4))); // Different connectionState
     });
   });
 

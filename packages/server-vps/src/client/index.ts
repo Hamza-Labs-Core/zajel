@@ -8,3 +8,9 @@ export {
   type ClientInfo,
   type ClientHandlerEvents,
 } from './handler.js';
+
+export {
+  ChunkRelay,
+  type ChunkAnnouncement,
+  type ChunkRelayStats,
+} from './chunk-relay.js';

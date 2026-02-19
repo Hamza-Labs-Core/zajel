@@ -1,31 +1,48 @@
 /**
  * Zajel Bootstrap Server - Cloudflare Worker
  *
- * A simple server registry that helps VPS servers discover each other.
- * This is the ONLY purpose of the CF Worker - all client functionality
- * is handled by the federated VPS servers.
+ * A server registry and attestation authority for the Zajel infrastructure.
  *
  * Endpoints:
  * - POST /servers - Register a VPS server
  * - GET /servers - List all active VPS servers
  * - DELETE /servers/:id - Unregister a server
  * - POST /servers/heartbeat - Keep-alive for registered servers
+ * - POST /attest/register - Register a device with a build token
+ * - POST /attest/upload-reference - CI uploads reference binary metadata
+ * - POST /attest/challenge - Request an attestation challenge
+ * - POST /attest/verify - Verify attestation challenge responses
+ * - GET /attest/versions - Get version policy
+ * - POST /attest/versions - Update version policy (admin)
  */
 
 import { importSigningKey, signPayload } from './crypto/signing.js';
+import { getCorsHeaders } from './cors.js';
+import { rateLimiter } from './rate-limiter.js';
 
 export { ServerRegistryDO } from './durable-objects/server-registry-do.js';
+export { AttestationRegistryDO } from './durable-objects/attestation-registry-do.js';
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-      'Access-Control-Expose-Headers': 'X-Bootstrap-Signature',
-    };
+    const corsHeaders = getCorsHeaders(request, env);
+
+    // Rate limiting: 100 requests per minute per IP
+    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+    const { allowed } = rateLimiter.check(ip, 100, 60000);
+    if (!allowed) {
+      return new Response(
+        JSON.stringify({ error: 'Too Many Requests' }),
+        { status: 429, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+      );
+    }
+
+    // Periodically prune stale rate limit entries (every ~100 requests)
+    if (Math.random() < 0.01) {
+      rateLimiter.prune();
+    }
 
     // Handle CORS preflight
     if (request.method === 'OPTIONS') {
@@ -54,14 +71,20 @@ export default {
       return new Response(
         JSON.stringify({
           name: 'Zajel Bootstrap Server',
-          version: '3.0.0',
-          description: 'VPS server discovery service',
+          version: '4.0.0',
+          description: 'VPS server discovery and attestation service',
           endpoints: {
             health: 'GET /health',
             listServers: 'GET /servers',
             registerServer: 'POST /servers',
             unregisterServer: 'DELETE /servers/:serverId',
             heartbeat: 'POST /servers/heartbeat',
+            attestRegister: 'POST /attest/register',
+            attestUploadReference: 'POST /attest/upload-reference',
+            attestChallenge: 'POST /attest/challenge',
+            attestVerify: 'POST /attest/verify',
+            attestVersions: 'GET /attest/versions',
+            attestSetVersions: 'POST /attest/versions',
           },
         }),
         {
@@ -75,6 +98,8 @@ export default {
 
     // GET /servers — fetch from DO, add timestamp, and sign the response
     if (url.pathname === '/servers' && request.method === 'GET') {
+      // TODO: Single global instance - acceptable for current scale.
+      // Consider sharding by region when request volume grows.
       const id = env.SERVER_REGISTRY.idFromName('global');
       const stub = env.SERVER_REGISTRY.get(id);
       const doResponse = await stub.fetch(request);
@@ -105,9 +130,30 @@ export default {
 
     // All other /servers/* routes go to the ServerRegistry Durable Object
     if (url.pathname.startsWith('/servers')) {
+      // TODO: Single global instance - acceptable for current scale.
+      // Consider sharding by region when request volume grows.
       const id = env.SERVER_REGISTRY.idFromName('global');
       const stub = env.SERVER_REGISTRY.get(id);
-      return stub.fetch(request);
+      const doResponse = await stub.fetch(request);
+      const response = new Response(doResponse.body, doResponse);
+      for (const [key, value] of Object.entries(corsHeaders)) {
+        response.headers.set(key, value);
+      }
+      return response;
+    }
+
+    // All /attest/* routes go to the AttestationRegistry Durable Object
+    if (url.pathname.startsWith('/attest')) {
+      // TODO: Single global instance - acceptable for current scale.
+      // Consider sharding by device_id prefix when request volume grows.
+      const id = env.ATTESTATION_REGISTRY.idFromName('global');
+      const stub = env.ATTESTATION_REGISTRY.get(id);
+      const doResponse = await stub.fetch(request);
+      const response = new Response(doResponse.body, doResponse);
+      for (const [key, value] of Object.entries(corsHeaders)) {
+        response.headers.set(key, value);
+      }
+      return response;
     }
 
     // Default - not found

@@ -29,11 +29,11 @@ void main() {
       expect(find.text('Next'), findsOneWidget);
     });
 
-    testWidgets('displays 4 page indicator dots', (tester) async {
+    testWidgets('displays 5 page indicator dots', (tester) async {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
-      // There should be 4 indicator dots (animated containers)
+      // There should be 5 indicator dots (animated containers)
       // The active dot is wider (24px), the rest are 8px
       final dots =
           tester.widgetList<Container>(find.byType(Container)).where((c) {
@@ -42,23 +42,32 @@ void main() {
         return (constraints.maxWidth == 24 || constraints.maxWidth == 8) &&
             constraints.maxHeight == 8;
       });
-      expect(dots.length, equals(4));
+      expect(dots.length, equals(5));
     });
 
-    testWidgets('navigates to second page on Next tap', (tester) async {
+    testWidgets('navigates to username page on Next tap', (tester) async {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Your Identity'), findsOneWidget);
+      expect(find.text('Choose a Username'), findsOneWidget);
     });
 
-    testWidgets('second page shows identity warning', (tester) async {
+    testWidgets('identity page shows identity warning', (tester) async {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
+      // Navigate to username page
+      await tester.tap(find.text('Next'));
+      await tester.pumpAndSettle();
+
+      // Enter username to enable Next button
+      await tester.enterText(find.byType(TextField), 'TestUser');
+      await tester.pump();
+
+      // Navigate to identity page
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
 
@@ -69,24 +78,33 @@ void main() {
       );
     });
 
-    testWidgets('navigates through all 4 pages', (tester) async {
+    testWidgets('navigates through all 5 pages', (tester) async {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
       // Page 1: Welcome
       expect(find.text('Welcome to Zajel'), findsOneWidget);
 
-      // Page 2: Identity
+      // Page 2: Username
+      await tester.tap(find.text('Next'));
+      await tester.pumpAndSettle();
+      expect(find.text('Choose a Username'), findsOneWidget);
+
+      // Enter username to enable Next button
+      await tester.enterText(find.byType(TextField), 'TestUser');
+      await tester.pump();
+
+      // Page 3: Identity
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
       expect(find.text('Your Identity'), findsOneWidget);
 
-      // Page 3: Connect
+      // Page 4: Connect
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
       expect(find.text('How to Connect'), findsOneWidget);
 
-      // Page 4: Get Started
+      // Page 5: Get Started
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
       expect(find.text("You're Ready"), findsOneWidget);
@@ -97,7 +115,15 @@ void main() {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
-      // Navigate to last page
+      // Navigate to username page
+      await tester.tap(find.text('Next'));
+      await tester.pumpAndSettle();
+
+      // Enter username to enable Next button
+      await tester.enterText(find.byType(TextField), 'TestUser');
+      await tester.pump();
+
+      // Navigate through remaining pages to last page
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Next'));
@@ -117,17 +143,26 @@ void main() {
       // Page 1: mail_lock
       expect(find.byIcon(Icons.mail_lock), findsOneWidget);
 
-      // Page 2: fingerprint
+      // Page 2: person (username)
+      await tester.tap(find.text('Next'));
+      await tester.pumpAndSettle();
+      expect(find.byIcon(Icons.person), findsOneWidget);
+
+      // Enter username to enable Next button
+      await tester.enterText(find.byType(TextField), 'TestUser');
+      await tester.pump();
+
+      // Page 3: fingerprint (identity)
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
       expect(find.byIcon(Icons.fingerprint), findsOneWidget);
 
-      // Page 3: people
+      // Page 4: people (connect)
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
       expect(find.byIcon(Icons.people), findsOneWidget);
 
-      // Page 4: rocket_launch
+      // Page 5: rocket_launch (get started)
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
       expect(find.byIcon(Icons.rocket_launch), findsOneWidget);
@@ -139,21 +174,21 @@ void main() {
 
       expect(find.text('Welcome to Zajel'), findsOneWidget);
 
-      // Swipe left to go to next page
+      // Swipe left to go to next page (username)
       await tester.drag(find.byType(PageView), const Offset(-400, 0));
       await tester.pumpAndSettle();
 
-      expect(find.text('Your Identity'), findsOneWidget);
+      expect(find.text('Choose a Username'), findsOneWidget);
     });
 
     testWidgets('can navigate back to previous page via swipe', (tester) async {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
-      // Go to page 2 using the Next button
+      // Go to page 2 (username) using the Next button
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
-      expect(find.text('Your Identity'), findsOneWidget);
+      expect(find.text('Choose a Username'), findsOneWidget);
 
       // Fling right to go back to page 1
       await tester.fling(find.byType(PageView), const Offset(400, 0), 1000);

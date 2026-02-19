@@ -92,25 +92,31 @@ class TestSettings:
         helper.navigate_to_settings()
 
         # The External Connections section may be below the fold — scroll down
+        # Use small scroll increments to avoid overshooting past the section
         screen_size = alice.get_window_size()
         center_x = int(screen_size['width'] * 0.5)
-        start_y = int(screen_size['height'] * 0.8)
-        end_y = int(screen_size['height'] * 0.2)
+        start_y = int(screen_size['height'] * 0.6)
+        end_y = int(screen_size['height'] * 0.3)
 
         found_status = False
-        # Try without scrolling first, then scroll and retry
+        # On Pixel 6 (~859dp usable), "External Connections" is at ~492dp
+        # and should be visible without scrolling. Try with a longer timeout
+        # first, then scroll with smaller increments as fallback.
         for attempt in range(4):
+            find_timeout = 5 if attempt == 0 else 2
             for status_text in ['External Connections', 'Connected',
                                 'Connecting', 'Pairing Code']:
                 try:
-                    helper._find(status_text, timeout=3)
+                    helper._find(status_text, timeout=find_timeout)
                     found_status = True
                     break
                 except Exception:
                     pass
             if found_status:
                 break
-            alice.swipe(center_x, start_y, center_x, end_y, 500)
+            # Small scroll (~150dp) to avoid overshooting past the section
+            small_end_y = int(screen_size['height'] * 0.45)
+            alice.swipe(center_x, start_y, center_x, small_end_y, 500)
             time.sleep(1)
 
         assert found_status, \

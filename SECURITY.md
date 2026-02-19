@@ -6,6 +6,8 @@ This document describes Zajel's security model, threat assumptions, and the cryp
 
 Zajel is designed as a privacy-first, ephemeral messaging application. The core security principle is that **the signaling server is treated as an untrusted relay** - it facilitates connection establishment but never has access to decrypted message content.
 
+**Security Audit Status**: A comprehensive security audit was conducted across all 4 packages, identifying 94 issues. All 94 issues have been resolved across 3 waves (CRITICAL+HIGH, MEDIUM, LOW). See the [Security Audit Summary](#security-audit-summary) section for details.
+
 ## Cryptographic Primitives
 
 | Purpose | Algorithm | Implementation |
@@ -51,7 +53,7 @@ All message content is encrypted end-to-end using:
 
 1. **X25519 Key Exchange**: Each client generates an ephemeral key pair
 2. **ECDH Shared Secret**: Clients derive a shared secret from their private key and peer's public key
-3. **HKDF Key Derivation**: Session keys are derived using HKDF with peer-specific info
+3. **HKDF Key Derivation**: Session keys are derived using HKDF with both peer public keys as salt
 4. **ChaCha20-Poly1305**: Messages are encrypted with authenticated encryption
 
 ```
@@ -107,7 +109,7 @@ This provides defense-in-depth: even if the application-layer E2E encryption had
 
 ### Layer 5: Replay Protection
 
-Messages include sequence numbers to prevent replay attacks:
+Messages include sequence numbers and nonces to prevent replay attacks:
 
 ```typescript
 // Sequence number prepended to plaintext before encryption
@@ -118,6 +120,8 @@ new DataView(seqBytes.buffer).setUint32(0, seq, false);
 A sliding window mechanism allows for out-of-order delivery while rejecting:
 - Duplicate sequence numbers (replayed messages)
 - Sequence numbers too far in the past (old replayed messages)
+
+Additionally, nonce-based replay protection is enforced on encrypted P2P messages in the headless client, and group/channel messages are validated for sequence continuity.
 
 ## Why E2E Encryption is the Primary Security
 
@@ -184,6 +188,8 @@ However, E2E encryption with fingerprint verification provides **equivalent or b
 2. **Use trusted network** when possible (avoid public WiFi for initial pairing)
 3. **Verify peer identity** through known channels before pairing
 4. **Keep app updated** for latest security patches
+5. **Review group invitations** before accepting — invitations now require explicit verification
+6. **Monitor file transfers** — transfers are capped at 100 MB and verified with SHA-256 hashes
 
 ## Ephemeral by Design
 
@@ -193,6 +199,98 @@ Zajel is designed for ephemeral messaging:
 - **Mobile app**: Keys can be regenerated each session for maximum privacy
 - **No message persistence**: Messages are not stored on any server
 - **Session-scoped**: When the connection ends, cryptographic material is discarded
+
+## Security Audit Summary
+
+A comprehensive security audit was completed in February 2026, covering all 4 packages in the Zajel project. The audit identified 94 actionable issues (plus 8 previously resolved by architecture changes). All 94 issues were fixed in 3 waves.
+
+### Audit Scope
+
+| Package | Language | Issues Found | Issues Fixed |
+|---------|----------|--------------|--------------|
+| Headless Client (`packages/headless-client/`) | Python | 38 | 38 |
+| CF Worker Server (`packages/server/`) | JavaScript | 25 | 25 |
+| VPS Server (`packages/server-vps/`) | TypeScript | 9 | 9 |
+| Website (`packages/website/`) | React/TypeScript | 22 | 22 |
+| **Total** | | **94** | **94** |
+
+### Fix Waves
+
+| Wave | Severity | Issues | Commit |
+|------|----------|--------|--------|
+| Wave 1 | CRITICAL + HIGH | 29 | b97ff6e |
+| Wave 2 | MEDIUM | 38 | 00fc0c9 |
+| Wave 3 | LOW | 27 | 2e5bcc2 |
+
+### Enforced Security Properties
+
+The following security properties are now enforced across the project:
+
+**Cryptographic Hardening**
+- HKDF key derivation includes both peer public keys as salt, preventing key confusion attacks
+- Pairing codes generated with cryptographic PRNG (`secrets` module / `crypto.randomInt()`)
+- Session keys encrypted at rest with ChaCha20-Poly1305
+- Constant-time comparison for all secret/HMAC values (timing-safe)
+- Sender keys zeroized on group leave
+- Nonce-based replay protection on encrypted P2P messages
+- Separate signing keys for build tokens vs session tokens
+
+**Input Validation and Bounds**
+- File path traversal blocked (basename sanitization + containment checks)
+- JSON body size limits on all HTTP endpoints
+- 1 MB message size limit on daemon socket; 100 MB file transfer limit
+- Bounded in-memory storage (1,000 chunks, 5,000 messages)
+- PeerId format validation and consistency verification
+- JSON schema validation for group messages
+- Strict semver validation, hex input validation, URL scheme validation
+- Storage key injection prevention
+
+**Access Control**
+- UNIX socket permissions restricted to 0o600 with symlink prevention
+- SO_PEERCRED daemon socket authentication
+- Authentication required on server registration, deletion, and stats endpoints
+- Server deletion requires ownership proof
+- CORS origin allowlist (no wildcard)
+- Rate limiting at 100 req/min/IP
+- Connection limits (10,000 total, 50 per IP)
+- Group invitation requires explicit verification
+
+**Information Leakage Prevention**
+- Message content redacted from all log output
+- Generic error responses — no internal messages or stack traces leaked
+- Generic attestation verification messages
+- Channel invite links no longer embed private keys
+- Tiered error handling across all packages
+
+**Network and Transport Hardening**
+- WebSocket URL scheme validation (wss:// enforced)
+- Peer identity bound to WebRTC connection during handshake
+- Encrypted message delivery uses peer identity lookup (not try-all)
+- Exponential backoff reconnection
+- WebRTC cleanup on connection failure
+- Reliable SCTP delivery (no maxRetransmits cap)
+- ICE server configuration validation
+- Endpoint URL validation with private IP rejection
+
+**Web Security**
+- Content Security Policy and security response headers (HSTS, X-Frame-Options, X-Content-Type-Options)
+- DOMPurify SVG sanitization for Mermaid diagrams
+- Mermaid securityLevel set to 'strict'
+- JSX-escaped dynamic parameters
+- Self-hosted fonts (no external CDN dependencies)
+- Download URL domain allowlist
+- GitHub API response validation
+- rel="noopener noreferrer" on external links
+
+**Resource Management**
+- Nonce storage bounded with TTL expiry
+- Device and server storage growth limits
+- Rendezvous registration limits
+- Chunk announce array limits
+- maxConnections clamped to safe range
+- PeerId takeover prevention
+- Batch stale server deletion
+- Graceful async task cancellation with timeout
 
 ## Future Security Enhancements
 

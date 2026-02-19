@@ -379,7 +379,7 @@ describe('CryptoService', () => {
     });
   });
 
-  describe('Replay Protection', () => {
+  describe('Replay Protection (nonce-based)', () => {
     let alice: CryptoService;
     let bob: CryptoService;
     const sharedRoomId = 'room-replay-test';
@@ -393,66 +393,56 @@ describe('CryptoService', () => {
       bob.establishSession(sharedRoomId, alice.getPublicKeyBase64());
     });
 
-    it('sequence numbers should increment with each message', () => {
+    it('multiple messages decrypt successfully', () => {
       const msg1 = alice.encrypt(sharedRoomId, 'Message 1');
       const msg2 = alice.encrypt(sharedRoomId, 'Message 2');
       const msg3 = alice.encrypt(sharedRoomId, 'Message 3');
 
       // All messages should decrypt successfully in order
-      const decrypted1 = bob.decrypt(sharedRoomId, msg1);
-      const decrypted2 = bob.decrypt(sharedRoomId, msg2);
-      const decrypted3 = bob.decrypt(sharedRoomId, msg3);
-
-      expect(decrypted1).toBe('Message 1');
-      expect(decrypted2).toBe('Message 2');
-      expect(decrypted3).toBe('Message 3');
+      expect(bob.decrypt(sharedRoomId, msg1)).toBe('Message 1');
+      expect(bob.decrypt(sharedRoomId, msg2)).toBe('Message 2');
+      expect(bob.decrypt(sharedRoomId, msg3)).toBe('Message 3');
     });
 
-    it('should reject replay of same message (duplicate sequence number)', () => {
+    it('should reject replay of same ciphertext (duplicate nonce)', () => {
       const message = alice.encrypt(sharedRoomId, 'Original message');
 
       // First decryption should succeed
       const decrypted = bob.decrypt(sharedRoomId, message);
       expect(decrypted).toBe('Original message');
 
-      // Replaying the same message should fail
+      // Replaying the same ciphertext should fail (same nonce)
       expect(() => bob.decrypt(sharedRoomId, message)).toThrow(
         'Replay attack detected'
       );
     });
 
-    it('should reject messages with old sequence numbers', () => {
-      // Capture message at seq 1
+    it('should still reject replay after many messages', () => {
+      // Capture an early message
       const earlyMessage = alice.encrypt(sharedRoomId, 'Early message');
+      bob.decrypt(sharedRoomId, earlyMessage);
 
-      // Send and receive many more messages to advance counter beyond window (64)
+      // Send and receive many more messages
       for (let i = 0; i < 70; i++) {
         const msg = alice.encrypt(sharedRoomId, `Message ${i}`);
         bob.decrypt(sharedRoomId, msg);
       }
 
-      // Now try to replay the early message - should fail as too old
-      // seq 1 is outside window: 71 - 1 = 70 >= 64
+      // Replaying the early message should still fail (nonce was seen)
       expect(() => bob.decrypt(sharedRoomId, earlyMessage)).toThrow(
         'Replay attack detected'
       );
     });
 
-    it('should handle messages slightly out of order within window', () => {
+    it('should handle messages received out of order', () => {
       // Encrypt messages 1, 2, 3
       const msg1 = alice.encrypt(sharedRoomId, 'Message 1');
       const msg2 = alice.encrypt(sharedRoomId, 'Message 2');
       const msg3 = alice.encrypt(sharedRoomId, 'Message 3');
 
       // Receive them out of order: 1, 3, 2
-      // Message 1 (seq 1) - should work
       expect(bob.decrypt(sharedRoomId, msg1)).toBe('Message 1');
-
-      // Message 3 (seq 3) - should work (skipping ahead is fine)
       expect(bob.decrypt(sharedRoomId, msg3)).toBe('Message 3');
-
-      // Message 2 (seq 2) - should now work with sliding window implementation
-      // seq 2 is within the window (3 - 2 = 1 < 64) and hasn't been seen yet
       expect(bob.decrypt(sharedRoomId, msg2)).toBe('Message 2');
 
       // But replaying msg2 again should fail
@@ -461,7 +451,7 @@ describe('CryptoService', () => {
       );
     });
 
-    it('clearSession should reset sequence counters', () => {
+    it('clearSession should reset nonce tracking', () => {
       // Send a message
       const msg1 = alice.encrypt(sharedRoomId, 'Before clear');
       bob.decrypt(sharedRoomId, msg1);
@@ -472,23 +462,35 @@ describe('CryptoService', () => {
       alice.establishSession(sharedRoomId, bob.getPublicKeyBase64());
       bob.establishSession(sharedRoomId, alice.getPublicKeyBase64());
 
-      // Should be able to send new messages starting from seq 1 again
+      // Should be able to send new messages after clear
       const msg2 = alice.encrypt(sharedRoomId, 'After clear');
       const decrypted = bob.decrypt(sharedRoomId, msg2);
       expect(decrypted).toBe('After clear');
     });
 
-    it('each peer should have independent counters', () => {
+    it('each peer has independent nonce tracking', () => {
       // Alice sends 5 messages
       for (let i = 0; i < 5; i++) {
         const msg = alice.encrypt(sharedRoomId, `Alice ${i}`);
         bob.decrypt(sharedRoomId, msg);
       }
 
-      // Bob can still send his first message (Bob's counter is independent)
+      // Bob can still send messages (nonces are random, not counter-based)
       const bobMsg = bob.encrypt(sharedRoomId, 'Bob first message');
       const decrypted = alice.decrypt(sharedRoomId, bobMsg);
       expect(decrypted).toBe('Bob first message');
+    });
+
+    it('same plaintext produces different ciphertexts (different nonces)', () => {
+      const msg1 = alice.encrypt(sharedRoomId, 'Same text');
+      const msg2 = alice.encrypt(sharedRoomId, 'Same text');
+
+      // Different random nonces → different ciphertexts
+      expect(msg1).not.toBe(msg2);
+
+      // Both should decrypt successfully
+      expect(bob.decrypt(sharedRoomId, msg1)).toBe('Same text');
+      expect(bob.decrypt(sharedRoomId, msg2)).toBe('Same text');
     });
   });
 
@@ -595,7 +597,7 @@ describe('CryptoService', () => {
     });
   });
 
-  describe('Bytes Replay Protection', () => {
+  describe('Bytes Replay Protection (nonce-based)', () => {
     let alice: CryptoService;
     let bob: CryptoService;
     const sharedRoomId = 'bytes-replay-test';
@@ -617,20 +619,20 @@ describe('CryptoService', () => {
       const decrypted = bob.decryptBytes(sharedRoomId, encrypted);
       expect(decrypted).toEqual(data);
 
-      // Replaying the same message should fail
+      // Replaying the same ciphertext should fail (same nonce)
       expect(() => bob.decryptBytes(sharedRoomId, encrypted)).toThrow(
         'Replay attack detected'
       );
     });
 
-    it('bytes replay window is separate from text replay window', () => {
+    it('bytes nonce tracking is separate from text nonce tracking', () => {
       // Send text messages
       for (let i = 0; i < 5; i++) {
         const msg = alice.encrypt(sharedRoomId, `Text ${i}`);
         bob.decrypt(sharedRoomId, msg);
       }
 
-      // Bytes messages should still work with their own sequence
+      // Bytes messages should still work (separate nonce set)
       const data = new Uint8Array([1, 2, 3]);
       const encrypted = alice.encryptBytes(sharedRoomId, data);
       const decrypted = bob.decryptBytes(sharedRoomId, encrypted);

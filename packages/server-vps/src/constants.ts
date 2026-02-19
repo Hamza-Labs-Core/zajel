@@ -10,8 +10,8 @@
 // =============================================================================
 
 export const WEBSOCKET = {
-  /** Maximum message size (64KB) - matches WebSocket server config */
-  MAX_MESSAGE_SIZE: 64 * 1024,
+  /** Maximum message size (256KB) — must be larger than MAX_TEXT_CHUNK_PAYLOAD (64KB) to accommodate JSON framing */
+  MAX_MESSAGE_SIZE: 256 * 1024,
 } as const;
 
 // =============================================================================
@@ -108,4 +108,100 @@ export const ENTROPY = {
 
   /** High risk threshold - consider extending code length */
   COLLISION_HIGH_THRESHOLD: 30000,
+} as const;
+
+// =============================================================================
+// RENDEZVOUS LIMITS
+// =============================================================================
+
+export const RENDEZVOUS_LIMITS = {
+  /** Maximum daily points per registration message */
+  MAX_POINTS_PER_MESSAGE: 50,
+
+  /** Maximum hourly tokens per registration message */
+  MAX_TOKENS_PER_MESSAGE: 50,
+
+  /** Maximum length for a point or token hash string */
+  MAX_HASH_LENGTH: 128,
+
+  /** Maximum dead drop payload size in bytes (4KB) */
+  MAX_DEAD_DROP_SIZE: 4096,
+
+  /** Maximum relayId length */
+  MAX_RELAY_ID_LENGTH: 128,
+} as const;
+
+// =============================================================================
+// CHUNK LIMITS
+// =============================================================================
+
+export const CHUNK_LIMITS = {
+  /** Maximum chunks per announce message */
+  MAX_CHUNKS_PER_ANNOUNCE: 100,
+
+  /** Maximum chunkId string length */
+  MAX_CHUNK_ID_LENGTH: 256,
+
+  /** Maximum routingHash string length */
+  MAX_ROUTING_HASH_LENGTH: 256,
+} as const;
+
+// =============================================================================
+// PEER ID VALIDATION
+// =============================================================================
+
+export const PEER_ID = {
+  /** Maximum length for a peerId string */
+  MAX_LENGTH: 128,
+
+  /** Allowed characters: alphanumeric, hyphens, underscores */
+  PATTERN: /^[\w-]+$/,
+} as const;
+
+// =============================================================================
+// RELAY REGISTRATION LIMITS
+// =============================================================================
+
+export const RELAY = {
+  /** Minimum maxConnections value */
+  MIN_MAX_CONNECTIONS: 1,
+
+  /** Maximum maxConnections value */
+  MAX_MAX_CONNECTIONS: 1000,
+
+  /** Maximum connectedCount value */
+  MAX_CONNECTED_COUNT: 10000,
+} as const;
+
+// =============================================================================
+// CONNECTION LIMITS
+// =============================================================================
+
+export const CONNECTION_LIMITS = {
+  /** Maximum total WebSocket connections (client + signaling) */
+  MAX_TOTAL_CONNECTIONS: 10000,
+
+  /** Maximum WebSocket connections per IP address */
+  MAX_CONNECTIONS_PER_IP: 50,
+} as const;
+
+// =============================================================================
+// ATTESTATION CONSTANTS
+// =============================================================================
+
+export const ATTESTATION = {
+  /** Default session token TTL: 1 hour (in ms) */
+  DEFAULT_SESSION_TOKEN_TTL: 60 * 60 * 1000,
+
+  /** Default grace period for unattested connections: 30 seconds (in ms) */
+  DEFAULT_GRACE_PERIOD: 30 * 1000,
+
+  /** Error code sent to clients when attestation is required but missing */
+  ERROR_CODE_NOT_ATTESTED: 'NOT_ATTESTED',
+
+  /** WebSocket close code for attestation failure (4001 = application error) */
+  WS_CLOSE_CODE_ATTESTATION_FAILED: 4001,
+
+  /** WebSocket close code for grace period expired */
+  WS_CLOSE_CODE_GRACE_EXPIRED: 4002,
 } as const;

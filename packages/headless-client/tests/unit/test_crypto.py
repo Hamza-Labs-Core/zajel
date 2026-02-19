@@ -150,3 +150,45 @@ class TestCryptoService:
         ciphertext = alice.encrypt("bob", plaintext)
         decrypted = bob.decrypt("alice", ciphertext)
         assert decrypted == plaintext
+
+    def test_daily_points_from_ids(self):
+        crypto = CryptoService()
+        crypto.initialize()
+
+        points_ab = crypto.derive_daily_points_from_ids("idA", "idB")
+        points_ba = crypto.derive_daily_points_from_ids("idB", "idA")
+
+        assert points_ab == points_ba  # order-independent
+        assert len(points_ab) == 3
+        assert all(p.startswith("day_") for p in points_ab)
+
+    def test_daily_points_from_ids_different_pairs(self):
+        crypto = CryptoService()
+        crypto.initialize()
+
+        points_ab = crypto.derive_daily_points_from_ids("idA", "idB")
+        points_ac = crypto.derive_daily_points_from_ids("idA", "idC")
+
+        assert points_ab != points_ac
+
+    def test_daily_points_from_ids_cross_client_interop(self):
+        """Verify Python produces same values as Dart Flutter client."""
+        crypto = CryptoService()
+        crypto.initialize()
+
+        # These reference values match the Dart test:
+        # deriveDailyPointsFromIdsForDate('abc123def456ab01', 'ff00ee11dd22cc33', 2026-02-18)
+        from datetime import datetime, timezone, timedelta
+        import hashlib
+
+        my_id = "abc123def456ab01"
+        peer_id = "ff00ee11dd22cc33"
+        ids = sorted([my_id, peer_id])
+
+        # Compute for 2026-02-18 (today point)
+        date_str = "2026-02-18"
+        hash_input = ids[0].encode() + ids[1].encode() + f"zajel:daily:{date_str}".encode()
+        h = hashlib.sha256(hash_input).digest()
+        point = "day_" + base64.urlsafe_b64encode(h).decode()[:22]
+
+        assert point == "day_YgtUz6-JOPCoVxUJxbpWZP"

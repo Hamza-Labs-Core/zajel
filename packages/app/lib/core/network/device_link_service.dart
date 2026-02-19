@@ -481,6 +481,9 @@ class DeviceLinkException implements Exception {
 ({String linkCode, String publicKey, String serverUrl})? parseQrData(
     String qrData) {
   if (!qrData.startsWith(DeviceLinkConstants.qrProtocol)) {
+    logger.warning('parseQrData',
+        'QR data does not start with expected protocol prefix: '
+        '${qrData.substring(0, qrData.length.clamp(0, 30))}...');
     return null;
   }
 
@@ -488,6 +491,22 @@ class DeviceLinkException implements Exception {
   final parts = data.split(':');
 
   if (parts.length < 3) {
+    logger.warning('parseQrData',
+        'QR data has insufficient parts (${parts.length}, need 3+)');
+    return null;
+  }
+
+  // Validate public key is valid base64 of expected length (32 bytes for X25519)
+  final publicKey = parts[1];
+  try {
+    final decoded = base64Decode(publicKey);
+    if (decoded.length != 32) {
+      logger.warning('parseQrData',
+          'Invalid public key length: ${decoded.length} bytes (expected 32)');
+      return null;
+    }
+  } on FormatException {
+    logger.warning('parseQrData', 'Invalid base64 in public key');
     return null;
   }
 
@@ -497,10 +516,11 @@ class DeviceLinkException implements Exception {
   try {
     return (
       linkCode: parts[0],
-      publicKey: parts[1],
+      publicKey: publicKey,
       serverUrl: Uri.decodeComponent(serverUrlEncoded),
     );
   } catch (e) {
+    logger.warning('parseQrData', 'Failed to decode QR data components: $e');
     return null;
   }
 }

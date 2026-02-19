@@ -16,6 +16,7 @@ export function Footer() {
             Privacy Policy
           </a>
           <Link to="/guide">User Guide</Link>
+          <Link to="/wiki/en">Wiki</Link>
           <a href="https://hamzalabs.dev" target="_blank" rel="noopener noreferrer">
             HamzaLabs
           </a>

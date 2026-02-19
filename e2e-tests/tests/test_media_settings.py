@@ -73,22 +73,28 @@ class TestMediaSettings:
 
         helper.navigate_to_media_settings()
 
-        # Scroll until "Refresh Devices" is visible — it's at the bottom
-        # and may require more scrolls on small emulator screens (320x640)
+        # Scroll until "Refresh Devices" is visible — it's at the very bottom
+        # and the Camera preview section is tall, so we need to scroll and check
         screen_size = alice.get_window_size()
         center_x = int(screen_size['width'] * 0.5)
         start_y = int(screen_size['height'] * 0.8)
         end_y = int(screen_size['height'] * 0.2)
 
-        for _ in range(5):
-            alice.swipe(center_x, start_y, center_x, end_y, 500)
-            time.sleep(0.5)
-
-        helper._find("Refresh Devices", timeout=15).click()
+        found = False
+        for _ in range(10):
+            try:
+                helper._find("Refresh Devices", timeout=2).click()
+                found = True
+                break
+            except Exception:
+                alice.swipe(center_x, start_y, center_x, end_y, 500)
+                time.sleep(0.5)
+        if not found:
+            helper._find("Refresh Devices", timeout=5).click()
         time.sleep(2)
 
         # Scroll back up — Microphone is at the top of the settings page
-        for _ in range(5):
+        for _ in range(10):
             alice.swipe(center_x, end_y, center_x, start_y, 500)
             time.sleep(0.5)
 

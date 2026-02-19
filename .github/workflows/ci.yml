@@ -39,6 +39,7 @@ jobs:
         run: dart format --set-exit-if-changed .
 
   test:
+    needs: analyze
     runs-on: ubuntu-latest
     defaults:
       run:

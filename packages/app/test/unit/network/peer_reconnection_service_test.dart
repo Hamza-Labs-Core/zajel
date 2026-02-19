@@ -50,6 +50,7 @@ void main() {
     when(() => mockRelay.currentLoad).thenReturn(5);
 
     when(() => mockCrypto.publicKeyBase64).thenReturn('test-public-key-base64');
+    when(() => mockCrypto.stableId).thenReturn('test-stable-id');
     when(() => mockCrypto.getPublicKeyBase64())
         .thenAnswer((_) async => 'test-public-key-base64');
     when(() => mockCrypto.getPublicKeyBytes())
@@ -74,9 +75,6 @@ void main() {
         verify(() => mockRelay.onIntroduction).called(1);
       });
 
-      test('exposes isConnected as false initially', () {
-        expect(service.isConnected, isFalse);
-      });
     });
 
     group('Meeting Point Registration', () {
@@ -212,9 +210,14 @@ void main() {
         when(() => mockCrypto.getSessionKeyBytes('peer1'))
             .thenAnswer((_) async => null);
 
+        // StableId-based daily points (primary path)
+        when(() => mockMeetingPoints.deriveDailyPointsFromIds(
+                'test-stable-id', 'peer1'))
+            .thenReturn(['daily-point-1', 'daily-point-2']);
+        // Legacy pubkey-based daily points (fallback)
         when(() =>
                 mockMeetingPoints.deriveDailyPoints(myPublicKey, peerPublicKey))
-            .thenReturn(['daily-point-1', 'daily-point-2']);
+            .thenReturn(['legacy-daily-point']);
 
         // Listen for events
         final events = <PeerFoundEvent>[];
@@ -247,9 +250,14 @@ void main() {
         when(() => mockCrypto.getSessionKeyBytes('peer1'))
             .thenAnswer((_) async => sessionKey);
 
+        // StableId-based daily points (primary, no match)
+        when(() => mockMeetingPoints.deriveDailyPointsFromIds(
+                'test-stable-id', 'peer1'))
+            .thenReturn(['daily-point']);
+        // Legacy pubkey-based daily points (fallback, no match)
         when(() =>
                 mockMeetingPoints.deriveDailyPoints(myPublicKey, peerPublicKey))
-            .thenReturn(['daily-point']);
+            .thenReturn(['legacy-daily-point']);
         when(() => mockMeetingPoints.deriveHourlyTokens(sessionKey))
             .thenReturn(['hourly-token-1', 'hourly-token-2']);
 
@@ -402,14 +410,8 @@ void main() {
           relayClient: mockRelay,
         );
 
-        // Verify initially not connected
-        expect(freshService.isConnected, isFalse);
-
         // Act - dispose should complete without error
         await freshService.dispose();
-
-        // After dispose, should still show as not connected
-        expect(freshService.isConnected, isFalse);
       });
     });
 
@@ -437,6 +439,31 @@ void main() {
 
         // Assert
         verify(() => mockStorage.removePeer('peer-to-remove')).called(1);
+      });
+    });
+
+    group('PeerFoundEvent.toString', () {
+      test('handles empty meetingPoint without crash', () {
+        final event = PeerFoundEvent(
+            peerId: 'abc', meetingPoint: '', isLive: true);
+        // Must not throw RangeError
+        final str = event.toString();
+        expect(str, contains('meetingPoint:'));
+        expect(str, contains('peerId: abc'));
+      });
+
+      test('handles short meetingPoint', () {
+        final event = PeerFoundEvent(
+            peerId: 'abc', meetingPoint: 'abcd', isLive: false);
+        expect(event.toString(), contains('abcd'));
+      });
+
+      test('truncates long meetingPoint', () {
+        final event = PeerFoundEvent(
+            peerId: 'abc',
+            meetingPoint: 'a' * 50,
+            isLive: true);
+        expect(event.toString(), contains('aaaaaaaaaa...'));
       });
     });
   });
