@@ -7,7 +7,6 @@ import '../storage/trusted_peers_storage.dart';
 import 'connection_info.dart';
 import 'meeting_point_service.dart';
 import 'relay_client.dart';
-import 'signaling_client.dart';
 import 'subscription_manager.dart';
 
 /// Orchestrates peer reconnection using the relay and rendezvous system.
@@ -28,10 +27,7 @@ class PeerReconnectionService with SubscriptionManager {
   final MeetingPointService _meetingPointService;
   final RelayClient _relayClient;
 
-  SignalingClient? _signalingClient;
-  StreamSubscription? _signalingSubscription;
   Timer? _registrationTimer;
-  bool _isConnected = false;
 
   // Event streams
   final _peerFoundController = StreamController<PeerFoundEvent>.broadcast();
@@ -48,9 +44,6 @@ class PeerReconnectionService with SubscriptionManager {
 
   /// Emits status updates about the reconnection service.
   Stream<ReconnectionStatus> get onStatus => _statusController.stream;
-
-  /// Whether we're connected to the signaling server.
-  bool get isConnected => _isConnected;
 
   PeerReconnectionService({
     required CryptoService cryptoService,
@@ -77,157 +70,38 @@ class PeerReconnectionService with SubscriptionManager {
     }));
   }
 
-  /// Connect to the signaling server and start peer discovery.
-  Future<void> connect(String serverUrl) async {
-    if (_isConnected) {
-      await disconnect();
-    }
-
-    // Connect to signaling server
-    _signalingClient = SignalingClient(
-      serverUrl: serverUrl,
-      pairingCode: _relayClient.mySourceId, // Use our source ID as pairing code
-      publicKey: _cryptoService.publicKeyBase64,
-    );
-
-    await _signalingClient!.connect();
-    _isConnected = true;
-
-    _statusController.add(ReconnectionStatus(
-      isConnected: true,
-      message: 'Connected to signaling server',
-    ));
-
-    // Listen for signaling messages
-    _signalingSubscription =
-        _signalingClient!.messages.listen(_handleSignalingMessage);
-
-    // Register at meeting points for all trusted peers
-    await _registerAllMeetingPoints();
-
-    // Set up periodic re-registration (hourly tokens change)
-    _registrationTimer?.cancel();
-    _registrationTimer = Timer.periodic(
-      const Duration(minutes: 30),
-      (_) => _registerAllMeetingPoints(),
-    );
-
-    // Also register as a relay
-    await _registerAsRelay();
-  }
-
-  /// Disconnect from the signaling server.
-  Future<void> disconnect() async {
-    _registrationTimer?.cancel();
-    _registrationTimer = null;
-
-    await _signalingSubscription?.cancel();
-    _signalingSubscription = null;
-
-    await _signalingClient?.disconnect();
-    _signalingClient = null;
-    _isConnected = false;
-
-    _statusController.add(ReconnectionStatus(
-      isConnected: false,
-      message: 'Disconnected',
-    ));
-  }
-
-  /// Register at meeting points for all trusted peers.
-  Future<void> _registerAllMeetingPoints() async {
-    if (_signalingClient == null || !_isConnected) return;
-
-    final myPublicKey = await _cryptoService.getPublicKeyBytes();
-    final allDailyPoints = <String>[];
-    final allHourlyTokens = <String>[];
-    final deadDrops = <String, String>{}; // meetingPoint -> encrypted dead drop
-
-    final peerIds = await _trustedPeers.getAllPeerIds();
-
-    for (final peerId in peerIds) {
-      final peer = await _trustedPeers.getPeer(peerId);
-      if (peer == null || peer.isBlocked) continue;
-
-      final theirPublicKey = await _trustedPeers.getPublicKeyBytes(peerId);
-      if (theirPublicKey == null) continue;
-
-      // Derive daily meeting points from public keys
-      final dailyPoints = _meetingPointService.deriveDailyPoints(
-        myPublicKey,
-        theirPublicKey,
-      );
-      allDailyPoints.addAll(dailyPoints);
-
-      // Create dead drop with our connection info
-      final connectionInfo = ConnectionInfo(
-        publicKey: await _cryptoService.getPublicKeyBase64(),
-        relayId: _relayClient.getCurrentRelayId(),
-        sourceId: _relayClient.mySourceId,
-        fallbackRelays: _relayClient.getConnectedRelayIds(),
-        timestamp: DateTime.now().toUtc(),
-      );
-
-      // Encrypt connection info for this peer
-      final deadDropContent = await _createDeadDrop(peerId, connectionInfo);
-      if (deadDropContent != null) {
-        // Use today's daily point as the dead drop location
-        deadDrops[dailyPoints[1]] = deadDropContent;
-      }
-
-      // Derive hourly tokens from shared secret (if we have one)
-      final sharedSecret = await _cryptoService.getSessionKeyBytes(peerId);
-      if (sharedSecret != null) {
-        final hourlyTokens =
-            _meetingPointService.deriveHourlyTokens(sharedSecret);
-        allHourlyTokens.addAll(hourlyTokens);
-      }
-    }
-
-    // Register at the signaling server
-    await _signalingClient!.send({
-      'type': 'register_rendezvous',
-      'daily_points': allDailyPoints.toSet().toList(),
-      'hourly_tokens': allHourlyTokens.toSet().toList(),
-      'dead_drops': deadDrops,
-    });
-
-    _statusController.add(ReconnectionStatus(
-      isConnected: true,
-      message: 'Registered ${allDailyPoints.length} daily points, '
-          '${allHourlyTokens.length} hourly tokens',
-    ));
-  }
-
-  void _handleSignalingMessage(SignalingMessage message) async {
-    // We expect custom messages for rendezvous results
-    // The SignalingClient should be extended to handle these,
-    // but for now we can handle them through the existing types
-    // by checking for specific messages types we care about.
-
-    // Note: We need to extend SignalingClient to handle rendezvous messages.
-    // For now, the connection flow uses the relay client's introduction events.
-  }
+  // Meeting point registration is handled by ConnectionManager.reconnectTrustedPeers()
+  // which has direct access to the shared SignalingClient instance.
 
   Future<String?> _identifyPeerFromMeetingPoint(String meetingPoint) async {
+    final myStableId = _cryptoService.stableId;
     final myPublicKey = await _cryptoService.getPublicKeyBytes();
 
     final peerIds = await _trustedPeers.getAllPeerIds();
 
     for (final peerId in peerIds) {
-      final theirPublicKey = await _trustedPeers.getPublicKeyBytes(peerId);
-      if (theirPublicKey == null) continue;
-
-      // Check daily points
-      final dailyPoints = _meetingPointService.deriveDailyPoints(
-        myPublicKey,
-        theirPublicKey,
+      // Primary: check stableId-based daily points
+      final dailyPoints = _meetingPointService.deriveDailyPointsFromIds(
+        myStableId,
+        peerId,
       );
       if (dailyPoints.contains(meetingPoint)) {
         return peerId;
       }
 
-      // Check hourly tokens
+      // Legacy: check pubkey-based daily points
+      final theirPublicKey = await _trustedPeers.getPublicKeyBytes(peerId);
+      if (theirPublicKey != null) {
+        final legacyPoints = _meetingPointService.deriveDailyPoints(
+          myPublicKey,
+          theirPublicKey,
+        );
+        if (legacyPoints.contains(meetingPoint)) {
+          return peerId;
+        }
+      }
+
+      // Check hourly tokens (these use shared secret, not identity)
       final sharedSecret = await _cryptoService.getSessionKeyBytes(peerId);
       if (sharedSecret != null) {
         final hourlyTokens =
@@ -264,18 +138,6 @@ class PeerReconnectionService with SubscriptionManager {
           'PeerReconnection', 'Failed to decrypt dead drop from $peerId', e);
       return null;
     }
-  }
-
-  /// Register ourselves as an available relay.
-  Future<void> _registerAsRelay() async {
-    if (_signalingClient == null || !_isConnected) return;
-
-    await _signalingClient!.send({
-      'type': 'register',
-      'peer_id': _relayClient.mySourceId,
-      'max_connections': _relayClient.maxCapacity,
-      'connected_count': _relayClient.currentLoad,
-    });
   }
 
   /// Attempt to connect to a peer using their connection info.
@@ -426,9 +288,7 @@ class PeerReconnectionService with SubscriptionManager {
   /// Add a new trusted peer after successful connection.
   Future<void> addTrustedPeer(TrustedPeer peer) async {
     await _trustedPeers.savePeer(peer);
-
-    // Re-register meeting points to include the new peer
-    await _registerAllMeetingPoints();
+    // Meeting point re-registration is triggered via ConnectionManager
   }
 
   /// Remove a trusted peer.
@@ -438,7 +298,8 @@ class PeerReconnectionService with SubscriptionManager {
 
   /// Dispose resources.
   Future<void> dispose() async {
-    await disconnect();
+    _registrationTimer?.cancel();
+    _registrationTimer = null;
     await cancelAllSubscriptions();
     await _peerFoundController.close();
     await _connectionRequestController.close();
@@ -461,9 +322,14 @@ class PeerFoundEvent {
   });
 
   @override
-  String toString() => 'PeerFoundEvent(peerId: $peerId, '
-      'meetingPoint: ${meetingPoint.substring(0, 10)}..., '
-      'isLive: $isLive)';
+  String toString() {
+    final mpPreview = meetingPoint.length > 10
+        ? '${meetingPoint.substring(0, 10)}...'
+        : meetingPoint;
+    return 'PeerFoundEvent(peerId: $peerId, '
+        'meetingPoint: $mpPreview, '
+        'isLive: $isLive)';
+  }
 }
 
 /// Event emitted when we receive a connection request.
