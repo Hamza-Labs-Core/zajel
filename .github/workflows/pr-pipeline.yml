@@ -1681,7 +1681,7 @@ jobs:
             exit 1
           fi
           echo "coturn config:"
-          cat /etc/turnserver.conf
+          sudo cat /etc/turnserver.conf
           echo "---"
 
           # Android emulator reaches the host via 10.0.2.2 (SLiRP gateway),
