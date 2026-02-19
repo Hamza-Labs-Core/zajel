@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../app_router.dart';
+import '../../core/logging/logger_service.dart';
 import '../../core/media/media_service.dart';
 import '../../core/models/models.dart';
 import '../../core/network/voip_service.dart';
@@ -37,6 +38,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   final _scrollController = ScrollController();
   final _messageFocusNode = FocusNode();
   bool _isSending = false;
+  bool _isLoadingMore = false;
   bool _isIncomingCallDialogOpen = false;
   bool _showEmojiPicker = false;
   StreamSubscription<CallState>? _voipStateSubscription;
@@ -57,6 +59,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _scrollController.addListener(_onScroll);
     _listenToMessages();
     _setupVoipListener();
   }
@@ -88,6 +91,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     });
   }
 
+  /// Load older messages when user scrolls near the top.
+  void _onScroll() {
+    if (_isLoadingMore) return;
+    if (!_scrollController.hasClients) return;
+    if (_scrollController.position.pixels <
+        _scrollController.position.minScrollExtent + 100) {
+      final notifier =
+          ref.read(chatMessagesProvider(widget.peerId).notifier);
+      if (!notifier.hasMore) return;
+      _isLoadingMore = true;
+      notifier.loadMore().then((_) {
+        _isLoadingMore = false;
+      });
+    }
+  }
+
   void _listenToMessages() {
     // Messages are persisted by the global listener in main.dart.
     // Here we just reload from DB when a new message arrives for this peer.
@@ -106,6 +125,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _voipStateSubscription?.cancel();
+    _scrollController.removeListener(_onScroll);
     _messageController.dispose();
     _scrollController.dispose();
     _messageFocusNode.dispose();
@@ -449,8 +469,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     } else if (Platform.isMacOS) {
       result = await Process.run('open', [filePath]);
     } else if (Platform.isWindows) {
-      // On Windows, use 'start' command via cmd
-      result = await Process.run('cmd', ['/c', 'start', '', filePath]);
+      // Use explorer.exe directly — avoids cmd.exe shell parser which is
+      // vulnerable to injection via crafted filenames (& calc.exe, | net user)
+      result = await Process.run('explorer.exe', [filePath]);
     } else {
       throw Exception('Unsupported platform');
     }
@@ -585,9 +606,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     _messageController.clear();
     _scrollToBottom();
 
-    // Check if peer is connected
-    final peer = ref.read(selectedPeerProvider);
-    if (peer?.connectionState != PeerConnectionState.connected) {
+    // Check if the actual peer (not selectedPeerProvider) is connected
+    bool isConnected = false;
+    ref.read(peersProvider).whenData((peers) {
+      final peer = peers.where((p) => p.id == widget.peerId).firstOrNull;
+      isConnected = peer?.connectionState == PeerConnectionState.connected;
+    });
+    if (!isConnected) {
       // Queue as pending — will be sent on reconnect
       ref
           .read(chatMessagesProvider(widget.peerId).notifier)
@@ -855,7 +880,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       final connectionManager = ref.read(connectionManagerProvider);
       try {
         await connectionManager.disconnectPeer(peer.id);
-      } catch (_) {}
+      } catch (e) {
+        logger.debug('ChatScreen', 'Best-effort disconnect failed for ${peer.id}: $e');
+      }
       if (mounted) {
         Navigator.of(context).pop(); // Go back to home
       }
