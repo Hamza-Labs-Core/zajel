@@ -559,15 +559,36 @@ class ConnectionManager {
 
   void _setupCallbacks() {
     // Handle handshake completion: update peer username and transition to connected
-    _webrtcService.onHandshakeComplete = (peerId, publicKey, username) {
-      final stableId = _toStableId(peerId);
-      final peer = _peers[stableId];
-      if (peer != null) {
-        _peers[stableId] = peer.copyWith(
-          username: username,
-        );
+    _webrtcService.onHandshakeComplete =
+        (peerId, publicKey, username, handshakeStableId) {
+      // Resolve identity: prefer handshake stableId, fall back to publicKey-derived
+      final provisionalId = _toStableId(peerId);
+      final finalId = handshakeStableId ?? provisionalId;
+
+      // Re-key peer entry if handshake stableId differs from provisional
+      if (finalId != provisionalId && _peers.containsKey(provisionalId)) {
+        final peer = _peers.remove(provisionalId)!;
+        _peers[finalId] = peer.copyWith(id: finalId, username: username);
+        // Update aliasing maps
+        _codeToStableId[peerId] = finalId;
+        _stableIdToCode.remove(provisionalId);
+        _stableIdToCode[finalId] = peerId;
+        // Re-key crypto session: move public key from provisional to final
+        _cryptoService.removePeerPublicKey(provisionalId);
+        _cryptoService.setPeerPublicKey(finalId, publicKey);
+        logger.info('ConnectionManager',
+            'Identity resolved: provisional=$provisionalId → final=$finalId');
+      } else {
+        final peer = _peers[finalId];
+        if (peer != null) {
+          _peers[finalId] = peer.copyWith(username: username);
+        }
       }
-      _updatePeerState(stableId, PeerConnectionState.connected);
+
+      // Key rotation detection: known stableId with different publicKey
+      _checkKeyRotation(finalId, publicKey);
+
+      _updatePeerState(finalId, PeerConnectionState.connected);
     };
 
     _webrtcService.onMessage = (peerId, message) {
@@ -659,7 +680,12 @@ class ConnectionManager {
     try {
       // Message format: {"type":"send","to":"peerId","data":"..."}
       final parsed = _parseLinkedDeviceMessage(message);
-      if (parsed == null) return;
+      if (parsed == null) {
+        logger.warning('ConnectionManager',
+            'Could not parse linked device message from $deviceId '
+            '(length=${message.length})');
+        return;
+      }
 
       final type = parsed['type'] as String?;
       if (type == 'send') {
@@ -675,7 +701,8 @@ class ConnectionManager {
         }
       }
     } catch (e) {
-      // Invalid message format - ignore
+      logger.warning('ConnectionManager',
+          'Error handling linked device message from $deviceId: $e');
     }
   }
 
@@ -686,11 +713,13 @@ class ConnectionManager {
         const JsonDecoder().convert(message) as Map,
       );
     } catch (e) {
+      logger.debug('ConnectionManager',
+          'Failed to parse linked device JSON: $e');
       return null;
     }
   }
 
-  void _handleSignalingMessage(SignalingMessage message) async {
+  Future<void> _handleSignalingMessage(SignalingMessage message) async {
     logger.debug('ConnectionManager',
         'Received signaling message: ${message.runtimeType}');
     try {
@@ -918,8 +947,42 @@ class ConnectionManager {
 
       // Perform handshake when connected (translate to signaling code for WebRTC)
       if (state == PeerConnectionState.handshaking) {
-        _webrtcService.performHandshake(_toCode(peerId), username: _username);
+        String? ourStableId;
+        try {
+          ourStableId = _cryptoService.stableId;
+        } catch (_) {
+          // CryptoService not yet initialized — stableId will be omitted
+        }
+        _webrtcService.performHandshake(_toCode(peerId),
+            username: _username, stableId: ourStableId);
       }
+    }
+  }
+
+  /// Detect key rotation: known stableId presenting a new publicKey.
+  ///
+  /// TOFU (Trust On First Use): first key associated with a stableId is trusted.
+  /// Subsequent key changes are auto-accepted and logged. A future enhancement
+  /// could show a "safety number changed" warning in the UI.
+  Future<void> _checkKeyRotation(String stableId, String newPublicKey) async {
+    try {
+      final existingPeer = await _trustedPeersStorage.getPeer(stableId);
+      if (existingPeer != null && existingPeer.publicKey != newPublicKey) {
+        logger.warning('ConnectionManager',
+            'Key rotation detected for $stableId '
+            '(old: ${existingPeer.publicKey.substring(0, 8)}..., '
+            'new: ${newPublicKey.substring(0, 8)}...)');
+        // Persist the new key FIRST, then update in-memory state
+        await _trustedPeersStorage.savePeer(existingPeer.copyWith(
+          publicKey: newPublicKey,
+        ));
+        _cryptoService.setPeerPublicKey(stableId, newPublicKey);
+        logger.info('ConnectionManager',
+            'Key rotation persisted for $stableId');
+      }
+    } catch (e) {
+      logger.error('ConnectionManager',
+          'Failed to process key rotation for $stableId: $e');
     }
   }
 
