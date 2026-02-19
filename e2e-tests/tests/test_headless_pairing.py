@@ -15,7 +15,6 @@ Flow:
 import time
 import pytest
 
-from config import P2P_CONNECTION_TIMEOUT
 
 
 @pytest.mark.headless
@@ -53,13 +52,8 @@ class TestHeadlessPairing:
             print(f"Trying Bob's code {i+1}/{len(bob_codes)}: {bob_code}")
             helper.enter_peer_code(bob_code)
 
-            # Wait for P2P connection to establish
-            time.sleep(P2P_CONNECTION_TIMEOUT)
-
-            helper.go_back_to_home()
-            time.sleep(3)
-
-            if helper.is_peer_connected():
+            # Poll until connected or timeout
+            if helper.wait_for_peer_connected(timeout=60):
                 print(f"Pairing succeeded with code {bob_code}")
                 break
 
@@ -91,13 +85,8 @@ class TestHeadlessPairing:
         # The app auto-accepts in E2E mode, so this completes without UI interaction.
         headless_bob.pair_with(alice_code)
 
-        time.sleep(P2P_CONNECTION_TIMEOUT)
-
-        # Go back to home screen to check connection status
-        helper.go_back_to_home()
-        time.sleep(3)
-
-        assert helper.is_peer_connected(), "Alice should show a connected peer"
+        # Poll until connected or timeout
+        assert helper.wait_for_peer_connected(timeout=60), "Alice should show a connected peer"
 
     @pytest.mark.single_device
     def test_pairing_codes_differ(self, alice, app_helper, headless_bob):

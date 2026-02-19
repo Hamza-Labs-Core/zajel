@@ -369,6 +369,22 @@ class AppHelper:
         except (NoSuchElementException, Exception):
             return False
 
+    def wait_for_peer_connected(self, timeout: int = 60, peer_name: str = None) -> bool:
+        """Poll until a peer shows as 'Connected' on the home screen.
+
+        Navigates back to home and checks every 3 seconds.
+        Returns True if connected within timeout, False otherwise.
+        """
+        import time as _time
+        deadline = _time.monotonic() + timeout
+        while _time.monotonic() < deadline:
+            self.go_back_to_home()
+            _time.sleep(3)
+            if self.is_peer_connected(peer_name=peer_name):
+                return True
+            _time.sleep(2)
+        return False
+
     def is_status_online(self) -> bool:
         """Check if the signaling status shows 'Online'."""
         from selenium.common.exceptions import NoSuchElementException

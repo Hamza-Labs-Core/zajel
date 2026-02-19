@@ -10,7 +10,7 @@ import subprocess
 import time
 import pytest
 
-from config import P2P_CONNECTION_TIMEOUT, ADB_PATH
+from config import ADB_PATH
 
 
 def _get_device_id_from_driver(driver):
@@ -72,12 +72,7 @@ class TestHeadlessNotifications:
         helper.get_pairing_code_from_connect_screen()
         helper.enter_peer_code(headless_bob.pairing_code)
 
-        time.sleep(P2P_CONNECTION_TIMEOUT)
-
-        helper.go_back_to_home()
-        time.sleep(3)
-
-        assert helper.is_peer_connected(), "Pairing must succeed"
+        assert helper.wait_for_peer_connected(timeout=60), "Pairing must succeed"
         return helper
 
     @pytest.mark.single_device

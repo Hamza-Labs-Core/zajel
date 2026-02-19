@@ -896,6 +896,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
 
   Future<void> _syncAndroidSecureFlag() async {
     if (!Platform.isAndroid) return;
+    // Never set FLAG_SECURE in E2E mode — it blocks Appium screenshots
+    if (_isE2eTest) return;
     try {
       final enabled = ref.read(privacyScreenProvider);
       if (enabled) {
