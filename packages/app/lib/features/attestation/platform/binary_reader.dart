@@ -58,7 +58,9 @@ class StubBinaryReader implements BinaryReader {
       _tag,
       'Binary reading not implemented for this platform. '
       'Binary attestation challenges will fail. '
-      'See binary_reader.dart for implementation notes.',
+      'See BinaryReader class documentation in binary_reader.dart for '
+      'instructions on creating platform-specific implementations '
+      '(BinaryReaderAndroid, BinaryReaderIos, BinaryReaderDesktop).',
     );
     return null;
   }

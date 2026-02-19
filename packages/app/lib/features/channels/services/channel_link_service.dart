@@ -20,7 +20,7 @@ class ChannelLinkService {
     if (channel.encryptionKeyPrivate == null) {
       throw ArgumentError(
         'Only channel owners can generate invite links '
-        '(requires encryptionKeyPrivate)',
+        '— encryptionKeyPrivate is required',
       );
     }
 

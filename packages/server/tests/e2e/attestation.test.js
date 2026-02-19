@@ -1464,12 +1464,6 @@ describe('Attestation Service E2E Tests', () => {
     });
 
     it('should not issue web session token when signing key not configured', async () => {
-      const doWithoutSigningKey = new AttestationRegistryDO(mockState, {
-        BUILD_TOKEN_VERIFY_KEY: null,
-        ATTESTATION_SIGNING_KEY: seedHex,
-        CI_UPLOAD_SECRET: CI_SECRET,
-      });
-
       // Create a DO without the ATTESTATION_SIGNING_KEY for session signing
       const doNoSession = new AttestationRegistryDO(new MockState(), {
         ATTESTATION_SIGNING_KEY: seedHex,

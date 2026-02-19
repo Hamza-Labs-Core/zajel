@@ -63,7 +63,7 @@ elif PLATFORM == "windows":
     )
 elif PLATFORM == "ios":
     from platforms.ios_config import (
-        APP_PATH, SIGNALING_URL, APP_LAUNCH_TIMEOUT,
+        APP_PATH, SIGNALING_URL,
     )
 else:
     SIGNALING_URL = os.environ.get("SIGNALING_URL", "")

@@ -96,7 +96,6 @@ class TestSettings:
         screen_size = alice.get_window_size()
         center_x = int(screen_size['width'] * 0.5)
         start_y = int(screen_size['height'] * 0.6)
-        end_y = int(screen_size['height'] * 0.3)
 
         found_status = False
         # On Pixel 6 (~859dp usable), "External Connections" is at ~492dp
