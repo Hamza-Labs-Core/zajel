@@ -820,12 +820,12 @@ class SignalingClient {
   }
 
   /// Parse live matches from JSON.
-  List<LiveMatch> _parseLiveMatches(dynamic data) {
+  List<SignalingLiveMatch> _parseLiveMatches(dynamic data) {
     if (data == null) return [];
     final list = data as List<dynamic>;
     return list.map((m) {
       final match = m as Map<String, dynamic>;
-      return LiveMatch(
+      return SignalingLiveMatch(
         peerId: match['peerId'] as String? ?? '',
         relayId: match['relayId'] as String?,
       );
@@ -833,12 +833,12 @@ class SignalingClient {
   }
 
   /// Parse dead drops from JSON.
-  List<DeadDrop> _parseDeadDrops(dynamic data) {
+  List<SignalingDeadDrop> _parseDeadDrops(dynamic data) {
     if (data == null) return [];
     final list = data as List<dynamic>;
     return list.map((d) {
       final drop = d as Map<String, dynamic>;
-      return DeadDrop(
+      return SignalingDeadDrop(
         peerId: drop['peerId'] as String? ?? '',
         encryptedData: drop['deadDrop'] as String? ?? '',
         relayId: drop['relayId'] as String?,
@@ -1223,8 +1223,8 @@ sealed class RendezvousEvent {
 
 /// Full rendezvous result when all points are handled locally.
 class RendezvousResult extends RendezvousEvent {
-  final List<LiveMatch> liveMatches;
-  final List<DeadDrop> deadDrops;
+  final List<SignalingLiveMatch> liveMatches;
+  final List<SignalingDeadDrop> deadDrops;
 
   const RendezvousResult({
     required this.liveMatches,
@@ -1234,8 +1234,8 @@ class RendezvousResult extends RendezvousEvent {
 
 /// Partial rendezvous result with redirects to other servers.
 class RendezvousPartial extends RendezvousEvent {
-  final List<LiveMatch> liveMatches;
-  final List<DeadDrop> deadDrops;
+  final List<SignalingLiveMatch> liveMatches;
+  final List<SignalingDeadDrop> deadDrops;
   final List<RendezvousRedirect> redirects;
 
   const RendezvousPartial({
@@ -1273,24 +1273,28 @@ class RendezvousRedirect {
   });
 }
 
-/// Live match info from rendezvous.
-class LiveMatch {
+/// Live match info from rendezvous signaling message.
+///
+/// Distinct from `dead_drop.dart`'s `LiveMatch` which is a richer domain model.
+class SignalingLiveMatch {
   final String peerId;
   final String? relayId;
 
-  const LiveMatch({
+  const SignalingLiveMatch({
     required this.peerId,
     this.relayId,
   });
 }
 
-/// Dead drop info from rendezvous.
-class DeadDrop {
+/// Dead drop info from rendezvous signaling message.
+///
+/// Distinct from `dead_drop.dart`'s `DeadDrop` which is a richer domain model.
+class SignalingDeadDrop {
   final String peerId;
   final String encryptedData;
   final String? relayId;
 
-  const DeadDrop({
+  const SignalingDeadDrop({
     required this.peerId,
     required this.encryptedData,
     this.relayId,
