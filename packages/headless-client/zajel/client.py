@@ -290,6 +290,9 @@ class ZajelHeadlessClient:
         # WebRTC peer tracking (issue-headless-05: bind handshake to specific peer)
         self._webrtc_peer_id: Optional[str] = None
 
+        # Mapping of signaling peer code -> stableId from handshake
+        self._peer_stable_ids: dict[str, str] = {}
+
         # Group invitation verification state (issue-headless-11)
         self.auto_accept_group_invitations: bool = True
         self._pending_group_invitations: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
@@ -2028,12 +2031,19 @@ class ZajelHeadlessClient:
             invitee_sender_key = data["inviteeSenderKey"]
 
             # Verify the inviter is the peer who sent this message (issue-headless-11)
+            # The Flutter app sends inviterDeviceId as its stableId (16 hex chars),
+            # while from_peer_id is the signaling code (6 chars). Look up the
+            # peer's stableId from the handshake to compare correctly.
             inviter_device_id = data.get("inviterDeviceId")
-            if inviter_device_id != from_peer_id:
+            peer_stable_id = self._peer_stable_ids.get(from_peer_id)
+            expected_ids = {from_peer_id}
+            if peer_stable_id:
+                expected_ids.add(peer_stable_id)
+            if inviter_device_id not in expected_ids:
                 logger.warning(
                     "Group invitation inviterDeviceId mismatch: "
-                    "claimed '%s' but received from '%s'. Rejecting.",
-                    inviter_device_id, from_peer_id,
+                    "claimed '%s' but received from '%s' (stableId='%s'). Rejecting.",
+                    inviter_device_id, from_peer_id, peer_stable_id,
                 )
                 return
 
@@ -2371,6 +2381,14 @@ class ZajelHeadlessClient:
             # Key exchange — use tracked WebRTC peer ID (issue-headless-05)
             peer_pub_key = msg["publicKey"]
             peer_id = self._webrtc_peer_id
+            # Extract stableId if present (Flutter sends this for device identity)
+            stable_id = msg.get("stableId")
+            if peer_id and stable_id:
+                self._peer_stable_ids[peer_id] = stable_id
+                logger.info(
+                    "Stored stableId=%s for peer_id=%s",
+                    stable_id, peer_id,
+                )
             logger.info(
                 "Received handshake from peer_id=%s: peerPub=%s…",
                 peer_id, peer_pub_key[:8] if peer_pub_key else "None",
@@ -2492,16 +2510,22 @@ class ZajelHeadlessClient:
                 logger.warning("No session key for WebRTC peer %s", peer_id)
 
     def _on_file_channel_data(self, data: str) -> None:
-        """Handle data from the file channel."""
-        # File channel messages are encrypted — decrypt with tracked peer (issue-headless-06)
+        """Handle data from the file channel.
+
+        File channel messages use plaintext JSON envelopes.  Only the
+        ``data`` field inside ``file_chunk`` messages is encrypted; the
+        chunk-level decryption is handled by ``FileTransferService``.
+        """
         peer_id = self._webrtc_peer_id
-        if peer_id and self._crypto.has_session_key(peer_id):
-            try:
-                plaintext = self._crypto.decrypt(peer_id, data)
-                msg = json.loads(plaintext)
-                if self._file_transfer:
-                    self._file_transfer.handle_file_message(peer_id, msg)
-            except Exception as e:
-                logger.error("File channel decrypt failed for %s: %s", peer_id, e)
-        else:
-            logger.warning("No session key for file channel peer %s", peer_id)
+        if not peer_id:
+            logger.warning("File channel data received but no peer tracked")
+            return
+
+        try:
+            msg = json.loads(data)
+            if self._file_transfer:
+                self._file_transfer.handle_file_message(peer_id, msg)
+        except json.JSONDecodeError:
+            logger.error("File channel received non-JSON data from %s", peer_id)
+        except Exception as e:
+            logger.error("File channel handling failed for %s: %s", peer_id, e)

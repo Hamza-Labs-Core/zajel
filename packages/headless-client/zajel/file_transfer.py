@@ -108,6 +108,11 @@ class FileTransferService:
     ) -> str:
         """Send a file to a peer.
 
+        The file transfer protocol matches the Flutter app:
+        - file_start and file_complete are sent as plaintext JSON.
+        - file_chunk wraps the encrypted chunk data inside a plaintext JSON
+          envelope (only the ``data`` field is encrypted).
+
         Args:
             peer_id: The peer to send to.
             file_path: Path to the file to send.
@@ -129,38 +134,38 @@ class FileTransferService:
             path.name, len(file_data), total_chunks,
         )
 
-        # Send file_start
+        # Send file_start as plaintext JSON (matches Flutter protocol)
         start_msg = FileStartMessage(
             file_id=file_id,
             file_name=path.name,
             total_size=len(file_data),
             total_chunks=total_chunks,
         )
-        encrypted = self._crypto.encrypt(peer_id, start_msg.to_json())
-        self._send_fn(encrypted)
+        self._send_fn(start_msg.to_json())
 
-        # Send chunks
+        # Send chunks — only the chunk data is encrypted
         for i in range(total_chunks):
             offset = i * chunk_size
             chunk = file_data[offset : offset + chunk_size]
             chunk_b64 = base64.b64encode(chunk).decode()
 
+            # Encrypt just the base64-encoded chunk data
+            encrypted_data = self._crypto.encrypt(peer_id, chunk_b64)
+
             chunk_msg = FileChunkMessage(
                 file_id=file_id,
                 chunk_index=i,
-                data=chunk_b64,
+                data=encrypted_data,
             )
-            encrypted = self._crypto.encrypt(peer_id, chunk_msg.to_json())
-            self._send_fn(encrypted)
+            self._send_fn(chunk_msg.to_json())
 
             # Delay between chunks to avoid overwhelming the channel
             await asyncio.sleep(CHUNK_SEND_DELAY_MS / 1000)
 
-        # Send file_complete with hash
+        # Send file_complete as plaintext JSON (matches Flutter protocol)
         file_hash = hashlib.sha256(file_data).hexdigest()
         complete_msg = FileCompleteMessage(file_id=file_id, sha256=file_hash)
-        encrypted = self._crypto.encrypt(peer_id, complete_msg.to_json())
-        self._send_fn(encrypted)
+        self._send_fn(complete_msg.to_json())
 
         logger.info("File sent: %s (%s)", path.name, file_id)
         return file_id
@@ -231,7 +236,12 @@ class FileTransferService:
                 logger.warning("Chunk for unknown file: %s", file_id)
                 return
 
-            chunk_data = base64.b64decode(msg["data"])
+            # The data field contains encrypted base64 chunk data
+            # (only the chunk payload is encrypted, not the JSON envelope).
+            # Decrypt it first, then base64-decode to get raw bytes.
+            raw_data = msg["data"]
+            decrypted_b64 = self._crypto.decrypt(peer_id, raw_data)
+            chunk_data = base64.b64decode(decrypted_b64)
             transfer.info.bytes_received += len(chunk_data)
 
             if transfer.info.bytes_received > transfer.info.total_size * 1.1:  # 10% tolerance

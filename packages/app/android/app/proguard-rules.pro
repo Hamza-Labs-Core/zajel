@@ -22,3 +22,8 @@
 -keepclasseswithmembernames class * {
     native <methods>;
 }
+
+# Google Play Core — referenced by Flutter deferred components but not used
+-dontwarn com.google.android.play.core.splitcompat.SplitCompatApplication
+-dontwarn com.google.android.play.core.splitinstall.**
+-dontwarn com.google.android.play.core.tasks.**
