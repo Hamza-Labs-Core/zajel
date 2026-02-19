@@ -26,6 +26,8 @@ void main() {
       when(() => mockWebRTC.signalingEvents)
           .thenAnswer((_) => const Stream.empty());
       when(() => mockWebRTC.closeConnection(any())).thenAnswer((_) async {});
+      when(() => mockWebRTC.waitForDataChannel(any()))
+          .thenAnswer((_) async {});
       when(() => mockSignaling.isConnected).thenReturn(true);
 
       client = RelayClient(
