@@ -89,7 +89,8 @@ class MeetingPointService {
   /// Unlike [deriveDailyPoints] which uses public key bytes, this uses
   /// persistent stable IDs that survive key rotation. Both peers compute
   /// the same points regardless of who calls first.
-  List<String> deriveDailyPointsFromIds(String myStableId, String peerStableId) {
+  List<String> deriveDailyPointsFromIds(
+      String myStableId, String peerStableId) {
     return deriveDailyPointsFromIdsForDate(
         myStableId, peerStableId, DateTime.now().toUtc());
   }

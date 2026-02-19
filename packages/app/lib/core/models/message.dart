@@ -100,6 +100,7 @@ enum MessageType {
   image,
   handshake, // Key exchange message
   ack, // Acknowledgment
+  system, // System notifications (key changes, etc.)
 }
 
 enum MessageStatus {

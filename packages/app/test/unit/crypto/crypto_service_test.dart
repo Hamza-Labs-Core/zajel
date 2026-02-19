@@ -501,8 +501,8 @@ void main() {
 
       test('is deterministic', () {
         const id = '1234567890ABCDEF';
-        expect(
-            CryptoService.tagFromStableId(id), CryptoService.tagFromStableId(id));
+        expect(CryptoService.tagFromStableId(id),
+            CryptoService.tagFromStableId(id));
       });
 
       test('throws ArgumentError for strings shorter than 4 chars', () {

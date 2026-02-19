@@ -74,7 +74,6 @@ void main() {
         // Verify that onIntroduction was accessed during setup
         verify(() => mockRelay.onIntroduction).called(1);
       });
-
     });
 
     group('Meeting Point Registration', () {
@@ -252,8 +251,7 @@ void main() {
 
         // StableId-based daily points (primary, no match)
         when(() => mockMeetingPoints.deriveDailyPointsFromIds(
-                'test-stable-id', 'peer1'))
-            .thenReturn(['daily-point']);
+            'test-stable-id', 'peer1')).thenReturn(['daily-point']);
         // Legacy pubkey-based daily points (fallback, no match)
         when(() =>
                 mockMeetingPoints.deriveDailyPoints(myPublicKey, peerPublicKey))
@@ -444,8 +442,8 @@ void main() {
 
     group('PeerFoundEvent.toString', () {
       test('handles empty meetingPoint without crash', () {
-        final event = PeerFoundEvent(
-            peerId: 'abc', meetingPoint: '', isLive: true);
+        final event =
+            PeerFoundEvent(peerId: 'abc', meetingPoint: '', isLive: true);
         // Must not throw RangeError
         final str = event.toString();
         expect(str, contains('meetingPoint:'));
@@ -453,16 +451,14 @@ void main() {
       });
 
       test('handles short meetingPoint', () {
-        final event = PeerFoundEvent(
-            peerId: 'abc', meetingPoint: 'abcd', isLive: false);
+        final event =
+            PeerFoundEvent(peerId: 'abc', meetingPoint: 'abcd', isLive: false);
         expect(event.toString(), contains('abcd'));
       });
 
       test('truncates long meetingPoint', () {
-        final event = PeerFoundEvent(
-            peerId: 'abc',
-            meetingPoint: 'a' * 50,
-            isLive: true);
+        final event =
+            PeerFoundEvent(peerId: 'abc', meetingPoint: 'a' * 50, isLive: true);
         expect(event.toString(), contains('aaaaaaaaaa...'));
       });
     });

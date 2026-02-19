@@ -484,7 +484,8 @@ class _PeerCard extends ConsumerWidget {
       try {
         await connectionManager.disconnectPeer(peer.id);
       } catch (e) {
-        logger.debug('HomeScreen', 'Best-effort disconnect failed for ${peer.id}: $e');
+        logger.debug(
+            'HomeScreen', 'Best-effort disconnect failed for ${peer.id}: $e');
       }
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -34,6 +34,7 @@ class CryptoService {
   SimpleKeyPair? _identityKeyPair;
   String? _publicKeyBase64Cache;
   String? _stableId;
+  bool _keysWereRegenerated = false;
   final Map<String, SecretKey> _sessionKeys = {};
   final Map<String, String> _peerPublicKeys = {};
 
@@ -79,6 +80,13 @@ class CryptoService {
     }
     return _stableId!;
   }
+
+  /// Whether identity keys were regenerated due to storage corruption.
+  ///
+  /// When true, the previous identity (public key) is lost and all
+  /// existing peer trust relationships are broken. The UI should
+  /// warn the user that their identity changed.
+  bool get keysWereRegenerated => _keysWereRegenerated;
 
   /// Derive a stable peer ID from a public key (like a phone number).
   ///
@@ -175,6 +183,65 @@ class CryptoService {
     final publicKey = _peerPublicKeys[peerId];
     if (publicKey == null) return null;
     return getPeerPublicKeyFingerprint(publicKey);
+  }
+
+  /// Compute a shared safety number from two public keys.
+  ///
+  /// Both peers compute the same number by sorting keys lexicographically
+  /// before hashing. The result is 60 digits displayed as 12 groups of 5.
+  /// Users compare this number out-of-band (phone, in person) to verify
+  /// no MITM attack has occurred.
+  ///
+  /// Returns a 60-digit string (all digits).
+  static String computeSafetyNumber(
+      String publicKeyABase64, String publicKeyBBase64) {
+    final bytesA = base64Decode(publicKeyABase64);
+    final bytesB = base64Decode(publicKeyBBase64);
+
+    // Sort lexicographically so both sides get the same result
+    int cmp = 0;
+    for (var i = 0; i < bytesA.length && i < bytesB.length && cmp == 0; i++) {
+      cmp = bytesA[i].compareTo(bytesB[i]);
+    }
+    if (cmp == 0) cmp = bytesA.length.compareTo(bytesB.length);
+
+    final List<int> sorted;
+    if (cmp <= 0) {
+      sorted = [...bytesA, ...bytesB];
+    } else {
+      sorted = [...bytesB, ...bytesA];
+    }
+
+    final hash = crypto.sha256.convert(sorted);
+    return _formatSafetyNumber(hash.bytes);
+  }
+
+  /// Format hash bytes into a 60-digit safety number.
+  ///
+  /// Takes pairs of bytes, converts to a 5-digit number (mod 100000),
+  /// producing 12 groups of 5 digits = 60 digits total.
+  static String _formatSafetyNumber(List<int> hashBytes) {
+    final buffer = StringBuffer();
+    for (var i = 0; i < 24 && i + 1 < hashBytes.length; i += 2) {
+      final val = (hashBytes[i] << 8 | hashBytes[i + 1]) % 100000;
+      buffer.write(val.toString().padLeft(5, '0'));
+    }
+    return buffer.toString().substring(0, 60);
+  }
+
+  /// Format a 60-digit safety number for display as 12 groups of 5.
+  ///
+  /// Example: "12345678901234..." → "12345 67890 12345 67890\n..."
+  static String formatSafetyNumberForDisplay(String safetyNumber) {
+    final buffer = StringBuffer();
+    for (var i = 0; i < safetyNumber.length; i += 5) {
+      if (i > 0) {
+        buffer.write(i % 20 == 0 ? '\n' : ' ');
+      }
+      final end = (i + 5).clamp(0, safetyNumber.length);
+      buffer.write(safetyNumber.substring(i, end));
+    }
+    return buffer.toString();
   }
 
   /// Formats a hex string as a human-readable fingerprint.
@@ -278,12 +345,13 @@ class CryptoService {
     final sessionKeyHash = crypto.sha256.convert(sessionKeyBytes).toString();
     final sharedSecretHash =
         crypto.sha256.convert(sharedSecretBytes).toString();
-    logger.info('CryptoService',
+    logger.info(
+        'CryptoService',
         'establishSession($peerId): '
-        'ourPub=${publicKeyBase64.substring(0, 8)}… '
-        'peerPub=${peerPublicKeyBase64.substring(0, 8)}… '
-        'sharedHash=${sharedSecretHash.substring(0, 16)} '
-        'sessionHash=${sessionKeyHash.substring(0, 16)}');
+            'ourPub=${publicKeyBase64.substring(0, 8)}… '
+            'peerPub=${peerPublicKeyBase64.substring(0, 8)}… '
+            'sharedHash=${sharedSecretHash.substring(0, 16)} '
+            'sessionHash=${sessionKeyHash.substring(0, 16)}');
 
     // Store session key
     _sessionKeys[peerId] = sessionKey;
@@ -414,9 +482,11 @@ class CryptoService {
     } catch (e) {
       // Storage corruption or API error — generating new keys will break
       // existing peer trust relationships, so log a visible warning.
-      logger.warning('CryptoService',
+      logger.warning(
+          'CryptoService',
           'Failed to load identity keys from storage, generating new keys. '
-          'Existing peer trust relationships will be broken. Error: $e');
+              'Existing peer trust relationships will be broken. Error: $e');
+      _keysWereRegenerated = true;
     }
 
     // Generate new identity keys
@@ -454,7 +524,8 @@ class CryptoService {
       // In production, prefs MUST be injected via cryptoServiceProvider.
       assert(() {
         // ignore: avoid_print
-        print('WARNING: CryptoService._prefs is null — stableId will not persist across restarts');
+        print(
+            'WARNING: CryptoService._prefs is null — stableId will not persist across restarts');
         return true;
       }());
     }
@@ -463,7 +534,8 @@ class CryptoService {
   /// Generate a cryptographically random hex string of the given length.
   static String _generateRandomHex(int length) {
     final random = Random.secure();
-    final bytes = List<int>.generate((length / 2).ceil(), (_) => random.nextInt(256));
+    final bytes =
+        List<int>.generate((length / 2).ceil(), (_) => random.nextInt(256));
     final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
     return hex.substring(0, length).toUpperCase();
   }

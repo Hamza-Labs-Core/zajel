@@ -79,7 +79,8 @@ void main() {
       expect(name, 'Bob');
     });
 
-    test('returns username#tag even when publicKey is null (tag from stableId)', () {
+    test('returns username#tag even when publicKey is null (tag from stableId)',
+        () {
       final peer = Peer(
         id: testPeerId,
         displayName: 'Bob',

@@ -10,6 +10,7 @@ import '../crypto/crypto_service.dart';
 import '../logging/logger_service.dart';
 import '../models/models.dart';
 import '../storage/trusted_peers_storage.dart';
+import '../storage/message_storage.dart';
 import 'device_link_service.dart';
 import 'meeting_point_service.dart';
 import 'signaling_client.dart';
@@ -102,6 +103,7 @@ class ConnectionManager {
   final DeviceLinkService _deviceLinkService;
   final TrustedPeersStorage _trustedPeersStorage;
   final MeetingPointService _meetingPointService;
+  final MessageStorage? _messageStorage;
 
   /// Current signaling state - uses sealed class for type-safe null handling.
   SignalingState _signalingState = SignalingDisconnected();
@@ -171,6 +173,7 @@ class ConnectionManager {
     required DeviceLinkService deviceLinkService,
     required TrustedPeersStorage trustedPeersStorage,
     required MeetingPointService meetingPointService,
+    MessageStorage? messageStorage,
     bool Function(String publicKey)? isPublicKeyBlocked,
     String username = 'Anonymous',
   })  : _cryptoService = cryptoService,
@@ -178,6 +181,7 @@ class ConnectionManager {
         _deviceLinkService = deviceLinkService,
         _trustedPeersStorage = trustedPeersStorage,
         _meetingPointService = meetingPointService,
+        _messageStorage = messageStorage,
         _isPublicKeyBlocked = isPublicKeyBlocked,
         _username = username {
     _setupCallbacks();
@@ -253,6 +257,14 @@ class ConnectionManager {
   /// Stream of incoming pair requests.
   Stream<(String, String, String?)> get pairRequests =>
       _pairRequestController.stream;
+
+  /// Stream of key rotation events (peerId, oldKey, newKey).
+  final _keyChangeController = StreamController<
+      (String peerId, String oldKey, String newKey)>.broadcast();
+
+  /// Stream of key rotation events for UI warnings.
+  Stream<(String, String, String)> get keyChanges =>
+      _keyChangeController.stream;
 
   /// Stream of incoming link requests from web clients.
   final _linkRequestController = StreamController<
@@ -552,6 +564,7 @@ class ConnectionManager {
     await _fileStartController.close();
     await _fileCompleteController.close();
     await _pairRequestController.close();
+    await _keyChangeController.close();
     await _linkRequestController.close();
   }
 
@@ -681,9 +694,10 @@ class ConnectionManager {
       // Message format: {"type":"send","to":"peerId","data":"..."}
       final parsed = _parseLinkedDeviceMessage(message);
       if (parsed == null) {
-        logger.warning('ConnectionManager',
+        logger.warning(
+            'ConnectionManager',
             'Could not parse linked device message from $deviceId '
-            '(length=${message.length})');
+                '(length=${message.length})');
         return;
       }
 
@@ -713,8 +727,8 @@ class ConnectionManager {
         const JsonDecoder().convert(message) as Map,
       );
     } catch (e) {
-      logger.debug('ConnectionManager',
-          'Failed to parse linked device JSON: $e');
+      logger.debug(
+          'ConnectionManager', 'Failed to parse linked device JSON: $e');
       return null;
     }
   }
@@ -962,23 +976,44 @@ class ConnectionManager {
   /// Detect key rotation: known stableId presenting a new publicKey.
   ///
   /// TOFU (Trust On First Use): first key associated with a stableId is trusted.
-  /// Subsequent key changes are auto-accepted and logged. A future enhancement
-  /// could show a "safety number changed" warning in the UI.
+  /// Subsequent key changes are auto-accepted, logged, and produce a UI warning
+  /// via the keyChanges stream and a system message in the chat.
   Future<void> _checkKeyRotation(String stableId, String newPublicKey) async {
     try {
       final existingPeer = await _trustedPeersStorage.getPeer(stableId);
       if (existingPeer != null && existingPeer.publicKey != newPublicKey) {
-        logger.warning('ConnectionManager',
+        logger.warning(
+            'ConnectionManager',
             'Key rotation detected for $stableId '
-            '(old: ${existingPeer.publicKey.substring(0, 8)}..., '
-            'new: ${newPublicKey.substring(0, 8)}...)');
-        // Persist the new key FIRST, then update in-memory state
-        await _trustedPeersStorage.savePeer(existingPeer.copyWith(
-          publicKey: newPublicKey,
-        ));
+                '(old: ${existingPeer.publicKey.substring(0, 8)}..., '
+                'new: ${newPublicKey.substring(0, 8)}...)');
+
+        final oldKey = existingPeer.publicKey;
+
+        // Record key rotation in storage (sets keyChangeAcknowledged = false)
+        await _trustedPeersStorage.recordKeyRotation(
+            stableId, oldKey, newPublicKey);
         _cryptoService.setPeerPublicKey(stableId, newPublicKey);
-        logger.info('ConnectionManager',
-            'Key rotation persisted for $stableId');
+
+        // Emit key change event for UI
+        _keyChangeController.add((stableId, oldKey, newPublicKey));
+
+        // Insert system message in chat history
+        if (_messageStorage != null) {
+          final msg = Message(
+            localId: const Uuid().v4(),
+            peerId: stableId,
+            content: 'Safety number changed. Tap to verify.',
+            type: MessageType.system,
+            timestamp: DateTime.now(),
+            isOutgoing: false,
+            status: MessageStatus.delivered,
+          );
+          await _messageStorage.addMessage(msg);
+        }
+
+        logger.info(
+            'ConnectionManager', 'Key rotation persisted for $stableId');
       }
     } catch (e) {
       logger.error('ConnectionManager',

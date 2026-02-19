@@ -873,7 +873,8 @@ void main() {
       expect(restored.isLocal, equals(original.isLocal));
     });
 
-    test('Peer equality is based on id, displayName, publicKey, connectionState, and isLocal',
+    test(
+        'Peer equality is based on id, displayName, publicKey, connectionState, and isLocal',
         () {
       // Arrange
       final peer1 = Peer(

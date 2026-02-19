@@ -249,15 +249,41 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
   // Trigger migration from publicKey blocks to peerId blocks (one-time, no-op if done)
   blockedNotifier.migrateFromPublicKeys();
 
+  final messageStorage = ref.watch(messageStorageProvider);
+
   return ConnectionManager(
     cryptoService: cryptoService,
     webrtcService: webrtcService,
     deviceLinkService: deviceLinkService,
     trustedPeersStorage: trustedPeersStorage,
     meetingPointService: meetingPointService,
+    messageStorage: messageStorage,
     isPublicKeyBlocked: blockedNotifier.isPublicKeyBlocked,
     username: username,
   );
+});
+
+/// Stream of key rotation events emitted by ConnectionManager.
+///
+/// Each event is (peerId, oldPublicKey, newPublicKey). The UI can listen
+/// to this to show real-time warnings when a peer's key changes.
+final keyChangeStreamProvider = StreamProvider<(String, String, String)>((ref) {
+  final connectionManager = ref.watch(connectionManagerProvider);
+  return connectionManager.keyChanges;
+});
+
+/// Provider for peers with unacknowledged key changes.
+///
+/// Returns a map of peerId → TrustedPeer for all peers where
+/// keyChangeAcknowledged is false. Used by chat screen to show
+/// the key change warning banner.
+final pendingKeyChangesProvider =
+    FutureProvider<Map<String, TrustedPeer>>((ref) async {
+  // Re-evaluate when a key change event fires
+  ref.watch(keyChangeStreamProvider);
+  final storage = ref.watch(trustedPeersStorageProvider);
+  final peers = await storage.getPeersWithPendingKeyChanges();
+  return {for (final p in peers) p.id: p};
 });
 
 /// Provider for the list of linked devices.

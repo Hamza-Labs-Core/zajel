@@ -91,7 +91,8 @@ class NotificationService {
   }) async {
     if (!_initialized) {
       if (!_loggedInitWarning) {
-        logger.warning(_tag, 'Notification suppressed: service not initialized');
+        logger.warning(
+            _tag, 'Notification suppressed: service not initialized');
         _loggedInitWarning = true;
       }
       return;
@@ -133,7 +134,8 @@ class NotificationService {
   }) async {
     if (!_initialized) {
       if (!_loggedInitWarning) {
-        logger.warning(_tag, 'Notification suppressed: service not initialized');
+        logger.warning(
+            _tag, 'Notification suppressed: service not initialized');
         _loggedInitWarning = true;
       }
       return;
@@ -176,7 +178,8 @@ class NotificationService {
   }) async {
     if (!_initialized) {
       if (!_loggedInitWarning) {
-        logger.warning(_tag, 'Notification suppressed: service not initialized');
+        logger.warning(
+            _tag, 'Notification suppressed: service not initialized');
         _loggedInitWarning = true;
       }
       return;
@@ -217,7 +220,8 @@ class NotificationService {
   }) async {
     if (!_initialized) {
       if (!_loggedInitWarning) {
-        logger.warning(_tag, 'Notification suppressed: service not initialized');
+        logger.warning(
+            _tag, 'Notification suppressed: service not initialized');
         _loggedInitWarning = true;
       }
       return;

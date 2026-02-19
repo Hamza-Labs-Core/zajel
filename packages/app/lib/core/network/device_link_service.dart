@@ -481,9 +481,10 @@ class DeviceLinkException implements Exception {
 ({String linkCode, String publicKey, String serverUrl})? parseQrData(
     String qrData) {
   if (!qrData.startsWith(DeviceLinkConstants.qrProtocol)) {
-    logger.warning('parseQrData',
+    logger.warning(
+        'parseQrData',
         'QR data does not start with expected protocol prefix: '
-        '${qrData.substring(0, qrData.length.clamp(0, 30))}...');
+            '${qrData.substring(0, qrData.length.clamp(0, 30))}...');
     return null;
   }
 

@@ -97,8 +97,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     if (!_scrollController.hasClients) return;
     if (_scrollController.position.pixels <
         _scrollController.position.minScrollExtent + 100) {
-      final notifier =
-          ref.read(chatMessagesProvider(widget.peerId).notifier);
+      final notifier = ref.read(chatMessagesProvider(widget.peerId).notifier);
       if (!notifier.hasMore) return;
       _isLoadingMore = true;
       notifier.loadMore().then((_) {
@@ -881,7 +880,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       try {
         await connectionManager.disconnectPeer(peer.id);
       } catch (e) {
-        logger.debug('ChatScreen', 'Best-effort disconnect failed for ${peer.id}: $e');
+        logger.debug(
+            'ChatScreen', 'Best-effort disconnect failed for ${peer.id}: $e');
       }
       if (mounted) {
         Navigator.of(context).pop(); // Go back to home

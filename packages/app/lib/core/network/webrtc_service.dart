@@ -538,10 +538,11 @@ class WebRTCService {
         final publicKey = json['publicKey'] as String;
         final username = json['username'] as String?;
         final stableId = json['stableId'] as String?;
-        logger.info('WebRTCService',
+        logger.info(
+            'WebRTCService',
             'Received handshake from $peerId: '
-            'peerPub=${publicKey.substring(0, 8)}… '
-            'username=$username stableId=$stableId');
+                'peerPub=${publicKey.substring(0, 8)}… '
+                'username=$username stableId=$stableId');
         await _cryptoService.establishSession(peerId, publicKey);
         // Connection may have been closed during the async key exchange
         final conn = _connections[peerId];

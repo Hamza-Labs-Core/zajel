@@ -250,7 +250,8 @@ void main() {
     });
 
     test('should return 3 points (yesterday, today, tomorrow)', () {
-      final points = service.deriveDailyPointsFromIds('abc123def456ab01', 'ff00ee11dd22cc33');
+      final points = service.deriveDailyPointsFromIds(
+          'abc123def456ab01', 'ff00ee11dd22cc33');
       expect(points.length, 3);
       expect(points.every((p) => p.startsWith('day_')), true);
     });
@@ -277,22 +278,25 @@ void main() {
       final today = DateTime.utc(2026, 2, 18);
       final tomorrow = DateTime.utc(2026, 2, 19);
 
-      final pointsToday = service.deriveDailyPointsFromIdsForDate('a', 'b', today);
-      final pointsTomorrow = service.deriveDailyPointsFromIdsForDate('a', 'b', tomorrow);
+      final pointsToday =
+          service.deriveDailyPointsFromIdsForDate('a', 'b', today);
+      final pointsTomorrow =
+          service.deriveDailyPointsFromIdsForDate('a', 'b', tomorrow);
 
       // Today's "today" point should equal tomorrow's "yesterday" point
       expect(pointsToday[1], equals(pointsTomorrow[0]));
     });
 
-    test('should differ from pubkey-based points for same peer relationship', () {
+    test('should differ from pubkey-based points for same peer relationship',
+        () {
       // StableId-based and pubkey-based points should NOT collide
       final keyA = Uint8List.fromList(List.generate(32, (i) => i));
       final keyB = Uint8List.fromList(List.generate(32, (i) => i + 100));
       final date = DateTime.utc(2026, 2, 18);
 
       final pubkeyPoints = service.deriveDailyPointsForDate(keyA, keyB, date);
-      final stableIdPoints = service.deriveDailyPointsFromIdsForDate(
-          'abc123', 'def456', date);
+      final stableIdPoints =
+          service.deriveDailyPointsFromIdsForDate('abc123', 'def456', date);
 
       expect(pubkeyPoints, isNot(equals(stableIdPoints)));
     });
@@ -338,16 +342,16 @@ void main() {
       );
 
       expect(points[0], 'day_G_F73XDi8LCI3RzZLAC3LY'); // yesterday 2026-02-17
-      expect(points[1], 'day_YgtUz6-JOPCoVxUJxbpWZP');  // today 2026-02-18
-      expect(points[2], 'day_j10jaAgvCBpAniDcXQCWHH');  // tomorrow 2026-02-19
+      expect(points[1], 'day_YgtUz6-JOPCoVxUJxbpWZP'); // today 2026-02-18
+      expect(points[2], 'day_j10jaAgvCBpAniDcXQCWHH'); // tomorrow 2026-02-19
     });
 
     test('cross-client: order-independent (reversed IDs same result)', () {
       final date = DateTime.utc(2026, 2, 18);
       final points1 = service.deriveDailyPointsFromIdsForDate(
-        'abc123def456ab01', 'ff00ee11dd22cc33', date);
+          'abc123def456ab01', 'ff00ee11dd22cc33', date);
       final points2 = service.deriveDailyPointsFromIdsForDate(
-        'ff00ee11dd22cc33', 'abc123def456ab01', date);
+          'ff00ee11dd22cc33', 'abc123def456ab01', date);
       expect(points1, equals(points2));
     });
   });

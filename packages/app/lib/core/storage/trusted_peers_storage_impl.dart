@@ -156,6 +156,36 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
   }
 
   @override
+  Future<void> recordKeyRotation(
+      String peerId, String oldPublicKey, String newPublicKey) async {
+    await _ensureInitialized();
+    final peer = _cache[peerId];
+    if (peer == null) return;
+    _cache[peerId] = peer.copyWith(
+      previousPublicKey: oldPublicKey,
+      publicKey: newPublicKey,
+      keyRotatedAt: DateTime.now().toUtc(),
+      keyChangeAcknowledged: false,
+    );
+    await _persist();
+  }
+
+  @override
+  Future<void> acknowledgeKeyChange(String peerId) async {
+    await _ensureInitialized();
+    final peer = _cache[peerId];
+    if (peer == null) return;
+    _cache[peerId] = peer.copyWith(keyChangeAcknowledged: true);
+    await _persist();
+  }
+
+  @override
+  Future<List<TrustedPeer>> getPeersWithPendingKeyChanges() async {
+    await _ensureInitialized();
+    return _cache.values.where((p) => !p.keyChangeAcknowledged).toList();
+  }
+
+  @override
   Future<void> clear() async {
     _cache = {};
     await _storage.delete(key: _peersKey);

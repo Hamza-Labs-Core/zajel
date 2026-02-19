@@ -58,6 +58,19 @@ abstract class TrustedPeersStorage {
   /// Returns null if no peer with this public key exists.
   Future<TrustedPeer?> getPeerByPublicKey(String publicKey);
 
+  /// Record a key rotation for a peer.
+  ///
+  /// Stores the old public key, updates to the new one, and sets
+  /// keyChangeAcknowledged to false so the UI can show a warning.
+  Future<void> recordKeyRotation(
+      String peerId, String oldPublicKey, String newPublicKey);
+
+  /// Acknowledge a key change warning for a peer.
+  Future<void> acknowledgeKeyChange(String peerId);
+
+  /// Get all peers that have unacknowledged key changes.
+  Future<List<TrustedPeer>> getPeersWithPendingKeyChanges();
+
   /// Clear all trusted peers.
   Future<void> clear();
 }
@@ -100,6 +113,15 @@ class TrustedPeer {
   /// When this peer was blocked (null if not blocked).
   final DateTime? blockedAt;
 
+  /// Previous public key before most recent rotation (null if never rotated).
+  final String? previousPublicKey;
+
+  /// When the most recent key rotation was detected.
+  final DateTime? keyRotatedAt;
+
+  /// Whether the user has acknowledged/dismissed the key change warning.
+  final bool keyChangeAcknowledged;
+
   const TrustedPeer({
     required this.id,
     required this.displayName,
@@ -112,6 +134,9 @@ class TrustedPeer {
     this.alias,
     this.isBlocked = false,
     this.blockedAt,
+    this.previousPublicKey,
+    this.keyRotatedAt,
+    this.keyChangeAcknowledged = true,
   });
 
   TrustedPeer copyWith({
@@ -128,6 +153,11 @@ class TrustedPeer {
     bool? isBlocked,
     DateTime? blockedAt,
     bool clearBlockedAt = false,
+    String? previousPublicKey,
+    bool clearPreviousPublicKey = false,
+    DateTime? keyRotatedAt,
+    bool clearKeyRotatedAt = false,
+    bool? keyChangeAcknowledged,
   }) {
     return TrustedPeer(
       id: id ?? this.id,
@@ -141,6 +171,13 @@ class TrustedPeer {
       alias: clearAlias ? null : (alias ?? this.alias),
       isBlocked: isBlocked ?? this.isBlocked,
       blockedAt: clearBlockedAt ? null : (blockedAt ?? this.blockedAt),
+      previousPublicKey: clearPreviousPublicKey
+          ? null
+          : (previousPublicKey ?? this.previousPublicKey),
+      keyRotatedAt:
+          clearKeyRotatedAt ? null : (keyRotatedAt ?? this.keyRotatedAt),
+      keyChangeAcknowledged:
+          keyChangeAcknowledged ?? this.keyChangeAcknowledged,
     );
   }
 
@@ -162,6 +199,11 @@ class TrustedPeer {
       blockedAt: json['blockedAt'] != null
           ? DateTime.parse(json['blockedAt'] as String)
           : null,
+      previousPublicKey: json['previousPublicKey'] as String?,
+      keyRotatedAt: json['keyRotatedAt'] != null
+          ? DateTime.parse(json['keyRotatedAt'] as String)
+          : null,
+      keyChangeAcknowledged: json['keyChangeAcknowledged'] as bool? ?? true,
     );
   }
 
@@ -178,6 +220,9 @@ class TrustedPeer {
         'alias': alias,
         'isBlocked': isBlocked,
         'blockedAt': blockedAt?.toIso8601String(),
+        'previousPublicKey': previousPublicKey,
+        'keyRotatedAt': keyRotatedAt?.toIso8601String(),
+        'keyChangeAcknowledged': keyChangeAcknowledged,
       };
 
   /// Create from a connected Peer.

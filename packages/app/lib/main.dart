@@ -203,7 +203,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
 
       logger.info('ZajelApp', 'Core initialization complete');
     } catch (e, stack) {
-      logger.error('ZajelApp', 'Initialization failed — app in degraded state', e, stack);
+      logger.error('ZajelApp', 'Initialization failed — app in degraded state',
+          e, stack);
     }
 
     // Show the home screen immediately — signaling connects in the background.
@@ -396,8 +397,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
           peersAsync.whenData((peers) {
             final peer = peers.where((p) => p.id == peerId).firstOrNull;
             if (peer != null) {
-              peerName =
-                  resolvePeerDisplayName(peer, alias: aliases[peer.id]);
+              peerName = resolvePeerDisplayName(peer, alias: aliases[peer.id]);
             }
           });
 
@@ -946,9 +946,10 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       }
 
       if (deleted > 0 || filesDeleted > 0) {
-        logger.info('AutoDelete',
+        logger.info(
+            'AutoDelete',
             'Cleaned up $deleted messages and $filesDeleted files '
-            'older than ${settings.duration.inHours}h');
+                'older than ${settings.duration.inHours}h');
       }
     } catch (e) {
       logger.error('AutoDelete', 'Cleanup failed', e);
