@@ -60,6 +60,13 @@ android {
                 // Fall back to debug signing for local development
                 signingConfigs.getByName("debug")
             }
+            // R8 code shrinking + obfuscation for attestation hardening
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 }

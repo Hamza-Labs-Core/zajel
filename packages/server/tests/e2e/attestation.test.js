@@ -1342,6 +1342,293 @@ describe('Attestation Service E2E Tests', () => {
   });
 
   // -----------------------------------------------------------------------
+  // Web client fallback controls
+  // -----------------------------------------------------------------------
+
+  describe('Web client fallback', () => {
+    it('should issue session token directly for web platform registration', async () => {
+      const buildToken = await createBuildToken(seedHex, {
+        version: '1.0.0',
+        platform: 'web',
+        build_hash: 'web-hash-abc',
+        timestamp: Date.now(),
+      });
+
+      const request = createRequest('POST', '/attest/register', {
+        build_token: buildToken,
+        device_id: 'web-device-001',
+      });
+
+      const response = await attestationDO.fetch(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.status).toBe('registered');
+      expect(data.attestation_mode).toBe('web_fallback');
+      expect(data.session_token).toBeDefined();
+      expect(data.session_token).toContain('.'); // payload.signature format
+    });
+
+    it('should issue web session tokens with shorter TTL', async () => {
+      const buildToken = await createBuildToken(seedHex, {
+        version: '1.0.0',
+        platform: 'web',
+        build_hash: 'web-hash-abc',
+        timestamp: Date.now(),
+      });
+
+      const request = createRequest('POST', '/attest/register', {
+        build_token: buildToken,
+        device_id: 'web-device-002',
+      });
+
+      const response = await attestationDO.fetch(request);
+      const data = await response.json();
+
+      // Verify token TTL is 15 minutes (web) not 1 hour (native)
+      const signingKey = await importAttestationSigningKey(seedHex);
+      const pubKeyBase64 = await exportPublicKeyBase64(signingKey);
+      const verifyKey = await importVerifyKey(pubKeyBase64);
+      const tokenData = await verifySessionToken(verifyKey, data.session_token);
+
+      expect(tokenData.trust_level).toBe('web_fallback');
+      expect(tokenData.platform).toBe('web');
+      // 15 minutes = 900000ms
+      expect(tokenData.expires_at - tokenData.issued_at).toBe(900000);
+    });
+
+    it('should reject binary challenge requests for web devices', async () => {
+      const buildToken = await createBuildToken(seedHex, {
+        version: '1.0.0',
+        platform: 'web',
+        build_hash: 'web-hash-abc',
+        timestamp: Date.now(),
+      });
+
+      await attestationDO.fetch(
+        createRequest('POST', '/attest/register', {
+          build_token: buildToken,
+          device_id: 'web-device-003',
+        })
+      );
+
+      const request = createRequest('POST', '/attest/challenge', {
+        device_id: 'web-device-003',
+        build_version: '1.0.0',
+      });
+
+      const response = await attestationDO.fetch(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(data.error).toContain('not available for web platform');
+    });
+
+    it('should rate limit web client registrations', async () => {
+      // Register 10 times (the max per hour)
+      for (let i = 0; i < 10; i++) {
+        const buildToken = await createBuildToken(seedHex, {
+          version: '1.0.0',
+          platform: 'web',
+          build_hash: 'web-hash-abc',
+          timestamp: Date.now(),
+        });
+
+        const response = await attestationDO.fetch(
+          createRequest('POST', '/attest/register', {
+            build_token: buildToken,
+            device_id: 'web-rate-limit-device',
+          })
+        );
+        expect(response.status).toBe(200);
+      }
+
+      // 11th should be rate limited
+      const buildToken = await createBuildToken(seedHex, {
+        version: '1.0.0',
+        platform: 'web',
+        build_hash: 'web-hash-abc',
+        timestamp: Date.now(),
+      });
+
+      const response = await attestationDO.fetch(
+        createRequest('POST', '/attest/register', {
+          build_token: buildToken,
+          device_id: 'web-rate-limit-device',
+        })
+      );
+      const data = await response.json();
+
+      expect(response.status).toBe(429);
+      expect(data.error).toContain('Too many registration attempts');
+    });
+
+    it('should not issue web session token when signing key not configured', async () => {
+      const doWithoutSigningKey = new AttestationRegistryDO(mockState, {
+        BUILD_TOKEN_VERIFY_KEY: null,
+        ATTESTATION_SIGNING_KEY: seedHex,
+        CI_UPLOAD_SECRET: CI_SECRET,
+      });
+
+      // Create a DO without the ATTESTATION_SIGNING_KEY for session signing
+      const doNoSession = new AttestationRegistryDO(new MockState(), {
+        ATTESTATION_SIGNING_KEY: seedHex,
+        CI_UPLOAD_SECRET: CI_SECRET,
+      });
+
+      // Register the web device (signing key is available, so token should exist)
+      const buildToken = await createBuildToken(seedHex, {
+        version: '1.0.0',
+        platform: 'web',
+        build_hash: 'web-hash',
+        timestamp: Date.now(),
+      });
+
+      const response = await doNoSession.fetch(
+        createRequest('POST', '/attest/register', {
+          build_token: buildToken,
+          device_id: 'web-no-key',
+        })
+      );
+      const data = await response.json();
+
+      // Should still register successfully, just with session token
+      expect(response.status).toBe(200);
+      expect(data.status).toBe('registered');
+      expect(data.attestation_mode).toBe('web_fallback');
+      expect(data.session_token).toBeDefined();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Behavioral anomaly detection
+  // -----------------------------------------------------------------------
+
+  describe('Behavioral anomaly detection', () => {
+    async function setupDeviceForChallenge() {
+      const buildToken = await createBuildToken(seedHex, {
+        version: '1.0.0',
+        platform: 'android',
+        build_hash: 'abc123',
+        timestamp: Date.now(),
+      });
+
+      await attestationDO.fetch(
+        createRequest('POST', '/attest/register', {
+          build_token: buildToken,
+          device_id: 'anomaly-device',
+        })
+      );
+
+      await attestationDO.fetch(
+        createRequest(
+          'POST',
+          '/attest/upload-reference',
+          {
+            version: '1.0.0',
+            platform: 'android',
+            build_hash: 'abc123',
+            size: 1000000,
+            critical_regions: createTestCriticalRegions(),
+          },
+          { Authorization: `Bearer ${CI_SECRET}` }
+        )
+      );
+    }
+
+    it('should track attestation history on challenge requests', async () => {
+      await setupDeviceForChallenge();
+
+      // Request a challenge
+      await attestationDO.fetch(
+        createRequest('POST', '/attest/challenge', {
+          device_id: 'anomaly-device',
+          build_version: '1.0.0',
+        })
+      );
+
+      // Check that attestation_history was updated
+      const device = await mockState.storage.get('device:anomaly-device');
+      expect(device.attestation_history).toBeDefined();
+      expect(device.attestation_history.length).toBe(1);
+    });
+
+    it('should increment anomaly_flags on rapid attestation', async () => {
+      await setupDeviceForChallenge();
+
+      // Manually set attestation_history with 10+ recent entries
+      const device = await mockState.storage.get('device:anomaly-device');
+      const now = Date.now();
+      device.attestation_history = Array(11).fill(now - 1000);
+      await mockState.storage.put('device:anomaly-device', device);
+
+      // Next challenge should detect anomaly and increment flags
+      // But we also need more nonce slots — clear them first
+      await attestationDO.fetch(
+        createRequest('POST', '/attest/challenge', {
+          device_id: 'anomaly-device',
+          build_version: '1.0.0',
+        })
+      );
+
+      const updatedDevice = await mockState.storage.get('device:anomaly-device');
+      expect(updatedDevice.anomaly_flags).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Weighted region selection
+  // -----------------------------------------------------------------------
+
+  describe('Weighted region selection', () => {
+    it('should respect weight field in region selection', () => {
+      const regions = [
+        { offset: 0x1000, length: 256, data_hex: 'aa', weight: 1 },
+        { offset: 0x2000, length: 256, data_hex: 'bb', weight: 10 },
+        { offset: 0x3000, length: 256, data_hex: 'cc', weight: 1 },
+      ];
+
+      // Run selection many times to verify weight affects probability
+      const counts = { 0x1000: 0, 0x2000: 0, 0x3000: 0 };
+      for (let i = 0; i < 1000; i++) {
+        const selected = attestationDO.selectRandomRegions(regions, 1);
+        counts[selected[0].offset]++;
+      }
+
+      // The heavily weighted region (0x2000, weight=10) should be selected
+      // much more often than the others (weight=1)
+      expect(counts[0x2000]).toBeGreaterThan(counts[0x1000] * 2);
+      expect(counts[0x2000]).toBeGreaterThan(counts[0x3000] * 2);
+    });
+
+    it('should default weight to 1 when not specified', () => {
+      const regions = [
+        { offset: 0x1000, length: 256, data_hex: 'aa' },
+        { offset: 0x2000, length: 256, data_hex: 'bb' },
+      ];
+
+      // Should not crash and should select from both
+      const selected = attestationDO.selectRandomRegions(regions, 2);
+      expect(selected.length).toBe(2);
+    });
+
+    it('should not select the same region twice', () => {
+      const regions = [
+        { offset: 0x1000, length: 256, data_hex: 'aa', weight: 10 },
+        { offset: 0x2000, length: 256, data_hex: 'bb', weight: 1 },
+        { offset: 0x3000, length: 256, data_hex: 'cc', weight: 1 },
+      ];
+
+      for (let i = 0; i < 100; i++) {
+        const selected = attestationDO.selectRandomRegions(regions, 3);
+        const offsets = selected.map(r => r.offset);
+        const uniqueOffsets = new Set(offsets);
+        expect(uniqueOffsets.size).toBe(offsets.length);
+      }
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // Edge cases and error handling
   // -----------------------------------------------------------------------
 

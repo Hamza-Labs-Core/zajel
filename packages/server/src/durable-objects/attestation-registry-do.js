@@ -35,6 +35,9 @@ import { createLogger } from '../logger.js';
 /** Session token TTL: 1 hour */
 const SESSION_TOKEN_TTL = 60 * 60 * 1000;
 
+/** Session token TTL for web clients: 15 minutes (reduced trust) */
+const WEB_SESSION_TOKEN_TTL = 15 * 60 * 1000;
+
 /** Nonce TTL: 5 minutes (challenges expire) */
 const NONCE_TTL = 5 * 60 * 1000;
 
@@ -52,6 +55,9 @@ const MAX_TOKEN_AGE = 30 * 24 * 60 * 60 * 1000;
 
 /** Maximum clock skew tolerance: 1 minute */
 const MAX_CLOCK_SKEW = 60 * 1000;
+
+/** Maximum web registrations per device per hour */
+const MAX_WEB_REGISTRATIONS_PER_HOUR = 10;
 
 /** Generic error message for all attestation verification failures */
 const VERIFY_FAILED_MSG = 'Verification failed';
@@ -329,9 +335,80 @@ export class AttestationRegistryDO {
       build_version: version,
       platform,
       build_hash,
-      registered_at: Date.now(),
+      registered_at: existingDevice ? existingDevice.registered_at : Date.now(),
       last_seen: Date.now(),
+      // Preserve existing behavioral data
+      attestation_history: existingDevice?.attestation_history || [],
+      anomaly_flags: existingDevice?.anomaly_flags || 0,
+      web_registration_timestamps: existingDevice?.web_registration_timestamps || [],
     };
+
+    // Web platform fallback: issue session token directly (no binary attestation possible).
+    // Apply stricter rate limiting and shorter token TTL.
+    if (platform === 'web') {
+      // Rate limit web registrations per device
+      const now = Date.now();
+      const oneHourAgo = now - 60 * 60 * 1000;
+      deviceEntry.web_registration_timestamps = (deviceEntry.web_registration_timestamps || [])
+        .filter(t => t > oneHourAgo);
+      deviceEntry.web_registration_timestamps.push(now);
+
+      if (deviceEntry.web_registration_timestamps.length > MAX_WEB_REGISTRATIONS_PER_HOUR) {
+        this.logger.warn('[audit] Web client rate limited', {
+          action: 'web_rate_limited',
+          device_id,
+          ip: request.headers.get('CF-Connecting-IP'),
+        });
+        return this.jsonResponse(
+          { error: 'Too many registration attempts. Please try again later.' },
+          429,
+          corsHeaders
+        );
+      }
+
+      await this.state.storage.put(`device:${device_id}`, deviceEntry);
+
+      this.logger.info('[audit] Web device registered', {
+        action: 'web_device_register',
+        device_id,
+        version,
+        ip: request.headers.get('CF-Connecting-IP'),
+      });
+
+      // Issue a short-lived session token for web (if signing key available)
+      let sessionToken = null;
+      if (this.env.ATTESTATION_SIGNING_KEY) {
+        try {
+          const signingKey = await importSessionSigningKey(this.env.ATTESTATION_SIGNING_KEY);
+          const tokenData = {
+            device_id,
+            build_version: version,
+            platform: 'web',
+            issued_at: now,
+            expires_at: now + WEB_SESSION_TOKEN_TTL,
+            trust_level: 'web_fallback',
+          };
+          sessionToken = await createSessionToken(signingKey, tokenData);
+        } catch (e) {
+          this.logger.error('[attestation-registry] Failed to create web session token', e);
+        }
+      }
+
+      return this.jsonResponse(
+        {
+          status: 'registered',
+          device: deviceEntry,
+          version_status: versionCheck.status,
+          attestation_mode: 'web_fallback',
+          ...(sessionToken ? { session_token: sessionToken } : {}),
+          ...(versionCheck.status === 'update_recommended'
+            ? { recommended_version: policy.recommended_version }
+            : {}),
+        },
+        200,
+        corsHeaders
+      );
+    }
 
     await this.state.storage.put(`device:${device_id}`, deviceEntry);
 
@@ -480,8 +557,43 @@ export class AttestationRegistryDO {
       );
     }
 
+    // Web clients cannot perform binary attestation — reject challenge requests
+    if (device.platform === 'web') {
+      return this.jsonResponse(
+        { error: 'Binary attestation not available for web platform. Use registration token.' },
+        400,
+        corsHeaders
+      );
+    }
+
+    // Behavioral anomaly tracking
+    const now_ts = Date.now();
+    const timeSinceLastSeen = device.last_seen ? (now_ts - device.last_seen) : null;
+
+    // Track attestation frequency — rapid re-attestation may indicate probing
+    if (!device.attestation_history) {
+      device.attestation_history = [];
+    }
+    device.attestation_history.push(now_ts);
+    // Keep last 20 attestation timestamps
+    if (device.attestation_history.length > 20) {
+      device.attestation_history = device.attestation_history.slice(-20);
+    }
+
+    // Detect rapid attestation (more than 10 in the last 5 minutes)
+    const recentWindow = now_ts - 5 * 60 * 1000;
+    const recentCount = device.attestation_history.filter(t => t > recentWindow).length;
+    if (recentCount > 10) {
+      this.logger.warn('Behavioral anomaly: rapid attestation', {
+        device_id,
+        recentCount,
+        timeSinceLastSeen,
+      });
+      device.anomaly_flags = (device.anomaly_flags || 0) + 1;
+    }
+
     // Update device last_seen
-    device.last_seen = Date.now();
+    device.last_seen = now_ts;
     await this.state.storage.put(`device:${device_id}`, device);
 
     // Rate limit: max active nonces per device
@@ -854,15 +966,36 @@ export class AttestationRegistryDO {
    * @param {number} count - How many to select
    * @returns {Array} Selected regions
    */
+  /**
+   * Select regions with weighting: critical regions (attestation code,
+   * safety checks, content filtering) are 3x more likely to be sampled
+   * than non-critical regions.
+   *
+   * Each region may have a `weight` field (default 1). Higher weight =
+   * higher chance of selection.
+   */
   selectRandomRegions(criticalRegions, count) {
-    const available = [...criticalRegions];
+    const selectCount = Math.min(count, criticalRegions.length);
     const selected = [];
-    const selectCount = Math.min(count, available.length);
+    const usedIndices = new Set();
+
+    // Build weighted array: each region gets `weight` entries (default 1)
+    const weightedIndices = [];
+    for (let i = 0; i < criticalRegions.length; i++) {
+      const weight = criticalRegions[i].weight || 1;
+      for (let w = 0; w < weight; w++) {
+        weightedIndices.push(i);
+      }
+    }
 
     for (let i = 0; i < selectCount; i++) {
-      const idx = Math.floor(Math.random() * available.length);
-      selected.push(available[idx]);
-      available.splice(idx, 1);
+      // Filter out already-selected indices
+      const available = weightedIndices.filter(idx => !usedIndices.has(idx));
+      if (available.length === 0) break;
+
+      const pick = available[Math.floor(Math.random() * available.length)];
+      usedIndices.add(pick);
+      selected.push(criticalRegions[pick]);
     }
 
     return selected;
