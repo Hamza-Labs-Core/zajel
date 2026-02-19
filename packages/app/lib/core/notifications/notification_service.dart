@@ -13,6 +13,7 @@ class NotificationService {
       FlutterLocalNotificationsPlugin();
   final void Function(String? payload)? onNotificationTap;
   bool _initialized = false;
+  bool _loggedInitWarning = false;
 
   NotificationService({this.onNotificationTap});
 
@@ -88,7 +89,13 @@ class NotificationService {
     required String content,
     required NotificationSettings settings,
   }) async {
-    if (!_initialized) return;
+    if (!_initialized) {
+      if (!_loggedInitWarning) {
+        logger.warning(_tag, 'Notification suppressed: service not initialized');
+        _loggedInitWarning = true;
+      }
+      return;
+    }
     if (!settings.shouldNotify(peerId)) return;
     if (!settings.messageNotifications) return;
 
@@ -124,7 +131,13 @@ class NotificationService {
     required bool withVideo,
     required NotificationSettings settings,
   }) async {
-    if (!_initialized) return;
+    if (!_initialized) {
+      if (!_loggedInitWarning) {
+        logger.warning(_tag, 'Notification suppressed: service not initialized');
+        _loggedInitWarning = true;
+      }
+      return;
+    }
     if (!settings.shouldNotify(peerId)) return;
     if (!settings.callNotifications) return;
 
@@ -161,7 +174,13 @@ class NotificationService {
     required bool connected,
     required NotificationSettings settings,
   }) async {
-    if (!_initialized) return;
+    if (!_initialized) {
+      if (!_loggedInitWarning) {
+        logger.warning(_tag, 'Notification suppressed: service not initialized');
+        _loggedInitWarning = true;
+      }
+      return;
+    }
     if (settings.isDndActive) return;
     if (!settings.peerStatusNotifications) return;
 
@@ -196,7 +215,13 @@ class NotificationService {
     required String fileName,
     required NotificationSettings settings,
   }) async {
-    if (!_initialized) return;
+    if (!_initialized) {
+      if (!_loggedInitWarning) {
+        logger.warning(_tag, 'Notification suppressed: service not initialized');
+        _loggedInitWarning = true;
+      }
+      return;
+    }
     if (!settings.shouldNotify(peerId)) return;
     if (!settings.fileReceivedNotifications) return;
 
