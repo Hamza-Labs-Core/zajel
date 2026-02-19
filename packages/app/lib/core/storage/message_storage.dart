@@ -186,6 +186,25 @@ class MessageStorage {
     );
   }
 
+  /// Get attachment file paths for messages older than [cutoff].
+  /// Returns non-null attachmentPath values from messages that will be deleted.
+  Future<List<String>> getAttachmentPathsOlderThan(DateTime cutoff) async {
+    final db = _db;
+    if (db == null) return [];
+
+    final rows = await db.query(
+      _tableName,
+      columns: ['attachmentPath'],
+      where: 'timestamp < ? AND attachmentPath IS NOT NULL',
+      whereArgs: [cutoff.toIso8601String()],
+    );
+
+    return rows
+        .map((row) => row['attachmentPath'] as String?)
+        .whereType<String>()
+        .toList();
+  }
+
   /// Delete all messages.
   Future<void> deleteAllMessages() async {
     final db = _db;

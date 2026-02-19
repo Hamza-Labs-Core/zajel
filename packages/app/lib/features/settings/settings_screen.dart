@@ -107,21 +107,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
                 onTap: () => _showRegenerateKeysDialog(context),
               ),
-              SwitchListTile(
-                secondary: const Icon(Icons.delete_sweep),
-                title: const Text('Auto-delete Messages'),
-                subtitle: const Text('Delete messages after 24 hours'),
-                value: false, // TODO: Implement
-                onChanged: (value) {
-                  // TODO: Implement auto-delete
-                },
-              ),
+              _buildAutoDeleteTile(),
               ListTile(
                 leading: const Icon(Icons.block),
                 title: const Text('Blocked Users'),
                 subtitle: const Text('Manage blocked peers'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => context.push('/settings/blocked'),
+              ),
+              SwitchListTile(
+                secondary: const Icon(Icons.security),
+                title: const Text('Privacy Screen'),
+                subtitle: const Text(
+                  'Hide app content in app switcher',
+                ),
+                value: ref.watch(privacyScreenProvider),
+                onChanged: (value) {
+                  ref.read(privacyScreenProvider.notifier).setEnabled(value);
+                },
               ),
             ],
           ),
@@ -245,6 +248,54 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildAutoDeleteTile() {
+    final settings = ref.watch(autoDeleteSettingsProvider);
+    final durationMinutes = settings.duration.inMinutes;
+    final durationLabel =
+        AutoDeleteSettings.durations[durationMinutes] ?? '24 hours';
+
+    return Column(
+      children: [
+        SwitchListTile(
+          secondary: const Icon(Icons.delete_sweep),
+          title: const Text('Auto-delete Messages'),
+          subtitle: Text(settings.enabled
+              ? 'Delete messages after $durationLabel'
+              : 'Messages are kept indefinitely'),
+          value: settings.enabled,
+          onChanged: (value) {
+            ref.read(autoDeleteSettingsProvider.notifier).setEnabled(value);
+          },
+        ),
+        if (settings.enabled)
+          Padding(
+            padding: const EdgeInsets.only(left: 56, right: 16, bottom: 8),
+            child: DropdownButtonFormField<int>(
+              value: durationMinutes,
+              decoration: const InputDecoration(
+                labelText: 'Delete after',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              items: AutoDeleteSettings.durations.entries
+                  .map((e) => DropdownMenuItem(
+                        value: e.key,
+                        child: Text(e.value),
+                      ))
+                  .toList(),
+              onChanged: (minutes) {
+                if (minutes != null) {
+                  ref
+                      .read(autoDeleteSettingsProvider.notifier)
+                      .setDuration(Duration(minutes: minutes));
+                }
+              },
+            ),
+          ),
+      ],
     );
   }
 
