@@ -1009,7 +1009,7 @@ class ConnectionManager {
             isOutgoing: false,
             status: MessageStatus.delivered,
           );
-          await _messageStorage.addMessage(msg);
+          await _messageStorage.saveMessage(msg);
         }
 
         logger.info(
