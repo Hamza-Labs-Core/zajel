@@ -79,7 +79,8 @@ class Peer extends Equatable {
       );
 
   @override
-  List<Object?> get props => [id, displayName, username, publicKey];
+  List<Object?> get props =>
+      [id, displayName, username, publicKey, connectionState, isLocal];
 }
 
 enum PeerConnectionState {

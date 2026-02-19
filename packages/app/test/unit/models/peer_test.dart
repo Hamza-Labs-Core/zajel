@@ -260,7 +260,6 @@ void main() {
           displayName: 'Test',
           publicKey: 'key',
           lastSeen: DateTime.now(), // Different timestamp
-          connectionState: PeerConnectionState.connected, // Different state
         );
 
         expect(peer1, equals(peer2));
