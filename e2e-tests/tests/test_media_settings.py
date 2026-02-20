@@ -29,19 +29,28 @@ class TestMediaSettings:
 
         helper.navigate_to_media_settings()
 
-        # Scroll down to Audio Processing section
+        # Scroll down until "Noise Suppression" is visible — the Camera
+        # preview section can be tall on some emulators, so a single swipe
+        # may not be enough.
         screen_size = alice.get_window_size()
         center_x = int(screen_size['width'] * 0.5)
         start_y = int(screen_size['height'] * 0.8)
         end_y = int(screen_size['height'] * 0.2)
-        alice.swipe(center_x, start_y, center_x, end_y, 500)
+
+        found = False
+        for _ in range(5):
+            try:
+                helper._find("Noise Suppression", timeout=2).click()
+                found = True
+                break
+            except Exception:
+                alice.swipe(center_x, start_y, center_x, end_y, 500)
+                time.sleep(0.5)
+        if not found:
+            helper._find("Noise Suppression", timeout=5).click()
         time.sleep(1)
 
-        # Find and toggle noise suppression
-        helper._find("Noise Suppression", timeout=10).click()
-        time.sleep(1)
-
-        # Find echo cancellation
+        # Find echo cancellation (should be near Noise Suppression)
         helper._find("Echo Cancellation", timeout=5)
 
         # Find auto gain control
