@@ -363,6 +363,17 @@ export async function createZajelServer(
     });
   });
 
+  // Start listening early so health check endpoint is available during
+  // bootstrap registration and federation startup (which involve network I/O
+  // and can be slow during simultaneous multi-server deployments).
+  await new Promise<void>((resolve) => {
+    httpServer.listen(config.network.port, config.network.host, () => {
+      console.log(`[Zajel] Listening on ${config.network.host}:${config.network.port}`);
+      console.log(`[Zajel] Public endpoint: ${config.network.publicEndpoint}`);
+      resolve();
+    });
+  });
+
   // Register with CF Workers bootstrap server and get peers
   let discoveredPeers: import('./federation/bootstrap-client.js').BootstrapServerEntry[] = [];
   try {
@@ -473,15 +484,6 @@ export async function createZajelServer(
 
     console.log('[Zajel] Shutdown complete');
   };
-
-  // Start listening
-  await new Promise<void>((resolve) => {
-    httpServer.listen(config.network.port, config.network.host, () => {
-      console.log(`[Zajel] Listening on ${config.network.host}:${config.network.port}`);
-      console.log(`[Zajel] Public endpoint: ${config.network.publicEndpoint}`);
-      resolve();
-    });
-  });
 
   return {
     httpServer,
