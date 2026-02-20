@@ -6,6 +6,17 @@
 - **FIX ALL** — Never defer, skip, or leave items as "intentionally deferred". Every identified issue must be fixed. No exceptions for "ops tasks", "new features", or "cosmetic" — if it's in the plan, implement it.
 - **NO informational tests** — Every test in CI must be a real gate. Never use `|| true`, `exit 0`, `set +e`, or any pattern that swallows test failures.
 - **NEVER remove tests** — If a test fails, fix it. Do not delete, skip, or comment out tests to make CI pass.
+- **Test-driven bug fixing** — When fixing bugs, always use the `/fix` skill.
+
+## Skills
+
+### /fix — Test-driven bug fixing
+1. **Add tests** — Write tests that reproduce the bug
+2. **Run tests** — Run them, update tests until they **fail** (proving the bug exists)
+3. **Fix the issue** — Apply the minimal fix
+4. **Run tests** — Run them, fix until they **pass** (proving the fix works)
+
+Never skip steps. Never combine steps. Each step must complete before moving to the next.
 
 ## Licensing & IP Guidelines
 

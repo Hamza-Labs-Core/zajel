@@ -7,6 +7,7 @@ import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:uuid/uuid.dart';
 
 import 'app_router.dart';
@@ -34,6 +35,13 @@ void main() async {
   // Force semantics tree so UiAutomator2/AT-SPI/UIA can see widgets in E2E tests
   if (_isE2eTest) {
     SemanticsBinding.instance.ensureSemantics();
+  }
+
+  // Initialize sqflite FFI for desktop platforms (Linux, Windows, macOS).
+  // Without this, openDatabase throws "databaseFactory not initialized".
+  if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
   }
 
   // Initialize logger first
@@ -1002,12 +1010,16 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
 
     if (!_showPrivacyScreen) return app;
 
-    // Overlay the app with a privacy screen when backgrounded
-    return Stack(
-      children: [
-        app,
-        const _PrivacyOverlay(),
-      ],
+    // Overlay the app with a privacy screen when backgrounded.
+    // Directionality is required because the Stack is above MaterialApp.
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: Stack(
+        children: [
+          app,
+          const _PrivacyOverlay(),
+        ],
+      ),
     );
   }
 }
