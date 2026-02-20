@@ -1,7 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:sqflite/sqflite.dart' as sqflite;
-import 'package:zajel/core/models/message.dart';
 
 /// Regression test for desktop "databaseFactory not initialized" crash.
 ///
