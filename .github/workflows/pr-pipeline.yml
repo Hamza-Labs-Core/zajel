@@ -1761,6 +1761,7 @@ jobs:
           APPIUM_SERVER_COUNT: "1"
           E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-artifacts/e2e
           SIGNALING_URL: ${{ env.SIGNALING_URL }}
+          BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL }}
           TURN_URL: ${{ env.TURN_URL }}
           TURN_USER: ${{ env.TURN_USER }}
           TURN_PASS: ${{ env.TURN_PASS }}

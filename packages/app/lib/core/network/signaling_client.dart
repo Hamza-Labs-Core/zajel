@@ -716,9 +716,28 @@ class SignalingClient {
           break;
 
         case 'pong':
+          _logger.debug('SignalingClient', 'Received pong');
+          break;
+
         case 'registered':
-          // Heartbeat and registration confirmation, ignore
-          _logger.debug('SignalingClient', 'Received $type message');
+          // Parse optional redirects for cross-server pairing
+          final rawRedirects = json['redirects'] as List<dynamic>? ?? [];
+          final redirects = rawRedirects
+              .whereType<Map<String, dynamic>>()
+              .map((r) => SignalingRedirect(
+                    serverId: r['serverId'] as String? ?? '',
+                    endpoint: r['endpoint'] as String? ?? '',
+                  ))
+              .where((r) => r.endpoint.isNotEmpty)
+              .toList();
+
+          _messageController.add(SignalingMessage.registered(
+            pairingCode: json['pairingCode'] as String? ?? '',
+            serverId: json['serverId'] as String? ?? '',
+            redirects: redirects,
+          ));
+          _logger.debug(
+              'SignalingClient', 'Registered: ${redirects.length} redirects');
           break;
 
         default:
@@ -895,6 +914,12 @@ sealed class SignalingMessage {
 
   factory SignalingMessage.error({required String message}) = SignalingError;
 
+  factory SignalingMessage.registered({
+    required String pairingCode,
+    required String serverId,
+    required List<SignalingRedirect> redirects,
+  }) = SignalingRegistered;
+
   factory SignalingMessage.linkRequest({
     required String linkCode,
     required String publicKey,
@@ -993,6 +1018,27 @@ class SignalingPairError extends SignalingMessage {
   final String error;
 
   const SignalingPairError({required this.error});
+}
+
+/// Server registration confirmation with optional DHT redirects.
+class SignalingRegistered extends SignalingMessage {
+  final String pairingCode;
+  final String serverId;
+  final List<SignalingRedirect> redirects;
+
+  const SignalingRegistered({
+    required this.pairingCode,
+    required this.serverId,
+    required this.redirects,
+  });
+}
+
+/// A redirect target for cross-server pairing registration.
+class SignalingRedirect {
+  final String serverId;
+  final String endpoint;
+
+  const SignalingRedirect({required this.serverId, required this.endpoint});
 }
 
 /// Device link request from a web client.

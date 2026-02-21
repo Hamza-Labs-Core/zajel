@@ -148,6 +148,11 @@ class ConnectionManager {
   /// Key: server endpoint URL, Value: client and its subscriptions.
   final Map<String, _RedirectConnection> _redirectConnections = {};
 
+  /// Maps a peer's pairing code to the SignalingClient that received
+  /// the pairing event. Used for cross-server pairing: when a pair_incoming
+  /// arrives from a redirect server, responses must go through THAT client.
+  final Map<String, SignalingClient> _peerToClient = {};
+
   /// Callback to check if a public key is blocked.
   bool Function(String publicKey)? _isPublicKeyBlocked;
 
@@ -317,12 +322,16 @@ class ConnectionManager {
     // The stream subscription is set up once and handles all peers.
     _signalingEventsSubscription =
         _webrtcService.signalingEvents.listen((event) {
-      // Check if we're still connected before sending
-      final state = _signalingState;
-      if (state is! SignalingConnected || !state.client.isConnected) return;
-
       if (event.message['type'] == 'ice_candidate') {
-        state.client.sendIceCandidate(event.peerId, event.message);
+        // Route ICE candidate through the correct client (redirect or main)
+        final redirectClient = _peerToClient[event.peerId];
+        if (redirectClient != null && redirectClient.isConnected) {
+          redirectClient.sendIceCandidate(event.peerId, event.message);
+        } else {
+          final state = _signalingState;
+          if (state is! SignalingConnected || !state.client.isConnected) return;
+          state.client.sendIceCandidate(event.peerId, event.message);
+        }
       }
     });
 
@@ -359,6 +368,7 @@ class ConnectionManager {
     // Clear peer ID mappings — new session will have new pairing codes
     _codeToStableId.clear();
     _stableIdToCode.clear();
+    _peerToClient.clear();
   }
 
   /// Request to connect to a peer using their pairing code.
@@ -405,11 +415,19 @@ class ConnectionManager {
   }
 
   /// Respond to an incoming pair request.
+  /// Uses the client that received the pair_incoming event (may be a redirect
+  /// server client for cross-server pairing).
   void respondToPairRequest(String peerCode, {required bool accept}) {
-    // Safe access using pattern matching
-    final state = _signalingState;
-    if (state is SignalingConnected) {
-      state.client.respondToPairing(peerCode, accept: accept);
+    // Check if this peer's pairing event came from a redirect client
+    final redirectClient = _peerToClient[peerCode];
+    if (redirectClient != null && redirectClient.isConnected) {
+      redirectClient.respondToPairing(peerCode, accept: accept);
+    } else {
+      // Default: respond through main signaling client
+      final state = _signalingState;
+      if (state is SignalingConnected) {
+        state.client.respondToPairing(peerCode, accept: accept);
+      }
     }
 
     if (!accept) {
@@ -438,12 +456,19 @@ class ConnectionManager {
   Future<void> _startWebRTCConnection(
       String peerCode, String peerPublicKey, bool isInitiator) async {
     // Pattern 1: Capture signaling client before async operations (HIGH risk fix)
-    final state = _signalingState;
-    if (state is! SignalingConnected || !state.client.isConnected) {
-      _updatePeerState(peerCode, PeerConnectionState.failed);
-      return;
+    // Use the redirect client for cross-server peers if available
+    final redirectClient = _peerToClient[peerCode];
+    final SignalingClient client;
+    if (redirectClient != null && redirectClient.isConnected) {
+      client = redirectClient;
+    } else {
+      final state = _signalingState;
+      if (state is! SignalingConnected || !state.client.isConnected) {
+        _updatePeerState(peerCode, PeerConnectionState.failed);
+        return;
+      }
+      client = state.client;
     }
-    final client = state.client;
 
     // Store peer's public key for handshake verification
     _cryptoService.setPeerPublicKey(peerCode, peerPublicKey);
@@ -851,14 +876,27 @@ class ConnectionManager {
           _notifyPeersChanged();
           break;
 
+        case SignalingRegistered(redirects: final redirects):
+          // Handle registration redirects for cross-server pairing
+          if (redirects.isNotEmpty) {
+            _handleRegistrationRedirects(redirects);
+          }
+          break;
+
         case SignalingOffer(from: final from, payload: final payload):
           // Pattern 6: Capture client reference before async operation (HIGH risk fix)
-          final signalingState = _signalingState;
-          if (signalingState is! SignalingConnected) {
-            // Connection was closed, cannot process offer
-            return;
+          // Use redirect client for cross-server peers
+          final SignalingClient offerClient;
+          final redirectOfferClient = _peerToClient[from];
+          if (redirectOfferClient != null && redirectOfferClient.isConnected) {
+            offerClient = redirectOfferClient;
+          } else {
+            final signalingState = _signalingState;
+            if (signalingState is! SignalingConnected) {
+              return;
+            }
+            offerClient = signalingState.client;
           }
-          final client = signalingState.client;
 
           // Offer from matched peer (we're the non-initiator)
           // Use stable ID (may have been remapped in PairMatched handler)
@@ -885,8 +923,8 @@ class ConnectionManager {
 
           // Check if client is still valid and connected after async operation
           // This prevents crash if disableExternalConnections() was called during await
-          if (client.isConnected) {
-            client.sendAnswer(from, answer);
+          if (offerClient.isConnected) {
+            offerClient.sendAnswer(from, answer);
           }
           break;
 
@@ -1264,12 +1302,113 @@ class ConnectionManager {
     }
   }
 
+  /// Follow registration redirects by connecting to other federated servers
+  /// and registering the pairing code there for cross-server pairing.
+  Future<void> _handleRegistrationRedirects(
+      List<SignalingRedirect> redirects) async {
+    final state = _signalingState;
+    if (state is! SignalingConnected) return;
+
+    for (final redirect in redirects) {
+      if (redirect.endpoint.isEmpty) continue;
+
+      logger.info('ConnectionManager',
+          'Following pairing redirect to ${redirect.endpoint}');
+
+      try {
+        await _connectToRedirectServerForPairing(
+          endpoint: redirect.endpoint,
+          pairingCode: state.pairingCode,
+          publicKey: _cryptoService.publicKeyBase64,
+        );
+      } catch (e) {
+        logger.error('ConnectionManager',
+            'Failed to follow pairing redirect to ${redirect.endpoint}', e);
+      }
+    }
+  }
+
+  /// Connect to a federated redirect server for pairing: register pairing code
+  /// and listen for pairing messages (pair_incoming, pair_matched, etc.).
+  Future<void> _connectToRedirectServerForPairing({
+    required String endpoint,
+    required String pairingCode,
+    required String publicKey,
+  }) async {
+    // Close existing connection to this endpoint if any
+    final existing = _redirectConnections[endpoint];
+    if (existing != null) {
+      await existing.dispose();
+      _redirectConnections.remove(endpoint);
+    }
+
+    // Create a new signaling client for this server
+    final client = SignalingClient(
+      serverUrl: endpoint,
+      pairingCode: pairingCode,
+      publicKey: publicKey,
+    );
+
+    // Listen for pairing messages from this redirect server
+    final messageSub = client.messages.listen((message) {
+      logger.info('ConnectionManager',
+          'Redirect server message: ${message.runtimeType} from $endpoint');
+
+      // Store the mapping so responses route through this client
+      switch (message) {
+        case SignalingPairIncoming(fromCode: final fromCode):
+          _peerToClient[fromCode] = client;
+        case SignalingPairMatched(peerCode: final peerCode):
+          _peerToClient[peerCode] = client;
+        default:
+          break;
+      }
+
+      // Process through the same handler as the main client
+      _handleSignalingMessage(message);
+    });
+
+    // Also listen for rendezvous events (in case both happen)
+    final rendezvousSub = client.rendezvousEvents.listen((event) {
+      switch (event) {
+        case RendezvousResult(:final liveMatches, deadDrops: _):
+          for (final match in liveMatches) {
+            _handleLiveMatch(match.peerId);
+          }
+        case RendezvousPartial(:final liveMatches, deadDrops: _, redirects: _):
+          for (final match in liveMatches) {
+            _handleLiveMatch(match.peerId);
+          }
+        case RendezvousMatch(:final peerId, relayId: _, meetingPoint: _):
+          _handleLiveMatch(peerId);
+      }
+    });
+
+    _redirectConnections[endpoint] = _RedirectConnection(
+      client: client,
+      rendezvousSub: rendezvousSub,
+      messageSub: messageSub,
+    );
+
+    try {
+      await client.connect();
+      logger.info('ConnectionManager',
+          'Registered pairing code on redirect server $endpoint');
+    } catch (e) {
+      // Clean up on failure
+      await _redirectConnections[endpoint]?.dispose();
+      _redirectConnections.remove(endpoint);
+      rethrow;
+    }
+  }
+
   /// Close all redirect connections.
   Future<void> _closeRedirectConnections() async {
     for (final conn in _redirectConnections.values) {
       await conn.dispose();
     }
     _redirectConnections.clear();
+    _peerToClient.clear();
   }
 
   /// Handle a live match: initiate pairing with the matched peer.
@@ -1309,10 +1448,16 @@ class ConnectionManager {
 class _RedirectConnection {
   final SignalingClient client;
   final StreamSubscription rendezvousSub;
+  final StreamSubscription? messageSub;
 
-  _RedirectConnection({required this.client, required this.rendezvousSub});
+  _RedirectConnection({
+    required this.client,
+    required this.rendezvousSub,
+    this.messageSub,
+  });
 
   Future<void> dispose() async {
+    await messageSub?.cancel();
     await rendezvousSub.cancel();
     await client.dispose();
   }

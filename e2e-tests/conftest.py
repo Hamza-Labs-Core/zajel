@@ -497,16 +497,28 @@ class HeadlessBob:
 def _resolve_signaling_urls() -> list[str]:
     """Resolve signaling server URLs.
 
-    If SIGNALING_URL is set, use it directly.
-    Otherwise, discover servers from BOOTSTRAP_URL (same source the app uses).
+    Prefer BOOTSTRAP_URL discovery (finds ALL servers) so that MultiServerBob
+    can connect to every server the app might choose.  The Flutter app discovers
+    servers via bootstrap and may connect to any of them; if HeadlessBob is only
+    on one server, pairing fails when the app picks a different one.
+
+    Falls back to SIGNALING_URL (single server) when bootstrap is unavailable.
     """
+    bootstrap_url = os.environ.get("BOOTSTRAP_URL", "")
+    if bootstrap_url:
+        urls = _discover_from_bootstrap(bootstrap_url)
+        if urls:
+            return urls
+        logger.warning("Bootstrap discovery returned no servers, falling back to SIGNALING_URL")
+
     if SIGNALING_URL:
         return [SIGNALING_URL]
 
-    bootstrap_url = os.environ.get("BOOTSTRAP_URL", "")
-    if not bootstrap_url:
-        return []
+    return []
 
+
+def _discover_from_bootstrap(bootstrap_url: str) -> list[str]:
+    """Discover all signaling server URLs from the bootstrap endpoint."""
     try:
         import urllib.request
         import json
@@ -528,6 +540,7 @@ def _resolve_signaling_urls() -> list[str]:
                 urls.append(ep.replace("https://", "wss://", 1))
             elif ep.startswith("http://"):
                 urls.append(ep.replace("http://", "ws://", 1))
+        logger.info("Bootstrap discovered %d server(s): %s", len(urls), urls)
         return urls
     except Exception as e:
         logger.warning("Bootstrap discovery failed: %s", e)

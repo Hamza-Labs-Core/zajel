@@ -107,6 +107,10 @@ class SignalingClient:
         self._rendezvous_results: asyncio.Queue[dict] = asyncio.Queue()
         self._errors: asyncio.Queue[str] = asyncio.Queue()
 
+        # Fast-fail event for pair_error (unblocks wait_for_pair_match)
+        self._pair_error_event = asyncio.Event()
+        self._last_pair_error: str = ""
+
         # Channel event queues
         self._chunk_pulls: asyncio.Queue[dict] = asyncio.Queue()
         self._chunk_available: asyncio.Queue[dict] = asyncio.Queue()
@@ -192,6 +196,7 @@ class SignalingClient:
 
     async def pair_with(self, target_code: str, proposed_name: Optional[str] = None) -> None:
         """Send a pair request to another peer."""
+        self._pair_error_event.clear()
         msg: dict[str, Any] = {
             "type": "pair_request",
             "targetCode": target_code,
@@ -215,8 +220,32 @@ class SignalingClient:
         return await asyncio.wait_for(self._pair_requests.get(), timeout=timeout)
 
     async def wait_for_pair_match(self, timeout: float = 60) -> PairMatch:
-        """Wait for a pair match (after both sides accept)."""
-        return await asyncio.wait_for(self._pair_matches.get(), timeout=timeout)
+        """Wait for a pair match (after both sides accept).
+
+        Also monitors for pair_error to fail fast instead of waiting for
+        the full timeout when the target code doesn't exist on this server.
+        """
+        match_task = asyncio.create_task(self._pair_matches.get())
+        error_task = asyncio.create_task(self._pair_error_event.wait())
+
+        done, pending = await asyncio.wait(
+            {match_task, error_task},
+            timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        for task in pending:
+            task.cancel()
+
+        if not done:
+            raise asyncio.TimeoutError("Timed out waiting for pair match")
+
+        completed = done.pop()
+        if completed is error_task:
+            self._pair_error_event.clear()
+            raise RuntimeError(f"Pair error: {self._last_pair_error}")
+
+        return completed.result()
 
     # ── WebRTC Signaling ─────────────────────────────────────
 
@@ -519,6 +548,8 @@ class SignalingClient:
 
                 case "pair_error":
                     logger.error("Pair error: %s", msg.get("error"))
+                    self._last_pair_error = msg.get("error", "unknown")
+                    self._pair_error_event.set()
                     await self._errors.put(msg.get("error", "unknown"))
 
                 case "offer" | "answer" | "ice_candidate":

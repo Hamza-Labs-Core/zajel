@@ -18,6 +18,13 @@
 
 Never skip steps. Never combine steps. Each step must complete before moving to the next.
 
+### Before pushing
+Always run before committing/pushing Flutter changes:
+```bash
+cd packages/app && flutter analyze && flutter test test/
+```
+Do NOT push if either command fails.
+
 ## Licensing & IP Guidelines
 
 ### Third-Party Licensing

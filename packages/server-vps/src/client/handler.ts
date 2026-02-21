@@ -18,6 +18,7 @@ import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIG
 import { ChunkRelay } from './chunk-relay.js';
 import type { Storage } from '../storage/interface.js';
 import { AttestationManager, type AttestationConfig } from '../attestation/attestation-manager.js';
+import type { FederationManager } from '../federation/federation-manager.js';
 
 export interface ClientHandlerConfig {
   heartbeatInterval: number;   // Expected heartbeat interval from clients
@@ -396,6 +397,9 @@ export class ClientHandler extends EventEmitter {
   // WebSocket -> attestation connection ID mapping
   private wsToConnectionId: Map<WebSocket, string> = new Map();
 
+  // Federation manager for DHT redirect info (optional)
+  private federation: FederationManager | null = null;
+
   constructor(
     identity: ServerIdentity,
     endpoint: string,
@@ -404,7 +408,8 @@ export class ClientHandler extends EventEmitter {
     distributedRendezvous: DistributedRendezvous,
     metadata: ServerMetadata = {},
     storage?: Storage,
-    attestationConfig?: AttestationConfig
+    attestationConfig?: AttestationConfig,
+    federation?: FederationManager
   ) {
     super();
     this.identity = identity;
@@ -428,6 +433,11 @@ export class ClientHandler extends EventEmitter {
     // Initialize attestation manager if config is provided
     if (attestationConfig) {
       this.attestationManager = new AttestationManager(attestationConfig);
+    }
+
+    // Store federation reference for DHT redirect lookups
+    if (federation) {
+      this.federation = federation;
     }
 
     // Forward match notifications to clients
@@ -467,6 +477,16 @@ export class ClientHandler extends EventEmitter {
   private clearPairRequestTimers(timerKey: string): void {
     this.clearPairRequestTimer(timerKey);
     this.clearPairRequestWarningTimer(timerKey);
+  }
+
+  /**
+   * Get DHT redirect targets for a pairing code.
+   * Returns servers that are also responsible for this code in the hash ring.
+   */
+  private getPairingCodeRedirects(pairingCode: string): Array<{ serverId: string; endpoint: string }> {
+    if (!this.federation) return [];
+    const targets = this.federation.getRedirectTargets([pairingCode]);
+    return targets.map(t => ({ serverId: t.serverId, endpoint: t.endpoint }));
   }
 
   /**
@@ -1138,11 +1158,15 @@ export class ClientHandler extends EventEmitter {
 
     logger.pairingEvent('registered', { code: pairingCode, activeCodes: currentActiveCount });
 
-    // Send confirmation
+    // Compute DHT redirects: other servers that should also know about this code
+    const redirects = this.getPairingCodeRedirects(pairingCode);
+
+    // Send confirmation with optional redirects for cross-server pairing
     this.send(ws, {
       type: 'registered',
       pairingCode,
       serverId: this.identity.serverId,
+      ...(redirects.length > 0 ? { redirects } : {}),
     });
   }
 
@@ -1179,9 +1203,11 @@ export class ClientHandler extends EventEmitter {
     }
 
     const targetWs = this.pairingCodeToWs.get(targetCode);
-    // SECURITY: Use generic error message to prevent enumeration attacks
-    // Don't reveal whether the target code exists or not
+
     if (!targetWs) {
+      // Target not found locally — with DHT redirects, the client should have
+      // registered on all responsible servers. If it's not here, it's not available.
+      // SECURITY: Use generic error message to prevent enumeration attacks
       this.send(ws, {
         type: 'pair_error',
         error: 'Pair request could not be processed',
@@ -1199,6 +1225,20 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
+    this.processPairRequest(requesterCode, requesterPublicKey, targetCode, targetWs, proposedName);
+  }
+
+  /**
+   * Process a pair request (used for both local and cross-server requests).
+   * The target must be a local WebSocket connection.
+   */
+  private processPairRequest(
+    requesterCode: string,
+    requesterPublicKey: string,
+    targetCode: string,
+    targetWs: WebSocket,
+    proposedName?: string
+  ): void {
     // Check for DoS: limit pending requests per target
     const pending = this.pendingPairRequests.get(targetCode) || [];
 
@@ -1213,10 +1253,13 @@ export class ClientHandler extends EventEmitter {
 
     // SECURITY: Limit pending requests per target to prevent DoS
     if (pending.length >= PAIRING.MAX_PENDING_REQUESTS_PER_TARGET) {
-      this.send(ws, {
-        type: 'pair_error',
-        error: 'Pair request could not be processed',
-      });
+      const requesterWs = this.pairingCodeToWs.get(requesterCode);
+      if (requesterWs) {
+        this.send(requesterWs, {
+          type: 'pair_error',
+          error: 'Pair request could not be processed',
+        });
+      }
       return;
     }
 
@@ -1345,8 +1388,6 @@ export class ClientHandler extends EventEmitter {
       this.pendingPairRequests.set(responderCode, pending);
     }
 
-    const requesterWs = this.pairingCodeToWs.get(targetCode);
-
     if (accepted) {
       // Get responder's public key
       const responderPublicKey = this.pairingCodeToPublicKey.get(responderCode);
@@ -1357,6 +1398,7 @@ export class ClientHandler extends EventEmitter {
 
       // Notify both peers about the match
       // The requester is the initiator (creates WebRTC offer)
+      const requesterWs = this.pairingCodeToWs.get(targetCode);
       if (requesterWs) {
         this.send(requesterWs, {
           type: 'pair_matched',
@@ -1376,6 +1418,7 @@ export class ClientHandler extends EventEmitter {
       logger.pairingEvent('matched', { requester: targetCode, target: responderCode });
     } else {
       // Notify requester about rejection
+      const requesterWs = this.pairingCodeToWs.get(targetCode);
       if (requesterWs) {
         this.send(requesterWs, {
           type: 'pair_rejected',
@@ -1652,32 +1695,20 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
-    // Find target WebSocket
+    // Forward the message to target
     const targetWs = this.pairingCodeToWs.get(target);
-
-    if (!targetWs) {
+    if (targetWs) {
+      this.send(targetWs, {
+        type,
+        from: senderPairingCode,
+        payload,
+      });
+      logger.pairingEvent('forwarded', { requester: senderPairingCode, target, type });
+    } else {
       logger.pairingEvent('not_found', { target, type });
       this.send(ws, {
         type: 'error',
         message: `Peer not found: ${target}`,
-      });
-      return;
-    }
-
-    // Forward the message to target with sender info
-    const forwarded = this.send(targetWs, {
-      type,
-      from: senderPairingCode,
-      payload,
-    });
-
-    if (forwarded) {
-      logger.pairingEvent('forwarded', { requester: senderPairingCode, target, type });
-    } else {
-      logger.pairingEvent('forward_failed', { requester: senderPairingCode, target, type });
-      this.send(ws, {
-        type: 'error',
-        message: `Failed to forward ${type} to ${target}`,
       });
     }
   }
@@ -1774,32 +1805,20 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
-    // Find target WebSocket
+    // Forward the message to target
     const targetWs = this.pairingCodeToWs.get(target);
-
-    if (!targetWs) {
+    if (targetWs) {
+      this.send(targetWs, {
+        type,
+        from: senderPairingCode,
+        payload,
+      });
+      logger.pairingEvent('forwarded', { requester: senderPairingCode, target, type });
+    } else {
       logger.pairingEvent('not_found', { target, type });
       this.send(ws, {
         type: 'error',
         message: `Peer not found: ${target}`,
-      });
-      return;
-    }
-
-    // Forward the message to target with sender info
-    const forwarded = this.send(targetWs, {
-      type,
-      from: senderPairingCode,
-      payload,
-    });
-
-    if (forwarded) {
-      logger.pairingEvent('forwarded', { requester: senderPairingCode, target, type });
-    } else {
-      logger.pairingEvent('forward_failed', { requester: senderPairingCode, target, type });
-      this.send(ws, {
-        type: 'error',
-        message: `Failed to forward ${type} to ${target}`,
       });
     }
   }

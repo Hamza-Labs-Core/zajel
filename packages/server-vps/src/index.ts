@@ -280,7 +280,8 @@ export async function createZajelServer(
     distributedRendezvous,
     metadata,
     storage,
-    attestationConfig
+    attestationConfig,
+    federation
   );
 
   // Set the reference for HTTP handler (used by /metrics endpoint)
