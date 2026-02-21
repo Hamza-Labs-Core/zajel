@@ -6,7 +6,7 @@ import time
 import pytest
 from zajel.signaling import (
     generate_pairing_code, PAIRING_CODE_CHARS, PAIRING_CODE_LENGTH,
-    SignalingClient,
+    PairRequest, SignalingClient,
 )
 
 
@@ -89,3 +89,129 @@ class TestPairErrorFastFail:
             pass  # Expected: no connection
 
         assert not client._pair_error_event.is_set()
+
+
+class TestRedirectHandling:
+    """Tests for DHT redirect connection handling."""
+
+    @pytest.mark.asyncio
+    async def test_registered_with_no_redirects(self):
+        """registered message with no redirects should not create connections."""
+        client = SignalingClient("ws://localhost:9999")
+        client._public_key_b64 = "testkey123"
+
+        await client._handle_message({"type": "registered"})
+
+        assert client._registered.is_set()
+        assert len(client._redirect_connections) == 0
+
+    @pytest.mark.asyncio
+    async def test_registered_with_empty_redirects(self):
+        """registered message with empty redirects list should not connect."""
+        client = SignalingClient("ws://localhost:9999")
+        client._public_key_b64 = "testkey123"
+
+        await client._handle_message({
+            "type": "registered",
+            "redirects": [],
+        })
+
+        assert client._registered.is_set()
+        assert len(client._redirect_connections) == 0
+
+    @pytest.mark.asyncio
+    async def test_peer_to_ws_tracking_on_pair_incoming(self):
+        """pair_incoming from a redirect should track the source websocket."""
+        client = SignalingClient("ws://localhost:9999")
+
+        # Create a mock websocket object
+        mock_ws = object()
+
+        await client._handle_message({
+            "type": "pair_incoming",
+            "fromCode": "PEER42",
+            "fromPublicKey": "peerkey",
+        }, source_ws=mock_ws)
+
+        assert "PEER42" in client._peer_to_ws
+        assert client._peer_to_ws["PEER42"] is mock_ws
+
+    @pytest.mark.asyncio
+    async def test_peer_to_ws_tracking_on_pair_matched(self):
+        """pair_matched from a redirect should track the source websocket."""
+        client = SignalingClient("ws://localhost:9999")
+        mock_ws = object()
+
+        await client._handle_message({
+            "type": "pair_matched",
+            "peerCode": "PEER99",
+            "peerPublicKey": "peerkey",
+            "isInitiator": True,
+        }, source_ws=mock_ws)
+
+        assert "PEER99" in client._peer_to_ws
+        assert client._peer_to_ws["PEER99"] is mock_ws
+
+    @pytest.mark.asyncio
+    async def test_peer_to_ws_not_set_without_source(self):
+        """Messages from the main connection (source_ws=None) should not add to map."""
+        client = SignalingClient("ws://localhost:9999")
+
+        await client._handle_message({
+            "type": "pair_incoming",
+            "fromCode": "PEER42",
+            "fromPublicKey": "peerkey",
+        })
+
+        assert "PEER42" not in client._peer_to_ws
+
+    @pytest.mark.asyncio
+    async def test_send_to_peer_uses_tracked_ws(self):
+        """_send_to_peer should use the tracked websocket for known peers."""
+        client = SignalingClient("ws://localhost:9999")
+
+        sent_on = []
+
+        async def mock_send(msg, ws=None):
+            sent_on.append(ws)
+
+        client._send = mock_send
+
+        mock_ws = object()
+        client._peer_to_ws["PEER42"] = mock_ws
+
+        await client._send_to_peer("PEER42", {"type": "test"})
+
+        assert len(sent_on) == 1
+        assert sent_on[0] is mock_ws
+
+    @pytest.mark.asyncio
+    async def test_send_to_peer_falls_back_to_main_ws(self):
+        """_send_to_peer should fall back to main ws for unknown peers."""
+        client = SignalingClient("ws://localhost:9999")
+        main_ws = object()
+        client._ws = main_ws
+
+        sent_on = []
+
+        async def mock_send(msg, ws=None):
+            sent_on.append(ws)
+
+        client._send = mock_send
+
+        await client._send_to_peer("UNKNOWN", {"type": "test"})
+
+        assert len(sent_on) == 1
+        assert sent_on[0] is main_ws
+
+    @pytest.mark.asyncio
+    async def test_close_redirect_connections_clears_state(self):
+        """_close_redirect_connections should clear all tracking state."""
+        client = SignalingClient("ws://localhost:9999")
+        client._peer_to_ws["PEER1"] = object()
+        client._peer_to_ws["PEER2"] = object()
+
+        await client._close_redirect_connections()
+
+        assert len(client._redirect_connections) == 0
+        assert len(client._peer_to_ws) == 0

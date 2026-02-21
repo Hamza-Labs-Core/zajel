@@ -116,6 +116,12 @@ class SignalingClient:
         self._chunk_available: asyncio.Queue[dict] = asyncio.Queue()
         self._chunk_data: asyncio.Queue[dict] = asyncio.Queue()
 
+        # Redirect connections for cross-server pairing (mirrors Flutter app behavior)
+        # Key: endpoint URL, Value: (websocket, receive_task)
+        self._redirect_connections: dict[str, tuple[ClientConnection, asyncio.Task]] = {}
+        # Maps a peer's code to the WebSocket that received the pairing event
+        self._peer_to_ws: dict[str, ClientConnection] = {}
+
         # Callbacks
         self._on_pair_request: Optional[EventHandler] = None
         self._on_pair_match: Optional[EventHandler] = None
@@ -177,6 +183,7 @@ class SignalingClient:
     async def disconnect(self) -> None:
         """Disconnect from the signaling server."""
         logger.info("Disconnecting from signaling server")
+        await self._close_redirect_connections()
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
             self._heartbeat_task = None
@@ -191,6 +198,56 @@ class SignalingClient:
             await self._ws.close()
             self._ws = None
         self._connected.clear()
+
+    # ── Redirect connections (cross-server pairing) ────────
+
+    async def _connect_to_redirect(self, endpoint: str) -> None:
+        """Connect to a redirect server and register our pairing code there."""
+        if endpoint in self._redirect_connections:
+            return  # Already connected
+        try:
+            ws = await websockets.connect(endpoint)
+            await self._send({
+                "type": "register",
+                "pairingCode": self.pairing_code,
+                "publicKey": self._public_key_b64,
+            }, ws=ws)
+
+            # Start receiving messages from this redirect connection
+            task = asyncio.create_task(self._redirect_receive_loop(endpoint, ws))
+            self._redirect_connections[endpoint] = (ws, task)
+            logger.info("Registered on redirect server %s", endpoint)
+        except Exception as e:
+            logger.warning("Failed to connect to redirect %s: %s", endpoint, e)
+
+    async def _redirect_receive_loop(self, endpoint: str, ws: ClientConnection) -> None:
+        """Receive messages from a redirect server and route to main handlers."""
+        try:
+            async for raw in ws:
+                try:
+                    msg = json.loads(raw)
+                    await self._handle_message(msg, source_ws=ws)
+                except json.JSONDecodeError:
+                    logger.warning("Non-JSON from redirect %s: %s", endpoint, raw[:100])
+        except websockets.ConnectionClosed:
+            logger.info("Redirect connection to %s closed", endpoint)
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            logger.warning("Redirect receive error from %s: %s", endpoint, e)
+        finally:
+            self._redirect_connections.pop(endpoint, None)
+
+    async def _close_redirect_connections(self) -> None:
+        """Close all redirect connections."""
+        for endpoint, (ws, task) in list(self._redirect_connections.items()):
+            task.cancel()
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        self._redirect_connections.clear()
+        self._peer_to_ws.clear()
 
     # ── Pairing ──────────────────────────────────────────────
 
@@ -208,7 +265,7 @@ class SignalingClient:
 
     async def respond_to_pair(self, target_code: str, accept: bool) -> None:
         """Accept or reject an incoming pair request."""
-        await self._send({
+        await self._send_to_peer(target_code, {
             "type": "pair_response",
             "targetCode": target_code,
             "accepted": accept,
@@ -251,7 +308,7 @@ class SignalingClient:
 
     async def send_offer(self, target: str, sdp: str) -> None:
         """Send a WebRTC offer."""
-        await self._send({
+        await self._send_to_peer(target, {
             "type": "offer",
             "target": target,
             "payload": {"type": "offer", "sdp": sdp},
@@ -259,7 +316,7 @@ class SignalingClient:
 
     async def send_answer(self, target: str, sdp: str) -> None:
         """Send a WebRTC answer."""
-        await self._send({
+        await self._send_to_peer(target, {
             "type": "answer",
             "target": target,
             "payload": {"type": "answer", "sdp": sdp},
@@ -267,7 +324,7 @@ class SignalingClient:
 
     async def send_ice_candidate(self, target: str, candidate: dict) -> None:
         """Send an ICE candidate."""
-        await self._send({
+        await self._send_to_peer(target, {
             "type": "ice_candidate",
             "target": target,
             "payload": candidate,
@@ -425,12 +482,18 @@ class SignalingClient:
         """Send a raw JSON message to the signaling server."""
         await self._send(msg)
 
-    async def _send(self, msg: dict) -> None:
-        if self._ws is None:
+    async def _send(self, msg: dict, ws: Optional[ClientConnection] = None) -> None:
+        target_ws = ws or self._ws
+        if target_ws is None:
             raise RuntimeError("Not connected")
         data = json.dumps(msg)
         logger.debug("TX: %s", data[:200])
-        await self._ws.send(data)
+        await target_ws.send(data)
+
+    async def _send_to_peer(self, peer_code: str, msg: dict) -> None:
+        """Send a message through the connection associated with the peer."""
+        ws = self._peer_to_ws.get(peer_code, self._ws)
+        await self._send(msg, ws=ws)
 
     async def _heartbeat_loop(self) -> None:
         try:
@@ -499,7 +562,7 @@ class SignalingClient:
                 logger.error("Reconnect failed: %s", e)
                 continue
 
-    async def _handle_message(self, msg: dict) -> None:
+    async def _handle_message(self, msg: dict, source_ws: Optional[ClientConnection] = None) -> None:
         msg_type = msg.get("type", "")
         logger.debug("RX: %s", msg_type)
 
@@ -507,6 +570,15 @@ class SignalingClient:
             match msg_type:
                 case "registered":
                     self._registered.set()
+                    # Handle redirects for cross-server pairing
+                    redirects = msg.get("redirects", [])
+                    if redirects and self._public_key_b64:
+                        for redir in redirects:
+                            endpoint = redir.get("endpoint", "")
+                            if endpoint:
+                                asyncio.create_task(
+                                    self._connect_to_redirect(endpoint)
+                                )
 
                 case "pong":
                     pass  # Heartbeat response
@@ -515,8 +587,12 @@ class SignalingClient:
                     if not all(k in msg for k in ("fromCode", "fromPublicKey")):
                         logger.warning("Malformed pair_incoming: missing required fields")
                         return
+                    from_code = msg["fromCode"]
+                    # Track which connection this peer's event came from
+                    if source_ws is not None:
+                        self._peer_to_ws[from_code] = source_ws
                     req = PairRequest(
-                        from_code=msg["fromCode"],
+                        from_code=from_code,
                         from_public_key=msg["fromPublicKey"],
                         proposed_name=msg.get("proposedName"),
                     )
@@ -528,8 +604,11 @@ class SignalingClient:
                     if not all(k in msg for k in ("peerCode", "peerPublicKey", "isInitiator")):
                         logger.warning("Malformed pair_matched: missing required fields")
                         return
+                    peer_code = msg["peerCode"]
+                    if source_ws is not None:
+                        self._peer_to_ws[peer_code] = source_ws
                     pair_match = PairMatch(
-                        peer_code=msg["peerCode"],
+                        peer_code=peer_code,
                         peer_public_key=msg["peerPublicKey"],
                         is_initiator=msg["isInitiator"],
                     )
@@ -556,9 +635,12 @@ class SignalingClient:
                     if not all(k in msg for k in ("from", "payload")):
                         logger.warning("Malformed %s: missing required fields", msg_type)
                         return
+                    from_code = msg["from"]
+                    if source_ws is not None and from_code not in self._peer_to_ws:
+                        self._peer_to_ws[from_code] = source_ws
                     signal = WebRTCSignal(
                         signal_type=msg_type,
-                        from_code=msg["from"],
+                        from_code=from_code,
                         payload=msg["payload"],
                     )
                     await self._webrtc_signals.put(signal)
