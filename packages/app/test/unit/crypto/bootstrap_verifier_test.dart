@@ -159,5 +159,12 @@ void main() {
       // Empty body has no timestamp, so it should fail
       expect(result, isFalse);
     });
+
+    test('default constructor creates valid verifier with well-formed keys',
+        () {
+      // This validates the hardcoded production/QA keys are valid base64
+      // and decode to proper 32-byte Ed25519 public keys
+      expect(() => BootstrapVerifier(), returnsNormally);
+    });
   });
 }

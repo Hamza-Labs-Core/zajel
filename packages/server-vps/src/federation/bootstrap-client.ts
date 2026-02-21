@@ -95,7 +95,7 @@ export function createBootstrapClient(
       const result = await response.json() as { servers: BootstrapServerEntry[] };
       return result.servers.filter(s => s.serverId !== identity.serverId);
     } catch (error) {
-      console.error(`[Bootstrap] Get servers error:`, error);
+      console.warn(`[Bootstrap] Get servers failed (returning empty - NOT the same as "no servers"):`, error);
       return [];
     }
   }
@@ -123,7 +123,7 @@ export function createBootstrapClient(
       const result = await response.json() as { success: boolean; peers: BootstrapServerEntry[] };
       return result.peers;
     } catch (error) {
-      console.error(`[Bootstrap] Heartbeat error:`, error);
+      console.warn(`[Bootstrap] Heartbeat failed (returning empty - NOT the same as "no peers"):`, error);
       return [];
     }
   }
@@ -135,9 +135,11 @@ export function createBootstrapClient(
       const peers = await heartbeat();
       if (peers.length > 0) {
         console.log(`[Bootstrap] Heartbeat: ${peers.length} peers known`);
-        if (onPeersDiscovered) {
-          onPeersDiscovered(peers);
-        }
+      } else {
+        console.debug(`[Bootstrap] Heartbeat returned 0 peers`);
+      }
+      if (onPeersDiscovered) {
+        onPeersDiscovered(peers);
       }
     }, config.bootstrap.heartbeatInterval);
 

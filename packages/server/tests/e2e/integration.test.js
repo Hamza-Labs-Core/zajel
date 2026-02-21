@@ -21,6 +21,7 @@ import worker from '../../src/index.js';
 class MockStorage {
   constructor() {
     this.data = new Map();
+    this._alarm = null;
   }
 
   async get(key) {
@@ -32,21 +33,35 @@ class MockStorage {
   }
 
   async delete(key) {
-    this.data.delete(key);
+    if (Array.isArray(key)) {
+      for (const k of key) this.data.delete(k);
+    } else {
+      this.data.delete(key);
+    }
   }
 
-  async list({ prefix }) {
+  async list({ prefix, limit }) {
     const results = new Map();
     for (const [key, value] of this.data) {
       if (key.startsWith(prefix)) {
         results.set(key, value);
+        if (limit && results.size >= limit) break;
       }
     }
     return results;
   }
 
+  async getAlarm() {
+    return this._alarm;
+  }
+
+  async setAlarm(time) {
+    this._alarm = time;
+  }
+
   clear() {
     this.data.clear();
+    this._alarm = null;
   }
 }
 
@@ -56,6 +71,10 @@ class MockStorage {
 class MockState {
   constructor() {
     this.storage = new MockStorage();
+  }
+
+  blockConcurrencyWhile(fn) {
+    return fn();
   }
 }
 

@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'features/channels/channel_detail_screen.dart';
+import 'features/channels/channels_main_screen.dart';
 import 'features/chat/chat_screen.dart';
 import 'features/connection/connect_screen.dart';
 import 'features/contacts/contact_detail_screen.dart';
 import 'features/contacts/contacts_screen.dart';
+import 'features/groups/group_detail_screen.dart';
+import 'features/groups/groups_list_screen.dart';
 import 'features/help/help_article_screen.dart';
 import 'features/help/help_screen.dart';
 import 'features/home/home_screen.dart';
@@ -87,6 +91,28 @@ final appRouter = GoRouter(
       builder: (context, state) {
         final peerId = state.pathParameters['peerId']!;
         return ContactDetailScreen(peerId: peerId);
+      },
+    ),
+    GoRoute(
+      path: '/channels',
+      builder: (context, state) => const ChannelsMainScreen(),
+    ),
+    GoRoute(
+      path: '/channel/:channelId',
+      builder: (context, state) {
+        final channelId = state.pathParameters['channelId']!;
+        return ChannelDetailScreen(channelId: channelId);
+      },
+    ),
+    GoRoute(
+      path: '/groups',
+      builder: (context, state) => const GroupsListScreen(),
+    ),
+    GoRoute(
+      path: '/group/:groupId',
+      builder: (context, state) {
+        final groupId = state.pathParameters['groupId']!;
+        return GroupDetailScreen(groupId: groupId);
       },
     ),
     GoRoute(

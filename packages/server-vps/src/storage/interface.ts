@@ -67,6 +67,22 @@ export interface Storage {
   getVectorClock(key: string): Promise<VectorClock | null>;
   deleteVectorClock(key: string): Promise<boolean>;
 
+  // Chunk cache
+  cacheChunk(chunkId: string, channelId: string, data: Buffer): Promise<void>;
+  getCachedChunk(chunkId: string): Promise<{ data: Buffer; channelId: string } | null>;
+  getCachedChunkIdsByChannel(channelId: string): Promise<string[]>;
+  deleteCachedChunk(chunkId: string): Promise<boolean>;
+  cleanupExpiredChunks(maxAgeMs: number): Promise<number>;
+  evictLruChunks(maxEntries: number): Promise<number>;
+  getCachedChunkCount(): Promise<number>;
+
+  // Chunk sources
+  saveChunkSource(chunkId: string, peerId: string): Promise<void>;
+  getChunkSources(chunkId: string): Promise<Array<{ chunkId: string; peerId: string; announcedAt: number }>>;
+  deleteChunkSourcesByPeer(peerId: string): Promise<number>;
+  deleteChunkSource(chunkId: string, peerId: string): Promise<boolean>;
+  cleanupExpiredChunkSources(maxAgeMs: number): Promise<number>;
+
   // Statistics
   getStats(): Promise<StorageStats>;
 }

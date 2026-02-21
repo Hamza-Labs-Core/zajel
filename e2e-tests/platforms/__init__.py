@@ -9,6 +9,7 @@ Supported platforms:
 - android: Appium + UiAutomator2 (emulator or real device)
 - linux: dogtail + AT-SPI (desktop)
 - windows: pywinauto + UIA (desktop)
+- ios: Appium + XCUITest (simulator)
 """
 
 import os
@@ -34,6 +35,9 @@ def get_config():
     elif platform == "windows":
         from . import windows_config
         return windows_config
+    elif platform == "ios":
+        from . import ios_config
+        return ios_config
     else:
         raise ValueError(f"Unknown platform: {platform}")
 
@@ -64,5 +68,8 @@ def create_helper(platform: str = None, **kwargs):
     elif platform == "windows":
         from .windows_helper import WindowsAppHelper
         return WindowsAppHelper(kwargs["app_path"])
+    elif platform == "ios":
+        from .ios_helper import IosAppHelper
+        return IosAppHelper(kwargs["driver"])
     else:
         raise ValueError(f"Unknown platform: {platform}")

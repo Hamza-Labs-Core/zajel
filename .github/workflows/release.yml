@@ -183,10 +183,10 @@ jobs:
         run: flutter pub get
 
       - name: Build APK
-        run: flutter build apk --release
+        run: flutter build apk --release --obfuscate --split-debug-info=build/debug-info/apk
 
       - name: Build App Bundle
-        run: flutter build appbundle --release
+        run: flutter build appbundle --release --obfuscate --split-debug-info=build/debug-info/aab
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -199,6 +199,18 @@ jobs:
         with:
           name: android-aab
           path: packages/app/build/app/outputs/bundle/release/app-release.aab
+
+      - name: Upload debug symbols (APK)
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-debug-info
+          path: packages/app/build/debug-info/apk/
+
+      - name: Upload debug symbols (AAB)
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-aab-debug-info
+          path: packages/app/build/debug-info/aab/
 
       - name: Upload to Play Store (internal track)
         if: ${{ env.PLAY_STORE_SERVICE_ACCOUNT_JSON != '' }}
@@ -271,14 +283,14 @@ jobs:
         if: ${{ env.IOS_CERTIFICATE_BASE64 != '' }}
         env:
           IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
-        run: flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
+        run: flutter build ipa --release --obfuscate --split-debug-info=build/debug-info/ios --export-options-plist=ios/ExportOptions.plist
 
       - name: Build iOS (unsigned for GitHub release)
         if: ${{ env.IOS_CERTIFICATE_BASE64 == '' }}
         env:
           IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
         run: |
-          flutter build ios --release --no-codesign
+          flutter build ios --release --no-codesign --obfuscate --split-debug-info=build/debug-info/ios
           cd build/ios/iphoneos
           mkdir Payload
           cp -r Runner.app Payload/
@@ -332,7 +344,7 @@ jobs:
         run: flutter pub get
 
       - name: Build macOS
-        run: flutter build macos --release
+        run: flutter build macos --release --obfuscate --split-debug-info=build/debug-info/macos
 
       - name: Create DMG
         run: |
@@ -380,7 +392,7 @@ jobs:
         run: flutter pub get
 
       - name: Build Windows
-        run: flutter build windows --release
+        run: flutter build windows --release --obfuscate --split-debug-info=build/debug-info/windows
 
       - name: Decode certificate
         if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' }}
@@ -448,7 +460,7 @@ jobs:
         run: flutter pub get
 
       - name: Build Linux
-        run: flutter build linux --release
+        run: flutter build linux --release --obfuscate --split-debug-info=build/debug-info/linux
 
       - name: Create tarball
         run: |

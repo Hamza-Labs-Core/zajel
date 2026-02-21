@@ -1,0 +1,13 @@
+{
+  "name": "@zajel/wiki",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GitHub Wiki content for the Zajel project",
+  "scripts": {
+    "clone": "git clone https://github.com/nicekid1/Zajel.wiki.git _wiki_repo",
+    "sync": "cp -v *.md _wiki_repo/ && cd _wiki_repo && git add -A && git status",
+    "push": "cd _wiki_repo && git add -A && git commit -m 'Update wiki content' && git push",
+    "deploy": "npm run clone && npm run sync && npm run push",
+    "clean": "rm -rf _wiki_repo"
+  }
+}

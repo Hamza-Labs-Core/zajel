@@ -100,13 +100,29 @@ class TestConfig {
 
   /// Configuration for CI/CD pipelines.
   ///
-  /// Uses production-like URLs but with test instances.
+  /// Requires CI_VPS_SERVER_URL and CI_BOOTSTRAP_URL environment variables.
+  /// These must be set in the CI workflow (e.g., from GitHub Actions vars
+  /// VPS_QA_WS_URL and QA_BOOTSTRAP_URL). Throws if not configured.
   factory TestConfig.ci() {
+    final vpsUrl = Platform.environment['CI_VPS_SERVER_URL'];
+    final bootstrapUrl = Platform.environment['CI_BOOTSTRAP_URL'];
+
+    if (vpsUrl == null || vpsUrl.isEmpty) {
+      throw StateError(
+        'CI_VPS_SERVER_URL environment variable is required for CI test config. '
+        'Set it in your CI workflow (e.g., from GitHub Actions vars.VPS_QA_WS_URL).',
+      );
+    }
+    if (bootstrapUrl == null || bootstrapUrl.isEmpty) {
+      throw StateError(
+        'CI_BOOTSTRAP_URL environment variable is required for CI test config. '
+        'Set it in your CI workflow (e.g., from GitHub Actions vars.QA_BOOTSTRAP_URL).',
+      );
+    }
+
     return TestConfig(
-      vpsServerUrl: Platform.environment['CI_VPS_SERVER_URL'] ??
-          'wss://test-vps.zajel.example.com',
-      bootstrapServerUrl: Platform.environment['CI_BOOTSTRAP_URL'] ??
-          'https://test-bootstrap.zajel.example.com',
+      vpsServerUrl: vpsUrl,
+      bootstrapServerUrl: bootstrapUrl,
       connectionTimeoutSeconds: 60, // Longer timeout for CI
       pairingTimeoutSeconds: 20,
       useMockServer: false,
@@ -315,16 +331,34 @@ extension ReconnectionTestUtils on TestConfig {
   }
 
   /// Wait for reconnection service status to indicate connected.
+  ///
+  /// Listens to the [statusStream] for an event whose `toString()` contains
+  /// 'connected' (case-insensitive), matching enum values like
+  /// `ReconnectionStatus.connected`. Returns true if such an event arrives
+  /// before [timeout], false otherwise.
   Future<bool> waitForReconnectionConnected(
     Stream<dynamic> statusStream, {
     Duration timeout = const Duration(seconds: 30),
   }) async {
-    return TestUtils.waitFor(
-      () {
-        // Poll the status stream
-        return true; // This is a placeholder - actual implementation depends on stream state
-      },
-      timeout: timeout,
-    );
+    final completer = Completer<bool>();
+    final subscription = statusStream.listen((event) {
+      final status = event.toString().toLowerCase();
+      if (status.contains('connected') && !completer.isCompleted) {
+        completer.complete(true);
+      }
+    });
+
+    final timer = Timer(timeout, () {
+      if (!completer.isCompleted) {
+        completer.complete(false);
+      }
+    });
+
+    try {
+      return await completer.future;
+    } finally {
+      timer.cancel();
+      await subscription.cancel();
+    }
   }
 }

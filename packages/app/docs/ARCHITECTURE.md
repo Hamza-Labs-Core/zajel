@@ -1597,7 +1597,8 @@ Global Providers (Singleton Services)
 
 Configuration Providers
 ├─ sharedPreferencesProvider
-├─ displayNameProvider
+├─ usernameProvider
+├─ userIdentityProvider
 ├─ bootstrapServerUrlProvider
 └─ selectedServerProvider
 
@@ -1834,8 +1835,8 @@ graph TB
 ### Unit Tests
 
 **Core Services**:
-- `/test/core/crypto/crypto_service_test.dart`
-- `/test/core/network/meeting_point_service_test.dart`
+- `/test/unit/crypto/crypto_service_test.dart`
+- `/test/unit/network/meeting_point_service_test.dart`
 
 **Example**:
 ```dart

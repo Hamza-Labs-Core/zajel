@@ -502,7 +502,13 @@ function validateHandshakeMessage(obj: Record<string, unknown>): ValidationResul
   if (!isValidPublicKey(obj.publicKey)) {
     return failure('Invalid or missing publicKey in handshake message');
   }
-  return success({ type: 'handshake', publicKey: obj.publicKey });
+  const msg: HandshakeMessage = { type: 'handshake', publicKey: obj.publicKey };
+  // stableId is optional (backward compat with old clients)
+  // Must be exactly 16 hex characters when present
+  if (typeof obj.stableId === 'string' && /^[0-9a-fA-F]{16}$/.test(obj.stableId)) {
+    msg.stableId = obj.stableId;
+  }
+  return success(msg);
 }
 
 function validateFileStartMessage(obj: Record<string, unknown>): ValidationResult<FileStartMessage> {

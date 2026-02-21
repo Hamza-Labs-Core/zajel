@@ -32,7 +32,7 @@ void main() {
         sharedPreferencesProvider.overrideWithValue(
           FakeSharedPreferences(),
         ),
-        displayNameProvider.overrideWith((ref) => displayName),
+        usernameProvider.overrideWith((ref) => displayName),
         pairingCodeProvider.overrideWith((ref) => 'ABC123'),
         signalingDisplayStateProvider
             .overrideWith((ref) => SignalingDisplayState.disconnected),
