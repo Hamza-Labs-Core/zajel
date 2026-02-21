@@ -21,12 +21,12 @@ class TestHeadlessMessaging:
         helper = app_helper(alice)
         helper.wait_for_app_ready()
 
-        # Alice navigates to Connect screen
+        # Alice navigates to Connect screen to get her code
         helper.navigate_to_connect()
-        helper.get_pairing_code_from_connect_screen()
+        alice_code = helper.get_pairing_code_from_connect_screen()
 
-        # Alice enters Bob's (headless) code
-        helper.enter_peer_code(headless_bob.pairing_code)
+        # Bob pairs with Alice's code (tries all servers via MultiServerBob)
+        headless_bob.pair_with(alice_code)
 
         # Poll until connected or timeout
         assert helper.wait_for_peer_connected(timeout=60), "Pairing with headless client must succeed"
