@@ -263,16 +263,46 @@ class SignalingClient:
     # ── Pairing ──────────────────────────────────────────────
 
     async def pair_with(self, target_code: str, proposed_name: Optional[str] = None) -> None:
-        """Send a pair request to another peer."""
-        self._pair_error_event.clear()
+        """Send a pair request to another peer.
+
+        Tries the main connection first.  If the server returns pair_error
+        (target code not on that server), retries on each redirect connection.
+        This mirrors the Flutter app + MultiServerBob behaviour: the code
+        might be registered on a different server in the federation.
+        """
         msg: dict[str, Any] = {
             "type": "pair_request",
             "targetCode": target_code,
         }
         if proposed_name:
             msg["proposedName"] = proposed_name
-        await self._send(msg)
-        logger.info("Sent pair request to %s", target_code)
+
+        # Collect all websockets to try: main first, then redirects
+        ws_list: list[tuple[str, Optional[ClientConnection]]] = [
+            ("main", self._ws),
+        ]
+        for endpoint, (ws, _task) in self._redirect_connections.items():
+            ws_list.append((endpoint, ws))
+
+        for label, ws in ws_list:
+            self._pair_error_event.clear()
+            self._last_pair_error = None
+            await self._send(msg, ws=ws)
+            logger.info("Sent pair request to %s via %s", target_code, label)
+
+            # Wait briefly for pair_error; if none comes, the request was
+            # accepted by this server and wait_for_pair_match will complete.
+            try:
+                await asyncio.wait_for(self._pair_error_event.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                # No error within 5s — request is being processed
+                return
+
+            # Got pair_error — try next connection
+            logger.info("pair_error on %s: %s, trying next", label, self._last_pair_error)
+
+        # All connections returned pair_error
+        logger.info("Sent pair request to %s (exhausted all connections)", target_code)
 
     async def respond_to_pair(self, target_code: str, accept: bool) -> None:
         """Accept or reject an incoming pair request."""

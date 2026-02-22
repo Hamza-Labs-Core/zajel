@@ -215,3 +215,59 @@ class TestRedirectHandling:
 
         assert len(client._redirect_connections) == 0
         assert len(client._peer_to_ws) == 0
+
+    @pytest.mark.asyncio
+    async def test_pair_with_tries_redirect_on_error(self):
+        """pair_with should try redirect connections when main returns pair_error."""
+        client = SignalingClient("ws://localhost:9999")
+        main_ws = object()
+        redirect_ws = object()
+        client._ws = main_ws
+
+        # Add a redirect connection
+        noop_task = asyncio.create_task(asyncio.sleep(999))
+        client._redirect_connections["ws://other:9000"] = (redirect_ws, noop_task)
+
+        sent_messages = []
+
+        async def mock_send(msg, ws=None):
+            sent_messages.append((msg, ws))
+            # Simulate pair_error on main, success on redirect
+            if ws is None or ws is main_ws:
+                client._last_pair_error = "code not found"
+                client._pair_error_event.set()
+
+        client._send = mock_send
+
+        await client.pair_with("TARGET")
+        noop_task.cancel()
+
+        # Should have sent to main ws first, then redirect ws
+        assert len(sent_messages) == 2
+        assert sent_messages[0][1] is None or sent_messages[0][1] is main_ws
+        assert sent_messages[1][1] is redirect_ws
+
+    @pytest.mark.asyncio
+    async def test_pair_with_stops_on_success(self):
+        """pair_with should stop trying after a connection accepts."""
+        client = SignalingClient("ws://localhost:9999")
+        main_ws = object()
+        redirect_ws = object()
+        client._ws = main_ws
+
+        noop_task = asyncio.create_task(asyncio.sleep(999))
+        client._redirect_connections["ws://other:9000"] = (redirect_ws, noop_task)
+
+        sent_messages = []
+
+        async def mock_send(msg, ws=None):
+            sent_messages.append((msg, ws))
+            # Main server accepts (no pair_error) — don't set error event
+
+        client._send = mock_send
+
+        await client.pair_with("TARGET")
+        noop_task.cancel()
+
+        # Should only send to main (which accepted)
+        assert len(sent_messages) == 1
