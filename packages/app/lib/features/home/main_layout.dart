@@ -125,6 +125,8 @@ class _ConversationSidebar extends ConsumerWidget {
           onSettings: () => context.push('/settings'),
           onConnect: () => context.push('/connect'),
           onContacts: () => context.push('/contacts'),
+          onChannels: () => context.push('/channels'),
+          onGroups: () => context.push('/groups'),
         ),
         const Divider(height: 1),
         // Peer list
@@ -203,6 +205,8 @@ class _SidebarHeader extends StatelessWidget {
   final VoidCallback onSettings;
   final VoidCallback onConnect;
   final VoidCallback onContacts;
+  final VoidCallback onChannels;
+  final VoidCallback onGroups;
 
   const _SidebarHeader({
     required this.displayName,
@@ -211,6 +215,8 @@ class _SidebarHeader extends StatelessWidget {
     required this.onSettings,
     required this.onConnect,
     required this.onContacts,
+    required this.onChannels,
+    required this.onGroups,
   });
 
   @override
@@ -266,6 +272,16 @@ class _SidebarHeader extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.rss_feed, size: 20),
+            onPressed: onChannels,
+            tooltip: 'Channels',
+          ),
+          IconButton(
+            icon: const Icon(Icons.group, size: 20),
+            onPressed: onGroups,
+            tooltip: 'Groups',
           ),
           IconButton(
             icon: const Icon(Icons.contacts, size: 20),
