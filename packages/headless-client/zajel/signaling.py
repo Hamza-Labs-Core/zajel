@@ -292,10 +292,12 @@ class SignalingClient:
 
             # Wait briefly for pair_error; if none comes, the request was
             # accepted by this server and wait_for_pair_match will complete.
+            # The server responds with pair_error almost immediately (<1s),
+            # so 2s is generous enough while saving time on the happy path.
             try:
-                await asyncio.wait_for(self._pair_error_event.wait(), timeout=5)
+                await asyncio.wait_for(self._pair_error_event.wait(), timeout=2)
             except asyncio.TimeoutError:
-                # No error within 5s — request is being processed
+                # No error within 2s — request is being processed
                 return
 
             # Got pair_error — try next connection

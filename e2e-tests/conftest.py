@@ -611,14 +611,15 @@ class MultiServerBob:
 
         Uses a short timeout per attempt since the signaling server responds
         quickly with pair_error if the code isn't registered there.
+        Wrong-server attempts fail fast (~2s) via pair_error.
+        Correct-server attempts need up to 60s for full WebRTC+TURN setup.
         """
         last_err = None
         for b in self._bobs:
             try:
-                # Short timeout: if the code is on this server, pairing completes
-                # within seconds. If not, we get a pair_error immediately and the
-                # wait_for_pair_match times out — 15s is enough to detect that.
-                result = b._run(b._client.pair_with(code), timeout=30)
+                # Wrong server: pair_error fires within 2s → RuntimeError
+                # Right server: signaling + WebRTC + TURN needs up to 60s
+                result = b._run(b._client.pair_with(code), timeout=60)
                 b._connected_peer = result
                 self._active = b
                 return result
