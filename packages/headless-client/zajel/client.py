@@ -1513,7 +1513,7 @@ class ZajelHeadlessClient:
             The created Group.
         """
         group_id = str(uuid.uuid4())
-        device_id = self._pairing_code or "headless"
+        device_id = self._crypto.stable_id
 
         self_member = GroupMember(
             device_id=device_id,
@@ -2116,11 +2116,13 @@ class ZajelHeadlessClient:
                     joined_at=datetime.fromisoformat(m.get("joined_at", created_at)),
                 ))
 
-            # Create the group locally with self_device_id = our pairing code
+            # Create the group locally with self_device_id = our stableId
+            # (matches what the Flutter app stores for us in the invitation)
+            our_stable_id = self._crypto.stable_id
             group = Group(
                 id=group_id,
                 name=group_name,
-                self_device_id=self._pairing_code,
+                self_device_id=our_stable_id,
                 members=members,
                 created_at=datetime.fromisoformat(created_at),
                 created_by=created_by,
@@ -2132,9 +2134,10 @@ class ZajelHeadlessClient:
                     group_id, device_id, key_b64
                 )
 
-            # Set our own sender key
+            # Set our own sender key under our stableId (matches the key
+            # the Flutter app stores for us as invitee)
             self._group_crypto.set_sender_key(
-                group_id, self._pairing_code, invitee_sender_key
+                group_id, our_stable_id, invitee_sender_key
             )
 
             # Persist group
@@ -2327,8 +2330,11 @@ class ZajelHeadlessClient:
             # Wait for data channel
             await self._webrtc.wait_for_message_channel(timeout=30)
 
-            # Send handshake (key exchange)
-            handshake = HandshakeMessage(public_key=self._crypto.public_key_base64)
+            # Send handshake (key exchange + stableId for identity)
+            handshake = HandshakeMessage(
+                public_key=self._crypto.public_key_base64,
+                stable_id=self._crypto.stable_id,
+            )
             await self._webrtc.send_message(handshake.to_json())
 
             # Initialize file transfer service

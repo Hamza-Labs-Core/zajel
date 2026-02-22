@@ -67,6 +67,22 @@ class CryptoService:
         """Get our public key as base64."""
         return base64.b64encode(self.public_key_bytes).decode()
 
+    @property
+    def stable_id(self) -> str:
+        """Derive a stable device identity from our public key.
+
+        Matches the Flutter app's CryptoService.peerIdFromPublicKey:
+        first 16 chars of SHA-256 hex hash, uppercased.
+        """
+        digest = hashlib.sha256(self.public_key_bytes).hexdigest().upper()
+        return digest[:16]
+
+    @staticmethod
+    def peer_id_from_public_key(public_key_b64: str) -> str:
+        """Derive a stable ID from a peer's public key (same as Flutter)."""
+        pub_bytes = base64.b64decode(public_key_b64)
+        return hashlib.sha256(pub_bytes).hexdigest().upper()[:16]
+
     def perform_key_exchange(self, peer_id: str, peer_public_key_b64: str) -> bytes:
         """Perform X25519 key exchange with a peer.
 
