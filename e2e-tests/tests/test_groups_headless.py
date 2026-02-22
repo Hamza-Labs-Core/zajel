@@ -85,18 +85,19 @@ class TestGroupsHeadless:
 
         async def _test():
             group = await alice_client.create_group("Family Chat")
+            alice_stable = alice_client._crypto.stable_id
 
             assert group.name == "Family Chat"
             assert group.id  # Non-empty UUID
             assert group.member_count == 1
             assert group.members[0].display_name == "Alice"
-            assert group.members[0].device_id == "alice-device"
-            assert group.self_device_id == "alice-device"
-            assert group.created_by == "alice-device"
+            assert group.members[0].device_id == alice_stable
+            assert group.self_device_id == alice_stable
+            assert group.created_by == alice_stable
 
             # Sender key should be stored
             assert alice_client._group_crypto.has_sender_key(
-                group.id, "alice-device"
+                group.id, alice_stable
             )
 
         run(_test())
@@ -167,13 +168,14 @@ class TestGroupsHeadless:
 
         async def _test():
             group = await alice_client.create_group("Messaging Group")
+            alice_stable = alice_client._crypto.stable_id
 
             msg = await alice_client.send_group_message(
                 group.id, "Hello everyone!"
             )
 
             assert msg.content == "Hello everyone!"
-            assert msg.author_device_id == "alice-device"
+            assert msg.author_device_id == alice_stable
             assert msg.is_outgoing is True
             assert msg.sequence_number == 1
 
@@ -233,23 +235,26 @@ class TestGroupsHeadless:
         """Full E2E: Alice creates group, sends message, Bob receives and decrypts."""
 
         async def _test():
+            alice_stable = alice_client._crypto.stable_id
+            bob_stable = bob_client._crypto.stable_id
+
             # Alice creates group
             group = await alice_client.create_group("Cross Chat")
 
             # Get Alice's sender key for sharing with Bob
             alice_sender_key = alice_client._group_crypto.get_sender_key(
-                group.id, "alice-device"
+                group.id, alice_stable
             )
             alice_key_b64 = base64.b64encode(alice_sender_key).decode()
 
             # Bob creates the same group locally (simulating invitation acceptance)
             bob_member = GroupMember(
-                device_id="bob-device",
+                device_id=bob_stable,
                 display_name="Bob",
                 public_key=bob_client._crypto.public_key_base64,
             )
             alice_member = GroupMember(
-                device_id="alice-device",
+                device_id=alice_stable,
                 display_name="Alice",
                 public_key=alice_client._crypto.public_key_base64,
             )
@@ -257,26 +262,26 @@ class TestGroupsHeadless:
             bob_group = Group(
                 id=group.id,
                 name=group.name,
-                self_device_id="bob-device",
+                self_device_id=bob_stable,
                 members=[alice_member, bob_member],
-                created_by="alice-device",
+                created_by=alice_stable,
             )
             bob_client._group_storage.save_group(bob_group)
 
             # Bob generates his sender key
             bob_key_b64 = bob_client._group_crypto.generate_sender_key()
             bob_client._group_crypto.set_sender_key(
-                group.id, "bob-device", bob_key_b64
+                group.id, bob_stable, bob_key_b64
             )
 
             # Bob stores Alice's sender key
             bob_client._group_crypto.set_sender_key(
-                group.id, "alice-device", alice_key_b64
+                group.id, alice_stable, alice_key_b64
             )
 
             # Alice also stores Bob's sender key
             alice_client._group_crypto.set_sender_key(
-                group.id, "bob-device", bob_key_b64
+                group.id, bob_stable, bob_key_b64
             )
 
             # Alice sends a message (encrypt with her sender key)
@@ -287,17 +292,17 @@ class TestGroupsHeadless:
             # Simulate transmission: get encrypted bytes
             msg_bytes = alice_msg.to_bytes()
             encrypted = alice_client._group_crypto.encrypt(
-                msg_bytes, group.id, "alice-device"
+                msg_bytes, group.id, alice_stable
             )
 
             # Bob receives the encrypted message
             received = await bob_client.receive_group_message(
-                group.id, "alice-device", encrypted
+                group.id, alice_stable, encrypted
             )
 
             assert received is not None
             assert received.content == "Hello Bob!"
-            assert received.author_device_id == "alice-device"
+            assert received.author_device_id == alice_stable
             assert received.is_outgoing is False
 
         run(_test())
@@ -330,12 +335,13 @@ class TestGroupsHeadless:
         """Leaving a group clears sender keys and stored data."""
 
         async def _test():
+            alice_stable = alice_client._crypto.stable_id
             group = await alice_client.create_group("Leave Test")
             await alice_client.send_group_message(group.id, "Before leaving")
 
             # Verify data exists
             assert alice_client._group_crypto.has_sender_key(
-                group.id, "alice-device"
+                group.id, alice_stable
             )
             msgs = await alice_client.get_group_messages(group.id)
             assert len(msgs) == 1
@@ -345,7 +351,7 @@ class TestGroupsHeadless:
 
             # Keys should be cleared
             assert not alice_client._group_crypto.has_sender_key(
-                group.id, "alice-device"
+                group.id, alice_stable
             )
 
             # Group should be gone
@@ -397,10 +403,13 @@ class TestGroupsHeadless:
         """Receiving the same message twice returns None on second receive."""
 
         async def _test():
+            alice_stable = alice_client._crypto.stable_id
+            bob_stable = bob_client._crypto.stable_id
+
             # Setup group with both clients
             group = await alice_client.create_group("Dedup Test")
             alice_key = alice_client._group_crypto.get_sender_key(
-                group.id, "alice-device"
+                group.id, alice_stable
             )
             alice_key_b64 = base64.b64encode(alice_key).decode()
 
@@ -408,42 +417,42 @@ class TestGroupsHeadless:
             bob_group = Group(
                 id=group.id,
                 name=group.name,
-                self_device_id="bob-device",
+                self_device_id=bob_stable,
                 members=[
                     GroupMember(
-                        device_id="alice-device",
+                        device_id=alice_stable,
                         display_name="Alice",
                         public_key="alice-key",
                     ),
                     GroupMember(
-                        device_id="bob-device",
+                        device_id=bob_stable,
                         display_name="Bob",
                         public_key="bob-key",
                     ),
                 ],
-                created_by="alice-device",
+                created_by=alice_stable,
             )
             bob_client._group_storage.save_group(bob_group)
             bob_client._group_crypto.set_sender_key(
-                group.id, "alice-device", alice_key_b64
+                group.id, alice_stable, alice_key_b64
             )
 
             # Alice sends a message
             msg = await alice_client.send_group_message(group.id, "Unique msg")
             encrypted = alice_client._group_crypto.encrypt(
-                msg.to_bytes(), group.id, "alice-device"
+                msg.to_bytes(), group.id, alice_stable
             )
 
             # Bob receives it first time — success
             result1 = await bob_client.receive_group_message(
-                group.id, "alice-device", encrypted
+                group.id, alice_stable, encrypted
             )
             assert result1 is not None
             assert result1.content == "Unique msg"
 
             # Bob receives the same message again — duplicate, returns None
             result2 = await bob_client.receive_group_message(
-                group.id, "alice-device", encrypted
+                group.id, alice_stable, encrypted
             )
             assert result2 is None
 
@@ -453,6 +462,8 @@ class TestGroupsHeadless:
         """Receiving a message where encrypted author != claimed author raises."""
 
         async def _test():
+            bob_stable = bob_client._crypto.stable_id
+
             # Bob creates group
             group = await bob_client.create_group("Auth Test")
 
@@ -466,15 +477,15 @@ class TestGroupsHeadless:
 
             # But encrypt with Bob's key (the only key we have)
             encrypted = bob_client._group_crypto.encrypt(
-                msg.to_bytes(), group.id, "bob-device"
+                msg.to_bytes(), group.id, bob_stable
             )
 
-            # Now try to receive as "bob-device" — author in decrypted payload
-            # says "alice-device" but we told receive it came from "bob-device"
+            # Now try to receive as bob_stable — author in decrypted payload
+            # says "alice-device" but we told receive it came from bob_stable
             # The author mismatch should raise
             with pytest.raises(RuntimeError, match="Author mismatch"):
                 await bob_client.receive_group_message(
-                    group.id, "bob-device", encrypted
+                    group.id, bob_stable, encrypted
                 )
 
         run(_test())
