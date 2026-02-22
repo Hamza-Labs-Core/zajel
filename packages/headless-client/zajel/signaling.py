@@ -167,12 +167,18 @@ class SignalingClient:
         # Start message receiver
         self._receive_task = asyncio.create_task(self._receive_loop())
 
-        # Register
+        # Register and wait for server confirmation
         await self._send({
             "type": "register",
             "pairingCode": self.pairing_code,
             "publicKey": public_key_b64,
         })
+
+        # Wait for 'registered' response so redirect tasks can be created
+        try:
+            await asyncio.wait_for(self._registered.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            logger.warning("Timed out waiting for registered response from %s", self.url)
 
         # Start heartbeat
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
@@ -201,8 +207,13 @@ class SignalingClient:
 
     # ── Redirect connections (cross-server pairing) ────────
 
-    async def _connect_to_redirect(self, endpoint: str) -> None:
-        """Connect to a redirect server and register our pairing code there."""
+    async def connect_to_redirect(self, endpoint: str) -> None:
+        """Connect to a redirect server and register our pairing code there.
+
+        Called automatically when the server includes redirects in the
+        registered response.  Can also be called explicitly to register
+        on additional servers (e.g. when federation hasn't propagated yet).
+        """
         if endpoint in self._redirect_connections:
             return  # Already connected
         try:
@@ -577,7 +588,7 @@ class SignalingClient:
                             endpoint = redir.get("endpoint", "")
                             if endpoint:
                                 asyncio.create_task(
-                                    self._connect_to_redirect(endpoint)
+                                    self.connect_to_redirect(endpoint)
                                 )
 
                 case "pong":

@@ -354,6 +354,10 @@ class HeadlessBob:
         self.pairing_code = self._run(self._client.connect())
         return self.pairing_code
 
+    def register_on_server(self, endpoint: str):
+        """Register our pairing code on an additional signaling server."""
+        self._run(self._client.register_on_server(endpoint))
+
     def pair_with(self, code: str):
         self._connected_peer = self._run(self._client.pair_with(code))
         return self._connected_peer
@@ -651,10 +655,14 @@ class MultiServerBob:
 def headless_bob():
     """Headless client acting as Bob for cross-platform tests.
 
-    Connects to the signaling server, auto-accepts pair requests.
-    Uses SIGNALING_URL if set, otherwise discovers servers from BOOTSTRAP_URL.
-    When multiple servers are discovered, connects to all of them so that
-    pair_with() works regardless of which server the app chose.
+    Connects to one signaling server, auto-accepts pair requests.
+    When multiple servers are discovered via BOOTSTRAP_URL, registers
+    the same pairing code on ALL servers (mimicking the Flutter app's
+    redirect handling).  This ensures pairing works regardless of which
+    server the app chose.
+
+    Falls back to MultiServerBob (one bob per server) if redirect
+    registration fails.
     """
     signaling_urls = _resolve_signaling_urls()
     if not signaling_urls:
@@ -662,22 +670,60 @@ def headless_bob():
 
     ice_servers = _build_ice_servers()
 
-    bobs = []
-    for i, url in enumerate(signaling_urls):
+    if len(signaling_urls) <= 1:
+        # Single server — simple case
         bob = HeadlessBob(
-            signaling_url=url,
-            name=f"HeadlessBob-{i}",
+            signaling_url=signaling_urls[0],
+            name="HeadlessBob",
             auto_accept_pairs=True,
             log_level="DEBUG",
             ice_servers=ice_servers,
         )
         bob.connect()
-        bobs.append(bob)
-
-    if len(bobs) == 1:
-        yield bobs[0]
-    else:
-        yield MultiServerBob(bobs)
-
-    for bob in bobs:
+        yield bob
         bob.disconnect()
+    else:
+        # Multiple servers — register on all of them (mimic Flutter app)
+        primary_url = signaling_urls[0]
+        bob = HeadlessBob(
+            signaling_url=primary_url,
+            name="HeadlessBob",
+            auto_accept_pairs=True,
+            log_level="DEBUG",
+            ice_servers=ice_servers,
+        )
+        bob.connect()
+
+        # Register on all OTHER servers so the pairing code is findable everywhere.
+        # The server may have already sent redirects (via DHT), but if federation
+        # isn't ready (e.g. fresh deploy), we do it explicitly.
+        redirect_ok = True
+        for url in signaling_urls[1:]:
+            try:
+                bob.register_on_server(url)
+            except Exception as e:
+                logger.warning("Failed to register on %s: %s", url, e)
+                redirect_ok = False
+
+        if redirect_ok:
+            # One bob registered on all servers — pairing_code works everywhere
+            yield bob
+            bob.disconnect()
+        else:
+            # Fallback: create separate bobs per server (original MultiServerBob)
+            logger.warning("Falling back to MultiServerBob (redirect registration failed)")
+            bob.disconnect()
+            bobs = []
+            for i, url in enumerate(signaling_urls):
+                b = HeadlessBob(
+                    signaling_url=url,
+                    name=f"HeadlessBob-{i}",
+                    auto_accept_pairs=True,
+                    log_level="DEBUG",
+                    ice_servers=ice_servers,
+                )
+                b.connect()
+                bobs.append(b)
+            yield MultiServerBob(bobs)
+            for b in bobs:
+                b.disconnect()

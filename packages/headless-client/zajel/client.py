@@ -372,6 +372,15 @@ class ZajelHeadlessClient:
         logger.info("Connected as %s (code: %s)", self.name, self._pairing_code)
         return self._pairing_code
 
+    async def register_on_server(self, endpoint: str) -> None:
+        """Register our pairing code on an additional server.
+
+        Mirrors the Flutter app's redirect handling: connects to the given
+        server endpoint, registers the same pairing code and public key,
+        and starts receiving pairing events from that server.
+        """
+        await self._signaling.connect_to_redirect(endpoint)
+
     async def disconnect(self) -> None:
         """Disconnect from all peers and the signaling server."""
         # Cancel all background tasks
