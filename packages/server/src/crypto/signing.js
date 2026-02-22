@@ -10,11 +10,29 @@
  * @returns {Uint8Array}
  */
 export function hexToBytes(hex) {
+  if (typeof hex !== 'string' || hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) {
+    throw new Error('Invalid hex string');
+  }
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < hex.length; i += 2) {
     bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
   }
   return bytes;
+}
+
+/**
+ * Convert an ArrayBuffer or Uint8Array to a base64 string.
+ * Uses a loop instead of spread operator to avoid stack overflow on large inputs.
+ * @param {ArrayBuffer|Uint8Array} buffer
+ * @returns {string} Base64-encoded string
+ */
+export function bytesToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
 }
 
 /**
@@ -54,5 +72,5 @@ export async function importSigningKey(hexSeed) {
 export async function signPayload(key, payload) {
   const data = new TextEncoder().encode(payload);
   const signature = await crypto.subtle.sign('Ed25519', key, data);
-  return btoa(String.fromCharCode(...new Uint8Array(signature)));
+  return bytesToBase64(signature);
 }

@@ -69,7 +69,11 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
   Future<Uint8List?> getPublicKeyBytes(String peerId) async {
     final peer = await getPeer(peerId);
     if (peer == null) return null;
-    return base64Decode(peer.publicKey);
+    try {
+      return base64Decode(peer.publicKey);
+    } on FormatException {
+      return null;
+    }
   }
 
   @override
@@ -111,6 +115,15 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
   }
 
   @override
+  Future<TrustedPeer?> getPeerByPublicKey(String publicKey) async {
+    await _ensureInitialized();
+    for (final peer in _cache.values) {
+      if (peer.publicKey == publicKey) return peer;
+    }
+    return null;
+  }
+
+  @override
   Future<void> updateLastSeen(String peerId, DateTime timestamp) async {
     await _ensureInitialized();
     final peer = _cache[peerId];
@@ -140,6 +153,36 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
           : peer.copyWith(clearAlias: true);
       await _persist();
     }
+  }
+
+  @override
+  Future<void> recordKeyRotation(
+      String peerId, String oldPublicKey, String newPublicKey) async {
+    await _ensureInitialized();
+    final peer = _cache[peerId];
+    if (peer == null) return;
+    _cache[peerId] = peer.copyWith(
+      previousPublicKey: oldPublicKey,
+      publicKey: newPublicKey,
+      keyRotatedAt: DateTime.now().toUtc(),
+      keyChangeAcknowledged: false,
+    );
+    await _persist();
+  }
+
+  @override
+  Future<void> acknowledgeKeyChange(String peerId) async {
+    await _ensureInitialized();
+    final peer = _cache[peerId];
+    if (peer == null) return;
+    _cache[peerId] = peer.copyWith(keyChangeAcknowledged: true);
+    await _persist();
+  }
+
+  @override
+  Future<List<TrustedPeer>> getPeersWithPendingKeyChanges() async {
+    await _ensureInitialized();
+    return _cache.values.where((p) => !p.keyChangeAcknowledged).toList();
   }
 
   @override

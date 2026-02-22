@@ -10,6 +10,7 @@ Implements:
 import base64
 import hashlib
 import hmac
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -21,6 +22,8 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+logger = logging.getLogger(__name__)
 
 # Constants matching the Dart app
 NONCE_SIZE = 12
@@ -42,6 +45,10 @@ class CryptoService:
         self._session_keys: dict[str, bytes] = {}
         # peerId -> peer public key bytes
         self._peer_public_keys: dict[str, bytes] = {}
+        # Replay protection: track seen nonces per peer
+        self._seen_nonces: dict[str, set[bytes]] = {}
+        # Sliding window size for nonce tracking
+        self._max_nonce_history = 10000
 
     def initialize(self) -> None:
         """Generate a new X25519 key pair."""
@@ -80,6 +87,8 @@ class CryptoService:
         shared_secret = self._private_key.exchange(peer_pub)
 
         # Derive session key using HKDF-SHA256
+        # Info must match Dart app's establishSession() and web client's establishSession()
+        # All clients use HKDF_INFO = b"zajel_session" for interop
         session_key = HKDF(
             algorithm=SHA256(),
             length=32,
@@ -88,6 +97,19 @@ class CryptoService:
         ).derive(shared_secret)
 
         self._session_keys[peer_id] = session_key
+        self._seen_nonces[peer_id] = set()  # Reset for new session
+
+        # Diagnostic: log key fingerprints for cross-platform debugging
+        shared_hash = hashlib.sha256(shared_secret).hexdigest()[:16]
+        session_hash = hashlib.sha256(session_key).hexdigest()[:16]
+        our_pub = self.public_key_base64[:8]
+        peer_pub = peer_public_key_b64[:8]
+        logger.info(
+            "perform_key_exchange(%s): ourPub=%s… peerPub=%s… "
+            "sharedHash=%s sessionHash=%s",
+            peer_id, our_pub, peer_pub, shared_hash, session_hash,
+        )
+
         return session_key
 
     def encrypt(self, peer_id: str, plaintext: str) -> str:
@@ -119,6 +141,9 @@ class CryptoService:
 
         Returns:
             The decrypted plaintext string.
+
+        Raises:
+            ValueError: If a replayed nonce is detected.
         """
         key = self._session_keys.get(peer_id)
         if key is None:
@@ -128,8 +153,23 @@ class CryptoService:
         nonce = raw[:NONCE_SIZE]
         ciphertext = raw[NONCE_SIZE:]  # includes MAC
 
+        # Replay detection: check for previously seen nonces
+        if peer_id not in self._seen_nonces:
+            self._seen_nonces[peer_id] = set()
+        if nonce in self._seen_nonces[peer_id]:
+            raise ValueError(f"Replay detected: duplicate nonce from peer {peer_id}")
+
         aead = ChaCha20Poly1305(key)
         plaintext = aead.decrypt(nonce, ciphertext, None)
+
+        # Record the nonce after successful decryption
+        self._seen_nonces[peer_id].add(nonce)
+
+        # Evict oldest nonces if the set is too large
+        if len(self._seen_nonces[peer_id]) > self._max_nonce_history:
+            nonce_list = list(self._seen_nonces[peer_id])
+            self._seen_nonces[peer_id] = set(nonce_list[len(nonce_list) // 2:])
+
         return plaintext.decode()
 
     def has_session_key(self, peer_id: str) -> bool:
@@ -178,6 +218,42 @@ class CryptoService:
 
         return points
 
+    def derive_daily_points_from_ids(
+        self,
+        my_stable_id: str,
+        peer_stable_id: str,
+        days_offset: tuple[int, ...] = (-1, 0, 1),
+    ) -> list[str]:
+        """Derive daily meeting points from two stable IDs.
+
+        Unlike derive_daily_points which uses public key bytes, this uses
+        persistent stable IDs that survive key rotation.
+
+        Args:
+            my_stable_id: Our stable ID (16 hex chars).
+            peer_stable_id: Peer's stable ID (16 hex chars).
+            days_offset: Day offsets from today.
+
+        Returns:
+            List of daily meeting point strings.
+        """
+        # Sort IDs lexicographically so both sides get same result
+        ids = sorted([my_stable_id, peer_stable_id])
+        now = datetime.now(timezone.utc)
+
+        points = []
+        for offset in days_offset:
+            day = now + timedelta(days=offset)
+            date_str = day.strftime("%Y-%m-%d")
+            hash_input = (
+                ids[0].encode() + ids[1].encode() + (DAILY_SALT + date_str).encode()
+            )
+            h = hashlib.sha256(hash_input).digest()
+            point = DAILY_PREFIX + base64.urlsafe_b64encode(h).decode()[:22]
+            points.append(point)
+
+        return points
+
     def derive_hourly_tokens(
         self,
         shared_secret: bytes,
@@ -206,3 +282,34 @@ class CryptoService:
             tokens.append(token)
 
         return tokens
+
+    @staticmethod
+    def compute_safety_number(
+        public_key_a_base64: str, public_key_b_base64: str
+    ) -> str:
+        """Compute a shared safety number from two public keys.
+
+        Both peers compute the same number by sorting keys lexicographically
+        before hashing. Returns a 60-digit string.
+
+        Compatible with the Dart and TypeScript implementations.
+        """
+        bytes_a = base64.b64decode(public_key_a_base64)
+        bytes_b = base64.b64decode(public_key_b_base64)
+
+        # Sort lexicographically
+        if bytes_a <= bytes_b:
+            combined = bytes_a + bytes_b
+        else:
+            combined = bytes_b + bytes_a
+
+        hash_bytes = hashlib.sha256(combined).digest()
+
+        # Format: pairs of bytes → 5-digit number (mod 100000)
+        result = ""
+        for i in range(0, 24, 2):
+            if i + 1 < len(hash_bytes):
+                val = ((hash_bytes[i] << 8) | hash_bytes[i + 1]) % 100000
+                result += str(val).zfill(5)
+
+        return result[:60]

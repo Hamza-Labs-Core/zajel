@@ -53,11 +53,12 @@ class TestFileTransferService:
         import asyncio
         asyncio.run(alice_transfer.send_file("bob", test_path))
 
-        # Process received messages through Bob's handler
-        for encrypted_msg in self.sent_messages:
-            plaintext = self.bob_crypto.decrypt("alice", encrypted_msg)
-            import json
-            msg = json.loads(plaintext)
+        # Process received messages through Bob's handler.
+        # File channel messages are plaintext JSON; only the chunk data field
+        # is encrypted (matching the Flutter/web client protocol).
+        import json
+        for raw_msg in self.sent_messages:
+            msg = json.loads(raw_msg)
             bob_transfer.handle_file_message("alice", msg)
 
         # Verify the file was received correctly

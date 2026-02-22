@@ -10,13 +10,26 @@ import subprocess
 import time
 import pytest
 
-from config import P2P_CONNECTION_TIMEOUT, ADB_PATH
+from config import ADB_PATH
 
 
 def _get_device_id_from_driver(driver):
     """Extract the device UDID from an Appium driver session."""
     caps = driver.capabilities
     return caps.get("udid", caps.get("deviceUDID", "emulator-5554"))
+
+
+def _dump_notifications(device_id: str) -> str:
+    """Return the raw dumpsys notification output for debugging."""
+    adb = ADB_PATH if ADB_PATH else "adb"
+    try:
+        result = subprocess.run(
+            [adb, "-s", device_id, "shell", "dumpsys", "notification", "--noredact"],
+            capture_output=True, text=True, timeout=10
+        )
+        return result.stdout
+    except (subprocess.TimeoutExpired, OSError):
+        return ""
 
 
 def _check_android_notification(device_id: str, expected_text: str, timeout: int = 15) -> bool:
@@ -32,17 +45,27 @@ def _check_android_notification(device_id: str, expected_text: str, timeout: int
     """
     adb = ADB_PATH if ADB_PATH else "adb"
     deadline = time.time() + timeout
+    last_output = ""
     while time.time() < deadline:
         try:
             result = subprocess.run(
                 [adb, "-s", device_id, "shell", "dumpsys", "notification", "--noredact"],
                 capture_output=True, text=True, timeout=10
             )
-            if expected_text in result.stdout:
+            last_output = result.stdout
+            if expected_text in last_output:
                 return True
         except (subprocess.TimeoutExpired, OSError):
             pass
         time.sleep(2)
+    # Dump relevant lines for debugging on failure
+    zajel_lines = [l for l in last_output.splitlines() if "zajel" in l.lower()]
+    if zajel_lines:
+        print(f"[notification check] zajel-related lines in dumpsys:\n" +
+              "\n".join(zajel_lines[:20]))
+    else:
+        print(f"[notification check] no zajel-related lines found in dumpsys output "
+              f"({len(last_output)} chars)")
     return False
 
 
@@ -72,12 +95,7 @@ class TestHeadlessNotifications:
         helper.get_pairing_code_from_connect_screen()
         helper.enter_peer_code(headless_bob.pairing_code)
 
-        time.sleep(P2P_CONNECTION_TIMEOUT)
-
-        helper.go_back_to_home()
-        time.sleep(3)
-
-        assert helper.is_peer_connected(), "Pairing must succeed"
+        assert helper.wait_for_peer_connected(timeout=60), "Pairing must succeed"
         return helper
 
     @pytest.mark.single_device
@@ -93,10 +111,16 @@ class TestHeadlessNotifications:
         peer_id = headless_bob.connected_peer.peer_id
         headless_bob.send_text(peer_id, "Notification test message")
 
-        # Check for notification
+        # Check for notification by looking for the message text in the
+        # dumpsys output. The app package is com.zajel.zajel (not com.zajel.app).
         found = _check_android_notification(
-            device_id, "com.zajel.app", timeout=15
+            device_id, "Notification test message", timeout=15
         )
+        if not found:
+            # Fall back to checking for any notification from our package
+            found = _check_android_notification(
+                device_id, "com.zajel.zajel", timeout=5
+            )
         assert found, "Notification should appear when chat is not open"
 
     @pytest.mark.single_device

@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/logging/logger_service.dart';
 import '../../core/models/models.dart';
 import '../../core/providers/app_providers.dart';
+import '../../core/utils/identity_utils.dart';
 import '../../shared/widgets/relative_time.dart';
 
 /// Home screen showing discovered peers and connection options.
@@ -18,6 +20,16 @@ class HomeScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Zajel'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.rss_feed),
+            onPressed: () => context.push('/channels'),
+            tooltip: 'Channels',
+          ),
+          IconButton(
+            icon: const Icon(Icons.group),
+            onPressed: () => context.push('/groups'),
+            tooltip: 'Groups',
+          ),
           IconButton(
             icon: const Icon(Icons.contacts),
             onPressed: () => context.push('/contacts'),
@@ -72,7 +84,7 @@ class HomeScreen extends ConsumerWidget {
   }
 
   Widget _buildHeader(BuildContext context, WidgetRef ref) {
-    final displayName = ref.watch(displayNameProvider);
+    final identity = ref.watch(userIdentityProvider);
     final pairingCode = ref.watch(pairingCodeProvider);
     final signalingState = ref.watch(signalingDisplayStateProvider);
 
@@ -105,7 +117,7 @@ class HomeScreen extends ConsumerWidget {
               CircleAvatar(
                 backgroundColor: Theme.of(context).colorScheme.primaryContainer,
                 child: Text(
-                  displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
+                  identity.isNotEmpty ? identity[0].toUpperCase() : '?',
                   style: TextStyle(
                     color: Theme.of(context).colorScheme.onPrimaryContainer,
                   ),
@@ -117,7 +129,7 @@ class HomeScreen extends ConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      displayName,
+                      identity,
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     if (pairingCode != null)
@@ -393,7 +405,7 @@ class _PeerCard extends ConsumerWidget {
 
   String _displayName(WidgetRef ref) {
     final aliases = ref.watch(peerAliasesProvider);
-    return aliases[peer.id] ?? peer.displayName;
+    return resolvePeerDisplayName(peer, alias: aliases[peer.id]);
   }
 
   Future<void> _showRenameDialog(BuildContext context, WidgetRef ref) async {
@@ -445,7 +457,7 @@ class _PeerCard extends ConsumerWidget {
       builder: (context) => AlertDialog(
         title: const Text('Delete Connection?'),
         content: Text(
-          'Delete ${peer.displayName}? This will remove the conversation and connection.',
+          'Delete ${_displayName(ref)}? This will remove the conversation and connection.',
         ),
         actions: [
           TextButton(
@@ -471,12 +483,13 @@ class _PeerCard extends ConsumerWidget {
       final connectionManager = ref.read(connectionManagerProvider);
       try {
         await connectionManager.disconnectPeer(peer.id);
-      } catch (_) {
-        // Best-effort disconnect
+      } catch (e) {
+        logger.debug(
+            'HomeScreen', 'Best-effort disconnect failed for ${peer.id}: $e');
       }
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${peer.displayName} deleted')),
+          SnackBar(content: Text('${_displayName(ref)} deleted')),
         );
       }
     }
@@ -488,7 +501,7 @@ class _PeerCard extends ConsumerWidget {
       builder: (context) => AlertDialog(
         title: const Text('Block User?'),
         content: Text(
-          'Block ${peer.displayName}? They won\'t be able to connect to you.',
+          'Block ${_displayName(ref)}? They won\'t be able to connect to you.',
         ),
         actions: [
           TextButton(
@@ -508,14 +521,14 @@ class _PeerCard extends ConsumerWidget {
     );
 
     if (confirmed == true) {
-      final keyToBlock = peer.publicKey ?? peer.id;
       await ref.read(blockedPeersProvider.notifier).block(
-            keyToBlock,
-            displayName: peer.displayName,
+            peer.id,
+            publicKey: peer.publicKey,
+            displayName: _displayName(ref),
           );
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${peer.displayName} blocked')),
+          SnackBar(content: Text('${_displayName(ref)} blocked')),
         );
       }
     }

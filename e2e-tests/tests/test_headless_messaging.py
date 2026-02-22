@@ -9,7 +9,6 @@ messages programmatically and send messages that Alice sees in the UI.
 import time
 import pytest
 
-from config import P2P_CONNECTION_TIMEOUT
 
 
 @pytest.mark.headless
@@ -29,13 +28,8 @@ class TestHeadlessMessaging:
         # Alice enters Bob's (headless) code
         helper.enter_peer_code(headless_bob.pairing_code)
 
-        # Wait for pairing and WebRTC connection
-        time.sleep(P2P_CONNECTION_TIMEOUT)
-
-        helper.go_back_to_home()
-        time.sleep(3)
-
-        assert helper.is_peer_connected(), "Pairing with headless client must succeed"
+        # Poll until connected or timeout
+        assert helper.wait_for_peer_connected(timeout=60), "Pairing with headless client must succeed"
 
         # Alice opens chat with the connected peer
         helper.open_chat_with_peer()

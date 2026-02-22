@@ -84,6 +84,60 @@ class MeetingPointService {
     return tokens;
   }
 
+  /// Derive daily meeting points from two stable IDs.
+  ///
+  /// Unlike [deriveDailyPoints] which uses public key bytes, this uses
+  /// persistent stable IDs that survive key rotation. Both peers compute
+  /// the same points regardless of who calls first.
+  List<String> deriveDailyPointsFromIds(
+      String myStableId, String peerStableId) {
+    return deriveDailyPointsFromIdsForDate(
+        myStableId, peerStableId, DateTime.now().toUtc());
+  }
+
+  /// Derive daily meeting points from stable IDs for a specific date (for testing).
+  List<String> deriveDailyPointsFromIdsForDate(
+    String myStableId,
+    String peerStableId,
+    DateTime date,
+  ) {
+    // Sort IDs lexicographically so both sides get same result
+    final sorted = [myStableId, peerStableId]..sort();
+    final points = <String>[];
+
+    for (var dayOffset = -1; dayOffset <= 1; dayOffset++) {
+      final targetDate = date.add(Duration(days: dayOffset));
+      final dateStr = _formatDate(targetDate);
+
+      // Concatenate: sorted_id_1 || sorted_id_2 || "zajel:daily:" || date
+      final input = Uint8List.fromList([
+        ...utf8.encode(sorted[0]),
+        ...utf8.encode(sorted[1]),
+        ...utf8.encode('zajel:daily:$dateStr'),
+      ]);
+
+      final hash = _sha256Hash(input);
+      points.add('day_${_hashToToken(hash)}');
+    }
+
+    return points;
+  }
+
+  /// Get all meeting points for a peer using stable IDs.
+  ///
+  /// Combines stableId-based daily points and hourly tokens (from shared secret).
+  MeetingPoints getMeetingPointsFromIds({
+    required String myStableId,
+    required String peerStableId,
+    Uint8List? sharedSecret,
+  }) {
+    return MeetingPoints(
+      dailyPoints: deriveDailyPointsFromIds(myStableId, peerStableId),
+      hourlyTokens:
+          sharedSecret != null ? deriveHourlyTokens(sharedSecret) : [],
+    );
+  }
+
   /// Sort two keys deterministically (lexicographic comparison).
   ///
   /// This ensures both peers compute the same meeting point regardless
