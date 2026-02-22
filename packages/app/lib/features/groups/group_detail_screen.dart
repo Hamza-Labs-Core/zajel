@@ -278,6 +278,9 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
         result.encryptedBytes,
       );
 
+      logger.info('GroupDetailScreen',
+          'broadcastToGroup returned meshCount=$meshCount');
+
       // Fallback: also send via 1-on-1 direct connections for group
       // members who are directly connected peers (e.g. HeadlessBob).
       // This handles the case where mesh group_ connections aren't
@@ -291,17 +294,32 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
               .map((p) => p.id)
               .toSet();
 
+          logger.info(
+              'GroupDetailScreen',
+              'Direct fallback: otherMembers=${group.otherMembers.map((m) => m.deviceId).toList()}, '
+                  'directPeers=$directPeers');
+
           final payload = 'grp:${base64Encode(result.encryptedBytes)}';
           for (final member in group.otherMembers) {
             if (directPeers.contains(member.deviceId)) {
               try {
+                logger.info('GroupDetailScreen',
+                    'Sending grp: message to ${member.deviceId} (${payload.length} chars)');
                 await connectionManager.sendMessage(member.deviceId, payload);
+                logger.info('GroupDetailScreen',
+                    'Successfully sent grp: message to ${member.deviceId}');
               } catch (e) {
                 logger.error('GroupDetailScreen',
                     'Failed to send group message to ${member.deviceId}', e);
               }
+            } else {
+              logger.warning('GroupDetailScreen',
+                  'Member ${member.deviceId} not in directPeers, skipping');
             }
           }
+        } else {
+          logger.warning(
+              'GroupDetailScreen', 'getGroup(${widget.groupId}) returned null');
         }
       }
 

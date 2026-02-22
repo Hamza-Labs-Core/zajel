@@ -2183,9 +2183,24 @@ class ZajelHeadlessClient:
         if peer_stable_id:
             candidate_ids.add(peer_stable_id)
 
-        for group in self._group_storage.get_all_groups():
+        all_groups = self._group_storage.get_all_groups()
+        logger.info(
+            "handle_group_data: from=%s, stableId=%s, candidates=%s, "
+            "groups=%d, encrypted_len=%d",
+            from_peer_id, peer_stable_id, candidate_ids,
+            len(all_groups), len(encrypted_bytes),
+        )
+        for group in all_groups:
+            member_ids = [m.device_id for m in group.members]
+            logger.info(
+                "  group '%s': members=%s", group.name, member_ids
+            )
             for member in group.members:
                 if member.device_id in candidate_ids:
+                    logger.info(
+                        "  MATCH: member.device_id=%s in group '%s'",
+                        member.device_id, group.name,
+                    )
                     try:
                         message = self._receive_group_message_sync(
                             group, member.device_id, encrypted_bytes
@@ -2197,9 +2212,14 @@ class ZajelHeadlessClient:
                                 group.name,
                                 len(message.content),
                             )
+                        else:
+                            logger.warning(
+                                "Group message returned None from %s in '%s'",
+                                from_peer_id, group.name,
+                            )
                         return
                     except Exception as e:
-                        logger.debug(
+                        logger.warning(
                             "Group decrypt failed for %s in %s: %s",
                             from_peer_id,
                             group.id,
@@ -2460,6 +2480,12 @@ class ZajelHeadlessClient:
             if peer_id and self._crypto.has_session_key(peer_id):
                 try:
                     plaintext = self._crypto.decrypt(peer_id, msg["data"])
+                    # Log prefix for debugging group message flow
+                    prefix = plaintext[:10] if len(plaintext) >= 10 else plaintext
+                    logger.info(
+                        "Decrypted message from %s: prefix='%s' len=%d",
+                        peer_id, prefix, len(plaintext),
+                    )
 
                     # Check for typing indicator prefix
                     if plaintext.startswith("typ:"):
@@ -2490,6 +2516,10 @@ class ZajelHeadlessClient:
 
                     # Check for group message prefix
                     if plaintext.startswith("grp:"):
+                        logger.info(
+                            "Received grp: message from %s (len=%d)",
+                            peer_id, len(plaintext),
+                        )
                         self._handle_group_data(
                             peer_id, plaintext[4:]
                         )
