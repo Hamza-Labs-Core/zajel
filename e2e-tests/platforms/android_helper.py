@@ -941,7 +941,12 @@ class AppHelper:
         _time.sleep(2)
 
     def send_group_message(self, text):
-        """Type in 'Type a message...' field → tap 'Send' button."""
+        """Type in 'Type a message...' field → tap 'Send' button.
+
+        Uses element_to_be_clickable to find the actual Send button,
+        avoiding the 'Send the first message!' placeholder text which
+        also contains 'Send' but is not clickable.
+        """
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.common.by import By
@@ -953,7 +958,16 @@ class AppHelper:
         input_field.clear()
         self.driver.execute_script('mobile: type', {'text': text})
 
-        self._find("Send", timeout=5).click()
+        # Use element_to_be_clickable to skip non-clickable placeholder
+        # text that also contains 'Send' (e.g. 'Send the first message!')
+        send_btn = WebDriverWait(self.driver, 5).until(
+            EC.element_to_be_clickable((
+                By.XPATH,
+                "//android.widget.Button[@content-desc='Send' or "
+                "@tooltip-text='Send']"
+            ))
+        )
+        send_btn.click()
         import time as _time
         _time.sleep(2)
 
