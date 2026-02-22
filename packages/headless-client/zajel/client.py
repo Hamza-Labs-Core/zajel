@@ -1632,10 +1632,19 @@ class ZajelHeadlessClient:
         # Broadcast to all connected peers who are members of this group.
         # Uses the grp: prefix protocol matching the Flutter app's
         # WebRtcP2PAdapter: grp:<base64(encrypted_bytes)>
+        #
+        # member.device_id is the Flutter stableId, but _connected_peers
+        # and session keys are keyed by the pairing code. Build a reverse
+        # lookup from stableId → pairing code.
+        stable_to_pairing: dict[str, str] = {}
+        for pid, sid in self._peer_stable_ids.items():
+            stable_to_pairing[sid] = pid
+
         payload = f"grp:{base64.b64encode(encrypted).decode('ascii')}"
         sent_count = 0
         for member in group.other_members:
-            peer_id = member.device_id
+            # Try stableId → pairing code first, fall back to device_id itself
+            peer_id = stable_to_pairing.get(member.device_id, member.device_id)
             if peer_id in self._connected_peers and self._crypto.has_session_key(peer_id):
                 try:
                     cipher = self._crypto.encrypt(peer_id, payload)
@@ -2164,13 +2173,19 @@ class ZajelHeadlessClient:
             logger.error("Failed to decode group data from %s: %s", from_peer_id, e)
             return
 
-        # Try each group where from_peer_id is a member
+        # from_peer_id is the signaling pairing code; member.device_id is
+        # the Flutter stableId. Resolve via the handshake mapping.
+        peer_stable_id = self._peer_stable_ids.get(from_peer_id)
+        candidate_ids = {from_peer_id}
+        if peer_stable_id:
+            candidate_ids.add(peer_stable_id)
+
         for group in self._group_storage.get_all_groups():
             for member in group.members:
-                if member.device_id == from_peer_id:
+                if member.device_id in candidate_ids:
                     try:
                         message = self._receive_group_message_sync(
-                            group, from_peer_id, encrypted_bytes
+                            group, member.device_id, encrypted_bytes
                         )
                         if message:
                             logger.info(
