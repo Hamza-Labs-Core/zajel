@@ -1946,7 +1946,8 @@ jobs:
             libsecret-1-0 \
             gnome-keyring \
             libjsoncpp25 \
-            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libsecret-1-dev libjsoncpp-dev
+            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libsecret-1-dev libjsoncpp-dev \
+            at-spi2-core gir1.2-atspi-2.0 python3-gi
 
       - name: Start virtual display and services
         run: |
@@ -1992,9 +1993,17 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Enable AT-SPI accessibility
+        run: |
+          # Start AT-SPI registry daemon (bridges ATK → D-Bus)
+          /usr/libexec/at-spi2-registryd &
+          sleep 1
+          # Enable toolkit accessibility so Flutter's ATK bridge activates
+          gsettings set org.gnome.desktop.interface toolkit-accessibility true
+
       - name: Install E2E dependencies
         run: |
-          pip install pytest pytest-timeout
+          pip install pytest pytest-timeout pyautogui
           pip install -e packages/headless-client
 
       - name: Build Flutter integration test app
@@ -2097,6 +2106,57 @@ jobs:
         if: always()
         run: |
           kill $FLUTTER_TEST_PID 2>/dev/null || true
+
+      - name: Build Flutter Linux binary for AT-SPI tests
+        if: ${{ !cancelled() }}
+        working-directory: packages/app
+        run: |
+          # Build a debug binary (includes Semantics tree for AT-SPI).
+          # Release builds also work but debug is faster to build.
+          flutter build linux --debug \
+            --dart-define=ENV=qa \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL || '' }} \
+            --dart-define=E2E_TEST=true
+
+      - name: Run Desktop E2E UI tests (AT-SPI + real cursor)
+        if: ${{ !cancelled() }}
+        env:
+          CI: 'true'
+          DISPLAY: ':99'
+          ZAJEL_TEST_PLATFORM: linux-a11y
+          ZAJEL_APP_PATH: ${{ github.workspace }}/packages/app/build/linux/x64/debug/bundle/zajel
+          E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-artifacts/desktop-e2e
+        run: |
+          cd ${{ github.workspace }}/e2e-tests
+          python3 -m pytest tests/test_desktop_ui.py -v -s --timeout=120 || {
+            echo "::warning::Desktop AT-SPI UI tests failed (non-blocking while AT-SPI support is stabilized)"
+            true
+          }
+
+      - name: Run Dart integration tests on Linux desktop
+        if: ${{ !cancelled() }}
+        env:
+          DISPLAY: ':99'
+          TEST_USE_MOCK_SERVER: 'true'
+        working-directory: packages/app
+        run: |
+          # Run mock-safe integration tests on Linux desktop.
+          # These tests use provider overrides — no real server needed.
+          FAILED=0
+          flutter test integration_test/desktop_test.dart -d linux --no-pub || FAILED=1
+          flutter test integration_test/app_test.dart -d linux --no-pub || FAILED=1
+          flutter test integration_test/channels_test.dart -d linux --no-pub || FAILED=1
+          flutter test integration_test/groups_test.dart -d linux --no-pub || FAILED=1
+          if [ $FAILED -ne 0 ]; then
+            echo "FAILED: One or more Dart integration tests failed"
+            exit 1
+          fi
+          echo "All Dart integration tests passed on Linux desktop."
+
+      - name: Cleanup services
+        if: always()
+        run: |
+          kill $FLUTTER_TEST_PID 2>/dev/null || true
           kill $GCR_KILLER_PID 2>/dev/null || true
 
       - name: Upload test artifacts
@@ -2182,13 +2242,126 @@ jobs:
           retention-days: 3
           if-no-files-found: ignore
 
+  # ============================================
+  # PHASE 5d: macOS E2E Tests (NSAccessibility + real cursor)
+  # ============================================
+  e2e-macos:
+    name: E2E Tests (macOS)
+    needs: [build-macos, deploy-vps]
+    if: |
+      always() &&
+      needs.build-macos.result == 'success' &&
+      (needs.deploy-vps.result == 'success' || needs.deploy-vps.result == 'skipped') &&
+      (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true))
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download macOS build
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-build
+          path: macos-artifact
+
+      - name: Extract macOS app
+        run: |
+          cd macos-artifact
+          ZIP_FILE=$(ls *.zip 2>/dev/null | head -1)
+          if [ -n "$ZIP_FILE" ]; then
+            unzip "$ZIP_FILE" -d ../macos-app
+          else
+            echo "No zip file found in artifact"
+            ls -la
+            exit 1
+          fi
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install E2E dependencies
+        run: |
+          pip install pytest pytest-timeout atomacos pyautogui
+          pip install -e packages/headless-client
+
+      - name: Resolve signaling URL
+        run: |
+          URL="${{ vars.VPS_QA_WS_URL }}"
+          if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
+            FIRST_IP=$(echo "${{ vars.QA_VPS_IP }}" | cut -d',' -f1 | tr -d ' ')
+            URL="wss://${FIRST_IP}:8443"
+          fi
+          echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
+          echo "Resolved SIGNALING_URL=${URL:-<empty>}"
+
+      - name: Run macOS E2E tests
+        env:
+          ZAJEL_TEST_PLATFORM: macos
+          ZAJEL_APP_PATH: ${{ github.workspace }}/macos-app/zajel.app
+          SIGNALING_URL: ${{ env.SIGNALING_URL }}
+          E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-artifacts/e2e
+        run: |
+          # ── Desktop UI tests (NSAccessibility + real cursor) ──
+          echo "=== Running macOS desktop UI tests ==="
+          cd ${{ github.workspace }}/e2e-tests
+          python3 -m pytest tests/test_desktop_ui.py -v -s --timeout=120 || {
+            echo "::warning::macOS desktop UI tests failed (non-blocking while support is stabilized)"
+            true
+          }
+
+          # ── Signaling protocol tests ──
+          SIGNALING_RESULT=0
+          if [ -n "$SIGNALING_URL" ]; then
+            echo ""
+            echo "=== Running signaling tests ==="
+            python3 -m pytest tests/test_signaling_headless.py -v -s --timeout=120
+            SIGNALING_RESULT=$?
+          else
+            echo "=== Skipping signaling tests (SIGNALING_URL not set) ==="
+          fi
+
+          [ $SIGNALING_RESULT -ne 0 ] && echo "FAILED: Signaling tests" && exit 1
+          echo "All macOS E2E tests passed."
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-macos-test-artifacts
+          path: test-artifacts/
+          retention-days: 3
+          if-no-files-found: ignore
+
   phase-5-e2e:
     name: "✓ Phase 5: E2E Tests"
-    needs: [e2e-tests, e2e-linux, e2e-windows]
-    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true) }}
+    needs: [e2e-tests, e2e-linux, e2e-windows, e2e-macos]
+    if: |
+      always() &&
+      (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true))
     runs-on: ubuntu-latest
     steps:
-      - run: echo "All E2E tests passed (Android + Linux + Windows)"
+      - name: Check E2E results
+        run: |
+          echo "e2e-tests: ${{ needs.e2e-tests.result }}"
+          echo "e2e-linux: ${{ needs.e2e-linux.result }}"
+          echo "e2e-windows: ${{ needs.e2e-windows.result }}"
+          echo "e2e-macos: ${{ needs.e2e-macos.result }}"
+
+          FAILED=0
+          # Core E2E jobs must succeed
+          [[ "${{ needs.e2e-tests.result }}" != "success" ]] && echo "FAILED: e2e-tests" && FAILED=1
+          [[ "${{ needs.e2e-linux.result }}" != "success" ]] && echo "FAILED: e2e-linux" && FAILED=1
+          [[ "${{ needs.e2e-windows.result }}" != "success" ]] && echo "FAILED: e2e-windows" && FAILED=1
+          # macOS E2E is tolerated as skipped (build-macos may be skipped)
+          [[ "${{ needs.e2e-macos.result }}" == "failure" ]] && echo "FAILED: e2e-macos" && FAILED=1
+
+          if [ $FAILED -ne 0 ]; then
+            echo "One or more E2E jobs failed"
+            exit 1
+          fi
+          echo "All E2E tests passed (Android + Linux + Windows + macOS)"
 
   # ============================================
   # Cleanup Pre-release Tag on Failure

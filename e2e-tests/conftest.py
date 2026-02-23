@@ -3,8 +3,10 @@ Pytest fixtures for unified E2E tests.
 
 Supports multiple platforms via ZAJEL_TEST_PLATFORM env var:
 - android (default): Appium + UiAutomator2
-- linux: dogtail + AT-SPI
+- linux: Shelf HTTP client (headless CI)
+- linux-a11y: AT-SPI + pyautogui real cursor
 - windows: pywinauto + UIA
+- macos: atomacos + pyautogui real cursor
 
 Provides fixtures for:
 - Single device (alice, bob)
@@ -52,7 +54,7 @@ if PLATFORM == "android":
         SERVER_COUNT = 0
         APP_LAUNCH_TIMEOUT = 60
         SIGNALING_URL = os.environ.get("SIGNALING_URL", "")
-elif PLATFORM == "linux":
+elif PLATFORM in ("linux", "linux-a11y"):
     from platforms.linux_config import (
         APP_PATH, DATA_DIR_1, DATA_DIR_2, SIGNALING_URL,
         APP_LAUNCH_TIMEOUT,
@@ -60,6 +62,11 @@ elif PLATFORM == "linux":
 elif PLATFORM == "windows":
     from platforms.windows_config import (
         APP_PATH, SIGNALING_URL, APP_LAUNCH_TIMEOUT,
+    )
+elif PLATFORM == "macos":
+    from platforms.macos_config import (
+        APP_PATH, DATA_DIR_1, DATA_DIR_2, SIGNALING_URL,
+        APP_LAUNCH_TIMEOUT,
     )
 elif PLATFORM == "ios":
     from platforms.ios_config import (
@@ -187,10 +194,10 @@ def alice():
         _active_drivers.pop("alice", None)
         driver.quit()
 
-    elif PLATFORM == "linux":
+    elif PLATFORM in ("linux", "linux-a11y"):
         if os.path.exists(DATA_DIR_1):
             shutil.rmtree(DATA_DIR_1)
-        helper = create_helper("linux", app_path=APP_PATH, data_dir=DATA_DIR_1, name="alice")
+        helper = create_helper(PLATFORM, app_path=APP_PATH, data_dir=DATA_DIR_1, name="alice")
         helper.launch()
         helper.wait_for_app_ready()
         yield helper
@@ -198,6 +205,15 @@ def alice():
 
     elif PLATFORM == "windows":
         helper = create_helper("windows", app_path=APP_PATH)
+        helper.launch()
+        helper.wait_for_app_ready()
+        yield helper
+        helper.stop()
+
+    elif PLATFORM == "macos":
+        if os.path.exists(DATA_DIR_1):
+            shutil.rmtree(DATA_DIR_1)
+        helper = create_helper("macos", app_path=APP_PATH, data_dir=DATA_DIR_1, name="alice")
         helper.launch()
         helper.wait_for_app_ready()
         yield helper
@@ -223,10 +239,10 @@ def bob():
         _active_drivers.pop("bob", None)
         driver.quit()
 
-    elif PLATFORM == "linux":
+    elif PLATFORM in ("linux", "linux-a11y"):
         if os.path.exists(DATA_DIR_2):
             shutil.rmtree(DATA_DIR_2)
-        helper = create_helper("linux", app_path=APP_PATH, data_dir=DATA_DIR_2, name="bob")
+        helper = create_helper(PLATFORM, app_path=APP_PATH, data_dir=DATA_DIR_2, name="bob")
         helper.launch()
         helper.wait_for_app_ready()
         yield helper
@@ -234,6 +250,15 @@ def bob():
 
     elif PLATFORM == "windows":
         pytest.skip("Windows E2E does not support a second app instance (bob)")
+
+    elif PLATFORM == "macos":
+        if os.path.exists(DATA_DIR_2):
+            shutil.rmtree(DATA_DIR_2)
+        helper = create_helper("macos", app_path=APP_PATH, data_dir=DATA_DIR_2, name="bob")
+        helper.launch()
+        helper.wait_for_app_ready()
+        yield helper
+        helper.stop()
 
 
 @pytest.fixture(scope="function")

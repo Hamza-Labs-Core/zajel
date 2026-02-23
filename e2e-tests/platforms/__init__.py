@@ -7,8 +7,10 @@ platform helper and load platform-specific configuration.
 
 Supported platforms:
 - android: Appium + UiAutomator2 (emulator or real device)
-- linux: dogtail + AT-SPI (desktop)
+- linux: Shelf HTTP client (headless CI)
+- linux-a11y: AT-SPI + pyautogui real cursor (desktop with display)
 - windows: pywinauto + UIA (desktop)
+- macos: atomacos + pyautogui real cursor (desktop)
 - ios: Appium + XCUITest (simulator)
 """
 
@@ -29,12 +31,15 @@ def get_config():
     if platform == "android":
         from . import android_config
         return android_config
-    elif platform == "linux":
+    elif platform in ("linux", "linux-a11y"):
         from . import linux_config
         return linux_config
     elif platform == "windows":
         from . import windows_config
         return windows_config
+    elif platform == "macos":
+        from . import macos_config
+        return macos_config
     elif platform == "ios":
         from . import ios_config
         return ios_config
@@ -50,7 +55,9 @@ def create_helper(platform: str = None, **kwargs):
         **kwargs: Platform-specific arguments:
             - android: driver (Appium Remote driver)
             - linux: app_path, data_dir, name (optional)
+            - linux-a11y: app_path, data_dir, name (optional)
             - windows: app_path
+            - macos: app_path, data_dir (optional), name (optional)
     """
     if platform is None:
         platform = get_platform()
@@ -65,9 +72,23 @@ def create_helper(platform: str = None, **kwargs):
             kwargs["data_dir"],
             kwargs.get("name", "zajel"),
         )
+    elif platform == "linux-a11y":
+        from .linux_a11y_helper import LinuxDesktopHelper
+        return LinuxDesktopHelper(
+            kwargs["app_path"],
+            kwargs["data_dir"],
+            kwargs.get("name", "zajel"),
+        )
     elif platform == "windows":
         from .windows_helper import WindowsAppHelper
         return WindowsAppHelper(kwargs["app_path"])
+    elif platform == "macos":
+        from .macos_helper import MacosAppHelper
+        return MacosAppHelper(
+            kwargs["app_path"],
+            kwargs.get("data_dir"),
+            kwargs.get("name", "zajel"),
+        )
     elif platform == "ios":
         from .ios_helper import IosAppHelper
         return IosAppHelper(kwargs["driver"])
