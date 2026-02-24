@@ -150,14 +150,19 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   }
 
   Future<void> _initialize() async {
+    final sw = Stopwatch()..start();
     try {
       logger.info('ZajelApp', 'Initializing crypto service...');
       final cryptoService = ref.read(cryptoServiceProvider);
       await cryptoService.initialize();
+      logger.info('ZajelApp',
+          'Crypto service initialized (${sw.elapsedMilliseconds}ms)');
 
       logger.info('ZajelApp', 'Initializing message storage...');
       final messageStorage = ref.read(messageStorageProvider);
       await messageStorage.initialize();
+      logger.info('ZajelApp',
+          'Message storage initialized (${sw.elapsedMilliseconds}ms)');
 
       logger.info('ZajelApp', 'Initializing channel storage...');
       final channelStorage = ref.read(channelStorageServiceProvider);
@@ -178,9 +183,14 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       }
       ref.read(peerAliasesProvider.notifier).state = aliases;
 
+      logger.info(
+          'ZajelApp', 'Storage initialized (${sw.elapsedMilliseconds}ms)');
+
       logger.info('ZajelApp', 'Initializing connection manager...');
       _connectionManager = ref.read(connectionManagerProvider);
       await _connectionManager!.initialize();
+      logger.info('ZajelApp',
+          'Connection manager initialized (${sw.elapsedMilliseconds}ms)');
 
       logger.info('ZajelApp', 'Initializing device link service...');
       final deviceLinkService = ref.read(deviceLinkServiceProvider);
@@ -195,10 +205,26 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       // Set up link request listener for incoming web client link requests
       _setupLinkRequestListener();
 
-      // Initialize notification service
+      // Initialize notification service.
+      // Timeout guards protect against D-Bus hangs on headless Linux (no
+      // notification daemon → flutter_local_notifications_linux blocks on
+      // D-Bus call that never returns).
       final notificationService = ref.read(notificationServiceProvider);
-      await notificationService.initialize();
-      await notificationService.requestPermission();
+      await notificationService.initialize().timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          logger.warning(
+              'ZajelApp', 'Notification init timed out (10s) — skipping');
+        },
+      );
+      await notificationService.requestPermission().timeout(
+        const Duration(seconds: 5),
+        onTimeout: () async {
+          logger.warning(
+              'ZajelApp', 'Notification permission timed out — skipping');
+          return false;
+        },
+      );
 
       // Set up notification listeners for messages, files, and peer status
       _setupNotificationListeners();
@@ -213,7 +239,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       // Enable Android FLAG_SECURE if privacy screen is on
       _syncAndroidSecureFlag();
 
-      logger.info('ZajelApp', 'Core initialization complete');
+      logger.info('ZajelApp',
+          'Core initialization complete (${sw.elapsedMilliseconds}ms)');
     } catch (e, stack) {
       logger.error('ZajelApp', 'Initialization failed — app in degraded state',
           e, stack);

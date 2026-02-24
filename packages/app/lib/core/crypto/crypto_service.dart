@@ -472,16 +472,19 @@ class CryptoService {
 
   Future<void> _loadOrGenerateIdentityKeys() async {
     try {
-      final privateKeyBase64 =
-          await _secureStorage.read(key: '${_keyPrefix}private');
+      // Timeout protects against libsecret/gnome-keyring hanging on headless
+      // Linux (D-Bus call blocks if keyring daemon is not reachable).
+      final privateKeyBase64 = await _secureStorage
+          .read(key: '${_keyPrefix}private')
+          .timeout(const Duration(seconds: 10));
       if (privateKeyBase64 != null) {
         final privateKeyBytes = base64Decode(privateKeyBase64);
         _identityKeyPair = await _x25519.newKeyPairFromSeed(privateKeyBytes);
         return;
       }
     } catch (e) {
-      // Storage corruption or API error — generating new keys will break
-      // existing peer trust relationships, so log a visible warning.
+      // Storage corruption, API error, or timeout — generating new keys will
+      // break existing peer trust relationships, so log a visible warning.
       logger.warning(
           'CryptoService',
           'Failed to load identity keys from storage, generating new keys. '
@@ -544,10 +547,12 @@ class CryptoService {
     if (_identityKeyPair == null) return;
 
     final privateKeyBytes = await _identityKeyPair!.extractPrivateKeyBytes();
-    await _secureStorage.write(
-      key: '${_keyPrefix}private',
-      value: base64Encode(privateKeyBytes),
-    );
+    await _secureStorage
+        .write(
+          key: '${_keyPrefix}private',
+          value: base64Encode(privateKeyBytes),
+        )
+        .timeout(const Duration(seconds: 10));
   }
 
   Future<void> _storeSessionKey(String peerId, SecretKey sessionKey) async {
