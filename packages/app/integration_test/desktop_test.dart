@@ -36,19 +36,25 @@ Future<void> _pumpApp(WidgetTester tester, SharedPreferences prefs) async {
       child: const ZajelApp(),
     ),
   );
-  // Pump 100 frames × 100ms = ~10s for _initialize() to complete.
+  // Pump frames with real-time delays for _initialize() to complete.
+  // pump(Duration) advances the fake clock but doesn't wait real time.
+  // _initialize()'s async operations (FFI calls, IO) need real event
+  // loop time. Interleave Future.delayed with pump to allow both.
   for (int i = 0; i < 100; i++) {
     await tester.pump(const Duration(milliseconds: 100));
+    await Future<void>.delayed(const Duration(milliseconds: 50));
   }
 }
 
 /// Pump frames for a short duration after a UI action (e.g. tap, navigation).
 ///
 /// Replacement for pumpAndSettle in tests where background processes prevent
-/// the frame scheduler from settling.
+/// the frame scheduler from settling. Uses real-time delays between pumps
+/// so async operations (navigation transitions, provider updates) complete.
 Future<void> _pumpFrames(WidgetTester tester, {int count = 20}) async {
   for (int i = 0; i < count; i++) {
     await tester.pump(const Duration(milliseconds: 100));
+    await Future<void>.delayed(const Duration(milliseconds: 50));
   }
 }
 

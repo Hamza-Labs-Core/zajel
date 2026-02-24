@@ -66,13 +66,18 @@ void main() async {
 
       // Pump frames so ZajelApp._initialize() completes and the home screen
       // renders. After pumpWidget, only the first frame (loading screen) is
-      // built. The async _initialize() runs in the background; when it
-      // finishes and calls setState, the rebuild is scheduled but won't
-      // execute until someone pumps the widget tree.
-      // Can't use pumpAndSettle — background signaling and periodic timers
-      // keep scheduling frames indefinitely.
-      for (int i = 0; i < 300; i++) {
+      // built. The async _initialize() runs in the background (crypto init,
+      // SQLite database creation, etc.); when it finishes and calls setState,
+      // the rebuild won't execute until someone pumps the widget tree.
+      //
+      // pump(Duration) advances the fake clock but doesn't wait real time.
+      // _initialize()'s async operations (FFI calls, IO) need real event loop
+      // time. We interleave Future.delayed with pump to allow both the async
+      // init and the frame rebuild to proceed.
+      for (int i = 0; i < 150; i++) {
         await tester.pump(const Duration(milliseconds: 100));
+        // Yield to the event loop so real async operations can complete
+        await Future<void>.delayed(const Duration(milliseconds: 100));
       }
     },
   );
