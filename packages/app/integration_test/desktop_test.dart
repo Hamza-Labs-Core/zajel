@@ -18,11 +18,25 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:zajel/main.dart';
+import 'package:zajel/core/notifications/notification_service.dart';
 import 'package:zajel/core/providers/app_providers.dart';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// No-op notification service for integration tests.
+///
+/// On headless Linux CI, the real NotificationService hangs forever in
+/// `_plugin.initialize()` because flutter_local_notifications_linux tries
+/// to connect to the freedesktop notification daemon over D-Bus.
+class _TestNotificationService extends NotificationService {
+  @override
+  Future<void> initialize() async {}
+
+  @override
+  Future<bool> requestPermission() async => false;
+}
 
 /// Pump ZajelApp with overridden SharedPreferences and wait for initialization.
 ///
@@ -32,7 +46,11 @@ import 'package:zajel/core/providers/app_providers.dart';
 Future<void> _pumpApp(WidgetTester tester, SharedPreferences prefs) async {
   await tester.pumpWidget(
     ProviderScope(
-      overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+        notificationServiceProvider
+            .overrideWithValue(_TestNotificationService()),
+      ],
       child: const ZajelApp(),
     ),
   );

@@ -9,28 +9,88 @@
 ///
 /// Run with:
 /// ```bash
-/// flutter test integration_test/app_test.dart
-/// ```
-///
-/// Or with flutter drive:
-/// ```bash
-/// flutter drive --target=integration_test/app_test.dart
+/// flutter test integration_test/app_test.dart -d linux --no-pub
 /// ```
 library;
+
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:zajel/main.dart';
+import 'package:zajel/core/notifications/notification_service.dart';
 import 'package:zajel/core/providers/app_providers.dart';
 
 import 'test_config.dart';
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// No-op notification service for integration tests.
+///
+/// On headless Linux CI, the real NotificationService hangs forever in
+/// `_plugin.initialize()` because flutter_local_notifications_linux tries
+/// to connect to the freedesktop notification daemon over D-Bus.
+class _TestNotificationService extends NotificationService {
+  @override
+  Future<void> initialize() async {}
+
+  @override
+  Future<bool> requestPermission() async => false;
+}
+
+/// Pump ZajelApp with overridden SharedPreferences and wait for initialization.
+///
+/// Uses a counted pump loop instead of pumpAndSettle because ZajelApp starts
+/// background processes (signaling connection, periodic auto-delete timer)
+/// that continuously schedule frames, preventing pumpAndSettle from settling.
+Future<void> _pumpApp(WidgetTester tester, SharedPreferences prefs) async {
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+        notificationServiceProvider
+            .overrideWithValue(_TestNotificationService()),
+      ],
+      child: const ZajelApp(),
+    ),
+  );
+  // Pump frames with real-time delays for _initialize() to complete.
+  for (int i = 0; i < 100; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
+}
+
+/// Pump frames for a short duration after a UI action (e.g. tap, navigation).
+///
+/// Replacement for pumpAndSettle in tests where background processes prevent
+/// the frame scheduler from settling.
+Future<void> _pumpFrames(WidgetTester tester, {int count = 20}) async {
+  for (int i = 0; i < count; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize sqflite FFI for desktop platforms.
+  if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+  }
 
   late TestConfig config;
 
@@ -44,24 +104,12 @@ void main() {
   group('App Launch Tests', () {
     testWidgets('app launches successfully and shows home screen',
         (WidgetTester tester) async {
-      // Set up shared preferences for testing
       SharedPreferences.setMockInitialValues({
         'displayName': config.testDisplayName,
       });
       final prefs = await SharedPreferences.getInstance();
 
-      // Build the app
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            sharedPreferencesProvider.overrideWithValue(prefs),
-          ],
-          child: const ZajelApp(),
-        ),
-      );
-
-      // Wait for app initialization (shows loading spinner first)
-      await tester.pumpAndSettle(const Duration(seconds: 5));
+      await _pumpApp(tester, prefs);
 
       // Verify app title is shown
       expect(find.text('Zajel'), findsOneWidget);
@@ -88,6 +136,8 @@ void main() {
         ProviderScope(
           overrides: [
             sharedPreferencesProvider.overrideWithValue(prefs),
+            notificationServiceProvider
+                .overrideWithValue(_TestNotificationService()),
           ],
           child: const ZajelApp(),
         ),
@@ -97,7 +147,7 @@ void main() {
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
 
       // Wait for initialization
-      await tester.pumpAndSettle(const Duration(seconds: 5));
+      await _pumpFrames(tester, count: 100);
 
       // Loading indicator should be gone
       expect(find.byType(CircularProgressIndicator), findsNothing);
@@ -112,20 +162,11 @@ void main() {
       });
       final prefs = await SharedPreferences.getInstance();
 
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            sharedPreferencesProvider.overrideWithValue(prefs),
-          ],
-          child: const ZajelApp(),
-        ),
-      );
-
-      await tester.pumpAndSettle(const Duration(seconds: 5));
+      await _pumpApp(tester, prefs);
 
       // Tap the connect button (QR code scanner icon in app bar)
       await tester.tap(find.byIcon(Icons.qr_code_scanner));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Verify we're on the connect screen
       expect(find.text('Connect'), findsWidgets);
@@ -140,20 +181,11 @@ void main() {
       });
       final prefs = await SharedPreferences.getInstance();
 
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            sharedPreferencesProvider.overrideWithValue(prefs),
-          ],
-          child: const ZajelApp(),
-        ),
-      );
-
-      await tester.pumpAndSettle(const Duration(seconds: 5));
+      await _pumpApp(tester, prefs);
 
       // Tap the settings button
       await tester.tap(find.byIcon(Icons.settings));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Verify we're on the settings screen
       expect(find.text('Settings'), findsOneWidget);
@@ -166,24 +198,15 @@ void main() {
       });
       final prefs = await SharedPreferences.getInstance();
 
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            sharedPreferencesProvider.overrideWithValue(prefs),
-          ],
-          child: const ZajelApp(),
-        ),
-      );
-
-      await tester.pumpAndSettle(const Duration(seconds: 5));
+      await _pumpApp(tester, prefs);
 
       // Navigate to connect screen
       await tester.tap(find.byIcon(Icons.qr_code_scanner));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Go back using the back button
       await tester.tap(find.byType(BackButton).first);
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Verify we're back on home screen
       expect(find.text('Nearby Devices'), findsOneWidget);
@@ -198,20 +221,11 @@ void main() {
       });
       final prefs = await SharedPreferences.getInstance();
 
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            sharedPreferencesProvider.overrideWithValue(prefs),
-          ],
-          child: const ZajelApp(),
-        ),
-      );
-
-      await tester.pumpAndSettle(const Duration(seconds: 5));
+      await _pumpApp(tester, prefs);
 
       // Navigate to connect screen
       await tester.tap(find.byIcon(Icons.qr_code_scanner));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Should show loading or code (depending on server availability)
       final loadingIndicator = find.byType(CircularProgressIndicator);
@@ -233,31 +247,22 @@ void main() {
       });
       final prefs = await SharedPreferences.getInstance();
 
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            sharedPreferencesProvider.overrideWithValue(prefs),
-          ],
-          child: const ZajelApp(),
-        ),
-      );
-
-      await tester.pumpAndSettle(const Duration(seconds: 5));
+      await _pumpApp(tester, prefs);
 
       // Navigate to connect screen
       await tester.tap(find.byIcon(Icons.qr_code_scanner));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Switch to Scan tab
       await tester.tap(find.text('Scan'));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Verify scan tab content
       expect(find.text('Scan a QR code to connect'), findsOneWidget);
 
       // Switch to Link Web tab
       await tester.tap(find.text('Link Web'));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Verify Link Web tab content
       expect(find.text('Generate Link Code'), findsOneWidget);
@@ -265,7 +270,7 @@ void main() {
 
       // Switch back to My Code tab
       await tester.tap(find.text('My Code'));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Verify My Code tab is shown
       expect(
@@ -281,20 +286,11 @@ void main() {
       });
       final prefs = await SharedPreferences.getInstance();
 
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            sharedPreferencesProvider.overrideWithValue(prefs),
-          ],
-          child: const ZajelApp(),
-        ),
-      );
-
-      await tester.pumpAndSettle(const Duration(seconds: 5));
+      await _pumpApp(tester, prefs);
 
       // Navigate to connect screen
       await tester.tap(find.byIcon(Icons.qr_code_scanner));
-      await tester.pumpAndSettle(const Duration(seconds: 3));
+      await _pumpFrames(tester, count: 30);
 
       // Find the text field for entering pairing code
       final textField = find.byType(TextField);
@@ -302,7 +298,7 @@ void main() {
 
       // Enter a valid pairing code
       await tester.enterText(textField, 'abc234');
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Verify text is uppercased (input formatter converts to uppercase)
       final textFieldWidget = tester.widget<TextField>(textField);
@@ -316,20 +312,11 @@ void main() {
       });
       final prefs = await SharedPreferences.getInstance();
 
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            sharedPreferencesProvider.overrideWithValue(prefs),
-          ],
-          child: const ZajelApp(),
-        ),
-      );
-
-      await tester.pumpAndSettle(const Duration(seconds: 5));
+      await _pumpApp(tester, prefs);
 
       // Navigate to connect screen
       await tester.tap(find.byIcon(Icons.qr_code_scanner));
-      await tester.pumpAndSettle(const Duration(seconds: 3));
+      await _pumpFrames(tester, count: 30);
 
       // Find and tap the text field
       final textField = find.byType(TextField);
@@ -337,7 +324,7 @@ void main() {
 
       // Try to enter more than 6 characters
       await tester.enterText(textField, 'ABCDEFGH');
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Verify only 6 characters are accepted
       final textFieldWidget = tester.widget<TextField>(textField);
@@ -351,20 +338,11 @@ void main() {
       });
       final prefs = await SharedPreferences.getInstance();
 
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            sharedPreferencesProvider.overrideWithValue(prefs),
-          ],
-          child: const ZajelApp(),
-        ),
-      );
-
-      await tester.pumpAndSettle(const Duration(seconds: 5));
+      await _pumpApp(tester, prefs);
 
       // Navigate to connect screen
       await tester.tap(find.byIcon(Icons.qr_code_scanner));
-      await tester.pumpAndSettle(const Duration(seconds: 3));
+      await _pumpFrames(tester, count: 30);
 
       // Find Connect button (ElevatedButton with "Connect" text)
       final connectButton = find.widgetWithText(ElevatedButton, 'Connect');
@@ -380,23 +358,14 @@ void main() {
       });
       final prefs = await SharedPreferences.getInstance();
 
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            sharedPreferencesProvider.overrideWithValue(prefs),
-          ],
-          child: const ZajelApp(),
-        ),
-      );
-
-      await tester.pumpAndSettle(const Duration(seconds: 5));
+      await _pumpApp(tester, prefs);
 
       // Find and tap the FAB
       final fab = find.byType(FloatingActionButton);
       expect(fab, findsOneWidget);
 
       await tester.tap(fab);
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Verify we're on the connect screen
       expect(find.text('My Code'), findsOneWidget);
@@ -412,16 +381,7 @@ void main() {
       });
       final prefs = await SharedPreferences.getInstance();
 
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            sharedPreferencesProvider.overrideWithValue(prefs),
-          ],
-          child: const ZajelApp(),
-        ),
-      );
-
-      await tester.pumpAndSettle(const Duration(seconds: 5));
+      await _pumpApp(tester, prefs);
 
       // Verify custom display name is shown
       expect(find.text(customName), findsOneWidget);
@@ -433,16 +393,7 @@ void main() {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
 
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            sharedPreferencesProvider.overrideWithValue(prefs),
-          ],
-          child: const ZajelApp(),
-        ),
-      );
-
-      await tester.pumpAndSettle(const Duration(seconds: 5));
+      await _pumpApp(tester, prefs);
 
       // Verify default name is shown
       expect(find.text('Anonymous'), findsOneWidget);
@@ -457,16 +408,7 @@ void main() {
       });
       final prefs = await SharedPreferences.getInstance();
 
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            sharedPreferencesProvider.overrideWithValue(prefs),
-          ],
-          child: const ZajelApp(),
-        ),
-      );
-
-      await tester.pumpAndSettle(const Duration(seconds: 5));
+      await _pumpApp(tester, prefs);
 
       // Verify empty state message
       expect(find.text('No devices found'), findsOneWidget);
