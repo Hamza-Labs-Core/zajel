@@ -25,6 +25,10 @@ import 'package:zajel/core/providers/app_providers.dart';
 // ---------------------------------------------------------------------------
 
 /// Pump ZajelApp with overridden SharedPreferences and wait for initialization.
+///
+/// Uses a counted pump loop instead of pumpAndSettle because ZajelApp starts
+/// background processes (signaling connection, periodic auto-delete timer)
+/// that continuously schedule frames, preventing pumpAndSettle from settling.
 Future<void> _pumpApp(WidgetTester tester, SharedPreferences prefs) async {
   await tester.pumpWidget(
     ProviderScope(
@@ -32,7 +36,20 @@ Future<void> _pumpApp(WidgetTester tester, SharedPreferences prefs) async {
       child: const ZajelApp(),
     ),
   );
-  await tester.pumpAndSettle(const Duration(seconds: 5));
+  // Pump 100 frames × 100ms = ~10s for _initialize() to complete.
+  for (int i = 0; i < 100; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+}
+
+/// Pump frames for a short duration after a UI action (e.g. tap, navigation).
+///
+/// Replacement for pumpAndSettle in tests where background processes prevent
+/// the frame scheduler from settling.
+Future<void> _pumpFrames(WidgetTester tester, {int count = 20}) async {
+  for (int i = 0; i < count; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -68,14 +85,14 @@ void main() {
 
       // Simulate desktop minimize
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Privacy overlay SHOULD be visible
       expect(find.byIcon(Icons.lock_outline), findsOneWidget);
 
       // Resume — overlay should disappear
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       expect(find.byIcon(Icons.lock_outline), findsNothing);
     });
@@ -92,13 +109,13 @@ void main() {
 
       // Simulate desktop focus loss
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       expect(find.byIcon(Icons.lock_outline), findsOneWidget);
 
       // Resume
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       expect(find.byIcon(Icons.lock_outline), findsNothing);
     });
@@ -115,14 +132,14 @@ void main() {
 
       // Simulate lifecycle change
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Privacy overlay should NOT appear when disabled
       expect(find.byIcon(Icons.lock_outline), findsNothing);
 
       // Also test inactive
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       expect(find.byIcon(Icons.lock_outline), findsNothing);
     });
@@ -142,7 +159,7 @@ void main() {
 
       // Navigate to settings
       await tester.tap(find.byIcon(Icons.settings));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       expect(find.text('Settings'), findsOneWidget);
       expect(find.text('Profile'), findsOneWidget);
@@ -161,7 +178,7 @@ void main() {
       await _pumpApp(tester, prefs);
 
       await tester.tap(find.byIcon(Icons.settings));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Theme segmented button should show all three options
       expect(find.text('Light'), findsOneWidget);
@@ -180,7 +197,7 @@ void main() {
       await _pumpApp(tester, prefs);
 
       await tester.tap(find.byIcon(Icons.settings));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Privacy screen toggle should be visible
       expect(find.text('Privacy Screen'), findsOneWidget);
@@ -214,7 +231,7 @@ void main() {
 
       // Tap Skip
       await tester.tap(find.text('Skip'));
-      await tester.pumpAndSettle(const Duration(seconds: 3));
+      await _pumpFrames(tester, count: 30);
 
       // Should be on the home screen
       expect(find.text('Nearby Devices'), findsOneWidget);
@@ -229,29 +246,29 @@ void main() {
       // Page 1: Welcome
       expect(find.text('Welcome to Zajel'), findsOneWidget);
       await tester.tap(find.text('Next'));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Page 2: Username — Next is disabled until a valid username is entered
       expect(find.text('Choose a Username'), findsOneWidget);
       await tester.enterText(find.byType(TextField), 'DesktopUser');
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
       await tester.tap(find.text('Next'));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Page 3: Identity
       expect(find.text('Your Identity'), findsOneWidget);
       await tester.tap(find.text('Next'));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Page 4: How to Connect
       expect(find.text('How to Connect'), findsOneWidget);
       await tester.tap(find.text('Next'));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Page 5: Get Started
       expect(find.text("You're Ready"), findsOneWidget);
       await tester.tap(find.text('Get Started'));
-      await tester.pumpAndSettle(const Duration(seconds: 3));
+      await _pumpFrames(tester, count: 30);
 
       // Should now be on home screen
       expect(find.text('Nearby Devices'), findsOneWidget);
@@ -272,14 +289,14 @@ void main() {
 
       // Navigate to channels via app bar icon
       await tester.tap(find.byIcon(Icons.rss_feed));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Verify channels screen
       expect(find.text('Channels'), findsOneWidget);
 
       // Navigate back
       await tester.tap(find.byType(BackButton).first);
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       expect(find.text('Nearby Devices'), findsOneWidget);
     });
@@ -295,14 +312,14 @@ void main() {
 
       // Navigate to groups via app bar icon
       await tester.tap(find.byIcon(Icons.group));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Verify groups screen
       expect(find.text('Groups'), findsOneWidget);
 
       // Navigate back
       await tester.tap(find.byType(BackButton).first);
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       expect(find.text('Nearby Devices'), findsOneWidget);
     });
@@ -318,7 +335,7 @@ void main() {
 
       // Navigate to connect
       await tester.tap(find.byIcon(Icons.qr_code_scanner));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       // Verify connect screen with tabs
       expect(find.text('My Code'), findsOneWidget);
@@ -327,16 +344,16 @@ void main() {
 
       // Switch tabs
       await tester.tap(find.text('Scan'));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
       expect(find.text('Scan a QR code to connect'), findsOneWidget);
 
       await tester.tap(find.text('Link Web'));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
       expect(find.text('Generate Link Code'), findsOneWidget);
 
       // Navigate back
       await tester.tap(find.byType(BackButton).first);
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       expect(find.text('Nearby Devices'), findsOneWidget);
     });
@@ -352,13 +369,13 @@ void main() {
 
       // Navigate to settings
       await tester.tap(find.byIcon(Icons.settings));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       expect(find.text('Settings'), findsOneWidget);
 
       // Navigate back
       await tester.tap(find.byType(BackButton).first);
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester);
 
       expect(find.text('Nearby Devices'), findsOneWidget);
     });

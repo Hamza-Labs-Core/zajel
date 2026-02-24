@@ -99,6 +99,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   bool _isIncomingCallDialogOpen = false;
   bool _isReconnecting = false;
   final _callForegroundService = CallForegroundService();
+  ConnectionManager? _connectionManager;
 
   @override
   void initState() {
@@ -137,9 +138,9 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   void _disposeServicesSync() {
     logger.info('ZajelApp', 'Disposing services...');
     try {
-      final connectionManager = ref.read(connectionManagerProvider);
-      // Fire and forget - we're shutting down anyway
-      connectionManager.dispose();
+      // Use cached reference — ref.read() throws StateError if called after
+      // the widget is disposed (e.g. between integration test runs).
+      _connectionManager?.dispose();
       logger.info('ZajelApp', 'Services disposed');
     } catch (e) {
       logger.error('ZajelApp', 'Error during shutdown', e);
@@ -178,8 +179,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       ref.read(peerAliasesProvider.notifier).state = aliases;
 
       logger.info('ZajelApp', 'Initializing connection manager...');
-      final connectionManager = ref.read(connectionManagerProvider);
-      await connectionManager.initialize();
+      _connectionManager = ref.read(connectionManagerProvider);
+      await _connectionManager!.initialize();
 
       logger.info('ZajelApp', 'Initializing device link service...');
       final deviceLinkService = ref.read(deviceLinkServiceProvider);
@@ -227,17 +228,15 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
 
     // Auto-connect to signaling server (non-blocking)
     try {
-      final connectionManager = ref.read(connectionManagerProvider);
-      await _connectToSignaling(connectionManager);
+      await _connectToSignaling(_connectionManager!);
       logger.info('ZajelApp', 'Signaling connection complete');
 
       // Set up auto-reconnect on disconnect
-      _setupSignalingReconnect(connectionManager);
+      _setupSignalingReconnect(_connectionManager!);
     } catch (e, stack) {
       logger.error('ZajelApp', 'Signaling connection failed', e, stack);
       // Even on initial failure, try to reconnect
-      final connectionManager = ref.read(connectionManagerProvider);
-      _setupSignalingReconnect(connectionManager);
+      _setupSignalingReconnect(_connectionManager!);
     }
   }
 

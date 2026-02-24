@@ -63,6 +63,17 @@ void main() async {
       tester.binding.ensureSemantics();
 
       await tester.pumpWidget(app);
+
+      // Pump frames so ZajelApp._initialize() completes and the home screen
+      // renders. After pumpWidget, only the first frame (loading screen) is
+      // built. The async _initialize() runs in the background; when it
+      // finishes and calls setState, the rebuild is scheduled but won't
+      // execute until someone pumps the widget tree.
+      // Can't use pumpAndSettle — background signaling and periodic timers
+      // keep scheduling frames indefinitely.
+      for (int i = 0; i < 300; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
     },
   );
 }
