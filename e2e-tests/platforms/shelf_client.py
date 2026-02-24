@@ -45,6 +45,10 @@ class ShelfElement:
     def clear(self):
         self._client.clear_element(self.id)
 
+    def get_rect(self) -> dict:
+        """Get element's position and size: {x, y, width, height}."""
+        return self._client.get_element_rect(self.id)
+
     @property
     def name(self) -> str:
         return self._client.get_element_name(self.id)
@@ -217,6 +221,17 @@ class ShelfClient:
             f"/session/{self.session_id}/element/{element_id}/attribute/{attribute}"
         )
         return resp.get("value")
+
+    def get_element_rect(self, element_id: str) -> dict:
+        """Get element position and size (W3C WebDriver /rect endpoint).
+
+        Returns dict with keys: x, y, width, height (floats, in logical pixels
+        relative to the Flutter window's content area).
+        """
+        resp = self._get(
+            f"/session/{self.session_id}/element/{element_id}/rect"
+        )
+        return resp.get("value", {})
 
     # ── Navigation ──────────────────────────────────────────────
 

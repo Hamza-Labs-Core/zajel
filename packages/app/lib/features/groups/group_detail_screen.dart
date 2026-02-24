@@ -9,6 +9,7 @@ import '../../core/models/peer.dart';
 import '../../core/providers/app_providers.dart';
 import 'models/group.dart';
 import 'providers/group_providers.dart';
+import 'services/group_connection_service.dart';
 
 /// Screen showing details and messages for a single group.
 class GroupDetailScreen extends ConsumerStatefulWidget {
@@ -25,6 +26,10 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
   bool _sending = false;
   bool _groupActivated = false;
 
+  // Cache the connection service reference before dispose, since
+  // ref.read() throws after the widget is disposed.
+  GroupConnectionService? _cachedConnectionService;
+
   @override
   void initState() {
     super.initState();
@@ -36,8 +41,8 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
       final groupService = ref.read(groupServiceProvider);
       final group = await groupService.getGroup(widget.groupId);
       if (group != null && mounted) {
-        final connectionService = ref.read(groupConnectionServiceProvider);
-        await connectionService.activateGroup(group);
+        _cachedConnectionService = ref.read(groupConnectionServiceProvider);
+        await _cachedConnectionService!.activateGroup(group);
         _groupActivated = true;
       }
     } catch (e) {
@@ -48,10 +53,9 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
 
   @override
   void dispose() {
-    if (_groupActivated) {
+    if (_groupActivated && _cachedConnectionService != null) {
       try {
-        final connectionService = ref.read(groupConnectionServiceProvider);
-        connectionService.deactivateGroup(widget.groupId);
+        _cachedConnectionService!.deactivateGroup(widget.groupId);
       } catch (e) {
         logger.error('GroupDetailScreen',
             'Failed to deactivate mesh for group ${widget.groupId}', e);

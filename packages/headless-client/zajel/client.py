@@ -795,6 +795,9 @@ class ZajelHeadlessClient:
                     chunk.chunk_id, channel_id, chunk.to_dict()
                 )
 
+        # Persist updated sequence so it survives restarts
+        self._channel_storage.save_owned(channel)
+
         logger.info(
             "Published message to channel %s (seq %d, %d chunks)",
             channel_id[:16], sequence, len(chunks),
@@ -1351,6 +1354,9 @@ class ZajelHeadlessClient:
                     chunk.chunk_id, channel_id, chunk.to_dict()
                 )
 
+        # Persist updated sequence so it survives restarts
+        self._channel_storage.save_owned(channel)
+
         logger.info(
             "Created poll '%s' in channel %s (%d options)",
             question,
@@ -1474,6 +1480,9 @@ class ZajelHeadlessClient:
                 await self._signaling.send_chunk_push(
                     chunk.chunk_id, channel_id, chunk.to_dict()
                 )
+
+        # Persist updated sequence so it survives restarts
+        self._channel_storage.save_owned(channel)
 
         logger.info(
             "Tallied poll %s in channel %s (%d votes, final=%s)",

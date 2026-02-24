@@ -142,8 +142,8 @@ export function sendJson<T>(
  * Set authentication cookie (after verifying token from URL)
  */
 export function setAuthCookie(res: ServerResponse, token: string, isSecure = false): void {
-  // 15 minute expiry, matching JWT
-  const maxAge = 15 * 60;
+  // 4 hour expiry, matching JWT
+  const maxAge = 4 * 60 * 60;
   const securePart = isSecure ? '; Secure' : '';
   const sameSite = isSecure ? 'Strict' : 'Lax';
   res.setHeader(

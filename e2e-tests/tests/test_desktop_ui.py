@@ -2,13 +2,13 @@
 E2E UI tests for desktop platforms (Linux, Windows, macOS).
 
 These tests launch the real app binary, move the actual mouse cursor to UI
-elements via platform accessibility APIs, and click them — just like a human.
+elements, and click them — just like a human.
 
 Platform dispatch:
-- Linux (linux-a11y): AT-SPI + pyautogui → LinuxDesktopHelper
+- Linux (linux-a11y): Shelf HTTP + pyautogui → LinuxDesktopHelper (hybrid)
 - Windows: pywinauto + UIA → WindowsAppHelper
 - macOS: atomacos + pyautogui → MacosAppHelper
-- Linux (linux): Shelf HTTP → LinuxAppHelper (also works)
+- Linux (linux): Shelf HTTP → LinuxAppHelper (programmatic clicks)
 
 The `alice` fixture from conftest.py creates the correct helper based on
 ZAJEL_TEST_PLATFORM. On desktop platforms, alice IS the helper (no wrapping
@@ -36,10 +36,13 @@ class TestDesktopAppLaunch:
 
     @pytest.mark.single_device
     def test_app_launches_home_screen(self, alice):
-        """App launches and shows the home screen with 'Zajel' title."""
+        """App launches and shows the home screen."""
         # alice fixture already calls launch() + wait_for_app_ready()
         # If we get here, the app launched and the home screen is visible.
-        alice.find_by_name("Zajel", timeout=15)
+        # On wide layout (desktop), the HomeScreen's "Zajel" title isn't
+        # shown — the sidebar replaces it. Verify via Settings tooltip
+        # which exists on both narrow and wide layouts.
+        alice.find_by_name("Settings", timeout=15)
 
 
 class TestDesktopNavigation:

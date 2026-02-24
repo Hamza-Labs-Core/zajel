@@ -128,12 +128,14 @@ class SignalingClient {
     bool? usePinnedWebSocket,
   })  : _pairingCode = pairingCode,
         _publicKey = publicKey,
-        // Use pinned WebSocket only on platforms with native implementations (Android/iOS)
-        // Disabled on: web (no native access), desktop (no native impl), and test env
+        // Use pinned WebSocket only on platforms with native implementations.
+        // Disabled in test environments (FLUTTER_TEST or E2E_TEST) where
+        // native TLS dependencies (OpenSSL) may not be available.
         _usePinnedWebSocket = usePinnedWebSocket ??
             (_supportsPinnedWebSocket &&
                 !const bool.fromEnvironment('FLUTTER_TEST',
-                    defaultValue: false)) {
+                    defaultValue: false) &&
+                !const bool.fromEnvironment('E2E_TEST', defaultValue: false)) {
     _logger.debug(
       'SignalingClient',
       'Initialized: usePinnedWebSocket=$_usePinnedWebSocket, '

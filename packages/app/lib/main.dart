@@ -115,11 +115,14 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       _disposeServicesSync();
     }
 
-    // Privacy screen: obscure app content when backgrounded
+    // Privacy screen: obscure app content when backgrounded.
+    // On mobile: inactive/paused when app goes to background or task switcher.
+    // On desktop: hidden when minimized, inactive when losing focus.
     final privacyEnabled = ref.read(privacyScreenProvider);
     if (privacyEnabled) {
       if (state == AppLifecycleState.inactive ||
-          state == AppLifecycleState.paused) {
+          state == AppLifecycleState.paused ||
+          state == AppLifecycleState.hidden) {
         if (mounted && !_showPrivacyScreen) {
           setState(() => _showPrivacyScreen = true);
         }

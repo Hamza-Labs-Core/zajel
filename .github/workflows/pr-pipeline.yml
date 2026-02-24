@@ -2107,31 +2107,33 @@ jobs:
         run: |
           kill $FLUTTER_TEST_PID 2>/dev/null || true
 
-      - name: Build Flutter Linux binary for AT-SPI tests
+      - name: Build Flutter Linux binary for desktop E2E tests
         if: ${{ !cancelled() }}
         working-directory: packages/app
         run: |
-          # Build a debug binary (includes Semantics tree for AT-SPI).
-          # Release builds also work but debug is faster to build.
+          # Build the integration test binary which embeds the Shelf HTTP
+          # server (appium_flutter_server). The desktop E2E tests communicate
+          # with this server to find and interact with Flutter widgets.
+          # --target uses appium_test.dart which sets up surface size (1280x720)
+          # and initializes sqflite FFI for desktop.
           flutter build linux --debug \
+            --target integration_test/appium_test.dart \
             --dart-define=ENV=qa \
             --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL || '' }} \
             --dart-define=E2E_TEST=true
 
-      - name: Run Desktop E2E UI tests (AT-SPI + real cursor)
+      - name: Run Desktop E2E UI tests (Shelf HTTP + pyautogui)
         if: ${{ !cancelled() }}
         env:
           CI: 'true'
           DISPLAY: ':99'
           ZAJEL_TEST_PLATFORM: linux-a11y
           ZAJEL_APP_PATH: ${{ github.workspace }}/packages/app/build/linux/x64/debug/bundle/zajel
+          BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL || '' }}
           E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-artifacts/desktop-e2e
         run: |
           cd ${{ github.workspace }}/e2e-tests
-          python3 -m pytest tests/test_desktop_ui.py -v -s --timeout=120 || {
-            echo "::warning::Desktop AT-SPI UI tests failed (non-blocking while AT-SPI support is stabilized)"
-            true
-          }
+          python3 -m pytest tests/test_desktop_ui.py -v -s --timeout=120
 
       - name: Run Dart integration tests on Linux desktop
         if: ${{ !cancelled() }}

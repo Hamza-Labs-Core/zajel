@@ -74,16 +74,10 @@ class LinuxAppHelper:
             print(f"Pre-launched mode: connected to Shelf server on port {self._shelf_port}")
             return
 
-        # ── Scan for an already-running Shelf server (CI may not set the env var) ──
-        existing_port = self._probe_existing_server()
-        if existing_port is not None:
-            self._launch_mode = "pre_launched"
-            self._shelf_port = existing_port
-            self._shelf = ShelfClient(port=self._shelf_port)
-            self._shelf.create_session()
-            LinuxAppHelper._claimed_ports.add(self._shelf_port)
-            print(f"Pre-launched mode: found existing Shelf server on port {existing_port}")
-            return
+        # NOTE: We intentionally do NOT auto-probe for existing Shelf servers
+        # here. Auto-probing caused test isolation failures when stale processes
+        # from previous runs were still holding ports. Only use pre-launched
+        # mode when ZAJEL_SHELF_PORT is explicitly set (CI).
 
         # ── Self-launched: start the app process ──
         os.makedirs(self.data_dir, exist_ok=True)
@@ -172,7 +166,26 @@ class LinuxAppHelper:
         )
 
     def _find_server_port(self, timeout: int = 60) -> int:
-        """Scan ports 9000-9020 to find the Shelf server for this process."""
+        """Scan ports 9000-9020 to find the Shelf server for this process.
+
+        To avoid connecting to stale Shelf servers from previous test runs,
+        we snapshot which ports are already responding BEFORE our process
+        starts its server, then only match NEW ports.
+        """
+        # Snapshot ports that were already responding (stale servers, VPS, etc.)
+        pre_existing = set(LinuxAppHelper._claimed_ports)
+        for port in range(9000, 9021):
+            if port in pre_existing:
+                continue
+            try:
+                client = ShelfClient(port=port, timeout=1)
+                client._get("/status")
+                pre_existing.add(port)
+            except Exception:
+                continue
+        if pre_existing:
+            print(f"Pre-existing servers on ports: {sorted(pre_existing)}")
+
         deadline = time.time() + timeout
         while time.time() < deadline:
             if self.process.poll() is not None:
@@ -182,7 +195,7 @@ class LinuxAppHelper:
                     f"stderr:\n{stderr[-2000:]}"
                 )
             for port in range(9000, 9021):
-                if port in LinuxAppHelper._claimed_ports:
+                if port in pre_existing or port in LinuxAppHelper._claimed_ports:
                     continue
                 try:
                     client = ShelfClient(port=port, timeout=2)
@@ -206,7 +219,7 @@ class LinuxAppHelper:
                 self.process.kill()
         raise TimeoutError(
             f"Shelf server not found on ports 9000-9020 within {timeout}s. "
-            f"stderr:\n{stderr}"
+            f"Pre-existing: {sorted(pre_existing)}. stderr:\n{stderr}"
         )
 
     def stop(self):
@@ -222,6 +235,7 @@ class LinuxAppHelper:
                 pass
             self._shelf = None
 
+        saved_port = self._shelf_port  # Save before clearing for port wait
         if self._shelf_port is not None:
             LinuxAppHelper._claimed_ports.discard(self._shelf_port)
             self._shelf_port = None
@@ -241,7 +255,34 @@ class LinuxAppHelper:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.process.kill()
+                try:
+                    self.process.wait(timeout=3)
+                except Exception:
+                    pass
             self.process = None
+
+            # Wait for the port to be released (avoids next test
+            # connecting to a dying server during port scan).
+            if saved_port:
+                self._wait_for_port_release(saved_port)
+
+    @staticmethod
+    def _wait_for_port_release(port: int, timeout: int = 5):
+        """Wait until a TCP port is no longer in LISTEN state."""
+        import socket
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.5)
+                result = s.connect_ex(("127.0.0.1", port))
+                s.close()
+                if result != 0:
+                    return  # Port is free
+            except Exception:
+                return
+            time.sleep(0.3)
+        print(f"Warning: port {port} still in use after {timeout}s")
 
     @property
     def current_activity(self):
@@ -255,21 +296,28 @@ class LinuxAppHelper:
     def _find(self, text: str, timeout: int = ELEMENT_WAIT_TIMEOUT):
         """Find an element by text, trying multiple Shelf strategies.
 
-        Tries in order: text → text containing → tooltip → semantics label.
-        Returns a ShelfElement on success, raises on timeout.
+        Tries in order: text → tooltip → text containing → semantics label.
+        Uses short per-strategy timeouts (1s) so the full cycle completes
+        in ~4s, allowing multiple retries within the outer timeout.
+
+        Tooltip is tried second because desktop icon buttons (Channels,
+        Groups, Settings, etc.) use tooltip for their label.
         """
         deadline = time.time() + timeout
-        strategies = ["text", "text containing", "tooltip", "semantics label"]
+        # Tooltip before "text containing" — desktop icon buttons use tooltip
+        strategies = ["text", "tooltip", "text containing", "semantics label"]
         last_error = None
 
         while time.time() < deadline:
             for strategy in strategies:
+                if time.time() >= deadline:
+                    break
                 try:
-                    return self._shelf.find_element(strategy, text, timeout=3)
+                    return self._shelf.find_element(strategy, text, timeout=1)
                 except Exception as e:
                     last_error = e
                     continue
-            time.sleep(0.5)
+            time.sleep(0.3)
 
         raise TimeoutError(
             f"Element '{text}' not found within {timeout}s. Last error: {last_error}"
@@ -351,23 +399,40 @@ class LinuxAppHelper:
                       "accepting server health + session as proof of launch")
             return
 
-        try:
-            self._find("Zajel", timeout=min(30, timeout))
-            print("[wait_for_app_ready] Home screen detected directly")
-            return
-        except TimeoutError:
-            pass
+        # On desktop wide layout (≥720px), the HomeScreen's AppBar with
+        # "Zajel" title is NOT rendered — _WideLayout replaces it with a
+        # sidebar. Try multiple home-screen indicators that work on both
+        # narrow (phone) and wide (desktop) layouts.
+        home_indicators = [
+            "Settings",   # Tooltip on IconButton in both layouts
+            "Channels",   # Tooltip on IconButton in both layouts
+            "Zajel",      # AppBar title (narrow layout only)
+            "Connect",    # FAB label (both layouts)
+        ]
+        ready_timeout = min(30, timeout)
+        for indicator in home_indicators:
+            try:
+                self._find(indicator, timeout=ready_timeout)
+                print(f"[wait_for_app_ready] Home screen detected via '{indicator}'")
+                return
+            except TimeoutError:
+                # Try next indicator with reduced timeout (we already waited)
+                ready_timeout = max(5, ready_timeout - 10)
+                continue
 
         # Try dismissing onboarding screen (first launch)
         self._dismiss_onboarding()
 
-        # Now wait for the actual home screen
-        try:
-            self._find("Zajel", timeout)
-            print("[wait_for_app_ready] Home screen confirmed after onboarding dismissal")
-        except TimeoutError:
-            print("[wait_for_app_ready] FAILED to reach home screen after onboarding dismissal")
-            raise
+        # Retry after onboarding dismissal
+        for indicator in home_indicators[:2]:
+            try:
+                self._find(indicator, timeout=15)
+                print(f"[wait_for_app_ready] Home screen confirmed via '{indicator}' after onboarding")
+                return
+            except TimeoutError:
+                continue
+
+        raise TimeoutError("[wait_for_app_ready] FAILED to reach home screen")
 
     def _dismiss_onboarding(self):
         """Dismiss the onboarding screen if present (first launch)."""

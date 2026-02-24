@@ -1150,6 +1150,25 @@ class ConnectionManager {
 
     await state.client.send(rendezvousMsg);
 
+    // Also register rendezvous tokens on all redirect connections.
+    // With replicationFactor >= server count, the DHT says each server
+    // handles all tokens locally, so no rendezvous_partial redirects
+    // are generated. We must explicitly register on redirect servers
+    // so peers on different servers can discover each other.
+    for (final entry in _redirectConnections.entries) {
+      final conn = entry.value;
+      if (conn.client.isConnected) {
+        try {
+          await conn.client.send(rendezvousMsg);
+          logger.info('ConnectionManager',
+              'Registered rendezvous tokens on redirect server ${entry.key}');
+        } catch (e) {
+          logger.warning('ConnectionManager',
+              'Failed to register rendezvous on redirect ${entry.key}: $e');
+        }
+      }
+    }
+
     // Re-register after a delay to handle the race condition where both
     // peers restart simultaneously and neither finds the other's tokens
     // on the first registration (server deletes tokens on disconnect).
@@ -1160,6 +1179,17 @@ class ConnectionManager {
         logger.debug(
             'ConnectionManager', 'Re-registering rendezvous after delay');
         currentState.client.send(rendezvousMsg);
+
+        // Re-register on redirect servers too
+        for (final entry in _redirectConnections.entries) {
+          final conn = entry.value;
+          if (conn.client.isConnected) {
+            conn.client.send(rendezvousMsg).catchError((e) {
+              logger.warning('ConnectionManager',
+                  'Failed to re-register rendezvous on redirect ${entry.key}: $e');
+            });
+          }
+        }
       }
     });
   }
@@ -1419,13 +1449,29 @@ class ConnectionManager {
   void _handleLiveMatch(String matchedPeerId) {
     if (matchedPeerId.isEmpty) return;
 
-    // Skip if already connected or connecting to this peer
+    // Skip if already connected or connecting to this peer (by pairing code)
     final existingPeer = _peers[matchedPeerId];
     if (existingPeer != null &&
         (existingPeer.connectionState == PeerConnectionState.connected ||
             existingPeer.connectionState == PeerConnectionState.connecting ||
             existingPeer.connectionState == PeerConnectionState.handshaking)) {
       return;
+    }
+
+    // Also check by stable ID — after the first connection, the peer is
+    // re-keyed from pairing code to stable ID, so a second rendezvous
+    // match for the same pairing code wouldn't find it above.
+    final stableId = _codeToStableId[matchedPeerId];
+    if (stableId != null) {
+      final stablePeer = _peers[stableId];
+      if (stablePeer != null &&
+          (stablePeer.connectionState == PeerConnectionState.connected ||
+              stablePeer.connectionState == PeerConnectionState.connecting ||
+              stablePeer.connectionState == PeerConnectionState.handshaking)) {
+        logger.debug('ConnectionManager',
+            'Skipping duplicate match for $matchedPeerId (already connected as $stableId)');
+        return;
+      }
     }
 
     final state = _signalingState;

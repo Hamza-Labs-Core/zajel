@@ -105,7 +105,12 @@ export async function handleListServers(
           // Convert WS endpoint to HTTP base URL (strip any path component)
           const wsUrl = new URL(server.endpoint.replace('wss://', 'https://').replace('ws://', 'http://'));
           const statsUrl = `${wsUrl.protocol}//${wsUrl.host}`;
+          const statsHeaders: Record<string, string> = {};
+          if (env.VPS_STATS_SECRET) {
+            statsHeaders['Authorization'] = `Bearer ${env.VPS_STATS_SECRET}`;
+          }
           const statsResponse = await fetch(`${statsUrl}/stats`, {
+            headers: statsHeaders,
             signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT),
           });
 
@@ -128,14 +133,19 @@ export async function handleListServers(
 
             // Check if metrics endpoint returns degraded status
             const metricsResponse = await fetch(`${statsUrl}/metrics`, {
+              headers: statsHeaders,
               signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT),
             });
             if (metricsResponse.ok) {
               interface MetricsData {
                 collisionRisk?: 'low' | 'medium' | 'high';
+                pairingCodeEntropy?: {
+                  collisionRisk?: 'low' | 'medium' | 'high';
+                };
               }
               const metrics = await metricsResponse.json() as MetricsData;
-              if (metrics.collisionRisk === 'high') {
+              const risk = metrics.pairingCodeEntropy?.collisionRisk || metrics.collisionRisk;
+              if (risk === 'high') {
                 vpsServer.status = 'degraded';
               }
             }

@@ -8,7 +8,7 @@ platform helper and load platform-specific configuration.
 Supported platforms:
 - android: Appium + UiAutomator2 (emulator or real device)
 - linux: Shelf HTTP client (headless CI)
-- linux-a11y: AT-SPI + pyautogui real cursor (desktop with display)
+- linux-a11y: Shelf HTTP + pyautogui real cursor (desktop with display)
 - windows: pywinauto + UIA (desktop)
 - macos: atomacos + pyautogui real cursor (desktop)
 - ios: Appium + XCUITest (simulator)

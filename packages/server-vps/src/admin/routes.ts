@@ -53,6 +53,12 @@ export class AdminRoutes {
           res.end();
           return true;
         }
+        // Token invalid/expired — redirect to CF admin if configured
+        if (this.config.cfAdminUrl) {
+          res.writeHead(302, { Location: this.config.cfAdminUrl });
+          res.end();
+          return true;
+        }
       }
 
       // Serve dashboard HTML

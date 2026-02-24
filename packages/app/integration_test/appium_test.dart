@@ -16,31 +16,53 @@
 ///   flutter test integration_test/appium_test.dart -d linux
 library;
 
+import 'dart:io';
+import 'dart:ui';
+
 import 'package:appium_flutter_server/appium_flutter_server.dart';
-import 'package:flutter/semantics.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:zajel/core/providers/app_providers.dart';
 import 'package:zajel/main.dart';
 
 void main() async {
+  // Initialize sqflite FFI for desktop platforms — without this,
+  // openDatabase throws "databaseFactory not initialized".
+  if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+  }
+
   // Initialize SharedPreferences before passing the app to initializeTest.
-  // The mock values give us an empty but valid prefs instance.
   SharedPreferences.setMockInitialValues({
     'hasSeenOnboarding': true,
   });
   final prefs = await SharedPreferences.getInstance();
 
-  // Ensure semantics tree so the Shelf server can find widgets.
-  SemanticsBinding.instance.ensureSemantics();
+  final app = ProviderScope(
+    overrides: [
+      sharedPreferencesProvider.overrideWithValue(prefs),
+    ],
+    child: const ZajelApp(),
+  );
 
+  // Use the callback variant of initializeTest so we can set the surface
+  // size INSIDE the testWidgets context (setSurfaceSize requires it).
+  // The default test surface is tiny (10x10) on desktop, which prevents
+  // widgets from rendering and makes element finding impossible.
   initializeTest(
-    app: ProviderScope(
-      overrides: [
-        sharedPreferencesProvider.overrideWithValue(prefs),
-      ],
-      child: const ZajelApp(),
-    ),
+    callback: (WidgetTester tester) async {
+      // Set desktop-sized surface before pumping the widget tree.
+      await tester.binding.setSurfaceSize(const Size(1280, 720));
+
+      // Ensure semantics tree so Shelf can find widgets by tooltip/label.
+      tester.binding.ensureSemantics();
+
+      await tester.pumpWidget(app);
+    },
   );
 }

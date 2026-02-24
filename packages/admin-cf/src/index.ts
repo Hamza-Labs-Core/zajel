@@ -534,6 +534,19 @@ function serveDashboard(): Response {
             if (data.success) {
               state.token = token;
               state.user = data.data;
+
+              // Handle redirect back from VPS dashboard
+              const params = new URLSearchParams(window.location.search);
+              const redirectUrl = params.get('redirect');
+              if (redirectUrl) {
+                try {
+                  const url = new URL(redirectUrl);
+                  url.searchParams.set('token', state.token);
+                  window.location.href = url.toString();
+                  return; // Stop init — we're redirecting
+                } catch { /* invalid URL, ignore */ }
+              }
+
               await loadData();
             }
           }
