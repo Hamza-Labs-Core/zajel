@@ -190,15 +190,17 @@ export class ServerRegistryDO {
       );
     }
 
-    // Require secure protocols
-    if (!['https:', 'wss:'].includes(endpointUrl.protocol)) {
+    // Require secure protocols (relaxed in dev mode for local testing)
+    const isDev = this.env.DEV_MODE === 'true';
+    if (!isDev && !['https:', 'wss:'].includes(endpointUrl.protocol)) {
       return new Response(
         JSON.stringify({ error: 'Invalid endpoint: must use HTTPS or WSS protocol' }),
         { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
       );
     }
 
-    // Reject private/internal addresses
+    // Reject private/internal addresses (relaxed in dev mode for local testing)
+    if (!isDev) {
     const hostname = endpointUrl.hostname;
     const privatePatterns = [
       'localhost',
@@ -221,6 +223,7 @@ export class ServerRegistryDO {
         JSON.stringify({ error: 'Invalid endpoint: must not point to private or internal addresses' }),
         { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
       );
+    }
     }
 
     // Enforce maximum URL length
