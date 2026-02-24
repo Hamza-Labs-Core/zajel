@@ -2071,6 +2071,7 @@ jobs:
           CI: 'true'
           SIGNALING_URL: ${{ env.SIGNALING_URL }}
           ZAJEL_TEST_PLATFORM: linux
+          ZAJEL_SHELF_PORT: '9000'
           E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-artifacts/e2e
         run: |
           # ── Part 1: Shelf HTTP smoke test ──
@@ -2127,11 +2128,14 @@ jobs:
         env:
           CI: 'true'
           DISPLAY: ':99'
+          XAUTHORITY: /tmp/.Xauthority
           ZAJEL_TEST_PLATFORM: linux-a11y
           ZAJEL_APP_PATH: ${{ github.workspace }}/packages/app/build/linux/x64/debug/bundle/zajel
           BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL || '' }}
           E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-artifacts/desktop-e2e
         run: |
+          # Create Xauthority file for pyautogui (python3-Xlib needs it)
+          touch /tmp/.Xauthority
           cd ${{ github.workspace }}/e2e-tests
           python3 -m pytest tests/test_desktop_ui.py -v -s --timeout=120
 

@@ -548,32 +548,36 @@ def _resolve_signaling_urls() -> list[str]:
 
 def _discover_from_bootstrap(bootstrap_url: str) -> list[str]:
     """Discover all signaling server URLs from the bootstrap endpoint."""
-    try:
-        import urllib.request
-        import json
-        req = urllib.request.Request(
-            f"{bootstrap_url}/servers",
-            headers={"User-Agent": "ZajelE2E/1.0"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-        servers = data.get("servers", [])
-        # Sort by lastSeen descending (most recent first), matching app's selectServer()
-        servers.sort(key=lambda s: s.get("lastSeen", 0), reverse=True)
-        urls = []
-        for s in servers:
-            ep = s.get("endpoint", "")
-            if ep.startswith(("ws://", "wss://")):
-                urls.append(ep)
-            elif ep.startswith("https://"):
-                urls.append(ep.replace("https://", "wss://", 1))
-            elif ep.startswith("http://"):
-                urls.append(ep.replace("http://", "ws://", 1))
-        logger.info("Bootstrap discovered %d server(s): %s", len(urls), urls)
-        return urls
-    except Exception as e:
-        logger.warning("Bootstrap discovery failed: %s", e)
-        return []
+    import urllib.request
+    import json
+    import time
+
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(
+                f"{bootstrap_url}/servers",
+                headers={"User-Agent": "ZajelE2E/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read())
+            servers = data.get("servers", [])
+            servers.sort(key=lambda s: s.get("lastSeen", 0), reverse=True)
+            urls = []
+            for s in servers:
+                ep = s.get("endpoint", "")
+                if ep.startswith(("ws://", "wss://")):
+                    urls.append(ep)
+                elif ep.startswith("https://"):
+                    urls.append(ep.replace("https://", "wss://", 1))
+                elif ep.startswith("http://"):
+                    urls.append(ep.replace("http://", "ws://", 1))
+            logger.info("Bootstrap discovered %d server(s): %s", len(urls), urls)
+            return urls
+        except Exception as e:
+            logger.warning("Bootstrap discovery attempt %d failed: %s", attempt + 1, e)
+            if attempt < 2:
+                time.sleep(2)
+    return []
 
 
 def _build_ice_servers():
