@@ -87,13 +87,17 @@ class TestHeadlessNotifications:
     """Notification tests using headless client as the peer."""
 
     def _pair_and_go_home(self, alice, app_helper, headless_bob):
-        """Pair Alice with Bob and return to home screen (chat not open)."""
+        """Pair Alice with Bob and return to home screen (chat not open).
+
+        Uses Bob→Alice pairing direction: Bob's MultiServerBob tries all
+        servers, so it works regardless of which server Alice connected to.
+        """
         helper = app_helper(alice)
         helper.wait_for_app_ready()
 
         helper.navigate_to_connect()
-        helper.get_pairing_code_from_connect_screen()
-        helper.enter_peer_code(headless_bob.pairing_code)
+        alice_code = helper.get_pairing_code_from_connect_screen()
+        headless_bob.pair_with(alice_code)
 
         assert helper.wait_for_peer_connected(timeout=60), "Pairing must succeed"
         return helper

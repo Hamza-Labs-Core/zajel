@@ -183,28 +183,36 @@ class LinuxDesktopHelper(LinuxAppHelper):
         time.sleep(0.3)
 
     def press_key(self, key: str):
-        """Press a keyboard key via pyautogui.
+        """Press a keyboard key via pyautogui, or fall back to Shelf.
 
-        Handles both pyautogui-style ('escape') and pywinauto-style
-        ('{ESCAPE}') key names for cross-platform test compatibility.
+        When cursor clicks are enabled (real window detected), uses pyautogui
+        to send real keyboard events. Otherwise falls back to the parent
+        class's Shelf-based press_key (supports escape/back only).
         """
-        key_map = {
-            "{ESCAPE}": "escape",
-            "{ENTER}": "enter",
-            "{BACKSPACE}": "backspace",
-            "{TAB}": "tab",
-            "{DELETE}": "delete",
-        }
-        key = key_map.get(key.upper(), key.lower().strip("{}"))
-        pyautogui.press(key)
-        time.sleep(0.3)
+        if self._cursor_clicks_enabled:
+            key_map = {
+                "{ESCAPE}": "escape",
+                "{ENTER}": "enter",
+                "{BACKSPACE}": "backspace",
+                "{TAB}": "tab",
+                "{DELETE}": "delete",
+            }
+            key = key_map.get(key.upper(), key.lower().strip("{}"))
+            pyautogui.press(key)
+            time.sleep(0.3)
+        else:
+            # Fall back to Shelf programmatic key press
+            super().press_key(key)
 
     # ── Navigation overrides (use real cursor where possible) ──
 
     def go_back_to_home(self):
-        """Navigate back using real Escape key press."""
-        self.press_key("escape")
-        time.sleep(0.5)
+        """Navigate back using real Escape key or Shelf press_back."""
+        if self._cursor_clicks_enabled:
+            self.press_key("escape")
+            time.sleep(0.5)
+        else:
+            super().go_back_to_home()
 
     # ── Screenshots ─────────────────────────────────────────────
 
