@@ -49,7 +49,12 @@ class CryptoService {
   }
 
   /// Initialize the crypto service and generate/load identity keys.
+  ///
+  /// Safe to call multiple times — subsequent calls are no-ops.
+  /// (ConnectionManager.initialize() also calls this, so guard prevents
+  /// double-init with its associated secure storage timeouts.)
   Future<void> initialize() async {
+    if (_identityKeyPair != null) return;
     await _loadOrGenerateIdentityKeys();
     // Cache the public key for synchronous access
     if (_identityKeyPair != null) {
@@ -492,9 +497,16 @@ class CryptoService {
       _keysWereRegenerated = true;
     }
 
-    // Generate new identity keys
+    // Generate new identity keys (in-memory only if storage is broken)
     _identityKeyPair = await _x25519.newKeyPair();
-    await _persistIdentityKeys();
+    try {
+      await _persistIdentityKeys();
+    } catch (e) {
+      // Secure storage is completely unavailable (e.g. headless CI with no
+      // gnome-keyring). Keys stay in memory only for this session.
+      logger.warning('CryptoService',
+          'Failed to persist identity keys to secure storage: $e');
+    }
   }
 
   /// Load stableId from SharedPreferences or generate a new one.

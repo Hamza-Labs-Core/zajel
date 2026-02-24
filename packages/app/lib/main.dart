@@ -253,7 +253,14 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       setState(() => _initialized = true);
     }
 
-    // Auto-connect to signaling server (non-blocking)
+    // Auto-connect to signaling server (non-blocking).
+    // _connectionManager may be null if initialization failed early (e.g.
+    // secure storage unavailable on headless CI). Skip signaling in that case.
+    if (_connectionManager == null) {
+      logger.warning('ZajelApp',
+          'Skipping signaling — connection manager not initialized');
+      return;
+    }
     try {
       await _connectToSignaling(_connectionManager!);
       logger.info('ZajelApp', 'Signaling connection complete');
@@ -263,7 +270,9 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     } catch (e, stack) {
       logger.error('ZajelApp', 'Signaling connection failed', e, stack);
       // Even on initial failure, try to reconnect
-      _setupSignalingReconnect(_connectionManager!);
+      if (_connectionManager != null) {
+        _setupSignalingReconnect(_connectionManager!);
+      }
     }
   }
 
