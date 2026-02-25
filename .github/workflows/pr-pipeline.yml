@@ -2153,11 +2153,13 @@ jobs:
         run: |
           # Run mock-safe integration tests on Linux desktop.
           # These tests use provider overrides — no real server needed.
+          # INTEGRATION_TEST=true skips signaling server connection to avoid
+          # slow network timeouts (server discovery + WebSocket = 75s+ per test).
           FAILED=0
-          flutter test integration_test/desktop_test.dart -d linux --no-pub || FAILED=1
-          flutter test integration_test/app_test.dart -d linux --no-pub || FAILED=1
-          flutter test integration_test/channels_test.dart -d linux --no-pub || FAILED=1
-          flutter test integration_test/groups_test.dart -d linux --no-pub || FAILED=1
+          flutter test integration_test/desktop_test.dart -d linux --no-pub --dart-define=INTEGRATION_TEST=true || FAILED=1
+          flutter test integration_test/app_test.dart -d linux --no-pub --dart-define=INTEGRATION_TEST=true || FAILED=1
+          flutter test integration_test/channels_test.dart -d linux --no-pub --dart-define=INTEGRATION_TEST=true || FAILED=1
+          flutter test integration_test/groups_test.dart -d linux --no-pub --dart-define=INTEGRATION_TEST=true || FAILED=1
           if [ $FAILED -ne 0 ]; then
             echo "FAILED: One or more Dart integration tests failed"
             exit 1

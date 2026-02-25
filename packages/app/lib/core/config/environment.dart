@@ -74,6 +74,14 @@ class Environment {
   /// Override with `--dart-define=E2E_TEST=true`
   static const bool isE2eTest = bool.fromEnvironment('E2E_TEST');
 
+  /// Whether running as a Dart integration test (flutter test -d linux).
+  ///
+  /// When true, signaling server connection is skipped to avoid slow
+  /// network timeouts in CI. Override with
+  /// `--dart-define=INTEGRATION_TEST=true`
+  static const bool isIntegrationTest =
+      bool.fromEnvironment('INTEGRATION_TEST');
+
   /// Whether running in QA environment.
   static bool get isQA => env == 'qa';
 

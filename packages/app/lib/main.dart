@@ -254,6 +254,12 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     }
 
     // Auto-connect to signaling server (non-blocking).
+    // Skip signaling in Dart integration tests to avoid slow network timeouts
+    // in CI (server discovery + WebSocket connection can take 75s+ per test).
+    if (Environment.isIntegrationTest) {
+      logger.info('ZajelApp', 'Skipping signaling — INTEGRATION_TEST=true');
+      return;
+    }
     // _connectionManager may be null if initialization failed early (e.g.
     // secure storage unavailable on headless CI). Skip signaling in that case.
     if (_connectionManager == null) {
