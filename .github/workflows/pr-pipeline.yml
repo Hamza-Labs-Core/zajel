@@ -2151,19 +2151,14 @@ jobs:
           TEST_USE_MOCK_SERVER: 'true'
         working-directory: packages/app
         run: |
-          # Run mock-safe integration tests on Linux desktop.
-          # These tests use provider overrides — no real server needed.
+          # Run all Dart integration tests via combined entry point.
+          # all_tests.dart imports desktop_test, app_test, channels_test, and
+          # groups_test into one binary — avoids 4 separate compilations
+          # (~7 min each) and reduces total build time from ~28 min to ~7 min.
           # INTEGRATION_TEST=true skips signaling server connection to avoid
           # slow network timeouts (server discovery + WebSocket = 75s+ per test).
-          FAILED=0
-          flutter test integration_test/desktop_test.dart -d linux --no-pub --dart-define=INTEGRATION_TEST=true || FAILED=1
-          flutter test integration_test/app_test.dart -d linux --no-pub --dart-define=INTEGRATION_TEST=true || FAILED=1
-          flutter test integration_test/channels_test.dart -d linux --no-pub --dart-define=INTEGRATION_TEST=true || FAILED=1
-          flutter test integration_test/groups_test.dart -d linux --no-pub --dart-define=INTEGRATION_TEST=true || FAILED=1
-          if [ $FAILED -ne 0 ]; then
-            echo "FAILED: One or more Dart integration tests failed"
-            exit 1
-          fi
+          flutter test integration_test/all_tests.dart -d linux --no-pub \
+            --dart-define=INTEGRATION_TEST=true
           echo "All Dart integration tests passed on Linux desktop."
 
       - name: Cleanup services
