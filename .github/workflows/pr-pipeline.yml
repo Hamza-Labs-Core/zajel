@@ -1919,7 +1919,7 @@ jobs:
       (needs.deploy-vps.result == 'success' || needs.deploy-vps.result == 'skipped') &&
       (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true))
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     env:
       DISPLAY: ':99'
     steps:

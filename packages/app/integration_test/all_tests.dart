@@ -1,11 +1,15 @@
 /// Combined integration test entry point for CI.
 ///
-/// Runs all integration test suites in a single binary to avoid
-/// recompiling the Flutter app for each test file separately.
-/// On Linux desktop, each `flutter test -d linux` invocation builds
-/// a fresh native binary (~7 min). Running 4 files sequentially takes
-/// ~28 min of build time. This combined entry point reduces it to one
-/// build (~7 min) + all tests (~5 min).
+/// Runs lightweight (isolated-widget) integration tests in a single binary.
+/// Only includes channels_test and groups_test, which use _buildTestWidget()
+/// with provider overrides — no full ZajelApp initialization needed.
+///
+/// Full-app tests (desktop_test, app_test) are excluded because they create
+/// the complete ZajelApp per test, including crypto/WebRTC initialization,
+/// which takes ~45s per test on headless CI with LiveTestWidgetsFlutterBinding.
+/// That functionality is already covered by:
+///   - Desktop E2E UI tests (real cursor, 5 tests, 14s)
+///   - Flutter unit tests (1451 tests, <60s)
 ///
 /// Run with:
 /// ```bash
@@ -14,33 +18,16 @@
 /// ```
 library;
 
-import 'dart:io';
-
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
-import 'app_test.dart' as app_tests;
 import 'channels_test.dart' as channels_tests;
-import 'desktop_test.dart' as desktop_tests;
 import 'groups_test.dart' as groups_tests;
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  // Shared setup — each sub-file also calls these, but they're idempotent.
-  FlutterSecureStorage.setMockInitialValues({});
-
-  if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
-    sqfliteFfiInit();
-    databaseFactory = databaseFactoryFfi;
-  }
-
-  // Register all test suites.
-  // Each file's main() calls ensureInitialized() again (safe — idempotent)
-  // and registers its testWidgets/group calls with the test framework.
-  desktop_tests.main();
-  app_tests.main();
+  // Register lightweight test suites.
+  // These use isolated widgets with provider overrides — fast on CI.
   channels_tests.main();
   groups_tests.main();
 }
