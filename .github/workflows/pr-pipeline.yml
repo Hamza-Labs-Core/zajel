@@ -1919,7 +1919,7 @@ jobs:
       (needs.deploy-vps.result == 'success' || needs.deploy-vps.result == 'skipped') &&
       (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true))
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       DISPLAY: ':99'
     steps:
@@ -2018,7 +2018,11 @@ jobs:
           # This uses appium_flutter_server which starts a Shelf server on port
           # 9000 that exposes W3C WebDriver-like endpoints for widget interaction.
           # This bypasses AT-SPI entirely — no dogtail/accessibility needed.
-          flutter test integration_test/appium_test.dart -d linux --no-pub 2>&1 &
+          #
+          # Output is tee'd to a log file so pump-loop diagnostics are captured
+          # as a CI artifact even though flutter test runs in the background.
+          mkdir -p ${{ github.workspace }}/test-artifacts
+          flutter test integration_test/appium_test.dart -d linux --no-pub 2>&1 | tee ${{ github.workspace }}/test-artifacts/flutter-shelf.log &
           FLUTTER_TEST_PID=$!
           echo "FLUTTER_TEST_PID=$FLUTTER_TEST_PID" >> $GITHUB_ENV
 
@@ -2043,6 +2047,16 @@ jobs:
             fi
             sleep 1
           done
+
+          # After Shelf server is up, give the pump loop extra time to finish.
+          # The appium_test.dart callback pumps up to 300 iterations (~60s)
+          # waiting for _initialize() to complete (crypto timeouts on CI can
+          # take 20s). The Shelf server starts mid-pump, so we wait a bit more
+          # for the pump loop to detect the home screen and stop.
+          echo "Shelf server up — waiting 30s for widget tree pump loop..."
+          sleep 30
+          echo "Flutter Shelf log (last 20 lines):"
+          tail -20 ${{ github.workspace }}/test-artifacts/flutter-shelf.log 2>/dev/null || true
 
       - name: Resolve signaling URL
         run: |

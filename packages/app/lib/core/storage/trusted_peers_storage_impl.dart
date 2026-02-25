@@ -31,7 +31,11 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
     if (_initialized) return;
 
     try {
-      final json = await _storage.read(key: _peersKey);
+      // Timeout protects against libsecret/gnome-keyring hanging on headless
+      // Linux (D-Bus call blocks if keyring daemon is not reachable).
+      final json = await _storage
+          .read(key: _peersKey)
+          .timeout(const Duration(seconds: 10));
       if (json != null) {
         final List<dynamic> list = jsonDecode(json);
         _cache = {
@@ -50,7 +54,9 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
 
   Future<void> _persist() async {
     final list = _cache.values.map((p) => p.toJson()).toList();
-    await _storage.write(key: _peersKey, value: jsonEncode(list));
+    await _storage
+        .write(key: _peersKey, value: jsonEncode(list))
+        .timeout(const Duration(seconds: 10));
   }
 
   @override

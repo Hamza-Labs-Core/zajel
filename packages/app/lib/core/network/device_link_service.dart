@@ -418,7 +418,10 @@ class DeviceLinkService {
   /// Load linked devices from secure storage.
   Future<void> _loadLinkedDevices() async {
     try {
-      final allKeys = await _secureStorage.readAll();
+      // Timeout protects against libsecret/gnome-keyring hanging on headless
+      // Linux (D-Bus call blocks if keyring daemon is not reachable).
+      final allKeys =
+          await _secureStorage.readAll().timeout(const Duration(seconds: 10));
       for (final entry in allKeys.entries) {
         if (entry.key.startsWith(DeviceLinkConstants.storagePrefix)) {
           try {
