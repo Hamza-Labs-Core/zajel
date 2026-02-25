@@ -18,13 +18,34 @@
 /// ```
 library;
 
+import 'dart:io';
+import 'dart:ui';
+
+import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'channels_test.dart' as channels_tests;
 import 'groups_test.dart' as groups_tests;
 
 void main() {
-  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize sqflite FFI — some tests trigger GroupStorageService
+  // which needs a database factory, even with mock providers.
+  if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+  }
+
+  // Set a desktop-sized surface for LiveTestWidgetsFlutterBinding.
+  // On headless CI (Xvfb without a window manager), the default surface
+  // may be too small for dialogs to render, causing _getElementPoint
+  // failures when trying to tap dialog buttons.
+  setUp(() {
+    binding.platformDispatcher.views.first.physicalSize = const Size(1280, 720);
+    binding.platformDispatcher.views.first.devicePixelRatio = 1.0;
+  });
 
   // Register lightweight test suites.
   // These use isolated widgets with provider overrides — fast on CI.
