@@ -109,6 +109,7 @@ export async function handleListServers(
             signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT),
           });
 
+          console.log(`Health check ${statsUrl}/stats: ${statsResponse.status} ${statsResponse.statusText}`);
           if (statsResponse.ok) {
             interface StatsData {
               connections?: number;
@@ -146,8 +147,9 @@ export async function handleListServers(
           } else {
             vpsServer.status = 'degraded';
           }
-        } catch {
-          // Server unreachable
+        } catch (healthError) {
+          // Server unreachable — log the error for debugging
+          console.error(`Health check failed for ${server.endpoint}:`, healthError instanceof Error ? healthError.message : String(healthError));
           vpsServer.status = 'offline';
         }
 
