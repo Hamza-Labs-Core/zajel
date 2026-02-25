@@ -183,8 +183,11 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      // Tap the Create Channel button in the empty state
-      await tester.tap(find.widgetWithText(FilledButton, 'Create Channel'));
+      // Tap the Create Channel button in the empty state.
+      // Use find.text instead of widgetWithText(FilledButton, ...) because
+      // LiveTestWidgetsFlutterBinding (integration tests on desktop) may not
+      // resolve the FilledButton ancestor correctly.
+      await tester.tap(find.text('Create Channel'));
       await tester.pumpAndSettle();
 
       // Dialog should be shown
@@ -338,7 +341,9 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Channel Info'), findsOneWidget);
-      expect(find.text('A channel for testing'), findsOneWidget);
+      // On LiveTestWidgetsFlutterBinding, the description text may appear
+      // both in the detail screen (behind the sheet) and in the info sheet.
+      expect(find.text('A channel for testing'), findsWidgets);
       expect(find.text('Rules'), findsOneWidget);
     });
 
