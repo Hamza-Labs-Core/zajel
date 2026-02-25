@@ -1234,15 +1234,6 @@ jobs:
         env:
           APP_VERSION: ${{ env.VERSION }}
 
-      - name: Set admin worker secrets
-        if: ${{ secrets.VPS_STATS_SECRET != '' }}
-        working-directory: packages/admin-cf
-        run: echo "$VPS_STATS_SECRET" | npx wrangler secret put VPS_STATS_SECRET --env qa -c wrangler.jsonc
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          VPS_STATS_SECRET: ${{ secrets.VPS_STATS_SECRET }}
-
       - name: Verify deployment
         run: |
           echo "Waiting for deployment to propagate..."
@@ -1391,14 +1382,13 @@ jobs:
           APP_VERSION: ${{ needs.tag-prerelease.outputs.version }}
           BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL }}
           ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
-          VPS_STATS_SECRET: ${{ secrets.VPS_STATS_SECRET }}
           CERTBOT_EMAIL: ${{ vars.CERTBOT_EMAIL || 'admin@hamzalabs.dev' }}
         with:
           host: ${{ vars.QA_VPS_IP }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          envs: APP_VERSION,BOOTSTRAP_URL,ZAJEL_ADMIN_JWT_SECRET,VPS_STATS_SECRET,CERTBOT_EMAIL
+          envs: APP_VERSION,BOOTSTRAP_URL,ZAJEL_ADMIN_JWT_SECRET,CERTBOT_EMAIL
           script: |
             set -e
 
@@ -1496,7 +1486,6 @@ jobs:
             export ZAJEL_REGION=qa
             export ZAJEL_BOOTSTRAP_URL=${BOOTSTRAP_URL}
             export ZAJEL_ADMIN_JWT_SECRET=${ZAJEL_ADMIN_JWT_SECRET}
-            export STATS_SECRET=${VPS_STATS_SECRET}
             export ZAJEL_CF_ADMIN_URL=https://admin.zajel.qa.hamzalabs.dev
             export ZAJEL_TLS_CERT=${TLS_CERT}
             export ZAJEL_TLS_KEY=${TLS_KEY}
@@ -2163,9 +2152,13 @@ jobs:
         working-directory: packages/app
         run: |
           # Run all Dart integration tests via combined entry point.
-          # all_tests.dart imports channels, groups, app, and desktop tests
-          # into one binary — avoids separate compilations (~7 min each).
-          flutter test integration_test/all_tests.dart -d linux --no-pub
+          # all_tests.dart imports desktop_test, app_test, channels_test, and
+          # groups_test into one binary — avoids 4 separate compilations
+          # (~7 min each) and reduces total build time from ~28 min to ~7 min.
+          # INTEGRATION_TEST=true skips signaling server connection to avoid
+          # slow network timeouts (server discovery + WebSocket = 75s+ per test).
+          flutter test integration_test/all_tests.dart -d linux --no-pub \
+            --dart-define=INTEGRATION_TEST=true
           echo "All Dart integration tests passed on Linux desktop."
 
       - name: Cleanup services

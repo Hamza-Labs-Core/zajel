@@ -153,7 +153,7 @@ describe('Real Server Integration Tests', () => {
       }
     });
 
-    it('should reject stats endpoint without auth', { timeout: 15000 }, async () => {
+    it('should respond to stats endpoint', { timeout: 15000 }, async () => {
       const serverHarness = new TestServerHarness({
         bootstrapUrl: mockBootstrap.getUrl(),
         region: 'asia-pacific',
@@ -163,42 +163,6 @@ describe('Real Server Integration Tests', () => {
 
       try {
         const response = await fetch(`${serverHarness.getUrl()}/stats`);
-        expect(response.status).toBe(401);
-
-        const data = await response.json() as { error: string };
-        expect(data.error).toBe('Unauthorized');
-      } finally {
-        await serverHarness.stop();
-      }
-    });
-
-    it('should respond to stats endpoint with valid auth', { timeout: 15000 }, async () => {
-      const testSecret = 'test-stats-secret-12345';
-      const originalSecret = process.env['STATS_SECRET'];
-      process.env['STATS_SECRET'] = testSecret;
-
-      const serverHarness = new TestServerHarness({
-        bootstrapUrl: mockBootstrap.getUrl(),
-        region: 'asia-pacific',
-      });
-
-      await serverHarness.start();
-
-      try {
-        // Without auth header should still be rejected
-        const noAuthResponse = await fetch(`${serverHarness.getUrl()}/stats`);
-        expect(noAuthResponse.status).toBe(401);
-
-        // With wrong secret should be rejected
-        const wrongAuthResponse = await fetch(`${serverHarness.getUrl()}/stats`, {
-          headers: { 'Authorization': 'Bearer wrong-secret' },
-        });
-        expect(wrongAuthResponse.status).toBe(401);
-
-        // With correct secret should succeed
-        const response = await fetch(`${serverHarness.getUrl()}/stats`, {
-          headers: { 'Authorization': `Bearer ${testSecret}` },
-        });
         expect(response.status).toBe(200);
 
         const data = await response.json() as { serverId: string; region: string };
@@ -206,11 +170,6 @@ describe('Real Server Integration Tests', () => {
         expect(data.region).toBe('asia-pacific');
       } finally {
         await serverHarness.stop();
-        if (originalSecret !== undefined) {
-          process.env['STATS_SECRET'] = originalSecret;
-        } else {
-          delete process.env['STATS_SECRET'];
-        }
       }
     });
 
@@ -819,26 +778,13 @@ describe('Real Server Integration Tests', () => {
     });
 
     it('should have different regions for each server', { timeout: 10000 }, async () => {
-      const testSecret = 'test-stats-secret-federation';
-      const originalSecret = process.env['STATS_SECRET'];
-      process.env['STATS_SECRET'] = testSecret;
+      const [stats1, stats2] = await Promise.all([
+        fetch(`${server1.getUrl()}/stats`).then(r => r.json()),
+        fetch(`${server2.getUrl()}/stats`).then(r => r.json()),
+      ]) as [{ region: string }, { region: string }];
 
-      try {
-        const headers = { 'Authorization': `Bearer ${testSecret}` };
-        const [stats1, stats2] = await Promise.all([
-          fetch(`${server1.getUrl()}/stats`, { headers }).then(r => r.json()),
-          fetch(`${server2.getUrl()}/stats`, { headers }).then(r => r.json()),
-        ]) as [{ region: string }, { region: string }];
-
-        expect(stats1.region).toBe('region-1');
-        expect(stats2.region).toBe('region-2');
-      } finally {
-        if (originalSecret !== undefined) {
-          process.env['STATS_SECRET'] = originalSecret;
-        } else {
-          delete process.env['STATS_SECRET'];
-        }
-      }
+      expect(stats1.region).toBe('region-1');
+      expect(stats2.region).toBe('region-2');
     });
   });
 });

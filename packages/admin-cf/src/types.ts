@@ -70,8 +70,6 @@ export interface Env {
   APP_VERSION?: string;
   /** Service binding to the bootstrap server (zajel-signaling worker) */
   BOOTSTRAP_SERVICE?: ServiceBinding;
-  /** Shared secret for accessing VPS /stats and /metrics endpoints */
-  VPS_STATS_SECRET?: string;
 }
 
 /**

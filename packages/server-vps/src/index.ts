@@ -24,21 +24,6 @@ import { ClientHandler, type ClientHandlerConfig } from './client/handler.js';
 import { logger } from './utils/logger.js';
 import { createAdminModule, type AdminModule } from './admin/index.js';
 
-/**
- * Check authentication for stats/metrics endpoints.
- * Requires a Bearer token matching the STATS_SECRET environment variable.
- * If no secret is configured, denies all access (fail-closed).
- */
-function checkStatsAuth(req: IncomingMessage): boolean {
-  const adminSecret = process.env['STATS_SECRET'];
-  if (!adminSecret) return false; // If no secret configured, deny all access
-
-  const authHeader = req.headers['authorization'];
-  if (!authHeader || authHeader !== `Bearer ${adminSecret}`) {
-    return false;
-  }
-  return true;
-}
 
 export interface ZajelServer {
   httpServer: HttpServer;
@@ -114,13 +99,8 @@ export async function createZajelServer(
       return;
     }
 
-    // Stats endpoint (requires authentication)
+    // Stats endpoint (public — operational metrics only)
     if (req.url === '/stats') {
-      if (!checkStatsAuth(req)) {
-        res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unauthorized' }));
-        return;
-      }
 
       const handler = clientHandlerRef;
       const stats = {
@@ -141,13 +121,8 @@ export async function createZajelServer(
       return;
     }
 
-    // Metrics endpoint (Issue #41: Pairing code entropy monitoring, requires authentication)
+    // Metrics endpoint (Issue #41: Pairing code entropy monitoring)
     if (req.url === '/metrics') {
-      if (!checkStatsAuth(req)) {
-        res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unauthorized' }));
-        return;
-      }
 
       const handler = clientHandlerRef;
       if (!handler) {
