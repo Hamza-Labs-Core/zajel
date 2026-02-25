@@ -1919,7 +1919,7 @@ jobs:
       (needs.deploy-vps.result == 'success' || needs.deploy-vps.result == 'skipped') &&
       (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true))
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     env:
       DISPLAY: ':99'
     steps:
@@ -2049,12 +2049,11 @@ jobs:
           done
 
           # After Shelf server is up, give the pump loop extra time to finish.
-          # The appium_test.dart callback pumps up to 300 iterations (~60s)
-          # waiting for _initialize() to complete (crypto timeouts on CI can
-          # take 20s). The Shelf server starts mid-pump, so we wait a bit more
-          # for the pump loop to detect the home screen and stop.
-          echo "Shelf server up — waiting 30s for widget tree pump loop..."
-          sleep 30
+          # appium_test.dart uses in-memory secure storage, so _initialize()
+          # completes in <5s. The pump loop (100 iters × 200ms = 20s) should
+          # detect the home screen quickly. Wait 10s to be safe.
+          echo "Shelf server up — waiting 10s for widget tree pump loop..."
+          sleep 10
           echo "Flutter Shelf log (last 20 lines):"
           tail -20 ${{ github.workspace }}/test-artifacts/flutter-shelf.log 2>/dev/null || true
 

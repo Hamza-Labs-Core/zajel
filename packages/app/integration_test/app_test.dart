@@ -17,6 +17,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -62,7 +63,8 @@ Future<void> _pumpApp(WidgetTester tester, SharedPreferences prefs) async {
     ),
   );
   // Pump frames with real-time delays for _initialize() to complete.
-  for (int i = 0; i < 100; i++) {
+  // With in-memory secure storage, _initialize() completes in <3s.
+  for (int i = 0; i < 40; i++) {
     await tester.pump(const Duration(milliseconds: 100));
     await Future<void>.delayed(const Duration(milliseconds: 50));
   }
@@ -85,6 +87,10 @@ Future<void> _pumpFrames(WidgetTester tester, {int count = 20}) async {
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+
+  // Use in-memory secure storage to avoid libsecret/gnome-keyring hangs on
+  // headless Linux CI.
+  FlutterSecureStorage.setMockInitialValues({});
 
   // Initialize sqflite FFI for desktop platforms.
   if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {

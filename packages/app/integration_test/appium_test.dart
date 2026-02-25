@@ -21,6 +21,7 @@ import 'dart:io';
 import 'package:appium_flutter_server/appium_flutter_server.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -52,6 +53,12 @@ void main() async {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
   }
+
+  // Use in-memory secure storage to avoid libsecret/gnome-keyring hangs on
+  // headless Linux CI. Without this, CryptoService.initialize(),
+  // TrustedPeersStorage, and DeviceLinkService all hang for 10s+ each waiting
+  // for D-Bus calls that never return.
+  FlutterSecureStorage.setMockInitialValues({});
 
   // Initialize SharedPreferences before passing the app to initializeTest.
   // Include displayName so the app doesn't show any first-run dialogs.
@@ -99,14 +106,16 @@ void main() async {
       // _initialize()'s async operations (FFI calls, IO) need real event loop
       // time. We interleave Future.delayed with pump to allow both the async
       // init and the frame rebuild to proceed.
+      // With in-memory secure storage, _initialize() completes in <5s.
+      // 100 iterations × 200ms = 20s is generous.
       bool homeScreenReady = false;
-      for (int i = 0; i < 300; i++) {
+      for (int i = 0; i < 100; i++) {
         await tester.pump(const Duration(milliseconds: 100));
         // Yield to the event loop so real async operations can complete
         await Future<void>.delayed(const Duration(milliseconds: 100));
 
         // Diagnostic: check if the home screen has rendered.
-        if (!homeScreenReady && i % 20 == 0) {
+        if (!homeScreenReady && i % 10 == 0) {
           final hasLoader =
               find.byType(CircularProgressIndicator).evaluate().isNotEmpty;
           final hasHome = find.text('Nearby Devices').evaluate().isNotEmpty;
@@ -130,8 +139,8 @@ void main() async {
       }
       if (!homeScreenReady) {
         // ignore: avoid_print
-        print('[appium_test] WARNING: Home screen did not appear after 300 '
-            'pump iterations (~60s). Widget tree may be stuck on loading '
+        print('[appium_test] WARNING: Home screen did not appear after 100 '
+            'pump iterations (~20s). Widget tree may be stuck on loading '
             'screen. Continuing anyway — Shelf server will start but '
             'element finding may fail.');
       }
