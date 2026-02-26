@@ -429,6 +429,67 @@ describe('Bootstrap Service E2E Tests', () => {
       expect(listData.servers).toHaveLength(1);
     });
 
+    it('should update connections count via heartbeat', async () => {
+      const serverData = {
+        serverId: 'ed25519:metrics-server',
+        endpoint: 'wss://metrics.example.com',
+        publicKey: 'metrics-key',
+        region: 'eu-west',
+      };
+
+      await serverRegistry.fetch(createRequest('POST', '/servers', serverData));
+
+      // Send heartbeat with connections count
+      const heartbeatRequest = createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:metrics-server',
+        connections: 42,
+      });
+      const response = await serverRegistry.fetch(heartbeatRequest);
+      expect(response.status).toBe(200);
+
+      // Verify connections appears in server list
+      const listResponse = await serverRegistry.fetch(createRequest('GET', '/servers'));
+      const listData = await listResponse.json();
+
+      expect(listData.servers).toHaveLength(1);
+      expect(listData.servers[0].connections).toBe(42);
+    });
+
+    it('should include connections from registration in server list', async () => {
+      const serverData = {
+        serverId: 'ed25519:conn-server',
+        endpoint: 'wss://conn.example.com',
+        publicKey: 'conn-key',
+        region: 'eu-west',
+        connections: 10,
+      };
+
+      await serverRegistry.fetch(createRequest('POST', '/servers', serverData));
+
+      const listResponse = await serverRegistry.fetch(createRequest('GET', '/servers'));
+      const listData = await listResponse.json();
+
+      expect(listData.servers).toHaveLength(1);
+      expect(listData.servers[0].connections).toBe(10);
+    });
+
+    it('should default connections to 0 when not provided', async () => {
+      const serverData = {
+        serverId: 'ed25519:no-conn-server',
+        endpoint: 'wss://no-conn.example.com',
+        publicKey: 'no-conn-key',
+        region: 'eu-west',
+      };
+
+      await serverRegistry.fetch(createRequest('POST', '/servers', serverData));
+
+      const listResponse = await serverRegistry.fetch(createRequest('GET', '/servers'));
+      const listData = await listResponse.json();
+
+      expect(listData.servers).toHaveLength(1);
+      expect(listData.servers[0].connections).toBe(0);
+    });
+
     it('should return peers list with heartbeat response', async () => {
       // Register multiple servers
       const servers = [

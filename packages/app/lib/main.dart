@@ -338,10 +338,11 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
           SignalingDisplayState.connecting;
 
       String serverUrl;
+      final useDiscovery = !Environment.hasDirectSignalingUrl;
 
       // If a direct signaling URL is provided (e.g. E2E tests), use it
       // directly and skip server discovery.
-      if (Environment.hasDirectSignalingUrl) {
+      if (!useDiscovery) {
         serverUrl = Environment.signalingUrl;
         logger.info('ZajelApp', 'Using direct signaling URL: $serverUrl');
       } else {
@@ -376,6 +377,21 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       ref.read(signalingConnectedProvider.notifier).state = true;
       ref.read(signalingDisplayStateProvider.notifier).state =
           SignalingDisplayState.connected;
+
+      // Connect to all other discovered servers for cross-server rendezvous
+      if (useDiscovery) {
+        try {
+          final discoveryService = ref.read(serverDiscoveryServiceProvider);
+          final allServers = await discoveryService.fetchServers();
+          final allUrls = allServers
+              .map((s) => discoveryService.getWebSocketUrl(s))
+              .toList();
+          await connectionManager.connectToAdditionalServers(allUrls);
+        } catch (e) {
+          logger.warning(
+              'ZajelApp', 'Failed to connect to additional servers: $e');
+        }
+      }
 
       // Register meeting points for trusted peer reconnection
       await connectionManager.reconnectTrustedPeers();

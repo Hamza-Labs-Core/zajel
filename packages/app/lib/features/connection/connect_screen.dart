@@ -237,6 +237,17 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
       ref.read(signalingDisplayStateProvider.notifier).state =
           SignalingDisplayState.connected;
 
+      // Connect to all other discovered servers for cross-server rendezvous
+      try {
+        final allServers = await discoveryService.fetchServers();
+        final allUrls =
+            allServers.map((s) => discoveryService.getWebSocketUrl(s)).toList();
+        await connectionManager.connectToAdditionalServers(allUrls);
+      } catch (e) {
+        logger.warning(
+            'ConnectScreen', 'Failed to connect to additional servers: $e');
+      }
+
       // Re-register meeting points for trusted peer reconnection
       await connectionManager.reconnectTrustedPeers();
     } catch (e) {

@@ -13,6 +13,7 @@ class DiscoveredServer {
   final String endpoint;
   final String publicKey;
   final String region;
+  final int connections;
   final int registeredAt;
   final int lastSeen;
 
@@ -27,6 +28,7 @@ class DiscoveredServer {
     required this.endpoint,
     required this.publicKey,
     required this.region,
+    this.connections = 0,
     required this.registeredAt,
     required this.lastSeen,
     this.identityKey,
@@ -38,6 +40,7 @@ class DiscoveredServer {
       endpoint: json['endpoint'] as String,
       publicKey: json['publicKey'] as String,
       region: json['region'] as String? ?? 'unknown',
+      connections: json['connections'] as int? ?? 0,
       registeredAt: json['registeredAt'] as int? ?? 0,
       lastSeen: json['lastSeen'] as int? ?? 0,
       identityKey: json['identityKey'] as String?,

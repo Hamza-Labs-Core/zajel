@@ -25,9 +25,14 @@ export interface BootstrapClient {
   stopHeartbeat(): void;
 }
 
+export interface BootstrapMetrics {
+  connections: number;
+}
+
 export function createBootstrapClient(
   config: ServerConfig,
-  identity: ServerIdentity
+  identity: ServerIdentity,
+  getMetrics?: () => BootstrapMetrics
 ): BootstrapClient {
   let heartbeatTimer: NodeJS.Timeout | null = null;
   const baseUrl = config.bootstrap.serverUrl;
@@ -40,6 +45,7 @@ export function createBootstrapClient(
       endpoint: config.network.publicEndpoint,
       publicKey: base64Encode(identity.publicKey),
       region: config.network.region || 'unknown',
+      connections: getMetrics?.().connections ?? 0,
     };
 
     console.log(`[Bootstrap] Registering with ${baseUrl}...`);
@@ -107,7 +113,10 @@ export function createBootstrapClient(
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ serverId: identity.serverId }),
+        body: JSON.stringify({
+          serverId: identity.serverId,
+          connections: getMetrics?.().connections ?? 0,
+        }),
       });
 
       if (!response.ok) {

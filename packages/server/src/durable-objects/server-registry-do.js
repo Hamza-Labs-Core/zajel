@@ -256,11 +256,16 @@ export class ServerRegistryDO {
       );
     }
 
+    const connections = typeof body.connections === 'number' && Number.isFinite(body.connections)
+      ? Math.max(0, Math.floor(body.connections))
+      : 0;
+
     const serverEntry = {
       serverId,
       endpoint,
       publicKey,
       region: validRegion,
+      connections,
       registeredAt: Date.now(),
       lastSeen: Date.now(),
     };
@@ -376,6 +381,9 @@ export class ServerRegistryDO {
     }
 
     server.lastSeen = Date.now();
+    if (typeof body.connections === 'number' && Number.isFinite(body.connections)) {
+      server.connections = Math.max(0, Math.floor(body.connections));
+    }
     await this.state.storage.put(`server:${serverId}`, server);
 
     // Return current peer list with heartbeat response

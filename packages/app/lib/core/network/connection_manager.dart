@@ -235,6 +235,40 @@ class ConnectionManager {
     await _loadTrustedPeersAsOffline();
   }
 
+  /// Connect to additional discovered servers for cross-server rendezvous.
+  ///
+  /// When replicationFactor >= server count, the DHT considers all tokens
+  /// local, so no rendezvous_partial redirects are generated. This method
+  /// proactively connects to all other servers so that rendezvous tokens
+  /// are registered everywhere, enabling cross-server peer discovery.
+  Future<void> connectToAdditionalServers(List<String> serverUrls) async {
+    final state = _signalingState;
+    if (state is! SignalingConnected) return;
+
+    final primaryUrl = state.client.serverUrl;
+
+    for (final url in serverUrls) {
+      // Skip the primary server (already connected)
+      if (url == primaryUrl) continue;
+
+      // Skip servers already in redirect connections
+      if (_redirectConnections.containsKey(url)) continue;
+
+      try {
+        await _connectToRedirectServerForPairing(
+          endpoint: url,
+          pairingCode: state.pairingCode,
+          publicKey: _cryptoService.publicKeyBase64,
+        );
+        logger.info(
+            'ConnectionManager', 'Connected to additional server: $url');
+      } catch (e) {
+        logger.warning('ConnectionManager',
+            'Failed to connect to additional server $url: $e');
+      }
+    }
+  }
+
   /// Load all trusted peers into the peers map as offline/disconnected.
   Future<void> _loadTrustedPeersAsOffline() async {
     final trustedPeers = await _trustedPeersStorage.getAllPeers();
