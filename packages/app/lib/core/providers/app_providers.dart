@@ -72,10 +72,27 @@ final hasSeenOnboardingProvider = StateProvider<bool>((ref) {
   return prefs.getBool('hasSeenOnboarding') ?? false;
 });
 
-/// Provider for the user's display name.
-final displayNameProvider = StateProvider<String>((ref) {
+/// Provider for the user's username (Discord-style, without tag).
+/// Reads 'username' key first, falls back to 'displayName' for migration.
+final usernameProvider = StateProvider<String>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
-  return prefs.getString('displayName') ?? 'Anonymous';
+  return prefs.getString('username') ??
+      prefs.getString('displayName') ??
+      'Anonymous';
+});
+
+/// Provider for the user's full identity string: "Username#TAG".
+/// The tag is derived deterministically from the stable ID (key-independent).
+final userIdentityProvider = Provider<String>((ref) {
+  final username = ref.watch(usernameProvider);
+  try {
+    final cryptoService = ref.watch(cryptoServiceProvider);
+    final tag = CryptoService.tagFromStableId(cryptoService.stableId);
+    return '$username#$tag';
+  } catch (_) {
+    // CryptoService not initialized yet
+    return username;
+  }
 });
 
 /// Provider for notification settings with SharedPreferences persistence.
@@ -87,8 +104,12 @@ final notificationSettingsProvider =
 });
 
 /// Provider for crypto service.
+///
+/// SharedPreferences is injected for stableId persistence (resilient storage).
+/// FlutterSecureStorage is used internally for private keys (secure storage).
 final cryptoServiceProvider = Provider<CryptoService>((ref) {
-  return CryptoService();
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return CryptoService(prefs: prefs);
 });
 
 /// Provider for WebRTC service.
@@ -223,6 +244,12 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
   final trustedPeersStorage = ref.watch(trustedPeersStorageProvider);
   final meetingPointService = ref.watch(meetingPointServiceProvider);
   final blockedNotifier = ref.watch(blockedPeersProvider.notifier);
+  final username = ref.watch(usernameProvider);
+
+  // Trigger migration from publicKey blocks to peerId blocks (one-time, no-op if done)
+  blockedNotifier.migrateFromPublicKeys();
+
+  final messageStorage = ref.watch(messageStorageProvider);
 
   return ConnectionManager(
     cryptoService: cryptoService,
@@ -230,8 +257,33 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
     deviceLinkService: deviceLinkService,
     trustedPeersStorage: trustedPeersStorage,
     meetingPointService: meetingPointService,
-    isPublicKeyBlocked: blockedNotifier.isBlocked,
+    messageStorage: messageStorage,
+    isPublicKeyBlocked: blockedNotifier.isPublicKeyBlocked,
+    username: username,
   );
+});
+
+/// Stream of key rotation events emitted by ConnectionManager.
+///
+/// Each event is (peerId, oldPublicKey, newPublicKey). The UI can listen
+/// to this to show real-time warnings when a peer's key changes.
+final keyChangeStreamProvider = StreamProvider<(String, String, String)>((ref) {
+  final connectionManager = ref.watch(connectionManagerProvider);
+  return connectionManager.keyChanges;
+});
+
+/// Provider for peers with unacknowledged key changes.
+///
+/// Returns a map of peerId → TrustedPeer for all peers where
+/// keyChangeAcknowledged is false. Used by chat screen to show
+/// the key change warning banner.
+final pendingKeyChangesProvider =
+    FutureProvider<Map<String, TrustedPeer>>((ref) async {
+  // Re-evaluate when a key change event fires
+  ref.watch(keyChangeStreamProvider);
+  final storage = ref.watch(trustedPeersStorageProvider);
+  final peers = await storage.getPeersWithPendingKeyChanges();
+  return {for (final p in peers) p.id: p};
 });
 
 /// Provider for the list of linked devices.
@@ -263,16 +315,15 @@ final peersProvider = StreamProvider<List<Peer>>((ref) {
   return seeded();
 });
 
-/// Provider for visible peers (excluding blocked by public key).
+/// Provider for visible peers (excluding blocked by stableId).
 /// Sorted: connected first, then offline by lastSeen descending.
 final visiblePeersProvider = Provider<AsyncValue<List<Peer>>>((ref) {
   final peersAsync = ref.watch(peersProvider);
-  final blockedPublicKeys = ref.watch(blockedPeersProvider);
+  final blockedPeerIds = ref.watch(blockedPeersProvider);
 
   return peersAsync.whenData((peers) {
     final visible = peers.where((peer) {
-      if (peer.publicKey == null) return true;
-      return !blockedPublicKeys.contains(peer.publicKey);
+      return !blockedPeerIds.contains(peer.id);
     }).toList();
 
     // Sort: connected/connecting first, then offline by lastSeen descending
@@ -320,26 +371,50 @@ class ChatMessagesNotifier extends StateNotifier<List<Message>> {
   final String peerId;
   final MessageStorage _storage;
   bool _loaded = false;
+  bool _hasMore = true;
+  static const _pageSize = 100;
 
   ChatMessagesNotifier(this.peerId, this._storage) : super([]) {
     _loadMessages();
   }
 
+  /// Whether there are more older messages to load.
+  bool get hasMore => _hasMore;
+
   Future<void> _loadMessages() async {
     if (_loaded) return;
-    final messages = await _storage.getMessages(peerId);
+    final messages = await _storage.getMessages(peerId, limit: _pageSize);
     if (mounted) {
       state = messages;
       _loaded = true;
+      _hasMore = messages.length >= _pageSize;
+    }
+  }
+
+  /// Load older messages (pagination). Prepends to current state.
+  Future<void> loadMore() async {
+    if (!_hasMore || !_loaded) return;
+    final older = await _storage.getMessages(
+      peerId,
+      limit: _pageSize,
+      offset: state.length,
+    );
+    if (mounted && older.isNotEmpty) {
+      // older is in ascending order; prepend before current messages
+      state = [...older, ...state];
+      _hasMore = older.length >= _pageSize;
+    } else {
+      _hasMore = false;
     }
   }
 
   /// Reload messages from DB. Called when a new message is persisted
   /// by the global listener so the UI picks it up.
   Future<void> reload() async {
-    final messages = await _storage.getMessages(peerId);
+    final messages = await _storage.getMessages(peerId, limit: _pageSize);
     if (mounted) {
       state = messages;
+      _hasMore = messages.length >= _pageSize;
     }
   }
 
@@ -381,8 +456,7 @@ final peerAliasesProvider = StateProvider<Map<String, String>>((ref) => {});
 /// Provider for the currently selected peer.
 final selectedPeerProvider = StateProvider<Peer?>((ref) => null);
 
-/// Provider for blocked public keys (for efficient lookup).
-/// Blocking by public key ensures users can't bypass blocks by regenerating codes.
+/// Provider for blocked peer IDs (stableIds — survive key rotation).
 final blockedPeersProvider =
     StateNotifierProvider<BlockedPeersNotifier, Set<String>>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
@@ -390,8 +464,13 @@ final blockedPeersProvider =
   return BlockedPeersNotifier(prefs, trustedPeersStorage);
 });
 
-/// Provider for blocked peer details (publicKey -> name mapping).
-final blockedPeerDetailsProvider = StateProvider<Map<String, String>>((ref) {
+/// Provider for blocked peer details (peerId -> name mapping).
+///
+/// Watches [blockedPeersProvider] to re-read from SharedPreferences whenever
+/// the block set changes (block/unblock). This prevents stale UI state.
+final blockedPeerDetailsProvider = Provider<Map<String, String>>((ref) {
+  // Watch the blocked set — when it changes (block/unblock), we re-read details
+  ref.watch(blockedPeersProvider);
   final prefs = ref.watch(sharedPreferencesProvider);
   final detailsJson = prefs.getStringList('blockedPeerDetails') ?? [];
   final Map<String, String> details = {};
@@ -405,66 +484,143 @@ final blockedPeerDetailsProvider = StateProvider<Map<String, String>>((ref) {
 });
 
 /// Notifier for managing blocked peers with persistence.
-/// Stores public keys (not pairing codes) to prevent bypass via code regeneration.
+///
+/// Blocks by peer ID (stableId) so blocks survive key rotation.
+/// Also maintains a secondary set of blocked public keys for
+/// rejecting pair requests before stableId is known.
 class BlockedPeersNotifier extends StateNotifier<Set<String>> {
   final SharedPreferences _prefs;
   final TrustedPeersStorage _trustedPeersStorage;
 
-  BlockedPeersNotifier(this._prefs, this._trustedPeersStorage)
-      : super(_load(_prefs));
+  /// Secondary set: blocked public keys for pair request rejection.
+  Set<String> _blockedPublicKeys = {};
 
-  static Set<String> _load(SharedPreferences prefs) {
-    final blocked = prefs.getStringList('blockedPublicKeys') ?? [];
-    return blocked.toSet();
+  BlockedPeersNotifier(this._prefs, this._trustedPeersStorage)
+      : super(_load(_prefs)) {
+    _blockedPublicKeys =
+        (_prefs.getStringList('blockedPublicKeys') ?? []).toSet();
   }
 
-  /// Block a user by their public key.
-  Future<void> block(String publicKey, {String? displayName}) async {
-    state = {...state, publicKey};
-    await _prefs.setStringList('blockedPublicKeys', state.toList());
+  static Set<String> _load(SharedPreferences prefs) {
+    // Primary: stableId-based blocked set
+    final blockedIds = prefs.getStringList('blockedPeerIds');
+    if (blockedIds != null) return blockedIds.toSet();
+
+    // Migration: fall back to legacy publicKey-based set
+    final legacyBlocked = prefs.getStringList('blockedPublicKeys') ?? [];
+    return legacyBlocked.toSet();
+  }
+
+  /// Run one-time migration from publicKey-based blocks to peerId-based.
+  ///
+  /// Looks up TrustedPeer records to map publicKeys to stableIds.
+  /// Should be called once after app initialization.
+  Future<void> migrateFromPublicKeys() async {
+    // Skip if already migrated
+    if (_prefs.containsKey('blockedPeerIds')) return;
+
+    final legacyBlocked = _prefs.getStringList('blockedPublicKeys') ?? [];
+    if (legacyBlocked.isEmpty) {
+      await _prefs.setStringList('blockedPeerIds', []);
+      return;
+    }
+
+    final peers = await _trustedPeersStorage.getAllPeers();
+    final migratedIds = <String>{};
+    final migratedDetails = <String>[];
+    final existingDetails = _prefs.getStringList('blockedPeerDetails') ?? [];
+
+    for (final publicKey in legacyBlocked) {
+      // Find the peer with this publicKey to get their stableId
+      final peer = peers.where((p) => p.publicKey == publicKey).firstOrNull;
+      if (peer != null) {
+        migratedIds.add(peer.id);
+        // Migrate display name mapping
+        for (final detail in existingDetails) {
+          if (detail.startsWith('$publicKey::')) {
+            final name = detail.substring(publicKey.length + 2);
+            migratedDetails.add('${peer.id}::$name');
+          }
+        }
+      } else {
+        // No matching peer found — keep publicKey as-is (it may be a stableId already)
+        migratedIds.add(publicKey);
+      }
+    }
+
+    state = migratedIds;
+    await _prefs.setStringList('blockedPeerIds', migratedIds.toList());
+    if (migratedDetails.isNotEmpty) {
+      await _prefs.setStringList('blockedPeerDetails', migratedDetails);
+    }
+  }
+
+  /// Block a peer by their ID (stableId).
+  Future<void> block(String peerId,
+      {String? publicKey, String? displayName}) async {
+    state = {...state, peerId};
+    await _prefs.setStringList('blockedPeerIds', state.toList());
+
+    // Also track the publicKey for pair request rejection
+    if (publicKey != null) {
+      _blockedPublicKeys.add(publicKey);
+      await _prefs.setStringList(
+          'blockedPublicKeys', _blockedPublicKeys.toList());
+    }
 
     // Store display name if provided
     if (displayName != null) {
       final details = _prefs.getStringList('blockedPeerDetails') ?? [];
-      // Remove any existing entry for this key first
-      details.removeWhere((entry) => entry.startsWith('$publicKey::'));
-      details.add('$publicKey::$displayName');
+      details.removeWhere((entry) => entry.startsWith('$peerId::'));
+      details.add('$peerId::$displayName');
       await _prefs.setStringList('blockedPeerDetails', details);
     }
 
     // Store blockedAt timestamp
     final timestamps = _prefs.getStringList('blockedTimestamps') ?? [];
-    timestamps.removeWhere((e) => e.startsWith('$publicKey::'));
-    timestamps.add('$publicKey::${DateTime.now().toIso8601String()}');
+    timestamps.removeWhere((e) => e.startsWith('$peerId::'));
+    timestamps.add('$peerId::${DateTime.now().toIso8601String()}');
     await _prefs.setStringList('blockedTimestamps', timestamps);
 
-    // Sync to TrustedPeersStorage so reconnection logic respects the block
-    await _syncBlockToTrustedPeers(publicKey, blocked: true);
+    // Sync to TrustedPeersStorage
+    await _syncBlockToTrustedPeers(peerId, blocked: true);
   }
 
-  /// Unblock a user by their public key.
-  Future<void> unblock(String publicKey) async {
-    state = {...state}..remove(publicKey);
-    await _prefs.setStringList('blockedPublicKeys', state.toList());
+  /// Unblock a peer by their ID (stableId).
+  Future<void> unblock(String peerId) async {
+    state = {...state}..remove(peerId);
+    await _prefs.setStringList('blockedPeerIds', state.toList());
+
+    // Also remove from publicKey blocklist
+    final peer = await _trustedPeersStorage.getPeer(peerId);
+    if (peer != null) {
+      _blockedPublicKeys.remove(peer.publicKey);
+      await _prefs.setStringList(
+          'blockedPublicKeys', _blockedPublicKeys.toList());
+    }
 
     // Remove from details
     final details = _prefs.getStringList('blockedPeerDetails') ?? [];
-    details.removeWhere((entry) => entry.startsWith('$publicKey::'));
+    details.removeWhere((entry) => entry.startsWith('$peerId::'));
     await _prefs.setStringList('blockedPeerDetails', details);
 
     // Sync to TrustedPeersStorage
-    await _syncBlockToTrustedPeers(publicKey, blocked: false);
+    await _syncBlockToTrustedPeers(peerId, blocked: false);
   }
 
-  /// Check if a public key is blocked.
-  bool isBlocked(String publicKey) => state.contains(publicKey);
+  /// Check if a peer ID (stableId) is blocked.
+  bool isBlocked(String peerId) => state.contains(peerId);
+
+  /// Check if a public key is blocked (for pair request rejection).
+  bool isPublicKeyBlocked(String publicKey) =>
+      _blockedPublicKeys.contains(publicKey);
 
   /// Get when a peer was blocked.
-  DateTime? getBlockedAt(String publicKey) {
+  DateTime? getBlockedAt(String peerId) {
     final timestamps = _prefs.getStringList('blockedTimestamps') ?? [];
     for (final entry in timestamps) {
       final parts = entry.split('::');
-      if (parts.length == 2 && parts[0] == publicKey) {
+      if (parts.length == 2 && parts[0] == peerId) {
         return DateTime.tryParse(parts[1]);
       }
     }
@@ -472,31 +628,21 @@ class BlockedPeersNotifier extends StateNotifier<Set<String>> {
   }
 
   /// Unblock and permanently remove a peer from trusted storage.
-  Future<void> removePermanently(String publicKey) async {
-    await unblock(publicKey);
-    // Find and remove from trusted peers storage
-    final peers = await _trustedPeersStorage.getAllPeers();
-    for (final peer in peers) {
-      if (peer.publicKey == publicKey) {
-        await _trustedPeersStorage.removePeer(peer.id);
-        break;
-      }
-    }
+  Future<void> removePermanently(String peerId) async {
+    await unblock(peerId);
+    await _trustedPeersStorage.removePeer(peerId);
     // Remove blockedAt timestamp
     final timestamps = _prefs.getStringList('blockedTimestamps') ?? [];
-    timestamps.removeWhere((e) => e.startsWith('$publicKey::'));
+    timestamps.removeWhere((e) => e.startsWith('$peerId::'));
     await _prefs.setStringList('blockedTimestamps', timestamps);
   }
 
-  /// Update TrustedPeer.isBlocked to keep both storage layers in sync.
-  Future<void> _syncBlockToTrustedPeers(String publicKey,
+  /// Sync block status to TrustedPeersStorage.
+  Future<void> _syncBlockToTrustedPeers(String peerId,
       {required bool blocked}) async {
-    final peers = await _trustedPeersStorage.getAllPeers();
-    for (final peer in peers) {
-      if (peer.publicKey == publicKey) {
-        await _trustedPeersStorage.savePeer(peer.copyWith(isBlocked: blocked));
-        break;
-      }
+    final peer = await _trustedPeersStorage.getPeer(peerId);
+    if (peer != null) {
+      await _trustedPeersStorage.savePeer(peer.copyWith(isBlocked: blocked));
     }
   }
 }
@@ -517,8 +663,8 @@ final signalingDisplayStateProvider =
 });
 
 /// Default bootstrap server URL (CF Workers).
-/// Can be overridden at build time with --dart-define=BOOTSTRAP_URL=<url>
-const defaultBootstrapUrl = 'https://signal.zajel.hamzalabs.dev';
+/// Can be overridden at build time with `--dart-define=BOOTSTRAP_URL=<url>`.
+const defaultBootstrapUrl = 'https://signal.zajel.qa.hamzalabs.dev';
 
 /// Effective bootstrap URL (compile-time override or default).
 String get _effectiveBootstrapUrl => Environment.hasCustomBootstrapUrl
@@ -563,7 +709,7 @@ final discoveredServersProvider =
 final selectedServerProvider = StateProvider<DiscoveredServer?>((ref) => null);
 
 /// Provider for the signaling server URL (from selected VPS server).
-/// Can be overridden at build time with --dart-define=SIGNALING_URL=<url>
+/// Can be overridden at build time with `--dart-define=SIGNALING_URL=<url>`.
 final signalingServerUrlProvider = Provider<String?>((ref) {
   // If a direct signaling URL is provided via --dart-define, use it
   if (Environment.hasDirectSignalingUrl) {
@@ -665,8 +811,9 @@ final voipServiceProvider = Provider<VoIPService?>((ref) {
     ];
   }
 
-  final voipService =
-      VoIPService(mediaService, signalingClient, iceServers: iceServers);
+  final voipService = VoIPService(mediaService, signalingClient,
+      iceServers: iceServers,
+      forceRelay: iceServers != null && Environment.isE2eTest);
   ref.onDispose(() => voipService.dispose());
   return voipService;
 });
@@ -738,4 +885,91 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
   }
 
   bool isPeerMuted(String peerId) => state.mutedPeerIds.contains(peerId);
+}
+
+// ── Auto-Delete Messages ──────────────────────────────────
+
+/// Settings for automatic message deletion.
+class AutoDeleteSettings {
+  final bool enabled;
+  final Duration duration;
+
+  const AutoDeleteSettings({
+    this.enabled = false,
+    this.duration = const Duration(hours: 24),
+  });
+
+  AutoDeleteSettings copyWith({bool? enabled, Duration? duration}) {
+    return AutoDeleteSettings(
+      enabled: enabled ?? this.enabled,
+      duration: duration ?? this.duration,
+    );
+  }
+
+  /// Available auto-delete duration options (minutes -> label).
+  static const durations = <int, String>{
+    60: '1 hour',
+    360: '6 hours',
+    1440: '24 hours',
+    10080: '7 days',
+    43200: '30 days',
+  };
+}
+
+final autoDeleteSettingsProvider =
+    StateNotifierProvider<AutoDeleteSettingsNotifier, AutoDeleteSettings>(
+        (ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return AutoDeleteSettingsNotifier(prefs);
+});
+
+class AutoDeleteSettingsNotifier extends StateNotifier<AutoDeleteSettings> {
+  final SharedPreferences _prefs;
+  static const _enabledKey = 'autoDeleteEnabled';
+  static const _durationKey = 'autoDeleteDurationMinutes';
+
+  AutoDeleteSettingsNotifier(this._prefs) : super(_load(_prefs));
+
+  static AutoDeleteSettings _load(SharedPreferences prefs) {
+    final enabled = prefs.getBool(_enabledKey) ?? false;
+    final minutes = prefs.getInt(_durationKey) ?? 1440; // 24 hours
+    return AutoDeleteSettings(
+      enabled: enabled,
+      duration: Duration(minutes: minutes),
+    );
+  }
+
+  Future<void> setEnabled(bool enabled) async {
+    state = state.copyWith(enabled: enabled);
+    await _prefs.setBool(_enabledKey, enabled);
+  }
+
+  Future<void> setDuration(Duration duration) async {
+    state = state.copyWith(duration: duration);
+    await _prefs.setInt(_durationKey, duration.inMinutes);
+  }
+}
+
+// ── Privacy Screen ──────────────────────────────────
+
+/// Whether the app-switcher privacy screen is enabled.
+/// When enabled, the app content is obscured when the app goes to background,
+/// preventing sensitive content from appearing in the app switcher / recent apps.
+final privacyScreenProvider =
+    StateNotifierProvider<PrivacyScreenNotifier, bool>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return PrivacyScreenNotifier(prefs);
+});
+
+class PrivacyScreenNotifier extends StateNotifier<bool> {
+  final SharedPreferences _prefs;
+  static const _key = 'privacyScreenEnabled';
+
+  PrivacyScreenNotifier(this._prefs)
+      : super(_prefs.getBool(_key) ?? true); // enabled by default
+
+  Future<void> setEnabled(bool enabled) async {
+    state = enabled;
+    await _prefs.setBool(_key, enabled);
+  }
 }

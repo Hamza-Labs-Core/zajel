@@ -141,7 +141,7 @@ export class AdminUsersDO implements DurableObject {
     user.lastLogin = Date.now();
     await this.state.storage.put(`user:${user.id}`, user);
 
-    // Generate JWT
+    // Generate JWT (4 hours — long enough for a dashboard session)
     const token = await generateJwt(
       {
         sub: user.id,
@@ -149,7 +149,7 @@ export class AdminUsersDO implements DurableObject {
         role: user.role,
       },
       this.env.ZAJEL_ADMIN_JWT_SECRET,
-      15 // 15 minutes
+      240 // 4 hours
     );
 
     return this.jsonResponse({

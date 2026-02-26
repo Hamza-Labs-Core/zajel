@@ -550,7 +550,7 @@ class _InCallDeviceSheetState extends State<_InCallDeviceSheet> {
         devices.any((d) => d.deviceId == selectedId) ? selectedId : null;
 
     return DropdownButtonFormField<String?>(
-      value: validId,
+      initialValue: validId,
       decoration: const InputDecoration(
         border: OutlineInputBorder(),
         contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),

@@ -102,7 +102,9 @@ export async function handleListServers(
 
         // Try to fetch stats from the server
         try {
-          const statsUrl = server.endpoint.replace('wss://', 'https://').replace('ws://', 'http://');
+          // Convert WS endpoint to HTTP base URL (strip any path component)
+          const wsUrl = new URL(server.endpoint.replace('wss://', 'https://').replace('ws://', 'http://'));
+          const statsUrl = `${wsUrl.protocol}//${wsUrl.host}`;
           const statsResponse = await fetch(`${statsUrl}/stats`, {
             signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT),
           });
@@ -131,9 +133,13 @@ export async function handleListServers(
             if (metricsResponse.ok) {
               interface MetricsData {
                 collisionRisk?: 'low' | 'medium' | 'high';
+                pairingCodeEntropy?: {
+                  collisionRisk?: 'low' | 'medium' | 'high';
+                };
               }
               const metrics = await metricsResponse.json() as MetricsData;
-              if (metrics.collisionRisk === 'high') {
+              const risk = metrics.pairingCodeEntropy?.collisionRisk || metrics.collisionRisk;
+              if (risk === 'high') {
                 vpsServer.status = 'degraded';
               }
             }

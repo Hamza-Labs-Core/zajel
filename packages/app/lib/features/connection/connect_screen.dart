@@ -196,7 +196,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
     // skip reconnection to avoid replacing the existing SignalingClient and
     // generating a new pairing code.
     final connectionManager = ref.read(connectionManagerProvider);
-    if (connectionManager.externalPairingCode != null) {
+    if (connectionManager.externalPairingCode != null ||
+        ref.read(pairingCodeProvider) != null) {
       return;
     }
 
@@ -281,7 +282,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
   Widget _buildMyCodeTab() {
     final pairingCode = ref.watch(pairingCodeProvider);
-    final displayName = ref.watch(displayNameProvider);
+    final identity = ref.watch(userIdentityProvider);
 
     if (_error != null) {
       return Center(
@@ -415,7 +416,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
           ),
           const SizedBox(height: 8),
           Text(
-            'Visible as: $displayName',
+            'Your identity: $identity',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
@@ -429,7 +430,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
+                  color: Colors.black.withValues(alpha: 0.1),
                   blurRadius: 10,
                 ),
               ],
@@ -494,7 +495,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
               color: Theme.of(context)
                   .colorScheme
                   .primaryContainer
-                  .withOpacity(0.3),
+                  .withValues(alpha: 0.3),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Row(
@@ -529,7 +530,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
+                    color: Colors.black.withValues(alpha: 0.1),
                     blurRadius: 10,
                   ),
                 ],
@@ -822,8 +823,9 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
     try {
       final connectionManager = ref.read(connectionManagerProvider);
+      final username = ref.read(usernameProvider);
       logger.info('ConnectScreen', 'Calling connectToPeer with code: $code');
-      await connectionManager.connectToPeer(code);
+      await connectionManager.connectToPeer(code, proposedName: username);
 
       logger.info('ConnectScreen', 'connectToPeer succeeded, popping screen');
       if (mounted) {
