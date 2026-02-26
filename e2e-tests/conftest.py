@@ -57,16 +57,14 @@ if PLATFORM == "android":
 elif PLATFORM in ("linux", "linux-a11y"):
     from platforms.linux_config import (
         APP_PATH, DATA_DIR_1, DATA_DIR_2, SIGNALING_URL,
-        APP_LAUNCH_TIMEOUT,
     )
 elif PLATFORM == "windows":
     from platforms.windows_config import (
-        APP_PATH, SIGNALING_URL, APP_LAUNCH_TIMEOUT,
+        APP_PATH, SIGNALING_URL,
     )
 elif PLATFORM == "macos":
     from platforms.macos_config import (
         APP_PATH, DATA_DIR_1, DATA_DIR_2, SIGNALING_URL,
-        APP_LAUNCH_TIMEOUT,
     )
 elif PLATFORM == "ios":
     from platforms.ios_config import (
