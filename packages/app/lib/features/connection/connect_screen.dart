@@ -196,7 +196,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
     // skip reconnection to avoid replacing the existing SignalingClient and
     // generating a new pairing code.
     final connectionManager = ref.read(connectionManagerProvider);
-    if (connectionManager.externalPairingCode != null) {
+    if (connectionManager.externalPairingCode != null ||
+        ref.read(pairingCodeProvider) != null) {
       return;
     }
 

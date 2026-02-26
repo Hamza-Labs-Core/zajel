@@ -664,7 +664,7 @@ final signalingDisplayStateProvider =
 
 /// Default bootstrap server URL (CF Workers).
 /// Can be overridden at build time with `--dart-define=BOOTSTRAP_URL=<url>`.
-const defaultBootstrapUrl = 'https://signal.zajel.hamzalabs.dev';
+const defaultBootstrapUrl = 'https://signal.zajel.qa.hamzalabs.dev';
 
 /// Effective bootstrap URL (compile-time override or default).
 String get _effectiveBootstrapUrl => Environment.hasCustomBootstrapUrl

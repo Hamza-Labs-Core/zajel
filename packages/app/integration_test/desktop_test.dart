@@ -11,6 +11,7 @@ library;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,6 +19,7 @@ import 'package:integration_test/integration_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'package:zajel/app_router.dart';
 import 'package:zajel/main.dart';
 import 'package:zajel/core/notifications/notification_service.dart';
 import 'package:zajel/core/providers/app_providers.dart';
@@ -76,12 +78,27 @@ Future<void> _pumpFrames(WidgetTester tester, {int count = 20}) async {
   }
 }
 
+/// Simulate an app lifecycle state change without disabling the frame scheduler.
+///
+/// The binding's `handleAppLifecycleStateChanged` goes through
+/// `SchedulerBinding` which calls `_setFramesEnabledState(false)` for
+/// hidden/paused/detached states. This disables frame scheduling, causing
+/// `LiveTestWidgetsFlutterBinding.pump()` to hang forever.
+///
+/// This helper bypasses the scheduler by calling `didChangeAppLifecycleState`
+/// directly on ZajelApp's State (which is a `WidgetsBindingObserver`).
+void _simulateLifecycleState(WidgetTester tester, AppLifecycleState state) {
+  final element = tester.element(find.byType(ZajelApp));
+  final appState = (element as StatefulElement).state;
+  (appState as WidgetsBindingObserver).didChangeAppLifecycleState(state);
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 void main() {
-  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   // Use in-memory secure storage to avoid libsecret/gnome-keyring hangs on
   // headless Linux CI. Without this, each test spends 40-55s waiting for
@@ -94,6 +111,54 @@ void main() {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
   }
+
+  // Mock mobile_scanner platform channels to prevent PlatformException on
+  // headless Linux (no camera).
+  const scannerMethodChannel =
+      MethodChannel('dev.steenbakker.mobile_scanner/scanner/method');
+  const scannerEventChannel =
+      EventChannel('dev.steenbakker.mobile_scanner/scanner/event');
+
+  setUpAll(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(scannerMethodChannel,
+            (MethodCall call) async {
+      switch (call.method) {
+        case 'state':
+          return 1; // MobileScannerAuthorizationState.authorized
+        case 'request':
+          return true;
+        case 'start':
+          return {
+            'size': {'width': 1280.0, 'height': 720.0}
+          };
+        case 'stop':
+        case 'resetScale':
+        case 'setScale':
+        case 'pause':
+          return null;
+        default:
+          return null;
+      }
+    });
+
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockStreamHandler(
+            scannerEventChannel,
+            MockStreamHandler.inline(
+              onListen: (args, sink) {},
+            ));
+  });
+
+  // Force a narrow surface so MainLayout uses the mobile HomeScreen layout
+  // (< 720px wide) rather than the wide desktop sidebar layout.
+  // Reset GoRouter between tests to avoid leftover navigation state.
+  setUp(() {
+    FlutterSecureStorage.setMockInitialValues({});
+    appRouter.go('/');
+    binding.platformDispatcher.views.first.physicalSize = const Size(400, 800);
+    binding.platformDispatcher.views.first.devicePixelRatio = 1.0;
+  });
 
   // ── Privacy Screen Lifecycle ──────────────────────────────────
 
@@ -113,14 +178,14 @@ void main() {
       expect(find.byIcon(Icons.lock_outline), findsNothing);
 
       // Simulate desktop minimize
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      _simulateLifecycleState(tester, AppLifecycleState.hidden);
       await _pumpFrames(tester);
 
       // Privacy overlay SHOULD be visible
       expect(find.byIcon(Icons.lock_outline), findsOneWidget);
 
       // Resume — overlay should disappear
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      _simulateLifecycleState(tester, AppLifecycleState.resumed);
       await _pumpFrames(tester);
 
       expect(find.byIcon(Icons.lock_outline), findsNothing);
@@ -137,13 +202,13 @@ void main() {
       await _pumpApp(tester, prefs);
 
       // Simulate desktop focus loss
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      _simulateLifecycleState(tester, AppLifecycleState.inactive);
       await _pumpFrames(tester);
 
       expect(find.byIcon(Icons.lock_outline), findsOneWidget);
 
       // Resume
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      _simulateLifecycleState(tester, AppLifecycleState.resumed);
       await _pumpFrames(tester);
 
       expect(find.byIcon(Icons.lock_outline), findsNothing);
@@ -160,14 +225,14 @@ void main() {
       await _pumpApp(tester, prefs);
 
       // Simulate lifecycle change
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      _simulateLifecycleState(tester, AppLifecycleState.hidden);
       await _pumpFrames(tester);
 
       // Privacy overlay should NOT appear when disabled
       expect(find.byIcon(Icons.lock_outline), findsNothing);
 
       // Also test inactive
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      _simulateLifecycleState(tester, AppLifecycleState.inactive);
       await _pumpFrames(tester);
 
       expect(find.byIcon(Icons.lock_outline), findsNothing);
@@ -194,6 +259,13 @@ void main() {
       expect(find.text('Profile'), findsOneWidget);
       expect(find.text('Appearance'), findsOneWidget);
       expect(find.text('Privacy & Security'), findsOneWidget);
+
+      // Scroll down to reveal sections below the fold (ListView lazy rendering).
+      // Multiple drags ensure the section is in the viewport.
+      await tester.drag(find.byType(ListView), const Offset(0, -300));
+      await _pumpFrames(tester);
+      await tester.drag(find.byType(ListView), const Offset(0, -300));
+      await _pumpFrames(tester);
       expect(find.text('External Connections'), findsOneWidget);
     });
 
@@ -263,7 +335,7 @@ void main() {
       await _pumpFrames(tester, count: 30);
 
       // Should be on the home screen
-      expect(find.text('Nearby Devices'), findsOneWidget);
+      expect(find.text('Connected Peers'), findsOneWidget);
     });
 
     testWidgets('complete full onboarding flow', (tester) async {
@@ -300,7 +372,7 @@ void main() {
       await _pumpFrames(tester, count: 30);
 
       // Should now be on home screen
-      expect(find.text('Nearby Devices'), findsOneWidget);
+      expect(find.text('Connected Peers'), findsOneWidget);
     });
   });
 
@@ -327,7 +399,7 @@ void main() {
       await tester.tap(find.byType(BackButton).first);
       await _pumpFrames(tester);
 
-      expect(find.text('Nearby Devices'), findsOneWidget);
+      expect(find.text('Connected Peers'), findsOneWidget);
     });
 
     testWidgets('home to groups and back', (tester) async {
@@ -350,7 +422,7 @@ void main() {
       await tester.tap(find.byType(BackButton).first);
       await _pumpFrames(tester);
 
-      expect(find.text('Nearby Devices'), findsOneWidget);
+      expect(find.text('Connected Peers'), findsOneWidget);
     });
 
     testWidgets('home to connect and switch tabs', (tester) async {
@@ -384,7 +456,7 @@ void main() {
       await tester.tap(find.byType(BackButton).first);
       await _pumpFrames(tester);
 
-      expect(find.text('Nearby Devices'), findsOneWidget);
+      expect(find.text('Connected Peers'), findsOneWidget);
     });
 
     testWidgets('home to settings and back', (tester) async {
@@ -406,7 +478,7 @@ void main() {
       await tester.tap(find.byType(BackButton).first);
       await _pumpFrames(tester);
 
-      expect(find.text('Nearby Devices'), findsOneWidget);
+      expect(find.text('Connected Peers'), findsOneWidget);
     });
   });
 }

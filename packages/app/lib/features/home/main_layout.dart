@@ -261,11 +261,14 @@ class _SidebarHeader extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 4),
-                    Text(
-                      statusText,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: statusColor,
+                    Flexible(
+                      child: Text(
+                        statusText,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: statusColor,
+                        ),
                       ),
                     ),
                   ],

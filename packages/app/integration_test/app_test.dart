@@ -16,6 +16,7 @@ library;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,6 +24,7 @@ import 'package:integration_test/integration_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'package:zajel/app_router.dart';
 import 'package:zajel/main.dart';
 import 'package:zajel/core/notifications/notification_service.dart';
 import 'package:zajel/core/providers/app_providers.dart';
@@ -51,13 +53,22 @@ class _TestNotificationService extends NotificationService {
 /// Uses a counted pump loop instead of pumpAndSettle because ZajelApp starts
 /// background processes (signaling connection, periodic auto-delete timer)
 /// that continuously schedule frames, preventing pumpAndSettle from settling.
-Future<void> _pumpApp(WidgetTester tester, SharedPreferences prefs) async {
+///
+/// [mockPairingCode] provides a mock pairing code so the connect screen
+/// renders its My Code tab instead of showing a server-unavailable error.
+Future<void> _pumpApp(
+  WidgetTester tester,
+  SharedPreferences prefs, {
+  String? mockPairingCode,
+}) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
         sharedPreferencesProvider.overrideWithValue(prefs),
         notificationServiceProvider
             .overrideWithValue(_TestNotificationService()),
+        if (mockPairingCode != null)
+          pairingCodeProvider.overrideWith((ref) => mockPairingCode),
       ],
       child: const ZajelApp(),
     ),
@@ -86,7 +97,7 @@ Future<void> _pumpFrames(WidgetTester tester, {int count = 20}) async {
 // ---------------------------------------------------------------------------
 
 void main() {
-  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   // Use in-memory secure storage to avoid libsecret/gnome-keyring hangs on
   // headless Linux CI.
@@ -98,6 +109,15 @@ void main() {
     databaseFactory = databaseFactoryFfi;
   }
 
+  // Mock mobile_scanner platform channels to prevent PlatformException on
+  // headless Linux (no camera). Without this, the MobileScannerController
+  // constructor triggers channel calls that throw, and
+  // LiveTestWidgetsFlutterBinding treats them as test failures.
+  const scannerMethodChannel =
+      MethodChannel('dev.steenbakker.mobile_scanner/scanner/method');
+  const scannerEventChannel =
+      EventChannel('dev.steenbakker.mobile_scanner/scanner/event');
+
   late TestConfig config;
 
   setUpAll(() {
@@ -105,6 +125,48 @@ void main() {
     if (config.verboseLogging) {
       debugPrint('Integration Test Config: $config');
     }
+
+    // Handle all mobile_scanner method calls with no-op responses.
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(scannerMethodChannel,
+            (MethodCall call) async {
+      switch (call.method) {
+        case 'state':
+          return 1; // MobileScannerAuthorizationState.authorized
+        case 'request':
+          return true;
+        case 'start':
+          return {
+            'size': {'width': 1280.0, 'height': 720.0}
+          };
+        case 'stop':
+        case 'resetScale':
+        case 'setScale':
+        case 'pause':
+          return null;
+        default:
+          return null;
+      }
+    });
+
+    // Mock the event channel so it does not try to open a real camera stream.
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockStreamHandler(scannerEventChannel, MockStreamHandler.inline(
+      onListen: (args, sink) {
+        // Don't emit any scan events; just keep the stream open.
+      },
+    ));
+  });
+
+  // Force a narrow surface so MainLayout uses the mobile HomeScreen layout
+  // (< 720px wide) rather than the wide desktop sidebar layout.
+  // Reset FlutterSecureStorage mock and GoRouter between tests to avoid
+  // stale CryptoService keys and leftover navigation state from prior tests.
+  setUp(() {
+    FlutterSecureStorage.setMockInitialValues({});
+    appRouter.go('/');
+    binding.platformDispatcher.views.first.physicalSize = const Size(400, 800);
+    binding.platformDispatcher.views.first.devicePixelRatio = 1.0;
   });
 
   group('App Launch Tests', () {
@@ -112,6 +174,7 @@ void main() {
         (WidgetTester tester) async {
       SharedPreferences.setMockInitialValues({
         'displayName': config.testDisplayName,
+        'hasSeenOnboarding': true,
       });
       final prefs = await SharedPreferences.getInstance();
 
@@ -121,7 +184,7 @@ void main() {
       expect(find.text('Zajel'), findsOneWidget);
 
       // Verify home screen elements are present
-      expect(find.text('Nearby Devices'), findsOneWidget);
+      expect(find.text('Connected Peers'), findsOneWidget);
 
       // Verify connect button is present
       expect(find.byIcon(Icons.qr_code_scanner), findsOneWidget);
@@ -129,13 +192,15 @@ void main() {
       // Verify settings button is present
       expect(find.byIcon(Icons.settings), findsOneWidget);
 
-      // Verify display name is shown
-      expect(find.text(config.testDisplayName), findsOneWidget);
+      // Verify display name is shown (identity includes #TAG suffix)
+      expect(find.textContaining(config.testDisplayName), findsOneWidget);
     });
 
     testWidgets('app shows loading indicator during initialization',
         (WidgetTester tester) async {
-      SharedPreferences.setMockInitialValues({});
+      SharedPreferences.setMockInitialValues({
+        'hasSeenOnboarding': true,
+      });
       final prefs = await SharedPreferences.getInstance();
 
       await tester.pumpWidget(
@@ -165,6 +230,7 @@ void main() {
         (WidgetTester tester) async {
       SharedPreferences.setMockInitialValues({
         'displayName': config.testDisplayName,
+        'hasSeenOnboarding': true,
       });
       final prefs = await SharedPreferences.getInstance();
 
@@ -184,6 +250,7 @@ void main() {
     testWidgets('can navigate to settings screen', (WidgetTester tester) async {
       SharedPreferences.setMockInitialValues({
         'displayName': config.testDisplayName,
+        'hasSeenOnboarding': true,
       });
       final prefs = await SharedPreferences.getInstance();
 
@@ -201,6 +268,7 @@ void main() {
         (WidgetTester tester) async {
       SharedPreferences.setMockInitialValues({
         'displayName': config.testDisplayName,
+        'hasSeenOnboarding': true,
       });
       final prefs = await SharedPreferences.getInstance();
 
@@ -215,45 +283,37 @@ void main() {
       await _pumpFrames(tester);
 
       // Verify we're back on home screen
-      expect(find.text('Nearby Devices'), findsOneWidget);
+      expect(find.text('Connected Peers'), findsOneWidget);
     });
   });
 
   group('Connection Screen Tests', () {
-    testWidgets('My Code tab shows loading initially',
-        (WidgetTester tester) async {
+    testWidgets('My Code tab shows pairing code', (WidgetTester tester) async {
       SharedPreferences.setMockInitialValues({
         'displayName': config.testDisplayName,
+        'hasSeenOnboarding': true,
       });
       final prefs = await SharedPreferences.getInstance();
 
-      await _pumpApp(tester, prefs);
+      await _pumpApp(tester, prefs, mockPairingCode: 'TST123');
 
       // Navigate to connect screen
       await tester.tap(find.byIcon(Icons.qr_code_scanner));
       await _pumpFrames(tester);
 
-      // Should show loading or code (depending on server availability)
-      final loadingIndicator = find.byType(CircularProgressIndicator);
-      final codeText = find.textContaining(RegExp(r'^[A-Z0-9]{6}$'));
-
-      // Either loading or code should be present
-      expect(
-        loadingIndicator.evaluate().isNotEmpty ||
-            codeText.evaluate().isNotEmpty,
-        isTrue,
-        reason: 'Should show loading indicator or pairing code',
-      );
+      // Should show the mock pairing code
+      expect(find.text('TST123'), findsOneWidget);
     });
 
     testWidgets('can switch between My Code, Scan, and Link Web tabs',
         (WidgetTester tester) async {
       SharedPreferences.setMockInitialValues({
         'displayName': config.testDisplayName,
+        'hasSeenOnboarding': true,
       });
       final prefs = await SharedPreferences.getInstance();
 
-      await _pumpApp(tester, prefs);
+      await _pumpApp(tester, prefs, mockPairingCode: 'TST123');
 
       // Navigate to connect screen
       await tester.tap(find.byIcon(Icons.qr_code_scanner));
@@ -280,7 +340,7 @@ void main() {
 
       // Verify My Code tab is shown
       expect(
-        find.text('Share this code with others to connect'),
+        find.text('Share this with others to let them connect to you'),
         findsOneWidget,
       );
     });
@@ -289,10 +349,11 @@ void main() {
         (WidgetTester tester) async {
       SharedPreferences.setMockInitialValues({
         'displayName': config.testDisplayName,
+        'hasSeenOnboarding': true,
       });
       final prefs = await SharedPreferences.getInstance();
 
-      await _pumpApp(tester, prefs);
+      await _pumpApp(tester, prefs, mockPairingCode: 'TST123');
 
       // Navigate to connect screen
       await tester.tap(find.byIcon(Icons.qr_code_scanner));
@@ -315,10 +376,11 @@ void main() {
         (WidgetTester tester) async {
       SharedPreferences.setMockInitialValues({
         'displayName': config.testDisplayName,
+        'hasSeenOnboarding': true,
       });
       final prefs = await SharedPreferences.getInstance();
 
-      await _pumpApp(tester, prefs);
+      await _pumpApp(tester, prefs, mockPairingCode: 'TST123');
 
       // Navigate to connect screen
       await tester.tap(find.byIcon(Icons.qr_code_scanner));
@@ -341,10 +403,11 @@ void main() {
         (WidgetTester tester) async {
       SharedPreferences.setMockInitialValues({
         'displayName': config.testDisplayName,
+        'hasSeenOnboarding': true,
       });
       final prefs = await SharedPreferences.getInstance();
 
-      await _pumpApp(tester, prefs);
+      await _pumpApp(tester, prefs, mockPairingCode: 'TST123');
 
       // Navigate to connect screen
       await tester.tap(find.byIcon(Icons.qr_code_scanner));
@@ -361,6 +424,7 @@ void main() {
         (WidgetTester tester) async {
       SharedPreferences.setMockInitialValues({
         'displayName': config.testDisplayName,
+        'hasSeenOnboarding': true,
       });
       final prefs = await SharedPreferences.getInstance();
 
@@ -384,25 +448,28 @@ void main() {
       const customName = 'Custom User Name';
       SharedPreferences.setMockInitialValues({
         'displayName': customName,
+        'hasSeenOnboarding': true,
       });
       final prefs = await SharedPreferences.getInstance();
 
       await _pumpApp(tester, prefs);
 
-      // Verify custom display name is shown
-      expect(find.text(customName), findsOneWidget);
+      // Verify custom display name is shown (identity includes #TAG suffix)
+      expect(find.textContaining(customName), findsOneWidget);
     });
 
     testWidgets('shows default display name when not set',
         (WidgetTester tester) async {
-      // No displayName in preferences
-      SharedPreferences.setMockInitialValues({});
+      // No displayName in preferences — should show default
+      SharedPreferences.setMockInitialValues({
+        'hasSeenOnboarding': true,
+      });
       final prefs = await SharedPreferences.getInstance();
 
       await _pumpApp(tester, prefs);
 
-      // Verify default name is shown
-      expect(find.text('Anonymous'), findsOneWidget);
+      // Verify default name is shown (identity includes #TAG suffix)
+      expect(find.textContaining('Anonymous'), findsOneWidget);
     });
   });
 
@@ -411,6 +478,7 @@ void main() {
         (WidgetTester tester) async {
       SharedPreferences.setMockInitialValues({
         'displayName': config.testDisplayName,
+        'hasSeenOnboarding': true,
       });
       final prefs = await SharedPreferences.getInstance();
 
