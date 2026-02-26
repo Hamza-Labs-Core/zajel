@@ -366,7 +366,6 @@ function getDashboardHtml(cfAdminUrl?: string): string {
     .gauge-fill {
       stroke: var(--success);
       stroke-linecap: round;
-      transition: stroke-dashoffset 0.5s ease, stroke 0.3s ease;
     }
 
     .gauge-text {
@@ -483,7 +482,6 @@ function getDashboardHtml(cfAdminUrl?: string): string {
 
     .scaling-bar-fill {
       height: 100%;
-      transition: width 0.5s ease, background 0.3s ease;
     }
 
     .scaling-bar-label {
