@@ -21,10 +21,6 @@ elif _platform == "windows":
 elif _platform == "macos":
     from platforms.macos_config import *  # noqa: F401,F403
 elif _platform == "ios":
-    from platforms.ios_config import (  # noqa: F401
-        APP_PATH, SIMULATOR_UDID, SIGNALING_URL,
-        APP_LAUNCH_TIMEOUT, ELEMENT_WAIT_TIMEOUT, CONNECTION_TIMEOUT,
-        P2P_CONNECTION_TIMEOUT,
-    )
+    from platforms.ios_config import *  # noqa: F401,F403
 else:
     raise ValueError(f"Unknown platform: {_platform}")
