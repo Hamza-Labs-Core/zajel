@@ -265,13 +265,16 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
           'Skipping signaling — connection manager not initialized');
       return;
     }
+    if (!mounted) return;
     try {
       await _connectToSignaling(_connectionManager!);
+      if (!mounted) return;
       logger.info('ZajelApp', 'Signaling connection complete');
 
       // Set up auto-reconnect on disconnect
       _setupSignalingReconnect(_connectionManager!);
     } catch (e, stack) {
+      if (!mounted) return;
       logger.error('ZajelApp', 'Signaling connection failed', e, stack);
       // Even on initial failure, try to reconnect
       if (_connectionManager != null) {
@@ -281,6 +284,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   }
 
   void _setupSignalingReconnect(ConnectionManager connectionManager) {
+    if (!mounted) return;
     final signalingClient = ref.read(signalingClientProvider);
     if (signalingClient == null) return;
 
@@ -289,6 +293,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
         signalingClient.connectionState.listen((state) async {
       if (state == SignalingConnectionState.disconnected ||
           state == SignalingConnectionState.failed) {
+        if (!mounted) return;
         ref.read(signalingConnectedProvider.notifier).state = false;
         ref.read(signalingDisplayStateProvider.notifier).state =
             SignalingDisplayState.disconnected;
@@ -302,14 +307,14 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
         const maxRetries = 5;
 
         for (var attempt = 1; attempt <= maxRetries; attempt++) {
-          if (_disposed) break;
+          if (_disposed || !mounted) break;
           logger.info('ZajelApp',
               'Signaling reconnect attempt $attempt/$maxRetries in ${delay.inSeconds}s');
           ref.read(signalingDisplayStateProvider.notifier).state =
               SignalingDisplayState.connecting;
 
           await Future<void>.delayed(delay);
-          if (_disposed) break;
+          if (_disposed || !mounted) break;
 
           try {
             await _connectToSignaling(connectionManager);
@@ -328,8 +333,10 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
 
         logger.error('ZajelApp',
             'Signaling reconnect failed after $maxRetries attempts');
-        ref.read(signalingDisplayStateProvider.notifier).state =
-            SignalingDisplayState.disconnected;
+        if (mounted) {
+          ref.read(signalingDisplayStateProvider.notifier).state =
+              SignalingDisplayState.disconnected;
+        }
         _isReconnecting = false;
       }
     });
@@ -338,6 +345,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   Future<void> _connectToSignaling(ConnectionManager connectionManager) async {
     try {
       logger.info('ZajelApp', 'Auto-connecting to signaling server...');
+      if (!mounted) return;
       ref.read(signalingDisplayStateProvider.notifier).state =
           SignalingDisplayState.connecting;
 
@@ -353,6 +361,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
         // Discover and select a VPS server
         final discoveryService = ref.read(serverDiscoveryServiceProvider);
         final selectedServer = await discoveryService.selectServer();
+        if (!mounted) return;
 
         if (selectedServer == null) {
           logger.warning('ZajelApp', 'No servers available from discovery');
@@ -373,6 +382,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       logger.debug('ZajelApp', 'Connecting to WebSocket URL: $serverUrl');
 
       final code = await connectionManager.connect(serverUrl: serverUrl);
+      if (!mounted) return;
       logger.info(
           'ZajelApp', 'Connected to signaling with pairing code: $code');
       ref.read(pairingCodeProvider.notifier).state = code;
@@ -385,8 +395,10 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       // Connect to all other discovered servers for cross-server rendezvous
       if (useDiscovery) {
         try {
+          if (!mounted) return;
           final discoveryService = ref.read(serverDiscoveryServiceProvider);
           final allServers = await discoveryService.fetchServers();
+          if (!mounted) return;
           final allUrls = allServers
               .map((s) => discoveryService.getWebSocketUrl(s))
               .toList();
@@ -398,11 +410,14 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       }
 
       // Register meeting points for trusted peer reconnection
+      if (!mounted) return;
       await connectionManager.reconnectTrustedPeers();
     } catch (e, stack) {
       logger.error('ZajelApp', 'Failed to auto-connect to signaling', e, stack);
-      ref.read(signalingDisplayStateProvider.notifier).state =
-          SignalingDisplayState.disconnected;
+      if (mounted) {
+        ref.read(signalingDisplayStateProvider.notifier).state =
+            SignalingDisplayState.disconnected;
+      }
     }
   }
 
