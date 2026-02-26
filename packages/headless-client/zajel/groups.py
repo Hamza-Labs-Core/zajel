@@ -11,12 +11,10 @@ sender key that all other members hold. Messages are encrypted once
 and broadcast to all connected peers.
 """
 
-import asyncio
 import base64
 import json
 import logging
 import os
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional

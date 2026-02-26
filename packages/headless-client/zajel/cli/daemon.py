@@ -17,7 +17,6 @@ import signal
 import socket
 import stat
 import struct
-import sys
 import uuid
 from pathlib import Path
 
