@@ -538,7 +538,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Keys regenerated')),
+        const SnackBar(
+          content: Text('Keys regenerated'),
+          duration: Duration(seconds: 3),
+        ),
       );
     }
   }
@@ -550,7 +553,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       await launchUrl(url, mode: LaunchMode.externalApplication);
     } else {
       messenger.showSnackBar(
-        SnackBar(content: Text('Could not open $urlString')),
+        SnackBar(
+          content: Text('Could not open $urlString'),
+          duration: const Duration(seconds: 3),
+        ),
       );
     }
   }
@@ -593,7 +599,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('All data cleared')),
+        const SnackBar(
+          content: Text('All data cleared'),
+          duration: Duration(seconds: 3),
+        ),
       );
     }
   }
@@ -628,6 +637,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         SnackBar(
           content: Text('Failed to export logs: $e'),
           backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
         ),
       );
     }
@@ -728,7 +738,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Logs cleared')),
+        const SnackBar(
+          content: Text('Logs cleared'),
+          duration: Duration(seconds: 3),
+        ),
       );
     }
   }

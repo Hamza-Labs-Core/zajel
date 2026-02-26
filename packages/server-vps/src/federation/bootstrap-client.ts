@@ -27,6 +27,9 @@ export interface BootstrapClient {
 
 export interface BootstrapMetrics {
   connections: number;
+  relayConnections: number;
+  signalingConnections: number;
+  activeCodes: number;
 }
 
 export function createBootstrapClient(
@@ -40,12 +43,16 @@ export function createBootstrapClient(
   async function register(): Promise<void> {
     const url = `${baseUrl}/servers`;
 
+    const metrics = getMetrics?.();
     const body = {
       serverId: identity.serverId,
       endpoint: config.network.publicEndpoint,
       publicKey: base64Encode(identity.publicKey),
       region: config.network.region || 'unknown',
-      connections: getMetrics?.().connections ?? 0,
+      connections: metrics?.connections ?? 0,
+      relayConnections: metrics?.relayConnections ?? 0,
+      signalingConnections: metrics?.signalingConnections ?? 0,
+      activeCodes: metrics?.activeCodes ?? 0,
     };
 
     console.log(`[Bootstrap] Registering with ${baseUrl}...`);
@@ -110,12 +117,16 @@ export function createBootstrapClient(
     const url = `${baseUrl}/servers/heartbeat`;
 
     try {
+      const metrics = getMetrics?.();
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           serverId: identity.serverId,
-          connections: getMetrics?.().connections ?? 0,
+          connections: metrics?.connections ?? 0,
+          relayConnections: metrics?.relayConnections ?? 0,
+          signalingConnections: metrics?.signalingConnections ?? 0,
+          activeCodes: metrics?.activeCodes ?? 0,
         }),
       });
 

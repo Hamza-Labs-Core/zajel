@@ -259,6 +259,15 @@ export class ServerRegistryDO {
     const connections = typeof body.connections === 'number' && Number.isFinite(body.connections)
       ? Math.max(0, Math.floor(body.connections))
       : 0;
+    const relayConnections = typeof body.relayConnections === 'number' && Number.isFinite(body.relayConnections)
+      ? Math.max(0, Math.floor(body.relayConnections))
+      : 0;
+    const signalingConnections = typeof body.signalingConnections === 'number' && Number.isFinite(body.signalingConnections)
+      ? Math.max(0, Math.floor(body.signalingConnections))
+      : 0;
+    const activeCodes = typeof body.activeCodes === 'number' && Number.isFinite(body.activeCodes)
+      ? Math.max(0, Math.floor(body.activeCodes))
+      : 0;
 
     const serverEntry = {
       serverId,
@@ -266,6 +275,9 @@ export class ServerRegistryDO {
       publicKey,
       region: validRegion,
       connections,
+      relayConnections,
+      signalingConnections,
+      activeCodes,
       registeredAt: Date.now(),
       lastSeen: Date.now(),
     };
@@ -383,6 +395,15 @@ export class ServerRegistryDO {
     server.lastSeen = Date.now();
     if (typeof body.connections === 'number' && Number.isFinite(body.connections)) {
       server.connections = Math.max(0, Math.floor(body.connections));
+    }
+    if (typeof body.relayConnections === 'number' && Number.isFinite(body.relayConnections)) {
+      server.relayConnections = Math.max(0, Math.floor(body.relayConnections));
+    }
+    if (typeof body.signalingConnections === 'number' && Number.isFinite(body.signalingConnections)) {
+      server.signalingConnections = Math.max(0, Math.floor(body.signalingConnections));
+    }
+    if (typeof body.activeCodes === 'number' && Number.isFinite(body.activeCodes)) {
+      server.activeCodes = Math.max(0, Math.floor(body.activeCodes));
     }
     await this.state.storage.put(`server:${serverId}`, server);
 

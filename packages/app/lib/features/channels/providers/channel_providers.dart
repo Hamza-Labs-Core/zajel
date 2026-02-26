@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/network/signaling_client.dart'
+    show SignalingConnectionState;
 import '../../../core/providers/app_providers.dart';
 import '../models/channel.dart';
 import '../models/chunk.dart';
@@ -122,15 +125,27 @@ final channelSyncServiceProvider = Provider<ChannelSyncService>((ref) {
 
   // Wire up chunk message stream from the signaling client so the
   // sync service can react to incoming chunk_data, chunk_pull, etc.
+  StreamSubscription? connectionSub;
   if (signalingClient != null) {
     service.start(signalingClient.chunkMessages);
 
-    // Register owned and subscribed channels with the VPS so it can
-    // route chunk announcements and upstream messages to us.
-    _registerChannelsWithVps(storageService, sendMessage);
+    // Register channels when the WebSocket is fully connected, and
+    // re-register on every reconnect. This avoids the race condition
+    // where send() silently drops messages before the connection is ready.
+    if (signalingClient.isConnected) {
+      _registerChannelsWithVps(storageService, sendMessage);
+    }
+    connectionSub = signalingClient.connectionState.listen((state) {
+      if (state == SignalingConnectionState.connected) {
+        _registerChannelsWithVps(storageService, sendMessage);
+      }
+    });
   }
 
-  ref.onDispose(() => service.dispose());
+  ref.onDispose(() {
+    connectionSub?.cancel();
+    service.dispose();
+  });
   return service;
 });
 

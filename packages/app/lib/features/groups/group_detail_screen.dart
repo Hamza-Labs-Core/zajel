@@ -34,6 +34,10 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
   void initState() {
     super.initState();
     _activateGroupConnection();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(activeScreenProvider.notifier).state =
+          ActiveScreen(type: 'group', id: widget.groupId);
+    });
   }
 
   Future<void> _activateGroupConnection() async {
@@ -53,6 +57,9 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
 
   @override
   void dispose() {
+    try {
+      ref.read(activeScreenProvider.notifier).state = ActiveScreen.other;
+    } catch (_) {} // ref may be invalid during tree teardown
     if (_groupActivated && _cachedConnectionService != null) {
       try {
         _cachedConnectionService!.deactivateGroup(widget.groupId);
@@ -332,7 +339,10 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to send: $e')),
+          SnackBar(
+            content: Text('Failed to send: $e'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     } finally {
@@ -389,15 +399,23 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
     final peersAsync = ref.read(visiblePeersProvider);
 
     peersAsync.whenData((peers) async {
-      // Filter out peers already in the group and peers without public keys
+      // Filter out peers already in the group, peers without public keys,
+      // and disconnected peers (can't receive invitations over WebRTC).
       final groupDeviceIds = group.members.map((m) => m.deviceId).toSet();
       final availablePeers = peers
-          .where((p) => p.publicKey != null && !groupDeviceIds.contains(p.id))
+          .where((p) =>
+              p.publicKey != null &&
+              !groupDeviceIds.contains(p.id) &&
+              p.connectionState == PeerConnectionState.connected)
           .toList();
 
       if (availablePeers.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No available peers to add')),
+          const SnackBar(
+            content: Text(
+                'No connected peers available. Peers must be online to add.'),
+            duration: Duration(seconds: 3),
+          ),
         );
         return;
       }
@@ -414,7 +432,24 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
               itemBuilder: (context, index) {
                 final peer = availablePeers[index];
                 return ListTile(
-                  leading: const Icon(Icons.person),
+                  leading: Stack(
+                    children: [
+                      const Icon(Icons.person),
+                      Positioned(
+                        right: 0,
+                        bottom: 0,
+                        child: Container(
+                          width: 10,
+                          height: 10,
+                          decoration: BoxDecoration(
+                            color: Colors.green,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 1.5),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                   title: Text(peer.displayName),
                   subtitle: Text(
                     peer.publicKey!.length > 16
@@ -470,12 +505,16 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('Invitation sent to ${selectedPeer.displayName}'),
+              duration: const Duration(seconds: 3),
             ),
           );
         } catch (e) {
           if (!context.mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to add member: $e')),
+            SnackBar(
+              content: Text('Failed to add member: $e'),
+              duration: const Duration(seconds: 3),
+            ),
           );
         }
       }

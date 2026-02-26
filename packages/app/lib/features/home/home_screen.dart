@@ -445,7 +445,10 @@ class _PeerCard extends ConsumerWidget {
       ref.read(peerAliasesProvider.notifier).state = aliases;
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Renamed to $newName')),
+          SnackBar(
+            content: Text('Renamed to $newName'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }
@@ -489,7 +492,10 @@ class _PeerCard extends ConsumerWidget {
       }
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${_displayName(ref)} deleted')),
+          SnackBar(
+            content: Text('${_displayName(ref)} deleted'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }
@@ -528,7 +534,10 @@ class _PeerCard extends ConsumerWidget {
           );
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${_displayName(ref)} blocked')),
+          SnackBar(
+            content: Text('${_displayName(ref)} blocked'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }
@@ -573,6 +582,7 @@ class _PeerCard extends ConsumerWidget {
           SnackBar(
             content: Text('Connection failed: $e'),
             backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
           ),
         );
       }

@@ -116,6 +116,10 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       _disposeServicesSync();
     }
 
+    // Track foreground state for notification suppression
+    ref.read(appInForegroundProvider.notifier).state =
+        state == AppLifecycleState.resumed;
+
     // Privacy screen: obscure app content when backgrounded.
     // On mobile: inactive/paused when app goes to background or task switcher.
     // On desktop: hidden when minimized, inactive when losing focus.
@@ -733,6 +737,11 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
         connectionManager.messages.listen((event) {
       final (peerId, message) = event;
 
+      // Skip protocol-prefixed messages — handled by group services
+      if (message.startsWith('ginv:') || message.startsWith('grp:')) {
+        return;
+      }
+
       // Persist incoming message to DB immediately (prevents message drops)
       final msg = Message(
         localId: const Uuid().v4(),
@@ -743,6 +752,16 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
         status: MessageStatus.delivered,
       );
       ref.read(chatMessagesProvider(peerId).notifier).addMessage(msg);
+
+      // Suppress notification if app is in foreground AND user is viewing
+      // this specific chat.
+      final inForeground = ref.read(appInForegroundProvider);
+      final activeScreen = ref.read(activeScreenProvider);
+      if (inForeground &&
+          activeScreen.type == 'chat' &&
+          activeScreen.id == peerId) {
+        return;
+      }
 
       // Show notification
       final settings = ref.read(notificationSettingsProvider);
@@ -957,7 +976,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   static const _privacyChannel = MethodChannel('com.zajel.zajel/privacy');
 
   Future<void> _syncAndroidSecureFlag() async {
-    if (!Platform.isAndroid) return;
+    if (!Platform.isAndroid && !Platform.isWindows) return;
     // Never set FLAG_SECURE in E2E mode — it blocks Appium screenshots
     if (_isE2eTest) return;
     try {
@@ -968,7 +987,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
         await _privacyChannel.invokeMethod('disableSecureScreen');
       }
     } catch (e) {
-      logger.warning('ZajelApp', 'Failed to set FLAG_SECURE: $e');
+      logger.warning('ZajelApp', 'Failed to set secure screen flag: $e');
     }
   }
 

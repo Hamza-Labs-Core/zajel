@@ -74,6 +74,10 @@ export async function handleListServers(
       region?: string;
       lastSeen?: number;
       lastHeartbeat?: number;
+      connections?: number;
+      relayConnections?: number;
+      signalingConnections?: number;
+      activeCodes?: number;
     }
 
     const registryData = await response.json() as { servers?: RegistryServer[] };
@@ -84,12 +88,32 @@ export async function handleListServers(
     // so we rely on the bootstrap heartbeat timestamp instead of direct
     // HTTP health checks to /stats and /metrics.
     const servers: VpsServer[] = registryServers.map((server: RegistryServer, index: number) => {
+      const connections = server.connections ?? 0;
+      const relayConnections = server.relayConnections ?? 0;
+      const signalingConnections = server.signalingConnections ?? 0;
+      const activeCodes = server.activeCodes ?? 0;
+
+      // Determine collision risk from active codes count
+      let collisionRisk: 'low' | 'medium' | 'high' = 'low';
+      if (activeCodes >= 20000) {
+        collisionRisk = 'high';
+      } else if (activeCodes >= 10000) {
+        collisionRisk = 'medium';
+      }
+
       const vpsServer: VpsServer = {
         id: `srv-${String(index + 1).padStart(2, '0')}`,
         endpoint: server.endpoint,
         region: server.region || 'unknown',
         lastHeartbeat: server.lastSeen || server.lastHeartbeat || Date.now(),
         status: 'healthy',
+        stats: {
+          connections,
+          relayConnections,
+          signalingConnections,
+          activeCodes,
+          collisionRisk,
+        },
       };
 
       const timeSinceHeartbeat = Date.now() - vpsServer.lastHeartbeat;

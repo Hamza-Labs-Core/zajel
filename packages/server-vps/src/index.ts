@@ -65,6 +65,9 @@ export async function createZajelServer(
   // Create bootstrap client for CF Workers discovery
   const bootstrap = createBootstrapClient(config, identity, () => ({
     connections: (clientHandlerRef?.clientCount ?? 0) + (clientHandlerRef?.signalingClientCount ?? 0),
+    relayConnections: clientHandlerRef?.clientCount ?? 0,
+    signalingConnections: clientHandlerRef?.signalingClientCount ?? 0,
+    activeCodes: clientHandlerRef?.getEntropyMetrics().activeCodes ?? 0,
   }));
 
   // Mutable reference for clientHandler (set after creation, used in HTTP handlers)

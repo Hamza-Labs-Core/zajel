@@ -63,7 +63,10 @@ class _SafetyNumberScreenState extends ConsumerState<SafetyNumberScreen> {
     if (_safetyNumber == null) return;
     Clipboard.setData(ClipboardData(text: _safetyNumber!));
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Safety number copied to clipboard')),
+      const SnackBar(
+        content: Text('Safety number copied to clipboard'),
+        duration: Duration(seconds: 3),
+      ),
     );
   }
 

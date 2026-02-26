@@ -973,3 +973,28 @@ class PrivacyScreenNotifier extends StateNotifier<bool> {
     await _prefs.setBool(_key, enabled);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Active screen tracking (for notification suppression)
+// ---------------------------------------------------------------------------
+
+/// Describes which screen the user is currently viewing.
+///
+/// Used by the notification listener to suppress notifications when the user
+/// is already looking at the relevant chat, channel, or group.
+class ActiveScreen {
+  final String type; // 'chat', 'channel', 'group', or 'other'
+  final String? id; // peerId, channelId, or groupId
+
+  const ActiveScreen({required this.type, this.id});
+  static const other = ActiveScreen(type: 'other');
+}
+
+/// Tracks the currently visible screen so notifications can be suppressed
+/// when the user is already viewing the relevant conversation.
+final activeScreenProvider = StateProvider<ActiveScreen>((ref) {
+  return ActiveScreen.other;
+});
+
+/// Tracks whether the app is in the foreground (resumed).
+final appInForegroundProvider = StateProvider<bool>((ref) => true);

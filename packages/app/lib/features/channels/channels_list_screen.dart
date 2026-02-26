@@ -139,19 +139,26 @@ class ChannelsListScreen extends ConsumerWidget {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('Subscribed to "${decoded.manifest.name}"'),
+              duration: const Duration(seconds: 3),
             ),
           );
         }
       } on FormatException {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Invalid channel invite link')),
+            const SnackBar(
+              content: Text('Invalid channel invite link'),
+              duration: Duration(seconds: 3),
+            ),
           );
         }
       } catch (e) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Subscribe failed: $e')),
+            SnackBar(
+              content: Text('Subscribe failed: $e'),
+              duration: const Duration(seconds: 3),
+            ),
           );
         }
       }

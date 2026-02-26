@@ -63,6 +63,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     _scrollController.addListener(_onScroll);
     _listenToMessages();
     _setupVoipListener();
+    // Mark this chat as the active screen so notifications are suppressed
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(activeScreenProvider.notifier).state =
+          ActiveScreen(type: 'chat', id: widget.peerId);
+    });
   }
 
   @override
@@ -123,6 +128,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
   @override
   void dispose() {
+    // Clear active screen so notifications resume for this chat
+    try {
+      ref.read(activeScreenProvider.notifier).state = ActiveScreen.other;
+    } catch (_) {} // ref may be invalid during tree teardown
     WidgetsBinding.instance.removeObserver(this);
     _voipStateSubscription?.cancel();
     _scrollController.removeListener(_onScroll);
@@ -465,7 +474,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not open file: $e')),
+          SnackBar(
+            content: Text('Could not open file: $e'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }
@@ -720,6 +732,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           const SnackBar(
             content:
                 Text('VoIP not available. Connect to signaling server first.'),
+            duration: Duration(seconds: 3),
           ),
         );
       }
@@ -735,7 +748,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to start call: $e')),
+          SnackBar(
+            content: Text('Failed to start call: $e'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }
@@ -855,7 +871,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       ref.read(peerAliasesProvider.notifier).state = updatedAliases;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Renamed to $newName')),
+          SnackBar(
+            content: Text('Renamed to $newName'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }

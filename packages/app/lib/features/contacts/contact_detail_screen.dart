@@ -211,7 +211,10 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
     await _loadPeer();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Alias saved')),
+        const SnackBar(
+          content: Text('Alias saved'),
+          duration: Duration(seconds: 3),
+        ),
       );
     }
   }
@@ -223,7 +226,10 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
     await _loadPeer();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Alias cleared')),
+        const SnackBar(
+          content: Text('Alias cleared'),
+          duration: Duration(seconds: 3),
+        ),
       );
     }
   }

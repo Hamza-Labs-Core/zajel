@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:zajel/core/models/peer.dart';
 import 'package:zajel/core/providers/app_providers.dart';
 import 'package:zajel/features/groups/groups_list_screen.dart';
 import 'package:zajel/features/groups/group_detail_screen.dart';
@@ -111,6 +112,7 @@ Widget _buildTestWidget({
   List<Group> groups = const [],
   Group? groupById,
   List<GroupMessage> messages = const [],
+  List<Peer>? visiblePeers,
 }) {
   return ProviderScope(
     overrides: [
@@ -123,6 +125,9 @@ Widget _buildTestWidget({
       if (groupById != null)
         groupMessagesProvider(groupById.id)
             .overrideWith((ref) async => messages),
+      if (visiblePeers != null)
+        visiblePeersProvider
+            .overrideWith((ref) => AsyncValue.data(visiblePeers)),
     ],
     child: MaterialApp(home: child),
   );
@@ -412,6 +417,120 @@ void main() {
 
       expect(find.text('Members (1)'), findsOneWidget);
       expect(find.text('You'), findsOneWidget);
+    });
+  });
+
+  group('Add Member dialog filtering', () {
+    final connectedPeer = Peer(
+      id: 'charlie-device',
+      displayName: 'Charlie',
+      publicKey: 'charlie-public-key-base64',
+      connectionState: PeerConnectionState.connected,
+      lastSeen: _now,
+    );
+
+    final disconnectedPeer = Peer(
+      id: 'dave-device',
+      displayName: 'Dave',
+      publicKey: 'dave-public-key-base64',
+      connectionState: PeerConnectionState.disconnected,
+      lastSeen: _now,
+    );
+
+    final noKeyPeer = Peer(
+      id: 'eve-device',
+      displayName: 'Eve',
+      publicKey: null,
+      connectionState: PeerConnectionState.connected,
+      lastSeen: _now,
+    );
+
+    final alreadyMemberPeer = Peer(
+      id: 'alice-device',
+      displayName: 'Alice',
+      publicKey: 'alice-public-key-base64',
+      connectionState: PeerConnectionState.connected,
+      lastSeen: _now,
+    );
+
+    testWidgets('shows snackbar when no connected peers available',
+        (tester) async {
+      await tester.pumpWidget(_buildTestWidget(
+        prefs: prefs,
+        child: GroupDetailScreen(groupId: _testGroup.id),
+        groupById: _testGroup,
+        messages: [],
+        visiblePeers: [disconnectedPeer, noKeyPeer],
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.person_add));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('No connected peers available. Peers must be online to add.'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('only shows connected peers with public keys', (tester) async {
+      await tester.pumpWidget(_buildTestWidget(
+        prefs: prefs,
+        child: GroupDetailScreen(groupId: _testGroup.id),
+        groupById: _testGroup,
+        messages: [],
+        visiblePeers: [connectedPeer, disconnectedPeer, noKeyPeer],
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.person_add));
+      await tester.pumpAndSettle();
+
+      // Only Charlie (connected + has key) should appear
+      expect(find.text('Charlie'), findsOneWidget);
+      // Dave (disconnected) and Eve (no key) should not appear
+      expect(find.text('Dave'), findsNothing);
+      expect(find.text('Eve'), findsNothing);
+    });
+
+    testWidgets('excludes peers already in the group', (tester) async {
+      await tester.pumpWidget(_buildTestWidget(
+        prefs: prefs,
+        child: GroupDetailScreen(groupId: _testGroup.id),
+        groupById: _testGroup,
+        messages: [],
+        visiblePeers: [connectedPeer, alreadyMemberPeer],
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.person_add));
+      await tester.pumpAndSettle();
+
+      // Charlie should appear (not a member), Alice should not (already in group)
+      expect(find.text('Charlie'), findsOneWidget);
+      // Alice won't appear in the dialog list because she's already a member
+      // The dialog title should be "Add Member"
+      expect(find.text('Add Member'), findsOneWidget);
+    });
+
+    testWidgets('shows snackbar when all connected peers are already members',
+        (tester) async {
+      await tester.pumpWidget(_buildTestWidget(
+        prefs: prefs,
+        child: GroupDetailScreen(groupId: _testGroup.id),
+        groupById: _testGroup,
+        messages: [],
+        visiblePeers: [alreadyMemberPeer],
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.person_add));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('No connected peers available. Peers must be online to add.'),
+        findsOneWidget,
+      );
     });
   });
 }

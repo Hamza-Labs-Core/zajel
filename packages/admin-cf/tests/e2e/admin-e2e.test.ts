@@ -444,6 +444,49 @@ describe('Server Monitoring', () => {
     expect(body.success).toBe(false);
     expect(body.error).toBe('Unauthorized');
   });
+
+  it('each server has numeric stats fields when servers are available', async () => {
+    await loginAsSuperAdmin(client);
+    const res = await client.listServers();
+
+    if (res.status !== 200) return; // Skip if bootstrap unavailable
+
+    const body = (await res.json()) as ApiResponse<ServersData>;
+    expect(body.success).toBe(true);
+
+    const servers = body.data?.servers ?? [];
+    for (const server of servers) {
+      if (!server.stats) continue; // offline servers may lack stats
+
+      expect(typeof server.stats.relayConnections).toBe('number');
+      expect(server.stats.relayConnections).toBeGreaterThanOrEqual(0);
+
+      expect(typeof server.stats.signalingConnections).toBe('number');
+      expect(server.stats.signalingConnections).toBeGreaterThanOrEqual(0);
+
+      expect(typeof server.stats.activeCodes).toBe('number');
+      expect(server.stats.activeCodes).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('aggregate totalConnections matches sum of individual server connections', async () => {
+    await loginAsSuperAdmin(client);
+    const res = await client.listServers();
+
+    if (res.status !== 200) return; // Skip if bootstrap unavailable
+
+    const body = (await res.json()) as ApiResponse<ServersData>;
+    expect(body.success).toBe(true);
+
+    const servers = body.data?.servers ?? [];
+    const agg = body.data!.aggregate;
+
+    const sumConnections = servers.reduce(
+      (acc, s) => acc + (s.stats?.connections ?? 0),
+      0
+    );
+    expect(agg.totalConnections).toBe(sumConnections);
+  });
 });
 
 // ─────────────────────────────────────────────

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/providers/app_providers.dart';
 import 'models/channel.dart';
 import 'models/chunk.dart';
 import 'providers/channel_providers.dart';
@@ -37,7 +38,19 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
   bool _publishing = false;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(activeScreenProvider.notifier).state =
+          ActiveScreen(type: 'channel', id: widget.channelId);
+    });
+  }
+
+  @override
   void dispose() {
+    try {
+      ref.read(activeScreenProvider.notifier).state = ActiveScreen.other;
+    } catch (_) {} // ref may be invalid during tree teardown
     _messageController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -382,7 +395,8 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-                content: Text('Text content is not allowed in this channel')),
+                content: Text('Text content is not allowed in this channel'),
+                duration: Duration(seconds: 3)),
           );
         }
         return;
@@ -430,7 +444,10 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Published (${chunks.length} chunk(s))')),
+          SnackBar(
+            content: Text('Published (${chunks.length} chunk(s))'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
 
@@ -447,7 +464,10 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to publish: $e')),
+          SnackBar(
+            content: Text('Failed to publish: $e'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     } finally {
@@ -513,7 +533,8 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
                 Clipboard.setData(ClipboardData(text: channelLink!));
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
-                      content: Text('Invite link copied to clipboard')),
+                      content: Text('Invite link copied to clipboard'),
+                      duration: Duration(seconds: 3)),
                 );
               },
               child: const Text('Copy'),
@@ -740,12 +761,16 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
           SnackBar(
             content: Text(
                 'Admin "${labelController.text.trim()}" added successfully'),
+            duration: const Duration(seconds: 3),
           ),
         );
       } catch (e) {
         if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to add admin: $e')),
+          SnackBar(
+            content: Text('Failed to add admin: $e'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }
@@ -825,12 +850,16 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Admin "${admin.label}" removed successfully'),
+            duration: const Duration(seconds: 3),
           ),
         );
       } catch (e) {
         if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to remove admin: $e')),
+          SnackBar(
+            content: Text('Failed to remove admin: $e'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }
