@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 import time
 
-from platforms.ios_config import APP_LAUNCH_TIMEOUT, ELEMENT_WAIT_TIMEOUT
+from platforms.ios_config import APP_LAUNCH_TIMEOUT
 
 
 class IosAppHelper:

@@ -200,6 +200,10 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       final deviceLinkService = ref.read(deviceLinkServiceProvider);
       await deviceLinkService.initialize();
 
+      // Start group invitation/message listener so ginv:/grp: messages
+      // arriving over the broadcast stream are processed (not silently lost).
+      ref.read(groupInvitationServiceProvider);
+
       // Set up file transfer listeners
       _setupFileTransferListeners();
 
