@@ -1223,6 +1223,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Sync JWT secret to CF Worker
+        working-directory: packages/admin-cf
+        run: printf '%s' "$ZAJEL_ADMIN_JWT_SECRET" | npx wrangler secret put ZAJEL_ADMIN_JWT_SECRET -c wrangler.jsonc --env qa
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
+
       - name: Deploy admin dashboard
         id: deploy-admin
         uses: cloudflare/wrangler-action@v3
