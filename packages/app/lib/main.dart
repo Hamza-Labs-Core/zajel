@@ -21,6 +21,7 @@ import 'core/network/voip_service.dart';
 import 'core/notifications/call_foreground_service.dart';
 import 'core/providers/app_providers.dart';
 import 'features/channels/providers/channel_providers.dart';
+import 'features/chat/services/typing_indicator_service.dart';
 import 'features/groups/providers/group_providers.dart';
 import 'features/call/call_screen.dart';
 import 'features/call/incoming_call_dialog.dart';
@@ -203,6 +204,13 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       // Start group invitation/message listener so ginv:/grp: messages
       // arriving over the broadcast stream are processed (not silently lost).
       ref.read(groupInvitationServiceProvider);
+
+      // Start typing indicator listener
+      ref.read(typingIndicatorServiceProvider);
+
+      // Start read receipt service so rcpt: messages are processed and
+      // outgoing message statuses are updated from delivered -> read.
+      ref.read(readReceiptServiceProvider);
 
       // Set up file transfer listeners
       _setupFileTransferListeners();

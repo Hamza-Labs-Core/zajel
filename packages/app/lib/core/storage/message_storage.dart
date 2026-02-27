@@ -205,6 +205,22 @@ class MessageStorage {
         .toList();
   }
 
+  /// Mark all outgoing messages to [peerId] before [cutoff] as read.
+  ///
+  /// Only transitions messages that are currently in `delivered` status.
+  /// Returns the number of rows updated.
+  Future<int> markMessagesAsRead(String peerId, DateTime cutoff) async {
+    final db = _db;
+    if (db == null) return 0;
+
+    return db.update(
+      _tableName,
+      {'status': 'read'},
+      where: 'peerId = ? AND isOutgoing = 1 AND status = ? AND timestamp <= ?',
+      whereArgs: [peerId, 'delivered', cutoff.toIso8601String()],
+    );
+  }
+
   /// Delete all messages.
   Future<void> deleteAllMessages() async {
     final db = _db;

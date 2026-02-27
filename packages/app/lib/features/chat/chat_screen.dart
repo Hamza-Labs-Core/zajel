@@ -17,6 +17,7 @@ import '../../core/providers/app_providers.dart';
 import '../../core/utils/identity_utils.dart';
 import '../call/call_screen.dart';
 import '../call/incoming_call_dialog.dart';
+import 'services/typing_indicator_service.dart';
 import 'widgets/filtered_emoji_picker.dart';
 import 'widgets/safety_number_screen.dart';
 
@@ -63,10 +64,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     _scrollController.addListener(_onScroll);
     _listenToMessages();
     _setupVoipListener();
-    // Mark this chat as the active screen so notifications are suppressed
+    // Mark this chat as the active screen so notifications are suppressed,
+    // and send a read receipt to tell the peer we've seen their messages.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(activeScreenProvider.notifier).state =
           ActiveScreen(type: 'chat', id: widget.peerId);
+      _sendReadReceipt();
     });
   }
 
@@ -74,6 +77,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _messageFocusNode.requestFocus();
+      // Re-send read receipt when user returns to this chat
+      _sendReadReceipt();
     }
   }
 
@@ -121,9 +126,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         if (peerId == widget.peerId) {
           ref.read(chatMessagesProvider(widget.peerId).notifier).reload();
           _scrollToBottom();
+          // Send read receipt when a new message arrives while viewing this chat
+          _sendReadReceipt();
         }
       });
     });
+  }
+
+  /// Send a read receipt to the peer, telling them we've seen their messages.
+  void _sendReadReceipt() {
+    ref.read(readReceiptServiceProvider).sendReadReceipt(widget.peerId);
   }
 
   @override
@@ -158,6 +170,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   /// Fallback for platforms where IME inserts the newline before onKeyEvent fires.
   /// Detects trailing newline (without Shift) and triggers send instead.
   void _handleTextChanged(String text) {
+    // Send typing indicator (debounced inside the service)
+    if (text.trim().isNotEmpty) {
+      ref.read(typingIndicatorServiceProvider).sendTyping(widget.peerId);
+    }
+
     if (!_isDesktop || _isSending) return;
 
     if (text.endsWith('\n') && !HardwareKeyboard.instance.isShiftPressed) {
@@ -214,6 +231,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               ? _buildEmptyState()
               : _buildMessageList(messages),
         ),
+        _TypingIndicator(peerId: widget.peerId),
         _buildInputBar(),
         if (_showEmojiPicker)
           FilteredEmojiPicker(
@@ -586,7 +604,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 // Fallback for desktop platforms where the IME processes Enter
                 // before FocusNode.onKeyEvent fires (e.g. Linux GTK).
                 // Detects the inserted newline and triggers send instead.
-                onChanged: _isDesktop ? _handleTextChanged : null,
+                onChanged: _handleTextChanged,
                 // On mobile, onSubmitted handles send; on desktop, key handler does
                 onSubmitted: _isDesktop ? null : (_) => _sendMessage(),
               ),
@@ -1619,6 +1637,38 @@ class _SystemMessageBubble extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Typing indicator shown above the compose bar when the peer is typing.
+class _TypingIndicator extends ConsumerWidget {
+  final String peerId;
+
+  const _TypingIndicator({required this.peerId});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isTyping = ref.watch(isTypingProvider(peerId));
+
+    return isTyping.when(
+      data: (typing) {
+        if (!typing) return const SizedBox.shrink();
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          child: Text(
+            'typing...',
+            style: TextStyle(
+              fontSize: 12,
+              fontStyle: FontStyle.italic,
+              color: Theme.of(context).colorScheme.outline,
+            ),
+          ),
+        );
+      },
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
     );
   }
 }

@@ -24,6 +24,7 @@ import '../storage/file_receive_service.dart';
 import '../storage/message_storage.dart';
 import '../storage/trusted_peers_storage.dart';
 import '../storage/trusted_peers_storage_impl.dart';
+import '../../features/chat/services/read_receipt_service.dart';
 
 /// Provider for shared preferences.
 final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
@@ -447,6 +448,29 @@ final lastMessageProvider = Provider.family<Message?, String>((ref, peerId) {
   final messages = ref.watch(chatMessagesProvider(peerId));
   if (messages.isEmpty) return null;
   return messages.last;
+});
+
+/// Provider for read receipt service.
+///
+/// Listens to incoming read receipts and updates message statuses.
+/// When a receipt is received, invalidates the relevant chat messages provider
+/// so the UI refreshes to show updated read status indicators.
+final readReceiptServiceProvider = Provider<ReadReceiptService>((ref) {
+  final connectionManager = ref.watch(connectionManagerProvider);
+  final messageStorage = ref.watch(messageStorageProvider);
+  final service = ReadReceiptService(
+    connectionManager: connectionManager,
+    messageStorage: messageStorage,
+  );
+
+  // When receipts arrive, refresh the relevant chat so UI picks up read status
+  service.onStatusUpdated = (peerId) {
+    ref.invalidate(chatMessagesProvider(peerId));
+  };
+
+  service.start();
+  ref.onDispose(() => service.dispose());
+  return service;
 });
 
 /// Provider for peer aliases (peerId -> alias).
