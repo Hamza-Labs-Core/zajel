@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/logging/logger_service.dart';
 import '../../core/models/peer.dart';
 import '../../core/providers/app_providers.dart';
+import '../../shared/widgets/compose_bar.dart';
 import 'models/group.dart';
 import 'providers/group_providers.dart';
 import 'services/group_connection_service.dart';
@@ -215,55 +216,15 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
                   },
                 ),
               ),
-              _buildComposeBar(context),
+              ComposeBar(
+                controller: _messageController,
+                focusNode: _messageFocusNode,
+                onSend: _sendMessage,
+                isSending: _sending,
+              ),
             ],
           );
         },
-      ),
-    );
-  }
-
-  Widget _buildComposeBar(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        border: Border(
-          top: BorderSide(
-            color: Theme.of(context).dividerColor,
-          ),
-        ),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _messageController,
-                focusNode: _messageFocusNode,
-                decoration: const InputDecoration(
-                  hintText: 'Type a message...',
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 8),
-                ),
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => _sendMessage(),
-              ),
-            ),
-            IconButton(
-              icon: _sending
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.send),
-              onPressed: _sending ? null : _sendMessage,
-              tooltip: 'Send',
-            ),
-          ],
-        ),
       ),
     );
   }

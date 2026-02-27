@@ -30,6 +30,9 @@ void main() {
         final line = lines[i];
         // Look for lines that start a SnackBar constructor
         if (!line.contains('SnackBar(')) continue;
+        // Skip lines that only call methods containing SnackBar in name
+        // (e.g. hideCurrentSnackBar, showSnackBar) without a constructor
+        if (!RegExp(r'(?<![a-zA-Z])SnackBar\(').hasMatch(line)) continue;
 
         // Collect the full SnackBar(...) constructor text across lines
         final startLine = i;

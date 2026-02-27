@@ -161,12 +161,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             children: [
               ListTile(
                 leading: const Icon(Icons.description),
-                title: const Text('Export Logs'),
+                title: Text(
+                  (Platform.isWindows || Platform.isLinux || Platform.isMacOS)
+                      ? 'Open Log Folder'
+                      : 'Export Logs',
+                ),
                 subtitle: Text(
                   logger.logDirectoryPath ?? 'Logs not initialized',
                   overflow: TextOverflow.ellipsis,
                 ),
-                trailing: const Icon(Icons.share),
+                trailing: Icon(
+                  (Platform.isWindows || Platform.isLinux || Platform.isMacOS)
+                      ? Icons.folder_open
+                      : Icons.share,
+                ),
                 onTap: () => _exportLogs(context),
               ),
               ListTile(
@@ -607,11 +615,57 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  bool get _isDesktop =>
+      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+
   Future<void> _exportLogs(BuildContext context) async {
-    try {
-      // Show loading indicator
+    if (_isDesktop) {
+      await _exportLogsDesktop(context);
+    } else {
+      await _exportLogsMobile(context);
+    }
+  }
+
+  Future<void> _exportLogsDesktop(BuildContext context) async {
+    final logDir = logger.logDirectoryPath;
+    if (logDir == null) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Logs not initialized'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    try {
+      if (Platform.isLinux) {
+        await Process.run('xdg-open', [logDir]);
+      } else if (Platform.isMacOS) {
+        await Process.run('open', [logDir]);
+      } else if (Platform.isWindows) {
+        await Process.run('explorer', [logDir]);
+      }
+      logger.info('Settings', 'Opened log directory: $logDir');
+    } catch (e) {
+      logger.error('Settings', 'Failed to open log directory', e);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to open log directory: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  Future<void> _exportLogsMobile(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      if (!context.mounted) return;
+      messenger.showSnackBar(
         const SnackBar(
           content: Row(
             children: [
@@ -624,16 +678,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               Text('Preparing logs...'),
             ],
           ),
-          duration: Duration(seconds: 1),
+          duration: Duration(seconds: 30),
         ),
       );
 
       await logger.exportLogs();
+      messenger.hideCurrentSnackBar();
       logger.info('Settings', 'Logs exported successfully');
     } catch (e) {
+      messenger.hideCurrentSnackBar();
       logger.error('Settings', 'Failed to export logs', e);
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(
           content: Text('Failed to export logs: $e'),
           backgroundColor: Colors.red,

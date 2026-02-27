@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/providers/app_providers.dart';
+import '../../shared/widgets/compose_bar.dart';
 import 'models/channel.dart';
 import 'models/chunk.dart';
 import 'providers/channel_providers.dart';
@@ -99,7 +100,15 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
                 },
               ),
             ),
-            if (canPublish) _buildComposeBar(context, channel),
+            if (canPublish)
+              ComposeBar(
+                controller: _messageController,
+                focusNode: _messageFocusNode,
+                onSend: () => _publish(channel),
+                isSending: _publishing,
+                hintText: 'Publish to channel...',
+                sendTooltip: 'Publish',
+              ),
           ],
         );
       },
@@ -326,61 +335,6 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildComposeBar(BuildContext context, Channel channel) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        border: Border(
-          top: BorderSide(
-            color: Theme.of(context).dividerColor,
-          ),
-        ),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Row(
-          children: [
-            Expanded(
-              child: KeyboardListener(
-                focusNode: FocusNode(),
-                onKeyEvent: (event) {
-                  if (event is KeyDownEvent &&
-                      event.logicalKey == LogicalKeyboardKey.enter &&
-                      !HardwareKeyboard.instance.isShiftPressed) {
-                    _publish(channel);
-                  }
-                },
-                child: TextField(
-                  controller: _messageController,
-                  focusNode: _messageFocusNode,
-                  decoration: const InputDecoration(
-                    hintText: 'Publish to channel...',
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(horizontal: 8),
-                  ),
-                  maxLines: null,
-                  textInputAction: TextInputAction.newline,
-                ),
-              ),
-            ),
-            IconButton(
-              icon: _publishing
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.send),
-              onPressed: _publishing ? null : () => _publish(channel),
-              tooltip: 'Publish',
-            ),
-          ],
-        ),
       ),
     );
   }

@@ -15,10 +15,10 @@ import '../../core/models/models.dart';
 import '../../core/network/voip_service.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/utils/identity_utils.dart';
+import '../../shared/widgets/compose_bar.dart';
 import '../call/call_screen.dart';
 import '../call/incoming_call_dialog.dart';
 import 'services/typing_indicator_service.dart';
-import 'widgets/filtered_emoji_picker.dart';
 import 'widgets/safety_number_screen.dart';
 
 /// Chat screen for messaging with a peer.
@@ -42,7 +42,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   bool _isSending = false;
   bool _isLoadingMore = false;
   bool _isIncomingCallDialogOpen = false;
-  bool _showEmojiPicker = false;
   StreamSubscription<CallState>? _voipStateSubscription;
 
   /// Check if running on desktop platform
@@ -154,39 +153,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   }
 
   /// Handle key events for desktop: Enter sends, Shift+Enter creates newline
-  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
-    if (!_isDesktop) return KeyEventResult.ignored;
-
-    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.enter) {
-      final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
-      if (!isShiftPressed && !_isSending) {
-        _sendMessage();
-        return KeyEventResult.handled;
-      }
-    }
-    return KeyEventResult.ignored;
-  }
-
-  /// Fallback for platforms where IME inserts the newline before onKeyEvent fires.
-  /// Detects trailing newline (without Shift) and triggers send instead.
-  void _handleTextChanged(String text) {
-    // Send typing indicator (debounced inside the service)
-    if (text.trim().isNotEmpty) {
-      ref.read(typingIndicatorServiceProvider).sendTyping(widget.peerId);
-    }
-
-    if (!_isDesktop || _isSending) return;
-
-    if (text.endsWith('\n') && !HardwareKeyboard.instance.isShiftPressed) {
-      // Remove the newline that was inserted by the IME
-      _messageController.text = text.substring(0, text.length - 1);
-      _messageController.selection = TextSelection.collapsed(
-        offset: _messageController.text.length,
-      );
-      _sendMessage();
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final peer = ref.watch(selectedPeerProvider);
@@ -232,21 +198,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               : _buildMessageList(messages),
         ),
         _TypingIndicator(peerId: widget.peerId),
-        _buildInputBar(),
-        if (_showEmojiPicker)
-          FilteredEmojiPicker(
-            textEditingController: _messageController,
-            onEmojiSelected: (category, emoji) {
-              // Emoji is auto-inserted by the textEditingController binding
-            },
-            onBackspacePressed: () {
-              _messageController
-                ..text = _messageController.text.characters.skipLast(1).string
-                ..selection = TextSelection.fromPosition(
-                  TextPosition(offset: _messageController.text.length),
-                );
-            },
-          ),
+        ComposeBar(
+          controller: _messageController,
+          focusNode: _messageFocusNode,
+          onSend: _sendMessage,
+          isSending: _isSending,
+          showAttachButton: true,
+          onAttach: _pickFile,
+          onTextChanged: (text) {
+            if (text.trim().isNotEmpty) {
+              ref
+                  .read(typingIndicatorServiceProvider)
+                  .sendTyping(widget.peerId);
+            }
+          },
+        ),
       ],
     );
 
@@ -544,90 +510,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           ),
           Expanded(child: Divider(color: Colors.grey.shade300)),
         ],
-      ),
-    );
-  }
-
-  Widget _buildInputBar() {
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, -2),
-          ),
-        ],
-      ),
-      child: SafeArea(
-        child: Row(
-          children: [
-            IconButton(
-              icon: Icon(
-                _showEmojiPicker
-                    ? Icons.keyboard
-                    : Icons.emoji_emotions_outlined,
-              ),
-              tooltip: _showEmojiPicker ? 'Keyboard' : 'Emoji',
-              onPressed: () {
-                if (_showEmojiPicker) {
-                  setState(() => _showEmojiPicker = false);
-                  _messageFocusNode.requestFocus();
-                } else {
-                  _messageFocusNode.unfocus();
-                  setState(() => _showEmojiPicker = true);
-                }
-              },
-            ),
-            IconButton(
-              icon: const Icon(Icons.attach_file),
-              tooltip: 'Attach file',
-              onPressed: _pickFile,
-            ),
-            Expanded(
-              child: TextField(
-                controller: _messageController,
-                focusNode: _messageFocusNode..onKeyEvent = _handleKeyEvent,
-                decoration: const InputDecoration(
-                  hintText: 'Type a message...',
-                  border: InputBorder.none,
-                ),
-                textCapitalization: TextCapitalization.sentences,
-                maxLines: null,
-                onTap: () {
-                  if (_showEmojiPicker) {
-                    setState(() => _showEmojiPicker = false);
-                  }
-                },
-                // Fallback for desktop platforms where the IME processes Enter
-                // before FocusNode.onKeyEvent fires (e.g. Linux GTK).
-                // Detects the inserted newline and triggers send instead.
-                onChanged: _handleTextChanged,
-                // On mobile, onSubmitted handles send; on desktop, key handler does
-                onSubmitted: _isDesktop ? null : (_) => _sendMessage(),
-              ),
-            ),
-            _isSending
-                ? const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  )
-                : IconButton(
-                    icon: Icon(
-                      Icons.send,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                    tooltip: 'Send message',
-                    onPressed: _sendMessage,
-                  ),
-          ],
-        ),
       ),
     );
   }
