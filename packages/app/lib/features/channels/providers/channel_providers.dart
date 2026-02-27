@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/logging/logger_service.dart';
+
 import '../../../core/network/signaling_client.dart'
     show SignalingConnectionState;
 import '../../../core/providers/app_providers.dart';
@@ -118,8 +120,8 @@ final channelSyncServiceProvider = Provider<ChannelSyncService>((ref) {
 
       // Invalidate the messages provider so UI refreshes
       ref.invalidate(channelMessagesProvider(channelId));
-    } catch (_) {
-      // Skip malformed chunks — don't crash the sync loop
+    } catch (e, stack) {
+      logger.error('ChannelSync', 'Failed to process received chunk', e, stack);
     }
   };
 
@@ -169,8 +171,8 @@ Future<void> _registerChannelsWithVps(
         });
       }
     }
-  } catch (_) {
-    // Non-fatal: registration will be retried on next reconnect
+  } catch (e) {
+    logger.warning('ChannelSync', 'Channel VPS registration failed: $e');
   }
 }
 
@@ -299,8 +301,9 @@ final channelMessagesProvider =
         timestamp: payload.timestamp,
         author: payload.author,
       ));
-    } catch (_) {
-      // Skip corrupted or unreadable messages
+    } catch (e) {
+      logger.warning('ChannelMessages',
+          'Failed to decrypt/reassemble sequence ${entry.key}: $e');
     }
   }
 
