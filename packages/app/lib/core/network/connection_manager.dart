@@ -175,6 +175,10 @@ class ConnectionManager {
   final Map<String, String> _codeToStableId = {};
   final Map<String, String> _stableIdToCode = {};
 
+  /// Cache proposed display names from incoming pair requests so they're
+  /// available when [SignalingPairMatched] arrives (which doesn't carry names).
+  final Map<String, String> _codeToProposedName = {};
+
   /// Resolve a WebRTC/signaling code to the stable peer ID used by the app.
   String _toStableId(String code) => _codeToStableId[code] ?? code;
 
@@ -431,6 +435,7 @@ class ConnectionManager {
     // Clear peer ID mappings — new session will have new pairing codes
     _codeToStableId.clear();
     _stableIdToCode.clear();
+    _codeToProposedName.clear();
     _peerToClient.clear();
   }
 
@@ -674,7 +679,13 @@ class ConnectionManager {
       // Re-key peer entry if handshake stableId differs from provisional
       if (finalId != provisionalId && _peers.containsKey(provisionalId)) {
         final peer = _peers.remove(provisionalId)!;
-        _peers[finalId] = peer.copyWith(id: finalId, username: username);
+        // Update displayName from handshake username if still a placeholder
+        final betterName =
+            (username != null && peer.displayName.startsWith('Peer '))
+                ? username
+                : peer.displayName;
+        _peers[finalId] = peer.copyWith(
+            id: finalId, username: username, displayName: betterName);
         // Update aliasing maps
         _codeToStableId[peerId] = finalId;
         _stableIdToCode.remove(provisionalId);
@@ -687,7 +698,12 @@ class ConnectionManager {
       } else {
         final peer = _peers[finalId];
         if (peer != null) {
-          _peers[finalId] = peer.copyWith(username: username);
+          final betterName =
+              (username != null && peer.displayName.startsWith('Peer '))
+                  ? username
+                  : peer.displayName;
+          _peers[finalId] =
+              peer.copyWith(username: username, displayName: betterName);
         }
       }
 
@@ -851,6 +867,10 @@ class ConnectionManager {
             proposedName: final proposedName
           ):
           logger.info('ConnectionManager', 'Pair request from $fromCode');
+          // Cache proposed name so it's available in pair_matched handler
+          if (proposedName != null) {
+            _codeToProposedName[fromCode] = proposedName;
+          }
           // Check if this public key is blocked
           if (_isPublicKeyBlocked != null &&
               _isPublicKeyBlocked!(fromPublicKey)) {
@@ -908,12 +928,16 @@ class ConnectionManager {
             logger.info('ConnectionManager', 'New peer: $peerCode → $stableId');
           }
 
+          // Retrieve the proposed name cached from pair_incoming (if we're the receiver)
+          final proposedName = _codeToProposedName.remove(peerCode);
+
           // Create/update peer under the stable ID
           _peers[stableId] = Peer(
             id: stableId,
             displayName: existingTrusted?.alias ??
                 existingTrusted?.displayName ??
                 _peers[stableId]?.displayName ??
+                proposedName ??
                 'Peer $stableId',
             username: existingTrusted?.username ?? _peers[stableId]?.username,
             publicKey: peerPublicKey,
@@ -988,7 +1012,9 @@ class ConnectionManager {
               _peers[stableId]?.publicKey == null) {
             _peers[stableId] = Peer(
               id: stableId,
-              displayName: _peers[stableId]?.displayName ?? 'Peer $stableId',
+              displayName: _peers[stableId]?.displayName ??
+                  _codeToProposedName[from] ??
+                  'Peer $stableId',
               publicKey: peerPublicKey,
               connectionState: PeerConnectionState.connecting,
               lastSeen: DateTime.now(),
