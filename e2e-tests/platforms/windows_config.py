@@ -2,6 +2,12 @@
 
 import os
 
+__all__ = [
+    "APP_PATH", "SIGNALING_URL",
+    "APP_LAUNCH_TIMEOUT", "ELEMENT_WAIT_TIMEOUT", "CONNECTION_TIMEOUT",
+    "P2P_CONNECTION_TIMEOUT",
+]
+
 # Path to the built Flutter Windows app
 APP_PATH = os.environ.get(
     "ZAJEL_APP_PATH",

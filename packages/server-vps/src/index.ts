@@ -6,11 +6,13 @@
  * rendezvous for peer discovery.
  */
 
-import { createServer, type Server as HttpServer } from 'http';
+import { createServer as createHttpServer, type Server as HttpServer } from 'http';
+import { createServer as createHttpsServer } from 'https';
+import { readFileSync } from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
 import { loadConfig, type ServerConfig } from './config.js';
-import { WEBSOCKET } from './constants.js';
+import { WEBSOCKET, CONNECTION_LIMITS } from './constants.js';
 import { loadOrGenerateIdentity, type ServerIdentity } from './identity/server-identity.js';
 import { SQLiteStorage } from './storage/sqlite.js';
 import { FederationManager, type FederationConfig } from './federation/federation-manager.js';
@@ -21,6 +23,7 @@ import { DistributedRendezvous } from './registry/distributed-rendezvous.js';
 import { ClientHandler, type ClientHandlerConfig } from './client/handler.js';
 import { logger } from './utils/logger.js';
 import { createAdminModule, type AdminModule } from './admin/index.js';
+
 
 export interface ZajelServer {
   httpServer: HttpServer;
@@ -60,7 +63,12 @@ export async function createZajelServer(
   logger.info(`[Zajel] Node ID: ${logger.serverId(identity.nodeId)}`);
 
   // Create bootstrap client for CF Workers discovery
-  const bootstrap = createBootstrapClient(config, identity);
+  const bootstrap = createBootstrapClient(config, identity, () => ({
+    connections: (clientHandlerRef?.clientCount ?? 0) + (clientHandlerRef?.signalingClientCount ?? 0),
+    relayConnections: clientHandlerRef?.clientCount ?? 0,
+    signalingConnections: clientHandlerRef?.signalingClientCount ?? 0,
+    activeCodes: clientHandlerRef?.getEntropyMetrics().activeCodes ?? 0,
+  }));
 
   // Mutable reference for clientHandler (set after creation, used in HTTP handlers)
   let clientHandlerRef: ClientHandler | null = null;
@@ -68,8 +76,8 @@ export async function createZajelServer(
   // Mutable reference for admin module (set after creation)
   let adminModuleRef: AdminModule | null = null;
 
-  // Create HTTP server
-  const httpServer = createServer(async (req, res) => {
+  // Create HTTP or HTTPS server depending on TLS config
+  const requestHandler = async (req: IncomingMessage, res: import('http').ServerResponse) => {
     // Admin dashboard routes (handled first)
     if (req.url?.startsWith('/admin')) {
       if (adminModuleRef) {
@@ -96,8 +104,9 @@ export async function createZajelServer(
       return;
     }
 
-    // Stats endpoint
+    // Stats endpoint (public — operational metrics only)
     if (req.url === '/stats') {
+
       const handler = clientHandlerRef;
       const stats = {
         serverId: identity.serverId,
@@ -119,6 +128,7 @@ export async function createZajelServer(
 
     // Metrics endpoint (Issue #41: Pairing code entropy monitoring)
     if (req.url === '/metrics') {
+
       const handler = clientHandlerRef;
       if (!handler) {
         res.writeHead(503, { 'Content-Type': 'application/json' });
@@ -145,7 +155,19 @@ export async function createZajelServer(
     // Default response
     res.writeHead(404);
     res.end('Not Found');
-  });
+  };
+
+  let httpServer: HttpServer;
+  if (config.tls.enabled) {
+    const tlsOptions = {
+      cert: readFileSync(config.tls.certPath),
+      key: readFileSync(config.tls.keyPath),
+    };
+    httpServer = createHttpsServer(tlsOptions, requestHandler);
+    console.log('[Zajel] TLS enabled');
+  } else {
+    httpServer = createHttpServer(requestHandler);
+  }
 
   // Create WebSocket servers (separate for clients and federation)
   // maxPayload enforces size limits at the protocol level before buffering
@@ -222,13 +244,24 @@ export async function createZajelServer(
     maxConnectionsPerPeer: config.client.maxConnectionsPerPeer,
   };
 
+  // Build attestation config if attestation settings are present
+  const attestationConfig = config.attestation ? {
+    bootstrapUrl: config.attestation.bootstrapUrl,
+    vpsIdentityKey: config.attestation.vpsIdentityKey,
+    sessionTokenTtl: config.attestation.sessionTokenTtl,
+    gracePeriod: config.attestation.gracePeriod,
+  } : undefined;
+
   const clientHandler = new ClientHandler(
     identity,
     config.network.publicEndpoint,
     clientHandlerConfig,
     relayRegistry,
     distributedRendezvous,
-    metadata
+    metadata,
+    storage,
+    attestationConfig,
+    federation
   );
 
   // Set the reference for HTTP handler (used by /metrics endpoint)
@@ -258,9 +291,28 @@ export async function createZajelServer(
     }
   });
 
+  // Per-IP connection tracking for rate limiting
+  const ipConnectionCounts = new Map<string, number>();
+
   // Handle client WebSocket connections
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     const clientIp = req.socket.remoteAddress || 'unknown';
+
+    // Check total connection limit
+    const totalConnections = clientHandler.clientCount + clientHandler.signalingClientCount;
+    if (totalConnections >= CONNECTION_LIMITS.MAX_TOTAL_CONNECTIONS) {
+      ws.close(1013, 'Server at capacity');
+      return;
+    }
+
+    // Check per-IP connection limit
+    const ipCount = ipConnectionCounts.get(clientIp) || 0;
+    if (ipCount >= CONNECTION_LIMITS.MAX_CONNECTIONS_PER_IP) {
+      ws.close(1013, 'Too many connections from this IP');
+      return;
+    }
+    ipConnectionCounts.set(clientIp, ipCount + 1);
+
     logger.clientConnection('connected', clientIp);
 
     // Send server info
@@ -275,12 +327,31 @@ export async function createZajelServer(
 
     // Handle disconnect
     ws.on('close', async () => {
+      // Decrement per-IP count
+      const count = ipConnectionCounts.get(clientIp) || 1;
+      if (count <= 1) {
+        ipConnectionCounts.delete(clientIp);
+      } else {
+        ipConnectionCounts.set(clientIp, count - 1);
+      }
+
       await clientHandler.handleDisconnect(ws);
       logger.clientConnection('disconnected', clientIp);
     });
 
     ws.on('error', (error) => {
       console.error(`[Zajel] Client WebSocket error:`, error);
+    });
+  });
+
+  // Start listening early so health check endpoint is available during
+  // bootstrap registration and federation startup (which involve network I/O
+  // and can be slow during simultaneous multi-server deployments).
+  await new Promise<void>((resolve) => {
+    httpServer.listen(config.network.port, config.network.host, () => {
+      console.log(`[Zajel] Listening on ${config.network.host}:${config.network.port}`);
+      console.log(`[Zajel] Public endpoint: ${config.network.publicEndpoint}`);
+      resolve();
     });
   });
 
@@ -394,15 +465,6 @@ export async function createZajelServer(
 
     console.log('[Zajel] Shutdown complete');
   };
-
-  // Start listening
-  await new Promise<void>((resolve) => {
-    httpServer.listen(config.network.port, config.network.host, () => {
-      console.log(`[Zajel] Listening on ${config.network.host}:${config.network.port}`);
-      console.log(`[Zajel] Public endpoint: ${config.network.publicEndpoint}`);
-      resolve();
-    });
-  });
 
   return {
     httpServer,

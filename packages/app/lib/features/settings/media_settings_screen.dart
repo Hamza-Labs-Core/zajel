@@ -340,7 +340,7 @@ class _MediaSettingsScreenState extends ConsumerState<MediaSettingsScreen> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: DropdownButtonFormField<String?>(
-        value: validId,
+        initialValue: validId,
         decoration: const InputDecoration(
           border: OutlineInputBorder(),
           contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),

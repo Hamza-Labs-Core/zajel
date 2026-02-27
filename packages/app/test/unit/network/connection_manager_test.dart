@@ -119,8 +119,8 @@ void main() {
         expect(connectionManager.peers, isA<Stream>());
       });
 
-      test('messages stream exists', () {
-        expect(connectionManager.messages, isA<Stream>());
+      test('peerMessages stream exists', () {
+        expect(connectionManager.peerMessages, isA<Stream>());
       });
 
       test('fileChunks stream exists', () {

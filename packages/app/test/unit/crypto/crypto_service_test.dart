@@ -1,6 +1,8 @@
+// ignore_for_file: deprecated_member_use_from_same_package
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:zajel/core/crypto/crypto_service.dart';
 
 import '../../mocks/mocks.dart';
@@ -347,6 +349,199 @@ void main() {
         final decrypted = await bob.decrypt(sessionId, encrypted);
 
         expect(decrypted, specialMessage);
+      });
+    });
+
+    group('tagFromPublicKey', () {
+      test('returns 4-character uppercase hex string', () async {
+        await cryptoService.initialize();
+        final publicKey = await cryptoService.getPublicKeyBase64();
+
+        final tag = CryptoService.tagFromPublicKey(publicKey);
+
+        expect(tag.length, 4);
+        expect(tag, matches(RegExp(r'^[0-9A-F]{4}$')));
+      });
+
+      test('is consistent with peerIdFromPublicKey', () async {
+        await cryptoService.initialize();
+        final publicKey = await cryptoService.getPublicKeyBase64();
+
+        final tag = CryptoService.tagFromPublicKey(publicKey);
+        final peerId = CryptoService.peerIdFromPublicKey(publicKey);
+
+        // Both use same SHA-256 hash; tag is first 4 chars, peerId is first 16
+        expect(peerId.substring(0, 4), tag);
+      });
+
+      test('is deterministic for same key', () async {
+        await cryptoService.initialize();
+        final publicKey = await cryptoService.getPublicKeyBase64();
+
+        final tag1 = CryptoService.tagFromPublicKey(publicKey);
+        final tag2 = CryptoService.tagFromPublicKey(publicKey);
+
+        expect(tag1, tag2);
+      });
+
+      test('produces different tags for different keys', () async {
+        final alice = CryptoService(secureStorage: FakeSecureStorage());
+        final bob = CryptoService(secureStorage: FakeSecureStorage());
+        await alice.initialize();
+        await bob.initialize();
+
+        final aliceTag =
+            CryptoService.tagFromPublicKey(await alice.getPublicKeyBase64());
+        final bobTag =
+            CryptoService.tagFromPublicKey(await bob.getPublicKeyBase64());
+
+        // Technically could collide (1 in 65536) but extremely unlikely
+        expect(aliceTag, isNot(bobTag));
+      });
+
+      test('works with known base64 input', () {
+        // A fixed 32-byte key as base64
+        final knownKey = base64Encode(List.filled(32, 0));
+
+        final tag = CryptoService.tagFromPublicKey(knownKey);
+
+        expect(tag.length, 4);
+        expect(tag, matches(RegExp(r'^[0-9A-F]{4}$')));
+        // Should be stable across runs
+        final tag2 = CryptoService.tagFromPublicKey(knownKey);
+        expect(tag, tag2);
+      });
+    });
+
+    group('stableId', () {
+      test('stableId getter throws before initialization', () {
+        expect(
+          () => cryptoService.stableId,
+          throwsA(isA<CryptoException>().having(
+            (e) => e.message,
+            'message',
+            contains('not initialized'),
+          )),
+        );
+      });
+
+      test('generates stableId on first init (no prefs)', () async {
+        // CryptoService with no SharedPreferences — should generate random ID
+        await cryptoService.initialize();
+
+        final id = cryptoService.stableId;
+        expect(id.length, 16);
+        expect(id, matches(RegExp(r'^[0-9A-F]{16}$')));
+      });
+
+      test('migration: derives stableId from publicKey when no stored ID',
+          () async {
+        SharedPreferences.setMockInitialValues({});
+        final prefs = await SharedPreferences.getInstance();
+        final svc =
+            CryptoService(secureStorage: FakeSecureStorage(), prefs: prefs);
+        await svc.initialize();
+
+        // Migration: stableId should match peerIdFromPublicKey
+        final expected = CryptoService.peerIdFromPublicKey(svc.publicKeyBase64);
+        expect(svc.stableId, expected);
+
+        // Should be persisted
+        expect(prefs.getString('zajel_stable_id'), expected);
+      });
+
+      test('loads stored stableId from SharedPreferences', () async {
+        SharedPreferences.setMockInitialValues(
+            {'zajel_stable_id': 'ABCD1234EFGH5678'});
+        final prefs = await SharedPreferences.getInstance();
+        final svc =
+            CryptoService(secureStorage: FakeSecureStorage(), prefs: prefs);
+        await svc.initialize();
+
+        expect(svc.stableId, 'ABCD1234EFGH5678');
+      });
+
+      test('stableId survives key regeneration', () async {
+        SharedPreferences.setMockInitialValues({});
+        final prefs = await SharedPreferences.getInstance();
+        final svc =
+            CryptoService(secureStorage: FakeSecureStorage(), prefs: prefs);
+        await svc.initialize();
+
+        final originalStableId = svc.stableId;
+        final originalPublicKey = svc.publicKeyBase64;
+
+        // Regenerate keys — should NOT change stableId
+        await svc.regenerateIdentityKeys();
+        expect(svc.publicKeyBase64, isNot(originalPublicKey));
+        expect(svc.stableId, originalStableId);
+      });
+
+      test('stableId persists across service instances', () async {
+        SharedPreferences.setMockInitialValues({});
+        final prefs = await SharedPreferences.getInstance();
+        final storage = FakeSecureStorage();
+
+        final svc1 = CryptoService(secureStorage: storage, prefs: prefs);
+        await svc1.initialize();
+        final firstId = svc1.stableId;
+
+        // Create new instance with same storage
+        final svc2 = CryptoService(secureStorage: storage, prefs: prefs);
+        await svc2.initialize();
+        expect(svc2.stableId, firstId);
+      });
+    });
+
+    group('tagFromStableId', () {
+      test('returns first 4 characters uppercased', () {
+        expect(CryptoService.tagFromStableId('ABCD1234EFGH5678'), 'ABCD');
+        expect(CryptoService.tagFromStableId('abcd1234efgh5678'), 'ABCD');
+      });
+
+      test('is deterministic', () {
+        const id = '1234567890ABCDEF';
+        expect(CryptoService.tagFromStableId(id),
+            CryptoService.tagFromStableId(id));
+      });
+
+      test('throws ArgumentError for strings shorter than 4 chars', () {
+        expect(
+          () => CryptoService.tagFromStableId('AB'),
+          throwsA(isA<ArgumentError>().having(
+            (e) => e.message,
+            'message',
+            contains('at least 4 characters'),
+          )),
+        );
+      });
+
+      test('throws ArgumentError for empty string', () {
+        expect(
+          () => CryptoService.tagFromStableId(''),
+          throwsA(isA<ArgumentError>()),
+        );
+      });
+
+      test('works with exactly 4 characters', () {
+        expect(CryptoService.tagFromStableId('abcd'), 'ABCD');
+      });
+    });
+
+    group('removePeerPublicKey', () {
+      test('removes a stored peer public key', () async {
+        await cryptoService.initialize();
+        cryptoService.setPeerPublicKey('peer-1', 'key123');
+        expect(cryptoService.getPeerPublicKey('peer-1'), 'key123');
+
+        cryptoService.removePeerPublicKey('peer-1');
+        expect(cryptoService.getPeerPublicKey('peer-1'), isNull);
+      });
+
+      test('is a no-op for unknown peer', () async {
+        await cryptoService.initialize();
+        // Should not throw
+        cryptoService.removePeerPublicKey('nonexistent');
       });
     });
   });

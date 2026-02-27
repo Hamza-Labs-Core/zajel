@@ -953,3 +953,203 @@ describe('ClientHandler Pairing Logic', () => {
     });
   });
 });
+
+/**
+ * DHT-based redirect tests for cross-server pairing.
+ *
+ * When a pairing code is registered, the server checks the DHT hash ring
+ * and includes redirect targets in the 'registered' response. The client
+ * then connects to those redirect servers directly.
+ */
+describe('DHT Redirect in Pairing Registration', () => {
+  // Mock FederationManager that returns redirect targets
+  class MockFederationManager extends EventEmitter {
+    private redirectTargets: Array<{ serverId: string; endpoint: string; hashes: string[] }> = [];
+
+    setRedirectTargets(targets: Array<{ serverId: string; endpoint: string; hashes: string[] }>) {
+      this.redirectTargets = targets;
+    }
+
+    getRedirectTargets(hashes: string[]): Array<{ serverId: string; endpoint: string; hashes: string[] }> {
+      return this.redirectTargets;
+    }
+
+    getRoutingTable() {
+      return { getRedirectTargets: (h: string[]) => this.getRedirectTargets(h) };
+    }
+
+    getRing() {
+      return {};
+    }
+  }
+
+  let handler: ClientHandler;
+  let federation: MockFederationManager;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+
+    const identity: ServerIdentity = {
+      serverId: 'server-a',
+      nodeId: 'node-a',
+      ephemeralId: 'srv-a',
+      publicKey: new Uint8Array(32).fill(1),
+      privateKey: new Uint8Array(64).fill(2),
+    };
+
+    const config: ClientHandlerConfig = {
+      heartbeatInterval: 30000,
+      heartbeatTimeout: 90000,
+      maxConnectionsPerPeer: 20,
+      pairRequestTimeout: 120000,
+      pairRequestWarningTime: 30000,
+    };
+
+    federation = new MockFederationManager();
+    const relay = new RelayRegistry();
+    const drz = new MockDistributedRendezvous();
+
+    handler = new ClientHandler(
+      identity,
+      'ws://server-a:8080',
+      config,
+      relay,
+      drz as unknown as DistributedRendezvous,
+      {},
+      undefined,
+      undefined,
+      federation as any
+    );
+  });
+
+  afterEach(async () => {
+    await handler.shutdown();
+    vi.useRealTimers();
+  });
+
+  it('should include redirects in registered response when DHT routes elsewhere', async () => {
+    // Configure DHT to redirect this code to server-b
+    federation.setRedirectTargets([
+      { serverId: 'server-b', endpoint: 'wss://server-b.example.com', hashes: [VALID_CODE_REQ] },
+    ]);
+
+    const ws = new MockWebSocket();
+    handler.handleConnection(ws as any);
+    ws.clearMessages();
+
+    await handler.handleMessage(ws as any, JSON.stringify({
+      type: 'register',
+      pairingCode: VALID_CODE_REQ,
+      publicKey: VALID_PUBKEY_1,
+    }));
+
+    const registered = ws.getLastMessage();
+    expect(registered.type).toBe('registered');
+    expect(registered.pairingCode).toBe(VALID_CODE_REQ);
+    expect(registered.redirects).toBeDefined();
+    expect(registered.redirects).toHaveLength(1);
+    expect(registered.redirects[0].serverId).toBe('server-b');
+    expect(registered.redirects[0].endpoint).toBe('wss://server-b.example.com');
+  });
+
+  it('should not include redirects when no DHT redirect targets', async () => {
+    // No redirect targets configured (solo server)
+    federation.setRedirectTargets([]);
+
+    const ws = new MockWebSocket();
+    handler.handleConnection(ws as any);
+    ws.clearMessages();
+
+    await handler.handleMessage(ws as any, JSON.stringify({
+      type: 'register',
+      pairingCode: VALID_CODE_REQ,
+      publicKey: VALID_PUBKEY_1,
+    }));
+
+    const registered = ws.getLastMessage();
+    expect(registered.type).toBe('registered');
+    expect(registered.pairingCode).toBe(VALID_CODE_REQ);
+    expect(registered.redirects).toBeUndefined();
+  });
+
+  it('should include multiple redirects when DHT routes to multiple servers', async () => {
+    federation.setRedirectTargets([
+      { serverId: 'server-b', endpoint: 'wss://server-b.example.com', hashes: [VALID_CODE_REQ] },
+      { serverId: 'server-c', endpoint: 'wss://server-c.example.com', hashes: [VALID_CODE_REQ] },
+    ]);
+
+    const ws = new MockWebSocket();
+    handler.handleConnection(ws as any);
+    ws.clearMessages();
+
+    await handler.handleMessage(ws as any, JSON.stringify({
+      type: 'register',
+      pairingCode: VALID_CODE_REQ,
+      publicKey: VALID_PUBKEY_1,
+    }));
+
+    const registered = ws.getLastMessage();
+    expect(registered.redirects).toHaveLength(2);
+  });
+
+  it('should work without federation (no redirects)', async () => {
+    // Create handler without federation
+    const identity: ServerIdentity = {
+      serverId: 'solo-server',
+      nodeId: 'solo-node',
+      ephemeralId: 'srv-solo',
+      publicKey: new Uint8Array(32).fill(5),
+      privateKey: new Uint8Array(64).fill(6),
+    };
+    const soloHandler = new ClientHandler(
+      identity,
+      'ws://solo:8080',
+      {
+        heartbeatInterval: 30000,
+        heartbeatTimeout: 90000,
+        maxConnectionsPerPeer: 20,
+      },
+      new RelayRegistry(),
+      new MockDistributedRendezvous() as unknown as DistributedRendezvous,
+    );
+
+    const ws = new MockWebSocket();
+    soloHandler.handleConnection(ws as any);
+    ws.clearMessages();
+
+    await soloHandler.handleMessage(ws as any, JSON.stringify({
+      type: 'register',
+      pairingCode: VALID_CODE_REQ,
+      publicKey: VALID_PUBKEY_1,
+    }));
+
+    const registered = ws.getLastMessage();
+    expect(registered.type).toBe('registered');
+    expect(registered.redirects).toBeUndefined();
+
+    await soloHandler.shutdown();
+  });
+
+  it('should return pair_error for unknown target codes (no server-to-server relay)', async () => {
+    const ws = new MockWebSocket();
+    handler.handleConnection(ws as any);
+    ws.clearMessages();
+
+    await handler.handleMessage(ws as any, JSON.stringify({
+      type: 'register',
+      pairingCode: VALID_CODE_REQ,
+      publicKey: VALID_PUBKEY_1,
+    }));
+    ws.clearMessages();
+
+    // Try to pair with a code that isn't registered on this server
+    await handler.handleMessage(ws as any, JSON.stringify({
+      type: 'pair_request',
+      targetCode: VALID_CODE_TGT,
+    }));
+
+    const error = ws.getLastMessage();
+    expect(error.type).toBe('pair_error');
+    expect(error.error).toBe('Pair request could not be processed');
+  });
+});

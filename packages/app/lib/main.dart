@@ -4,8 +4,10 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:uuid/uuid.dart';
 
 import 'app_router.dart';
@@ -13,12 +15,17 @@ import 'core/config/environment.dart';
 import 'core/logging/logger_service.dart';
 import 'core/media/media_service.dart';
 import 'core/models/models.dart';
+import 'core/network/connection_manager.dart' show ConnectionManager;
 import 'core/network/signaling_client.dart' show SignalingConnectionState;
 import 'core/network/voip_service.dart';
 import 'core/notifications/call_foreground_service.dart';
 import 'core/providers/app_providers.dart';
+import 'features/channels/providers/channel_providers.dart';
+import 'features/chat/services/typing_indicator_service.dart';
+import 'features/groups/providers/group_providers.dart';
 import 'features/call/call_screen.dart';
 import 'features/call/incoming_call_dialog.dart';
+import 'core/utils/identity_utils.dart';
 import 'shared/theme/app_theme.dart';
 
 const bool _isE2eTest = bool.fromEnvironment('E2E_TEST');
@@ -29,6 +36,13 @@ void main() async {
   // Force semantics tree so UiAutomator2/AT-SPI/UIA can see widgets in E2E tests
   if (_isE2eTest) {
     SemanticsBinding.instance.ensureSemantics();
+  }
+
+  // Initialize sqflite FFI for desktop platforms (Linux, Windows, macOS).
+  // Without this, openDatabase throws "databaseFactory not initialized".
+  if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
   }
 
   // Initialize logger first
@@ -78,10 +92,15 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   StreamSubscription<(String, String, String?)>? _pairRequestSubscription;
   StreamSubscription<(String, String, String)>? _linkRequestSubscription;
   StreamSubscription<CallState>? _voipCallStateSubscription;
+  StreamSubscription? _signalingReconnectSubscription;
+  StreamSubscription? _notificationMessageSubscription;
+  Timer? _autoDeleteTimer;
   bool _disposed = false;
+  bool _showPrivacyScreen = false;
   bool _isIncomingCallDialogOpen = false;
   bool _isReconnecting = false;
   final _callForegroundService = CallForegroundService();
+  ConnectionManager? _connectionManager;
 
   @override
   void initState() {
@@ -97,14 +116,36 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       _disposed = true;
       _disposeServicesSync();
     }
+
+    // Track foreground state for notification suppression
+    ref.read(appInForegroundProvider.notifier).state =
+        state == AppLifecycleState.resumed;
+
+    // Privacy screen: obscure app content when backgrounded.
+    // On mobile: inactive/paused when app goes to background or task switcher.
+    // On desktop: hidden when minimized, inactive when losing focus.
+    final privacyEnabled = ref.read(privacyScreenProvider);
+    if (privacyEnabled) {
+      if (state == AppLifecycleState.inactive ||
+          state == AppLifecycleState.paused ||
+          state == AppLifecycleState.hidden) {
+        if (mounted && !_showPrivacyScreen) {
+          setState(() => _showPrivacyScreen = true);
+        }
+      } else if (state == AppLifecycleState.resumed) {
+        if (mounted && _showPrivacyScreen) {
+          setState(() => _showPrivacyScreen = false);
+        }
+      }
+    }
   }
 
   void _disposeServicesSync() {
     logger.info('ZajelApp', 'Disposing services...');
     try {
-      final connectionManager = ref.read(connectionManagerProvider);
-      // Fire and forget - we're shutting down anyway
-      connectionManager.dispose();
+      // Use cached reference — ref.read() throws StateError if called after
+      // the widget is disposed (e.g. between integration test runs).
+      _connectionManager?.dispose();
       logger.info('ZajelApp', 'Services disposed');
     } catch (e) {
       logger.error('ZajelApp', 'Error during shutdown', e);
@@ -114,14 +155,27 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   }
 
   Future<void> _initialize() async {
+    final sw = Stopwatch()..start();
     try {
       logger.info('ZajelApp', 'Initializing crypto service...');
       final cryptoService = ref.read(cryptoServiceProvider);
       await cryptoService.initialize();
+      logger.info('ZajelApp',
+          'Crypto service initialized (${sw.elapsedMilliseconds}ms)');
 
       logger.info('ZajelApp', 'Initializing message storage...');
       final messageStorage = ref.read(messageStorageProvider);
       await messageStorage.initialize();
+      logger.info('ZajelApp',
+          'Message storage initialized (${sw.elapsedMilliseconds}ms)');
+
+      logger.info('ZajelApp', 'Initializing channel storage...');
+      final channelStorage = ref.read(channelStorageServiceProvider);
+      await channelStorage.initialize();
+
+      logger.info('ZajelApp', 'Initializing group storage...');
+      final groupStorage = ref.read(groupStorageServiceProvider);
+      await groupStorage.initialize();
 
       // Load peer aliases from TrustedPeersStorage
       final trustedPeers = ref.read(trustedPeersStorageProvider);
@@ -134,13 +188,29 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       }
       ref.read(peerAliasesProvider.notifier).state = aliases;
 
+      logger.info(
+          'ZajelApp', 'Storage initialized (${sw.elapsedMilliseconds}ms)');
+
       logger.info('ZajelApp', 'Initializing connection manager...');
-      final connectionManager = ref.read(connectionManagerProvider);
-      await connectionManager.initialize();
+      _connectionManager = ref.read(connectionManagerProvider);
+      await _connectionManager!.initialize();
+      logger.info('ZajelApp',
+          'Connection manager initialized (${sw.elapsedMilliseconds}ms)');
 
       logger.info('ZajelApp', 'Initializing device link service...');
       final deviceLinkService = ref.read(deviceLinkServiceProvider);
       await deviceLinkService.initialize();
+
+      // Start group invitation/message listener so ginv:/grp: messages
+      // arriving over the broadcast stream are processed (not silently lost).
+      ref.read(groupInvitationServiceProvider);
+
+      // Start typing indicator listener
+      ref.read(typingIndicatorServiceProvider);
+
+      // Start read receipt service so rcpt: messages are processed and
+      // outgoing message statuses are updated from delivered -> read.
+      ref.read(readReceiptServiceProvider);
 
       // Set up file transfer listeners
       _setupFileTransferListeners();
@@ -151,10 +221,26 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       // Set up link request listener for incoming web client link requests
       _setupLinkRequestListener();
 
-      // Initialize notification service
+      // Initialize notification service.
+      // Timeout guards protect against D-Bus hangs on headless Linux (no
+      // notification daemon → flutter_local_notifications_linux blocks on
+      // D-Bus call that never returns).
       final notificationService = ref.read(notificationServiceProvider);
-      await notificationService.initialize();
-      await notificationService.requestPermission();
+      await notificationService.initialize().timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          logger.warning(
+              'ZajelApp', 'Notification init timed out (10s) — skipping');
+        },
+      );
+      await notificationService.requestPermission().timeout(
+        const Duration(seconds: 5),
+        onTimeout: () async {
+          logger.warning(
+              'ZajelApp', 'Notification permission timed out — skipping');
+          return false;
+        },
+      );
 
       // Set up notification listeners for messages, files, and peer status
       _setupNotificationListeners();
@@ -163,9 +249,17 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       // Set up VoIP call listener for incoming calls from any screen
       _setupVoipCallListener();
 
-      logger.info('ZajelApp', 'Core initialization complete');
+      // Start auto-delete cleanup timer
+      _startAutoDeleteTimer();
+
+      // Enable Android FLAG_SECURE if privacy screen is on
+      _syncAndroidSecureFlag();
+
+      logger.info('ZajelApp',
+          'Core initialization complete (${sw.elapsedMilliseconds}ms)');
     } catch (e, stack) {
-      logger.error('ZajelApp', 'Initialization failed', e, stack);
+      logger.error('ZajelApp', 'Initialization failed — app in degraded state',
+          e, stack);
     }
 
     // Show the home screen immediately — signaling connects in the background.
@@ -175,29 +269,43 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       setState(() => _initialized = true);
     }
 
-    // Auto-connect to signaling server (non-blocking)
+    // Auto-connect to signaling server (non-blocking).
+    // _connectionManager may be null if initialization failed early (e.g.
+    // secure storage unavailable on headless CI). Skip signaling in that case.
+    if (_connectionManager == null) {
+      logger.warning('ZajelApp',
+          'Skipping signaling — connection manager not initialized');
+      return;
+    }
+    if (!mounted) return;
     try {
-      final connectionManager = ref.read(connectionManagerProvider);
-      await _connectToSignaling(connectionManager);
+      await _connectToSignaling(_connectionManager!);
+      if (!mounted) return;
       logger.info('ZajelApp', 'Signaling connection complete');
 
       // Set up auto-reconnect on disconnect
-      _setupSignalingReconnect(connectionManager);
+      _setupSignalingReconnect(_connectionManager!);
     } catch (e, stack) {
+      if (!mounted) return;
       logger.error('ZajelApp', 'Signaling connection failed', e, stack);
       // Even on initial failure, try to reconnect
-      final connectionManager = ref.read(connectionManagerProvider);
-      _setupSignalingReconnect(connectionManager);
+      if (_connectionManager != null) {
+        _setupSignalingReconnect(_connectionManager!);
+      }
     }
   }
 
-  void _setupSignalingReconnect(dynamic connectionManager) {
+  void _setupSignalingReconnect(ConnectionManager connectionManager) {
+    if (!mounted) return;
     final signalingClient = ref.read(signalingClientProvider);
     if (signalingClient == null) return;
 
-    signalingClient.connectionState.listen((state) async {
+    _signalingReconnectSubscription?.cancel();
+    _signalingReconnectSubscription =
+        signalingClient.connectionState.listen((state) async {
       if (state == SignalingConnectionState.disconnected ||
           state == SignalingConnectionState.failed) {
+        if (!mounted) return;
         ref.read(signalingConnectedProvider.notifier).state = false;
         ref.read(signalingDisplayStateProvider.notifier).state =
             SignalingDisplayState.disconnected;
@@ -211,14 +319,14 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
         const maxRetries = 5;
 
         for (var attempt = 1; attempt <= maxRetries; attempt++) {
-          if (_disposed) break;
+          if (_disposed || !mounted) break;
           logger.info('ZajelApp',
               'Signaling reconnect attempt $attempt/$maxRetries in ${delay.inSeconds}s');
           ref.read(signalingDisplayStateProvider.notifier).state =
               SignalingDisplayState.connecting;
 
           await Future<void>.delayed(delay);
-          if (_disposed) break;
+          if (_disposed || !mounted) break;
 
           try {
             await _connectToSignaling(connectionManager);
@@ -237,30 +345,35 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
 
         logger.error('ZajelApp',
             'Signaling reconnect failed after $maxRetries attempts');
-        ref.read(signalingDisplayStateProvider.notifier).state =
-            SignalingDisplayState.disconnected;
+        if (mounted) {
+          ref.read(signalingDisplayStateProvider.notifier).state =
+              SignalingDisplayState.disconnected;
+        }
         _isReconnecting = false;
       }
     });
   }
 
-  Future<void> _connectToSignaling(dynamic connectionManager) async {
+  Future<void> _connectToSignaling(ConnectionManager connectionManager) async {
     try {
       logger.info('ZajelApp', 'Auto-connecting to signaling server...');
+      if (!mounted) return;
       ref.read(signalingDisplayStateProvider.notifier).state =
           SignalingDisplayState.connecting;
 
       String serverUrl;
+      final useDiscovery = !Environment.hasDirectSignalingUrl;
 
       // If a direct signaling URL is provided (e.g. E2E tests), use it
       // directly and skip server discovery.
-      if (Environment.hasDirectSignalingUrl) {
+      if (!useDiscovery) {
         serverUrl = Environment.signalingUrl;
         logger.info('ZajelApp', 'Using direct signaling URL: $serverUrl');
       } else {
         // Discover and select a VPS server
         final discoveryService = ref.read(serverDiscoveryServiceProvider);
         final selectedServer = await discoveryService.selectServer();
+        if (!mounted) return;
 
         if (selectedServer == null) {
           logger.warning('ZajelApp', 'No servers available from discovery');
@@ -281,6 +394,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       logger.debug('ZajelApp', 'Connecting to WebSocket URL: $serverUrl');
 
       final code = await connectionManager.connect(serverUrl: serverUrl);
+      if (!mounted) return;
       logger.info(
           'ZajelApp', 'Connected to signaling with pairing code: $code');
       ref.read(pairingCodeProvider.notifier).state = code;
@@ -290,12 +404,32 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       ref.read(signalingDisplayStateProvider.notifier).state =
           SignalingDisplayState.connected;
 
+      // Connect to all other discovered servers for cross-server rendezvous
+      if (useDiscovery) {
+        try {
+          if (!mounted) return;
+          final discoveryService = ref.read(serverDiscoveryServiceProvider);
+          final allServers = await discoveryService.fetchServers();
+          if (!mounted) return;
+          final allUrls = allServers
+              .map((s) => discoveryService.getWebSocketUrl(s))
+              .toList();
+          await connectionManager.connectToAdditionalServers(allUrls);
+        } catch (e) {
+          logger.warning(
+              'ZajelApp', 'Failed to connect to additional servers: $e');
+        }
+      }
+
       // Register meeting points for trusted peer reconnection
+      if (!mounted) return;
       await connectionManager.reconnectTrustedPeers();
     } catch (e, stack) {
       logger.error('ZajelApp', 'Failed to auto-connect to signaling', e, stack);
-      ref.read(signalingDisplayStateProvider.notifier).state =
-          SignalingDisplayState.disconnected;
+      if (mounted) {
+        ref.read(signalingDisplayStateProvider.notifier).state =
+            SignalingDisplayState.disconnected;
+      }
     }
   }
 
@@ -346,6 +480,26 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
                   attachmentSize: transfer.totalSize,
                 ),
               );
+
+          // Show notification after file is confirmed saved to disk
+          final notificationService = ref.read(notificationServiceProvider);
+          final settings = ref.read(notificationSettingsProvider);
+          String peerName = peerId;
+          final aliases = ref.read(peerAliasesProvider);
+          final peersAsync = ref.read(peersProvider);
+          peersAsync.whenData((peers) {
+            final peer = peers.where((p) => p.id == peerId).firstOrNull;
+            if (peer != null) {
+              peerName = resolvePeerDisplayName(peer, alias: aliases[peer.id]);
+            }
+          });
+
+          notificationService.showFileNotification(
+            peerId: peerId,
+            peerName: peerName,
+            fileName: transfer.fileName,
+            settings: settings,
+          );
         }
       }
     });
@@ -605,7 +759,9 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     final notificationService = ref.read(notificationServiceProvider);
 
     // Global message listener: persist to DB immediately, then notify
-    connectionManager.messages.listen((event) {
+    _notificationMessageSubscription?.cancel();
+    _notificationMessageSubscription =
+        connectionManager.peerMessages.listen((event) {
       final (peerId, message) = event;
 
       // Persist incoming message to DB immediately (prevents message drops)
@@ -619,13 +775,26 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       );
       ref.read(chatMessagesProvider(peerId).notifier).addMessage(msg);
 
+      // Suppress notification if app is in foreground AND user is viewing
+      // this specific chat.
+      final inForeground = ref.read(appInForegroundProvider);
+      final activeScreen = ref.read(activeScreenProvider);
+      if (inForeground &&
+          activeScreen.type == 'chat' &&
+          activeScreen.id == peerId) {
+        return;
+      }
+
       // Show notification
       final settings = ref.read(notificationSettingsProvider);
       String peerName = peerId;
+      final aliases = ref.read(peerAliasesProvider);
       final peersAsync = ref.read(peersProvider);
       peersAsync.whenData((peers) {
         final peer = peers.where((p) => p.id == peerId).firstOrNull;
-        if (peer != null) peerName = peer.displayName;
+        if (peer != null) {
+          peerName = resolvePeerDisplayName(peer, alias: aliases[peer.id]);
+        }
       });
 
       notificationService.showMessageNotification(
@@ -636,27 +805,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       );
     });
 
-    // Notify on file received
-    connectionManager.fileCompletes.listen((event) {
-      final (peerId, fileId) = event;
-      final settings = ref.read(notificationSettingsProvider);
-      final fileReceiveService = ref.read(fileReceiveServiceProvider);
-      final transfer = fileReceiveService.getTransfer(fileId);
-
-      String peerName = peerId;
-      final peersAsync = ref.read(peersProvider);
-      peersAsync.whenData((peers) {
-        final peer = peers.where((p) => p.id == peerId).firstOrNull;
-        if (peer != null) peerName = peer.displayName;
-      });
-
-      notificationService.showFileNotification(
-        peerId: peerId,
-        peerName: peerName,
-        fileName: transfer?.fileName ?? 'File',
-        settings: settings,
-      );
-    });
+    // File notifications are handled in _setupFileTransferListeners
+    // after completeTransfer confirms the file is saved to disk.
   }
 
   void _setupPeerStatusNotifications() {
@@ -678,8 +828,9 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
 
           if (wasOnline != isOnline) {
             final settings = ref.read(notificationSettingsProvider);
+            final aliases = ref.read(peerAliasesProvider);
             notificationService.showPeerStatusNotification(
-              peerName: peer.displayName,
+              peerName: resolvePeerDisplayName(peer, alias: aliases[peer.id]),
               connected: isOnline,
               settings: settings,
             );
@@ -707,11 +858,15 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
             if (call != null) {
               final settings = ref.read(notificationSettingsProvider);
               String callerName = call.peerId;
+              final aliases = ref.read(peerAliasesProvider);
               final peersAsync = ref.read(peersProvider);
               peersAsync.whenData((peers) {
                 final peer =
                     peers.where((p) => p.id == call.peerId).firstOrNull;
-                if (peer != null) callerName = peer.displayName;
+                if (peer != null) {
+                  callerName =
+                      resolvePeerDisplayName(peer, alias: aliases[peer.id]);
+                }
               });
               final notificationService = ref.read(notificationServiceProvider);
               notificationService.showCallNotification(
@@ -775,10 +930,11 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     // Try to get caller name from peers list
     final peersAsync = ref.read(peersProvider);
     String callerName = call.peerId;
+    final aliases = ref.read(peerAliasesProvider);
     peersAsync.whenData((peers) {
       final peer = peers.where((p) => p.id == call.peerId).firstOrNull;
       if (peer != null) {
-        callerName = peer.displayName;
+        callerName = resolvePeerDisplayName(peer, alias: aliases[peer.id]);
       }
     });
 
@@ -839,16 +995,85 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     );
   }
 
+  static const _privacyChannel = MethodChannel('com.zajel.zajel/privacy');
+
+  Future<void> _syncAndroidSecureFlag() async {
+    if (!Platform.isAndroid && !Platform.isWindows) return;
+    // Never set FLAG_SECURE in E2E mode — it blocks Appium screenshots
+    if (_isE2eTest) return;
+    try {
+      final enabled = ref.read(privacyScreenProvider);
+      if (enabled) {
+        await _privacyChannel.invokeMethod('enableSecureScreen');
+      } else {
+        await _privacyChannel.invokeMethod('disableSecureScreen');
+      }
+    } catch (e) {
+      logger.warning('ZajelApp', 'Failed to set secure screen flag: $e');
+    }
+  }
+
+  void _startAutoDeleteTimer() {
+    // Run cleanup immediately on startup, then every hour
+    _runAutoDeleteCleanup();
+    _autoDeleteTimer = Timer.periodic(
+      const Duration(hours: 1),
+      (_) => _runAutoDeleteCleanup(),
+    );
+  }
+
+  Future<void> _runAutoDeleteCleanup() async {
+    try {
+      final settings = ref.read(autoDeleteSettingsProvider);
+      if (!settings.enabled) return;
+
+      final cutoff = DateTime.now().subtract(settings.duration);
+      final storage = ref.read(messageStorageProvider);
+
+      // Get attachment paths before deleting messages
+      final attachmentPaths = await storage.getAttachmentPathsOlderThan(cutoff);
+
+      // Delete messages from database
+      final deleted = await storage.deleteMessagesOlderThan(cutoff);
+
+      // Delete attachment files from disk
+      var filesDeleted = 0;
+      for (final path in attachmentPaths) {
+        try {
+          final file = File(path);
+          if (await file.exists()) {
+            await file.delete();
+            filesDeleted++;
+          }
+        } catch (e) {
+          logger.warning('AutoDelete', 'Failed to delete file $path: $e');
+        }
+      }
+
+      if (deleted > 0 || filesDeleted > 0) {
+        logger.info(
+            'AutoDelete',
+            'Cleaned up $deleted messages and $filesDeleted files '
+                'older than ${settings.duration.inHours}h');
+      }
+    } catch (e) {
+      logger.error('AutoDelete', 'Cleanup failed', e);
+    }
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
 
+    _autoDeleteTimer?.cancel();
     _fileStartSubscription?.cancel();
     _fileChunkSubscription?.cancel();
     _fileCompleteSubscription?.cancel();
     _pairRequestSubscription?.cancel();
     _linkRequestSubscription?.cancel();
     _voipCallStateSubscription?.cancel();
+    _signalingReconnectSubscription?.cancel();
+    _notificationMessageSubscription?.cancel();
 
     // Dispose native resources if not already done
     if (!_disposed) {
@@ -869,13 +1094,62 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       );
     }
 
-    return MaterialApp.router(
+    final app = MaterialApp.router(
       title: 'Zajel',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: ref.watch(themeModeProvider),
       routerConfig: appRouter,
+    );
+
+    if (!_showPrivacyScreen) return app;
+
+    // Overlay the app with a privacy screen when backgrounded.
+    // Directionality is required because the Stack is above MaterialApp.
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: Stack(
+        children: [
+          app,
+          const _PrivacyOverlay(),
+        ],
+      ),
+    );
+  }
+}
+
+class _PrivacyOverlay extends StatelessWidget {
+  const _PrivacyOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        backgroundColor: const Color(0xFF1A1A2E),
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.lock_outline,
+                size: 64,
+                color: Colors.white.withValues(alpha: 0.7),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Zajel',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white.withValues(alpha: 0.8),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

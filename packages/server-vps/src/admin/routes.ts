@@ -45,9 +45,17 @@ export class AdminRoutes {
         // Verify token before setting cookie
         const payload = verifyJwt(queryToken, this.config.jwtSecret);
         if (payload) {
-          setAuthCookie(res, queryToken);
+          const isSecure = req.headers['x-forwarded-proto'] === 'https'
+            || (req.connection as { encrypted?: boolean })?.encrypted === true;
+          setAuthCookie(res, queryToken, isSecure);
           // Redirect to remove token from URL
           res.writeHead(302, { Location: '/admin/' });
+          res.end();
+          return true;
+        }
+        // Token invalid/expired — redirect to CF admin if configured
+        if (this.config.cfAdminUrl) {
+          res.writeHead(302, { Location: this.config.cfAdminUrl });
           res.end();
           return true;
         }
@@ -174,14 +182,14 @@ export class AdminRoutes {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-cache',
     });
-    res.end(getDashboardHtml());
+    res.end(getDashboardHtml(this.config.cfAdminUrl));
   }
 }
 
 /**
  * Dashboard HTML (inline for simplicity)
  */
-function getDashboardHtml(): string {
+function getDashboardHtml(cfAdminUrl?: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -358,7 +366,6 @@ function getDashboardHtml(): string {
     .gauge-fill {
       stroke: var(--success);
       stroke-linecap: round;
-      transition: stroke-dashoffset 0.5s ease, stroke 0.3s ease;
     }
 
     .gauge-text {
@@ -475,7 +482,6 @@ function getDashboardHtml(): string {
 
     .scaling-bar-fill {
       height: 100%;
-      transition: width 0.5s ease, background 0.3s ease;
     }
 
     .scaling-bar-label {
@@ -601,6 +607,9 @@ function getDashboardHtml(): string {
   </div>
 
   <script type="module">
+    // CF Admin URL for authentication redirect
+    const CF_ADMIN_URL = ${cfAdminUrl ? `'${cfAdminUrl}'` : 'null'};
+
     // State
     let state = {
       authenticated: false,
@@ -759,12 +768,23 @@ function getDashboardHtml(): string {
     }
 
     function renderLoginRequired() {
+      if (CF_ADMIN_URL) {
+        // Redirect to CF Admin after a short delay
+        setTimeout(() => {
+          const returnUrl = encodeURIComponent(window.location.href);
+          window.location.href = CF_ADMIN_URL + '/admin/?redirect=' + returnUrl;
+        }, 1500);
+      }
+
       return \`
         <div class="login-overlay">
           <div class="login-card">
             <h2>🔐 VPS Admin Dashboard</h2>
             <p>Authentication required. Please login via the central admin dashboard.</p>
-            <p class="login-error">Redirecting to CF Admin...</p>
+            \${CF_ADMIN_URL
+              ? '<p class="login-error">Redirecting to CF Admin...</p>'
+              : '<p class="login-error">CF Admin URL not configured. Set ZAJEL_CF_ADMIN_URL on the VPS.</p>'
+            }
           </div>
         </div>
       \`;
