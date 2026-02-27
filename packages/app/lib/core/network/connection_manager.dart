@@ -113,6 +113,18 @@ class ConnectionManager {
   final _messagesController =
       StreamController<(String peerId, String message)>.broadcast();
 
+  // Dedicated per-type streams (prefix already stripped by router)
+  final _peerMessageController =
+      StreamController<(String peerId, String message)>.broadcast();
+  final _groupInvitationController =
+      StreamController<(String peerId, String payload)>.broadcast();
+  final _groupDataController =
+      StreamController<(String peerId, String payload)>.broadcast();
+  final _typingController =
+      StreamController<(String peerId, String payload)>.broadcast();
+  final _receiptController =
+      StreamController<(String peerId, String payload)>.broadcast();
+
   final _fileChunksController = StreamController<
       (
         String peerId,
@@ -200,8 +212,25 @@ class ConnectionManager {
   /// Stream of all known peers.
   Stream<List<Peer>> get peers => _peersController.stream;
 
-  /// Stream of incoming messages (peerId, plaintext).
+  /// Stream of all incoming messages (legacy, deprecated).
+  @Deprecated('Use peerMessages, groupInvitations, or groupData instead')
   Stream<(String, String)> get messages => _messagesController.stream;
+
+  /// 1:1 peer chat messages only (no protocol prefixes).
+  Stream<(String, String)> get peerMessages => _peerMessageController.stream;
+
+  /// Group invitation payloads (ginv: prefix stripped).
+  Stream<(String, String)> get groupInvitations =>
+      _groupInvitationController.stream;
+
+  /// Group message data (grp: prefix stripped, raw base64).
+  Stream<(String, String)> get groupData => _groupDataController.stream;
+
+  /// Typing indicator events (typ: prefix stripped).
+  Stream<(String, String)> get typingEvents => _typingController.stream;
+
+  /// Read receipt events (rcpt: prefix stripped).
+  Stream<(String, String)> get receiptEvents => _receiptController.stream;
 
   /// Stream of incoming file chunks.
   Stream<(String, String, Uint8List, int, int)> get fileChunks =>
@@ -618,6 +647,11 @@ class ConnectionManager {
     _signalingState = SignalingDisconnected();
 
     await _peersController.close();
+    await _peerMessageController.close();
+    await _groupInvitationController.close();
+    await _groupDataController.close();
+    await _typingController.close();
+    await _receiptController.close();
     await _messagesController.close();
     await _fileChunksController.close();
     await _fileStartController.close();
@@ -673,7 +707,21 @@ class ConnectionManager {
         return;
       }
 
-      // Emit to UI — persistence is handled by the global listener in main.dart
+      // Route by protocol prefix to dedicated streams (prefix stripped)
+      if (message.startsWith('ginv:')) {
+        _groupInvitationController.add((stableId, message.substring(5)));
+      } else if (message.startsWith('grp:')) {
+        _groupDataController.add((stableId, message.substring(4)));
+      } else if (message.startsWith('typ:')) {
+        _typingController.add((stableId, message.substring(4)));
+      } else if (message.startsWith('rcpt:')) {
+        _receiptController.add((stableId, message.substring(5)));
+      } else {
+        _peerMessageController.add((stableId, message));
+      }
+
+      // Legacy catch-all stream (all messages with original prefixes)
+      // ignore: deprecated_member_use_from_same_package
       _messagesController.add((stableId, message));
 
       // Also forward to all connected linked devices

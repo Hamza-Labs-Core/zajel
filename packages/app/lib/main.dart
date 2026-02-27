@@ -753,13 +753,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     // Global message listener: persist to DB immediately, then notify
     _notificationMessageSubscription?.cancel();
     _notificationMessageSubscription =
-        connectionManager.messages.listen((event) {
+        connectionManager.peerMessages.listen((event) {
       final (peerId, message) = event;
-
-      // Skip protocol-prefixed messages — handled by group services
-      if (message.startsWith('ginv:') || message.startsWith('grp:')) {
-        return;
-      }
 
       // Persist incoming message to DB immediately (prevents message drops)
       final msg = Message(

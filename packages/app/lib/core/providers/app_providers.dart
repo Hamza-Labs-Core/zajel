@@ -345,10 +345,10 @@ final visiblePeersProvider = Provider<AsyncValue<List<Peer>>>((ref) {
   });
 });
 
-/// Provider for incoming messages.
+/// Provider for incoming 1:1 peer messages (no protocol prefixes).
 final messagesStreamProvider = StreamProvider<(String, String)>((ref) {
   final connectionManager = ref.watch(connectionManagerProvider);
-  return connectionManager.messages;
+  return connectionManager.peerMessages;
 });
 
 /// Provider for message storage (SQLite).

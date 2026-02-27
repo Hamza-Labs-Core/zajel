@@ -12,9 +12,6 @@ import 'group_service.dart';
 /// Wire prefix for group invitations sent over 1:1 P2P channels.
 const String _invitePrefix = 'ginv:';
 
-/// Wire prefix for group message data sent over 1:1 P2P channels.
-const String _groupDataPrefix = 'grp:';
-
 /// Handles sending and receiving group invitations over existing 1:1
 /// WebRTC data channels.
 ///
@@ -27,7 +24,8 @@ class GroupInvitationService {
   final GroupCryptoService _cryptoService;
   final String _selfDeviceId;
 
-  StreamSubscription<(String, String)>? _messageSub;
+  StreamSubscription<(String, String)>? _inviteSub;
+  StreamSubscription<(String, String)>? _groupDataSub;
 
   /// Callback invoked when a group invitation is received and accepted.
   void Function(Group group)? onGroupJoined;
@@ -46,22 +44,24 @@ class GroupInvitationService {
         _selfDeviceId = selfDeviceId;
 
   /// Start listening for incoming group invitations and group messages
-  /// on the 1:1 message stream.
+  /// on the dedicated streams from ConnectionManager.
   void start() {
-    _messageSub = _connectionManager.messages.listen((event) {
-      final (peerId, message) = event;
-      if (message.startsWith(_invitePrefix)) {
-        _handleInvitation(peerId, message.substring(_invitePrefix.length));
-      } else if (message.startsWith(_groupDataPrefix)) {
-        _handleGroupData(peerId, message.substring(_groupDataPrefix.length));
-      }
+    _inviteSub = _connectionManager.groupInvitations.listen((event) {
+      final (peerId, payload) = event;
+      _handleInvitation(peerId, payload);
+    });
+    _groupDataSub = _connectionManager.groupData.listen((event) {
+      final (peerId, payload) = event;
+      _handleGroupData(peerId, payload);
     });
   }
 
   /// Stop listening.
   Future<void> dispose() async {
-    await _messageSub?.cancel();
-    _messageSub = null;
+    await _inviteSub?.cancel();
+    _inviteSub = null;
+    await _groupDataSub?.cancel();
+    _groupDataSub = null;
   }
 
   /// Send a group invitation to a peer over the 1:1 data channel.

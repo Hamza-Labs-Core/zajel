@@ -86,20 +86,16 @@ class WebRtcP2PAdapter implements P2PConnectionAdapter {
       }
     });
 
-    // Listen to incoming messages and forward group data.
-    // Messages arrive with the plain device ID as the peer ID.
-    _messagesSub = _connectionManager.messages.listen((event) {
-      final (peerId, message) = event;
-
-      // Only process messages with our group data prefix.
-      if (!message.startsWith(_groupDataPrefix)) return;
+    // Listen to the dedicated groupData stream (grp: prefix already stripped).
+    // Events arrive with the plain device ID as the peer ID.
+    _messagesSub = _connectionManager.groupData.listen((event) {
+      final (peerId, payload) = event;
 
       // Find all group peer IDs that map to this device ID.
       final groupPeerIds = _deviceToGroupPeerIds[peerId];
       if (groupPeerIds == null || groupPeerIds.isEmpty) return;
 
       try {
-        final payload = message.substring(_groupDataPrefix.length);
         final data = base64Decode(payload);
         // Forward to all group contexts that include this device.
         for (final groupPeerId in groupPeerIds) {
