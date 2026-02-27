@@ -207,11 +207,10 @@ class TestChannels:
 
         # Tap publish button (exact match to avoid hitting "Publish content..." text)
         helper._find("Publish", timeout=10, partial=False).click()
-        time.sleep(3)
 
-        # Verify the publish snackbar appeared (indicates success)
-        # The snackbar says "Published (N chunk(s))"
-        helper._find("Published", timeout=10)
+        # Verify the message appears in the channel list (persistent, unlike
+        # the ephemeral snackbar which can vanish before the poll catches it).
+        helper._find("Hello from the channel owner!", timeout=15)
 
     @pytest.mark.single_device
     def test_channel_shows_share_button_for_owner(self, alice, app_helper):
