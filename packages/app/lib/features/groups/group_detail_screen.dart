@@ -23,6 +23,7 @@ class GroupDetailScreen extends ConsumerStatefulWidget {
 
 class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
   final _messageController = TextEditingController();
+  final _messageFocusNode = FocusNode();
   bool _sending = false;
   bool _groupActivated = false;
 
@@ -69,6 +70,7 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
       }
     }
     _messageController.dispose();
+    _messageFocusNode.dispose();
     super.dispose();
   }
 
@@ -239,6 +241,7 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
             Expanded(
               child: TextField(
                 controller: _messageController,
+                focusNode: _messageFocusNode,
                 decoration: const InputDecoration(
                   hintText: 'Type a message...',
                   border: InputBorder.none,
@@ -348,6 +351,7 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
     } finally {
       if (mounted) {
         setState(() => _sending = false);
+        _messageFocusNode.requestFocus();
       }
     }
   }

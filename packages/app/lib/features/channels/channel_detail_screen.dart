@@ -34,6 +34,7 @@ class ChannelDetailScreen extends ConsumerStatefulWidget {
 
 class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
   final _messageController = TextEditingController();
+  final _messageFocusNode = FocusNode();
   final _scrollController = ScrollController();
   bool _publishing = false;
 
@@ -52,6 +53,7 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
       ref.read(activeScreenProvider.notifier).state = ActiveScreen.other;
     } catch (_) {} // ref may be invalid during tree teardown
     _messageController.dispose();
+    _messageFocusNode.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -355,6 +357,7 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
                 },
                 child: TextField(
                   controller: _messageController,
+                  focusNode: _messageFocusNode,
                   decoration: const InputDecoration(
                     hintText: 'Publish to channel...',
                     border: InputBorder.none,
@@ -473,6 +476,7 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
     } finally {
       if (mounted) {
         setState(() => _publishing = false);
+        _messageFocusNode.requestFocus();
       }
     }
   }
