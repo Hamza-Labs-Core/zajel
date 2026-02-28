@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../../features/chat/widgets/filtered_emoji_picker.dart';
+import 'filtered_emoji_picker.dart';
 
 /// A reusable compose bar for text input with send functionality.
 ///

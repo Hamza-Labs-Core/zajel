@@ -784,7 +784,7 @@ describe('ClientHandler Pairing Logic', () => {
 
       const errorMsg = ws.getLastMessage();
       expect(errorMsg.type).toBe('error');
-      expect(errorMsg.message).toContain('Missing required field: targetCode');
+      expect(errorMsg.message).toContain('targetCode must be a string');
     });
 
     it('should handle pairing code registration without publicKey', async () => {
@@ -800,7 +800,7 @@ describe('ClientHandler Pairing Logic', () => {
 
       const errorMsg = ws.getLastMessage();
       expect(errorMsg.type).toBe('error');
-      expect(errorMsg.message).toContain('Missing required field: publicKey');
+      expect(errorMsg.message).toContain('publicKey must be a string');
     });
 
     it('should handle pair response from unregistered client', async () => {

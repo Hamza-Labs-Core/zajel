@@ -33,6 +33,9 @@ const bool _isE2eTest = bool.fromEnvironment('E2E_TEST');
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Guard: E2E_TEST must never leak into release builds
+  Environment.assertNoE2eTestInRelease();
+
   // Force semantics tree so UiAutomator2/AT-SPI/UIA can see widgets in E2E tests
   if (_isE2eTest) {
     SemanticsBinding.instance.ensureSemantics();

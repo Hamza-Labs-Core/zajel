@@ -239,8 +239,8 @@ class TestGroupsHeadlessE2E:
         time.sleep(2)
         helper.take_screenshot("group_members_with_headless")
 
-        # Verify member is visible (app shows "Peer <code>" or display name)
-        helper._find("Peer", partial=True)
+        # Verify member is visible (app shows display name "HeadlessBob")
+        helper._find("HeadlessBob", partial=True)
 
     @pytest.mark.slow
     def test_group_detail_shows_member_count(

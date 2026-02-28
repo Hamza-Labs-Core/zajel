@@ -583,6 +583,104 @@ export class ClientHandler extends EventEmitter {
   /**
    * Handle incoming WebSocket message
    */
+  /**
+   * Validate required fields and types for incoming messages.
+   * Returns an error string if invalid, or null if valid.
+   */
+  private validateMessage(message: Record<string, unknown>): string | null {
+    if (typeof message !== 'object' || message === null) {
+      return 'Message must be a JSON object';
+    }
+    if (typeof message.type !== 'string') {
+      return 'Missing or invalid "type" field';
+    }
+    switch (message.type) {
+      case 'register':
+        if ('pairingCode' in message) {
+          if (typeof message.pairingCode !== 'string') return 'register: pairingCode must be a string';
+          if (typeof message.publicKey !== 'string') return 'register: publicKey must be a string';
+        } else {
+          if (typeof message.peerId !== 'string') return 'register: peerId must be a string';
+        }
+        break;
+      case 'pair_request':
+        if (typeof message.targetCode !== 'string') return 'pair_request: targetCode must be a string';
+        break;
+      case 'pair_response':
+        if (typeof message.targetCode !== 'string') return 'pair_response: targetCode must be a string';
+        if (typeof message.accepted !== 'boolean') return 'pair_response: accepted must be a boolean';
+        break;
+      case 'offer':
+      case 'answer':
+      case 'ice_candidate':
+        if (typeof message.target !== 'string') return `${message.type}: target must be a string`;
+        break;
+      case 'call_offer':
+      case 'call_answer':
+      case 'call_reject':
+      case 'call_hangup':
+      case 'call_ice':
+        if (typeof message.target !== 'string') return `${message.type}: target must be a string`;
+        break;
+      case 'link_request':
+        if (typeof message.linkCode !== 'string') return 'link_request: linkCode must be a string';
+        if (typeof message.publicKey !== 'string') return 'link_request: publicKey must be a string';
+        break;
+      case 'link_response':
+        if (typeof message.linkCode !== 'string') return 'link_response: linkCode must be a string';
+        if (typeof message.accepted !== 'boolean') return 'link_response: accepted must be a boolean';
+        break;
+      case 'upstream-message':
+        if (typeof message.channelId !== 'string') return 'upstream-message: channelId must be a string';
+        if (typeof message.ephemeralPublicKey !== 'string') return 'upstream-message: ephemeralPublicKey must be a string';
+        break;
+      case 'stream-start':
+      case 'stream-frame':
+      case 'stream-end':
+        if (typeof message.streamId !== 'string') return `${message.type}: streamId must be a string`;
+        if (typeof message.channelId !== 'string') return `${message.type}: channelId must be a string`;
+        break;
+      case 'channel-subscribe':
+      case 'channel-owner-register':
+        if (typeof message.channelId !== 'string') return `${message.type}: channelId must be a string`;
+        break;
+      case 'chunk_announce':
+        if (typeof message.peerId !== 'string') return 'chunk_announce: peerId must be a string';
+        if (!Array.isArray(message.chunks)) return 'chunk_announce: chunks must be an array';
+        break;
+      case 'chunk_request':
+      case 'chunk_push':
+        if (typeof message.chunkId !== 'string') return `${message.type}: chunkId must be a string`;
+        if (typeof message.channelId !== 'string') return `${message.type}: channelId must be a string`;
+        break;
+      case 'update_load':
+        if (typeof message.peerId !== 'string') return 'update_load: peerId must be a string';
+        break;
+      case 'register_rendezvous':
+        if (typeof message.peerId !== 'string') return 'register_rendezvous: peerId must be a string';
+        if (typeof message.relayId !== 'string') return 'register_rendezvous: relayId must be a string';
+        break;
+      case 'heartbeat':
+        if (typeof message.peerId !== 'string') return 'heartbeat: peerId must be a string';
+        break;
+      case 'attest_request':
+        if (typeof message.build_token !== 'string') return 'attest_request: build_token must be a string';
+        if (typeof message.device_id !== 'string') return 'attest_request: device_id must be a string';
+        break;
+      case 'attest_response':
+        if (typeof message.nonce !== 'string') return 'attest_response: nonce must be a string';
+        if (!Array.isArray(message.responses)) return 'attest_response: responses must be an array';
+        break;
+      case 'ping':
+      case 'get_relays':
+        break; // no required fields
+      default:
+        // Unknown types handled by the switch default case in handleMessage
+        break;
+    }
+    return null;
+  }
+
   async handleMessage(ws: WebSocket, data: string): Promise<void> {
     // Size validation (defense in depth - primary limit is at WebSocket level)
     // This catches any messages that slip through or are used in testing
@@ -605,6 +703,13 @@ export class ClientHandler extends EventEmitter {
       message = JSON.parse(data);
     } catch (e) {
       this.sendError(ws, 'Invalid message format: JSON parse error');
+      return;
+    }
+
+    // Validate required fields per message type
+    const validationError = this.validateMessage(message as unknown as Record<string, unknown>);
+    if (validationError) {
+      this.sendError(ws, `Invalid message: ${validationError}`);
       return;
     }
 
@@ -2436,132 +2541,156 @@ export class ClientHandler extends EventEmitter {
    * Handle WebSocket disconnect
    */
   async handleDisconnect(ws: WebSocket): Promise<void> {
-    // Clean up attestation session
-    const connectionId = this.wsToConnectionId.get(ws);
-    if (connectionId && this.attestationManager) {
-      this.attestationManager.removeSession(connectionId);
-    }
-    this.wsToConnectionId.delete(ws);
+    try {
+      // Clean up attestation session
+      try {
+        const connectionId = this.wsToConnectionId.get(ws);
+        if (connectionId && this.attestationManager) {
+          this.attestationManager.removeSession(connectionId);
+        }
+        this.wsToConnectionId.delete(ws);
+      } catch (e) {
+        logger.warn('[ClientHandler] Error cleaning up attestation session:', e);
+      }
 
-    // Clean up rate limiting tracking
-    this.wsRateLimits.delete(ws);
-    this.wsPairRequestRateLimits.delete(ws);
-    this.upstreamRateLimits.delete(ws);
+      // Clean up rate limiting tracking (sync, safe)
+      this.wsRateLimits.delete(ws);
+      this.wsPairRequestRateLimits.delete(ws);
+      this.upstreamRateLimits.delete(ws);
 
-    // Clean up channel owner registrations
-    for (const [channelId, ownerWs] of this.channelOwners) {
-      if (ownerWs === ws) {
-        this.channelOwners.delete(channelId);
-        // End any active streams for this owner
-        const activeStream = this.activeStreams.get(channelId);
-        if (activeStream && activeStream.ownerWs === ws) {
-          this.activeStreams.delete(channelId);
-          // Notify subscribers that stream ended
-          const subscribers = this.channelSubscribers.get(channelId);
-          if (subscribers) {
-            const endMsg = { type: 'stream-end', streamId: activeStream.streamId, channelId };
-            for (const subWs of subscribers) {
-              this.send(subWs, endMsg);
+      // Clean up channel owner registrations
+      try {
+        for (const [channelId, ownerWs] of this.channelOwners) {
+          if (ownerWs === ws) {
+            this.channelOwners.delete(channelId);
+            // End any active streams for this owner
+            const activeStream = this.activeStreams.get(channelId);
+            if (activeStream && activeStream.ownerWs === ws) {
+              this.activeStreams.delete(channelId);
+              // Notify subscribers that stream ended
+              const subscribers = this.channelSubscribers.get(channelId);
+              if (subscribers) {
+                const endMsg = { type: 'stream-end', streamId: activeStream.streamId, channelId };
+                for (const subWs of subscribers) {
+                  this.send(subWs, endMsg);
+                }
+              }
             }
           }
         }
+      } catch (e) {
+        logger.warn('[ClientHandler] Error cleaning up channel owners:', e);
       }
-    }
 
-    // Clean up channel subscriber registrations
-    for (const [, subscribers] of this.channelSubscribers) {
-      subscribers.delete(ws);
-    }
-
-    // Clean up pairing code mappings (for signaling clients)
-    const pairingCode = this.wsToPairingCode.get(ws);
-    if (pairingCode) {
-      this.pairingCodeToWs.delete(pairingCode);
-      this.wsToPairingCode.delete(ws);
-      this.pairingCodeToPublicKey.delete(pairingCode);
-
-      // Clean up timers for requests where this peer was the target
-      const pendingAsTarget = this.pendingPairRequests.get(pairingCode) || [];
-      for (const request of pendingAsTarget) {
-        const timerKey = `${request.requesterCode}:${pairingCode}`;
-        this.clearPairRequestTimers(timerKey);
+      // Clean up channel subscriber registrations
+      try {
+        for (const [, subscribers] of this.channelSubscribers) {
+          subscribers.delete(ws);
+        }
+      } catch (e) {
+        logger.warn('[ClientHandler] Error cleaning up channel subscribers:', e);
       }
-      this.pendingPairRequests.delete(pairingCode);
 
-      // Also remove requests where this peer was the requester and clean up timers
-      for (const [targetCode, requests] of this.pendingPairRequests) {
-        const filtered = requests.filter(r => {
-          if (r.requesterCode === pairingCode) {
-            // Clear the timers for this request
-            const timerKey = `${pairingCode}:${targetCode}`;
+      // Clean up pairing code mappings (for signaling clients)
+      try {
+        const pairingCode = this.wsToPairingCode.get(ws);
+        if (pairingCode) {
+          this.pairingCodeToWs.delete(pairingCode);
+          this.wsToPairingCode.delete(ws);
+          this.pairingCodeToPublicKey.delete(pairingCode);
+
+          // Clean up timers for requests where this peer was the target
+          const pendingAsTarget = this.pendingPairRequests.get(pairingCode) || [];
+          for (const request of pendingAsTarget) {
+            const timerKey = `${request.requesterCode}:${pairingCode}`;
             this.clearPairRequestTimers(timerKey);
-            return false;
           }
-          return true;
-        });
-        if (filtered.length === 0) {
-          this.pendingPairRequests.delete(targetCode);
-        } else if (filtered.length !== requests.length) {
-          this.pendingPairRequests.set(targetCode, filtered);
-        }
-      }
+          this.pendingPairRequests.delete(pairingCode);
 
-      // Clean up pending link requests where this peer was the mobile app (Issue #9)
-      const mobileTimer = this.linkRequestTimers.get(pairingCode);
-      if (mobileTimer) {
-        clearTimeout(mobileTimer);
-        this.linkRequestTimers.delete(pairingCode);
-      }
-      this.pendingLinkRequests.delete(pairingCode);
-
-      // Also clean up link requests where this peer was the web client
-      for (const [linkCode, request] of this.pendingLinkRequests) {
-        if (request.webClientCode === pairingCode) {
-          // Clear the timer for this link request (Issue #9)
-          const webClientTimer = this.linkRequestTimers.get(linkCode);
-          if (webClientTimer) {
-            clearTimeout(webClientTimer);
-            this.linkRequestTimers.delete(linkCode);
-          }
-          this.pendingLinkRequests.delete(linkCode);
-          // Notify mobile app that web client disconnected
-          const mobileWs = this.pairingCodeToWs.get(linkCode);
-          if (mobileWs) {
-            this.send(mobileWs, {
-              type: 'link_timeout',
-              linkCode,
+          // Also remove requests where this peer was the requester and clean up timers
+          for (const [targetCode, requests] of this.pendingPairRequests) {
+            const filtered = requests.filter(r => {
+              if (r.requesterCode === pairingCode) {
+                // Clear the timers for this request
+                const timerKey = `${pairingCode}:${targetCode}`;
+                this.clearPairRequestTimers(timerKey);
+                return false;
+              }
+              return true;
             });
+            if (filtered.length === 0) {
+              this.pendingPairRequests.delete(targetCode);
+            } else if (filtered.length !== requests.length) {
+              this.pendingPairRequests.set(targetCode, filtered);
+            }
+          }
+
+          // Clean up pending link requests where this peer was the mobile app (Issue #9)
+          const mobileTimer = this.linkRequestTimers.get(pairingCode);
+          if (mobileTimer) {
+            clearTimeout(mobileTimer);
+            this.linkRequestTimers.delete(pairingCode);
+          }
+          this.pendingLinkRequests.delete(pairingCode);
+
+          // Also clean up link requests where this peer was the web client
+          for (const [linkCode, request] of this.pendingLinkRequests) {
+            if (request.webClientCode === pairingCode) {
+              // Clear the timer for this link request (Issue #9)
+              const webClientTimer = this.linkRequestTimers.get(linkCode);
+              if (webClientTimer) {
+                clearTimeout(webClientTimer);
+                this.linkRequestTimers.delete(linkCode);
+              }
+              this.pendingLinkRequests.delete(linkCode);
+              // Notify mobile app that web client disconnected
+              const mobileWs = this.pairingCodeToWs.get(linkCode);
+              if (mobileWs) {
+                this.send(mobileWs, {
+                  type: 'link_timeout',
+                  linkCode,
+                });
+              }
+            }
+          }
+
+          logger.pairingEvent('disconnected', { code: pairingCode });
+        }
+      } catch (e) {
+        logger.warn('[ClientHandler] Error cleaning up pairing code mappings:', e);
+      }
+
+      // Clean up peerId mappings (for relay clients)
+      try {
+        const peerId = this.wsToClient.get(ws);
+        if (peerId) {
+          // Only clean up if this WebSocket is still the registered one for this peerId
+          const client = this.clients.get(peerId);
+          if (client && client.ws === ws) {
+            // Remove from registries
+            this.relayRegistry.unregister(peerId);
+            await this.distributedRendezvous.unregisterPeer(peerId);
+
+            // Clean up chunk relay for this peer
+            if (this.chunkRelay) {
+              await this.chunkRelay.unregisterPeer(peerId);
+            }
+
+            // Clean up mappings
+            this.clients.delete(peerId);
+
+            this.emit('client-disconnected', peerId);
           }
         }
+        // Always clean up the reverse mapping for this WebSocket
+        this.wsToClient.delete(ws);
+      } catch (e) {
+        logger.warn('[ClientHandler] Error cleaning up peerId mappings:', e);
       }
-
-      logger.pairingEvent('disconnected', { code: pairingCode });
+    } catch (e) {
+      // Outer catch: prevents any uncaught error from propagating as unhandled rejection
+      logger.error('[ClientHandler] Unexpected error in handleDisconnect:', e);
     }
-
-    // Clean up peerId mappings (for relay clients)
-    const peerId = this.wsToClient.get(ws);
-    if (!peerId) return;
-
-    // Only clean up if this WebSocket is still the registered one for this peerId
-    const client = this.clients.get(peerId);
-    if (client && client.ws === ws) {
-      // Remove from registries
-      this.relayRegistry.unregister(peerId);
-      await this.distributedRendezvous.unregisterPeer(peerId);
-
-      // Clean up chunk relay for this peer
-      if (this.chunkRelay) {
-        await this.chunkRelay.unregisterPeer(peerId);
-      }
-
-      // Clean up mappings
-      this.clients.delete(peerId);
-
-      this.emit('client-disconnected', peerId);
-    }
-
-    // Always clean up the reverse mapping for this WebSocket
-    this.wsToClient.delete(ws);
   }
 
   /**

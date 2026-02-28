@@ -10,6 +10,8 @@
 /// ```
 library;
 
+import 'package:flutter/foundation.dart' show kReleaseMode;
+
 /// Environment configuration using compile-time constants.
 ///
 /// These values are baked into the app at build time and cannot be changed
@@ -73,6 +75,19 @@ class Environment {
   ///
   /// Override with `--dart-define=E2E_TEST=true`
   static const bool isE2eTest = bool.fromEnvironment('E2E_TEST');
+
+  /// Verify that E2E_TEST is not accidentally enabled in release builds.
+  ///
+  /// Call this during app startup. Throws in release mode if E2E_TEST is true.
+  /// Uses a runtime check (not assert) because assert is stripped from release.
+  static void assertNoE2eTestInRelease() {
+    if (kReleaseMode && isE2eTest) {
+      throw StateError(
+        'FATAL: E2E_TEST=true must never be used in release builds. '
+        'This flag disables security features including pair request approval.',
+      );
+    }
+  }
 
   /// Whether running in QA environment.
   static bool get isQA => env == 'qa';
