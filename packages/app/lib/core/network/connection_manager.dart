@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 
 import '../config/environment.dart';
 import '../crypto/crypto_service.dart';
+import '../crypto/key_ratchet.dart';
 import '../logging/logger_service.dart';
 import '../models/models.dart';
 import '../storage/trusted_peers_storage.dart';
@@ -49,6 +50,7 @@ class ConnectionManager {
   final TrustedPeersStorage _trustedPeersStorage;
   final MeetingPointService _meetingPointService;
   late final KeyRotationDetector _keyRotationDetector;
+  late final KeyRatchet _keyRatchet;
 
   /// Current signaling state - uses sealed class for type-safe null handling.
   SignalingState _signalingState = SignalingDisconnected();
@@ -153,6 +155,12 @@ class ConnectionManager {
       trustedPeersStorage: trustedPeersStorage,
       cryptoService: cryptoService,
       messageStorage: messageStorage,
+    );
+    _keyRatchet = KeyRatchet(
+      cryptoService: cryptoService,
+      sendControl: (peerId, ratchetMessage) {
+        sendMessage(peerId, ratchetMessage);
+      },
     );
     _setupCallbacks();
   }
@@ -549,6 +557,12 @@ class ConnectionManager {
   Future<void> sendMessage(String peerId, String plaintext) async {
     // Translate stable ID to signaling code for WebRTC layer
     await _webrtcService.sendMessage(_toCode(peerId), plaintext);
+
+    // Track outgoing message for key ratchet scheduling
+    // (skip ratchet control messages to avoid infinite recursion)
+    if (!plaintext.startsWith('ratchet:')) {
+      await _keyRatchet.onMessageSent(peerId);
+    }
   }
 
   /// Send a file to a peer.
@@ -669,7 +683,11 @@ class ConnectionManager {
       }
 
       // Route by protocol prefix to dedicated streams (prefix stripped)
-      if (message.startsWith('ginv:')) {
+      if (message.startsWith('ratchet:')) {
+        // Key ratchet control message — not forwarded to UI or linked devices
+        _keyRatchet.onRatchetReceived(stableId, message.substring(8));
+        return;
+      } else if (message.startsWith('ginv:')) {
         _groupInvitationController.add((stableId, message.substring(5)));
       } else if (message.startsWith('grp:')) {
         _groupDataController.add((stableId, message.substring(4)));
@@ -725,6 +743,12 @@ class ConnectionManager {
       }
 
       _updatePeerState(stableId, state);
+
+      // Clean up ratchet state when peer disconnects
+      if (state == PeerConnectionState.disconnected ||
+          state == PeerConnectionState.failed) {
+        _keyRatchet.removePeer(stableId);
+      }
 
       // Persist peer as trusted after successful connection (handshake complete).
       // TrustedPeer.fromPeer derives the ID from the public key, so

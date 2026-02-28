@@ -18,8 +18,9 @@ import '../logging/logger_service.dart';
 /// 3. HKDF-SHA256 derives a session key from the shared secret
 /// 4. ChaCha20-Poly1305 AEAD encrypts each message with a random nonce
 ///
-/// Note: This does NOT implement Double Ratchet or forward secrecy.
-/// Session keys persist until the peer disconnects or the app is reset.
+/// Forward secrecy: Per-session ephemeral keys ensure that compromise of
+/// the long-lived identity key does not expose past sessions. In-session
+/// key ratcheting rotates the session key periodically.
 class CryptoService {
   static const _keyPrefix = 'zajel_key_';
   static const _sessionKeyPrefix = 'zajel_session_';
@@ -404,6 +405,8 @@ class CryptoService {
   /// Decrypt a message from a peer.
   ///
   /// Expects base64-encoded ciphertext with prepended nonce.
+  /// After a key ratchet, falls back to the previous key during the
+  /// grace period if the current key fails to decrypt.
   Future<String> decrypt(String peerId, String ciphertextBase64) async {
     final sessionKey = await _getSessionKey(peerId);
     if (sessionKey == null) {
@@ -429,12 +432,25 @@ class CryptoService {
       mac: mac,
     );
 
-    final plaintextBytes = await _chacha20.decrypt(
-      secretBox,
-      secretKey: sessionKey,
-    );
-
-    return utf8.decode(plaintextBytes);
+    try {
+      final plaintextBytes = await _chacha20.decrypt(
+        secretBox,
+        secretKey: sessionKey,
+      );
+      return utf8.decode(plaintextBytes);
+    } catch (_) {
+      // Try previous key during grace period after a ratchet
+      final prev = _previousSessionKeys[peerId];
+      if (prev != null &&
+          DateTime.now().difference(prev.expiry) < _graceTimeout) {
+        final plaintextBytes = await _chacha20.decrypt(
+          secretBox,
+          secretKey: prev.key,
+        );
+        return utf8.decode(plaintextBytes);
+      }
+      rethrow;
+    }
   }
 
   /// Generate a new ephemeral key pair for a session.
@@ -451,6 +467,125 @@ class CryptoService {
       privateKey: base64Encode(privateKeyBytes),
     );
   }
+
+  /// Establish a session using both identity and ephemeral key exchange.
+  ///
+  /// Performs two X25519 ECDH computations:
+  /// 1. Identity key × Peer identity key (authenticates both parties)
+  /// 2. Ephemeral key × Peer ephemeral key (provides forward secrecy)
+  ///
+  /// Session key = HKDF(identitySecret || ephemeralSecret, "zajel_session_v2")
+  ///
+  /// The ephemeral private key is deleted immediately after use.
+  /// If the identity key is later compromised, past session keys
+  /// cannot be recovered because the ephemeral secret is gone.
+  Future<String> establishSessionWithEphemeral({
+    required String peerId,
+    required String peerIdentityKeyBase64,
+    required String peerEphemeralKeyBase64,
+    required String ourEphemeralPrivateKeyBase64,
+  }) async {
+    // 1. Identity ECDH (same as current establishSession)
+    final identitySecretBase64 =
+        await performKeyExchange(peerIdentityKeyBase64);
+    final identitySecretBytes = base64Decode(identitySecretBase64);
+
+    // 2. Ephemeral ECDH
+    final ephemeralPrivateBytes = base64Decode(ourEphemeralPrivateKeyBase64);
+    final ephemeralKeyPair = SimpleKeyPairData(
+      ephemeralPrivateBytes,
+      publicKey: SimplePublicKey([], type: KeyPairType.x25519),
+      type: KeyPairType.x25519,
+    );
+    final peerEphemeralKey = SimplePublicKey(
+      base64Decode(peerEphemeralKeyBase64),
+      type: KeyPairType.x25519,
+    );
+    final ephemeralSecret = await _x25519.sharedSecretKey(
+      keyPair: ephemeralKeyPair,
+      remotePublicKey: peerEphemeralKey,
+    );
+    final ephemeralSecretBytes = await ephemeralSecret.extractBytes();
+
+    // 3. Concatenate secrets: identity || ephemeral
+    final combinedSecret = Uint8List(
+      identitySecretBytes.length + ephemeralSecretBytes.length,
+    );
+    combinedSecret.setAll(0, identitySecretBytes);
+    combinedSecret.setAll(identitySecretBytes.length, ephemeralSecretBytes);
+
+    // 4. Derive session key via HKDF with v2 info string
+    final sessionKey = await _hkdf.deriveKey(
+      secretKey: SecretKey(combinedSecret),
+      info: utf8.encode('zajel_session_v2'),
+      nonce: const [],
+    );
+
+    // Diagnostic logging
+    final sessionKeyBytes = await sessionKey.extractBytes();
+    final sessionKeyHash = crypto.sha256.convert(sessionKeyBytes).toString();
+    logger.info(
+        'CryptoService',
+        'establishSessionWithEphemeral($peerId): '
+            'peerPub=${peerIdentityKeyBase64.substring(0, 8)}… '
+            'peerEph=${peerEphemeralKeyBase64.substring(0, 8)}… '
+            'sessionHash=${sessionKeyHash.substring(0, 16)}');
+
+    // Store session key
+    _sessionKeys[peerId] = sessionKey;
+    await _storeSessionKey(peerId, sessionKey);
+
+    return peerId;
+  }
+
+  /// Ratchet the session key forward using a random nonce.
+  ///
+  /// new_key = HKDF(current_key || nonce, "zajel_ratchet")
+  ///
+  /// The old key is kept in [_previousSessionKeys] for a brief grace
+  /// period to decrypt in-flight messages sent before the peer
+  /// processed the ratchet.
+  Future<void> ratchetSessionKey(String peerId, Uint8List nonce) async {
+    final currentKey = await _getSessionKey(peerId);
+    if (currentKey == null) {
+      throw CryptoException('No session to ratchet for peer: $peerId');
+    }
+
+    final currentKeyBytes = await currentKey.extractBytes();
+
+    // Combine current key material with nonce
+    final input = Uint8List(currentKeyBytes.length + nonce.length);
+    input.setAll(0, currentKeyBytes);
+    input.setAll(currentKeyBytes.length, nonce);
+
+    // Derive new key
+    final newKey = await _hkdf.deriveKey(
+      secretKey: SecretKey(input),
+      info: utf8.encode('zajel_ratchet'),
+      nonce: const [],
+    );
+
+    // Keep old key briefly for grace period
+    _previousSessionKeys[peerId] = (key: currentKey, expiry: DateTime.now());
+
+    // Install new key
+    _sessionKeys[peerId] = newKey;
+    await _storeSessionKey(peerId, newKey);
+
+    final newKeyBytes = await newKey.extractBytes();
+    final hash = crypto.sha256.convert(newKeyBytes).toString();
+    logger.info('CryptoService',
+        'ratchetSessionKey($peerId): newHash=${hash.substring(0, 16)}');
+  }
+
+  /// Grace period for old session keys after a ratchet.
+  ///
+  /// Messages encrypted with the old key may still be in-flight when
+  /// the ratchet completes. This map holds old keys for [_graceTimeout]
+  /// so those messages can still be decrypted.
+  final Map<String, ({SecretKey key, DateTime expiry})> _previousSessionKeys =
+      {};
+  static const _graceTimeout = Duration(seconds: 30);
 
   /// Clear all session keys (for logout/reset).
   Future<void> clearAllSessions() async {

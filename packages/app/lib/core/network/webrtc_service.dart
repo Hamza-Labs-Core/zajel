@@ -302,6 +302,11 @@ class WebRTCService {
   }
 
   /// Perform cryptographic handshake after connection is established.
+  ///
+  /// Includes an ephemeral X25519 public key for forward secrecy.
+  /// The ephemeral private key is stored temporarily in
+  /// [_pendingEphemeralKeys] until the peer's handshake arrives,
+  /// then deleted after session key derivation.
   Future<void> performHandshake(String peerId,
       {String? username, String? stableId}) async {
     final connection = _connections[peerId];
@@ -309,11 +314,17 @@ class WebRTCService {
       throw WebRTCException('No connection to peer: $peerId');
     }
 
-    // Send our public key, username, and stable ID
+    // Generate ephemeral key pair for forward secrecy
+    final ephemeral = await _cryptoService.generateEphemeralKeyPair();
+    _pendingEphemeralKeys[peerId] = ephemeral.privateKey;
+
+    // Send our public key, ephemeral key, username, and stable ID
     final publicKey = await _cryptoService.getPublicKeyBase64();
     final handshakeData = <String, dynamic>{
       'type': 'handshake',
       'publicKey': publicKey,
+      'ephemeralKey': ephemeral.publicKey,
+      'ratchetVersion': 1,
     };
     if (username != null) {
       handshakeData['username'] = username;
@@ -326,9 +337,14 @@ class WebRTCService {
     connection.messageChannel!.send(RTCDataChannelMessage(handshakeMessage));
   }
 
+  /// Temporary storage for ephemeral private keys during handshake.
+  /// Deleted immediately after session key derivation.
+  final Map<String, String> _pendingEphemeralKeys = {};
+
   /// Close connection to a peer.
   Future<void> closeConnection(String peerId) async {
     _pendingCandidates.remove(peerId);
+    _pendingEphemeralKeys.remove(peerId);
     final connection = _connections.remove(peerId);
     if (connection != null) {
       await connection.messageChannel?.close();
@@ -536,14 +552,36 @@ class WebRTCService {
       final json = jsonDecode(text) as Map<String, dynamic>;
       if (json['type'] == 'handshake') {
         final publicKey = json['publicKey'] as String;
+        final peerEphemeralKey = json['ephemeralKey'] as String?;
+        final ratchetVersion = json['ratchetVersion'] as int?;
         final username = json['username'] as String?;
         final stableId = json['stableId'] as String?;
         logger.info(
             'WebRTCService',
             'Received handshake from $peerId: '
                 'peerPub=${publicKey.substring(0, 8)}… '
+                'ephemeral=${peerEphemeralKey != null ? "yes(v$ratchetVersion)" : "no"} '
                 'username=$username stableId=$stableId');
-        await _cryptoService.establishSession(peerId, publicKey);
+
+        // Use ephemeral key exchange if both sides support it
+        final ourEphemeralPrivate = _pendingEphemeralKeys.remove(peerId);
+        if (peerEphemeralKey != null && ourEphemeralPrivate != null) {
+          // Forward-secret session: dual ECDH (identity + ephemeral)
+          await _cryptoService.establishSessionWithEphemeral(
+            peerId: peerId,
+            peerIdentityKeyBase64: publicKey,
+            peerEphemeralKeyBase64: peerEphemeralKey,
+            ourEphemeralPrivateKeyBase64: ourEphemeralPrivate,
+          );
+        } else {
+          // Backward compatible: identity-only key exchange
+          if (ourEphemeralPrivate != null) {
+            logger.info('WebRTCService',
+                'Peer $peerId does not support ephemeral keys, using identity-only');
+          }
+          await _cryptoService.establishSession(peerId, publicKey);
+        }
+
         // Connection may have been closed during the async key exchange
         final conn = _connections[peerId];
         if (conn == null) {
