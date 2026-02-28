@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:uuid/uuid.dart';
@@ -12,65 +11,11 @@ import '../models/models.dart';
 import '../storage/trusted_peers_storage.dart';
 import '../storage/message_storage.dart';
 import 'device_link_service.dart';
+import 'key_rotation_detector.dart';
 import 'meeting_point_service.dart';
+import 'pairing_code_utils.dart';
 import 'signaling_client.dart';
 import 'webrtc_service.dart';
-
-/// Character set for pairing codes.
-/// 32 characters (power of 2) chosen to avoid modulo bias with byte values (256 / 32 = 8 exactly).
-/// Excludes ambiguous characters: 0, O, 1, I to improve readability.
-const _pairingCodeChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const _pairingCodeLength = 6;
-
-/// Generates an unbiased random character from the given character set using rejection sampling.
-///
-/// This avoids modulo bias by rejecting random bytes that would cause uneven distribution.
-/// For a character set of length N, we calculate the largest multiple of N that fits in 256
-/// and reject any bytes >= that value.
-///
-/// Uses [Random.secure()] for cryptographically secure random number generation.
-String _getUnbiasedRandomChar(String chars, Random secureRandom) {
-  final charsetLength = chars.length;
-  // Calculate the largest multiple of charsetLength that fits in 256 (byte range)
-  final maxValid = (256 ~/ charsetLength) * charsetLength;
-
-  int byte;
-  do {
-    byte = secureRandom.nextInt(256);
-  } while (byte >= maxValid);
-
-  return chars[byte % charsetLength];
-}
-
-/// Generates a random pairing code using unbiased random character selection.
-///
-/// Uses rejection sampling to ensure each character has exactly equal probability,
-/// protecting against modulo bias even if the character set is changed in the future.
-String _generateSecurePairingCode() {
-  final secureRandom = Random.secure();
-  final buffer = StringBuffer();
-
-  for (var i = 0; i < _pairingCodeLength; i++) {
-    buffer.write(_getUnbiasedRandomChar(_pairingCodeChars, secureRandom));
-  }
-
-  return buffer.toString();
-}
-
-/// Validates pairing code format.
-///
-/// A valid pairing code must:
-/// - Be exactly [_pairingCodeLength] characters long (6 characters)
-/// - Contain only characters from [_pairingCodeChars] (uppercase letters A-Z
-///   excluding O and I, plus digits 2-9)
-///
-/// This ensures consistency with the pairing code generation algorithm.
-bool _isValidPairingCode(String code) {
-  if (code.length != _pairingCodeLength) return false;
-  // Validate against the same character set used for generation
-  final validChars = RegExp('^[$_pairingCodeChars]+\$');
-  return validChars.hasMatch(code.toUpperCase());
-}
 
 /// Sealed class representing the signaling connection state.
 ///
@@ -103,7 +48,7 @@ class ConnectionManager {
   final DeviceLinkService _deviceLinkService;
   final TrustedPeersStorage _trustedPeersStorage;
   final MeetingPointService _meetingPointService;
-  final MessageStorage? _messageStorage;
+  late final KeyRotationDetector _keyRotationDetector;
 
   /// Current signaling state - uses sealed class for type-safe null handling.
   SignalingState _signalingState = SignalingDisconnected();
@@ -202,9 +147,13 @@ class ConnectionManager {
         _deviceLinkService = deviceLinkService,
         _trustedPeersStorage = trustedPeersStorage,
         _meetingPointService = meetingPointService,
-        _messageStorage = messageStorage,
         _isPublicKeyBlocked = isPublicKeyBlocked,
         _username = username {
+    _keyRotationDetector = KeyRotationDetector(
+      trustedPeersStorage: trustedPeersStorage,
+      cryptoService: cryptoService,
+      messageStorage: messageStorage,
+    );
     _setupCallbacks();
   }
 
@@ -330,13 +279,9 @@ class ConnectionManager {
   Stream<(String, String, String?)> get pairRequests =>
       _pairRequestController.stream;
 
-  /// Stream of key rotation events (peerId, oldKey, newKey).
-  final _keyChangeController = StreamController<
-      (String peerId, String oldKey, String newKey)>.broadcast();
-
   /// Stream of key rotation events for UI warnings.
   Stream<(String, String, String)> get keyChanges =>
-      _keyChangeController.stream;
+      _keyRotationDetector.keyChanges;
 
   /// Stream of incoming link requests from web clients.
   final _linkRequestController = StreamController<
@@ -447,7 +392,7 @@ class ConnectionManager {
 
     // Normalize and validate pairing code format
     final normalizedCode = pairingCode.toUpperCase().trim();
-    if (!_isValidPairingCode(normalizedCode)) {
+    if (!isValidPairingCode(normalizedCode)) {
       logger.error(
           'ConnectionManager', 'Invalid pairing code format: $normalizedCode');
       throw ConnectionException('Invalid pairing code format');
@@ -662,7 +607,7 @@ class ConnectionManager {
     await _fileStartController.close();
     await _fileCompleteController.close();
     await _pairRequestController.close();
-    await _keyChangeController.close();
+    _keyRotationDetector.dispose();
     await _linkRequestController.close();
   }
 
@@ -708,7 +653,7 @@ class ConnectionManager {
       }
 
       // Key rotation detection: known stableId with different publicKey
-      _checkKeyRotation(finalId, publicKey);
+      _keyRotationDetector.checkKeyRotation(finalId, publicKey);
 
       _updatePeerState(finalId, PeerConnectionState.connected);
     };
@@ -1119,60 +1064,12 @@ class ConnectionManager {
     }
   }
 
-  /// Detect key rotation: known stableId presenting a new publicKey.
-  ///
-  /// TOFU (Trust On First Use): first key associated with a stableId is trusted.
-  /// Subsequent key changes are auto-accepted, logged, and produce a UI warning
-  /// via the keyChanges stream and a system message in the chat.
-  Future<void> _checkKeyRotation(String stableId, String newPublicKey) async {
-    try {
-      final existingPeer = await _trustedPeersStorage.getPeer(stableId);
-      if (existingPeer != null && existingPeer.publicKey != newPublicKey) {
-        logger.warning(
-            'ConnectionManager',
-            'Key rotation detected for $stableId '
-                '(old: ${existingPeer.publicKey.substring(0, 8)}..., '
-                'new: ${newPublicKey.substring(0, 8)}...)');
-
-        final oldKey = existingPeer.publicKey;
-
-        // Record key rotation in storage (sets keyChangeAcknowledged = false)
-        await _trustedPeersStorage.recordKeyRotation(
-            stableId, oldKey, newPublicKey);
-        _cryptoService.setPeerPublicKey(stableId, newPublicKey);
-
-        // Emit key change event for UI
-        _keyChangeController.add((stableId, oldKey, newPublicKey));
-
-        // Insert system message in chat history
-        if (_messageStorage != null) {
-          final msg = Message(
-            localId: const Uuid().v4(),
-            peerId: stableId,
-            content: 'Safety number changed. Tap to verify.',
-            type: MessageType.system,
-            timestamp: DateTime.now(),
-            isOutgoing: false,
-            status: MessageStatus.delivered,
-          );
-          await _messageStorage.saveMessage(msg);
-        }
-
-        logger.info(
-            'ConnectionManager', 'Key rotation persisted for $stableId');
-      }
-    } catch (e) {
-      logger.error('ConnectionManager',
-          'Failed to process key rotation for $stableId: $e');
-    }
-  }
-
   void _notifyPeersChanged() {
     _peersController.add(_peers.values.toList());
   }
 
   String _generatePairingCode() {
-    return _generateSecurePairingCode();
+    return generateSecurePairingCode();
   }
 
   /// Derive a collision-safe stable peer ID from a public key.
