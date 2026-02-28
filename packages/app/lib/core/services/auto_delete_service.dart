@@ -1,74 +1,106 @@
 import 'dart:async';
-import 'dart:io';
 
 import '../logging/logger_service.dart';
-import '../providers/settings_providers.dart';
-import '../storage/message_storage.dart';
 
-/// Periodically deletes old messages and their attachment files
-/// based on the user's auto-delete settings.
+/// Duration options for auto-deleting messages.
+enum AutoDeleteDuration {
+  off,
+  oneHour,
+  oneDay,
+  sevenDays,
+  thirtyDays,
+}
+
+/// Extension to get human-readable labels and actual durations.
+extension AutoDeleteDurationExt on AutoDeleteDuration {
+  String get label => switch (this) {
+        AutoDeleteDuration.off => 'Off',
+        AutoDeleteDuration.oneHour => '1 hour',
+        AutoDeleteDuration.oneDay => '1 day',
+        AutoDeleteDuration.sevenDays => '7 days',
+        AutoDeleteDuration.thirtyDays => '30 days',
+      };
+
+  Duration? get duration => switch (this) {
+        AutoDeleteDuration.off => null,
+        AutoDeleteDuration.oneHour => const Duration(hours: 1),
+        AutoDeleteDuration.oneDay => const Duration(days: 1),
+        AutoDeleteDuration.sevenDays => const Duration(days: 7),
+        AutoDeleteDuration.thirtyDays => const Duration(days: 30),
+      };
+}
+
+/// Service that periodically deletes messages older than a configured duration.
 ///
-/// Runs immediately on start, then every hour.
+/// Uses closure-based DI for testability -- Riverpod stays in main.dart.
 class AutoDeleteService {
-  final AutoDeleteSettings Function() _getSettings;
-  final MessageStorage Function() _getStorage;
+  static const _tag = 'AutoDeleteService';
+  static const _checkInterval = Duration(minutes: 5);
+
+  final Future<void> Function(String peerId, DateTime before)
+      deleteMessagesBefore;
+  final Future<List<String>> Function() getActivePeerIds;
+  final AutoDeleteDuration Function() getAutoDeleteDuration;
+
   Timer? _timer;
 
   AutoDeleteService({
-    required AutoDeleteSettings Function() getSettings,
-    required MessageStorage Function() getStorage,
-  })  : _getSettings = getSettings,
-        _getStorage = getStorage;
+    required this.deleteMessagesBefore,
+    required this.getActivePeerIds,
+    required this.getAutoDeleteDuration,
+  });
 
+  /// Start the periodic auto-delete check.
   void start() {
-    _runCleanup();
-    _timer = Timer.periodic(
-      const Duration(hours: 1),
-      (_) => _runCleanup(),
-    );
+    _timer?.cancel();
+    _timer = Timer.periodic(_checkInterval, (_) => runCleanup());
+    logger.info(_tag, 'Auto-delete service started');
   }
 
-  Future<void> _runCleanup() async {
-    try {
-      final settings = _getSettings();
-      if (!settings.enabled) return;
-
-      final cutoff = DateTime.now().subtract(settings.duration);
-      final storage = _getStorage();
-
-      // Get attachment paths before deleting messages
-      final attachmentPaths = await storage.getAttachmentPathsOlderThan(cutoff);
-
-      // Delete messages from database
-      final deleted = await storage.deleteMessagesOlderThan(cutoff);
-
-      // Delete attachment files from disk
-      var filesDeleted = 0;
-      for (final path in attachmentPaths) {
-        try {
-          final file = File(path);
-          if (await file.exists()) {
-            await file.delete();
-            filesDeleted++;
-          }
-        } catch (e) {
-          logger.warning('AutoDelete', 'Failed to delete file $path: $e');
-        }
-      }
-
-      if (deleted > 0 || filesDeleted > 0) {
-        logger.info(
-            'AutoDelete',
-            'Cleaned up $deleted messages and $filesDeleted files '
-                'older than ${settings.duration.inHours}h');
-      }
-    } catch (e) {
-      logger.error('AutoDelete', 'Cleanup failed', e);
-    }
-  }
-
-  void dispose() {
+  /// Stop the periodic auto-delete check.
+  void stop() {
     _timer?.cancel();
     _timer = null;
+    logger.info(_tag, 'Auto-delete service stopped');
+  }
+
+  /// Whether the service is currently running.
+  bool get isRunning => _timer != null && _timer!.isActive;
+
+  /// Run a single cleanup pass.
+  ///
+  /// Deletes messages older than the configured duration for all active peers.
+  /// Returns the number of peers cleaned up.
+  Future<int> runCleanup() async {
+    final setting = getAutoDeleteDuration();
+    if (setting == AutoDeleteDuration.off) return 0;
+
+    final duration = setting.duration;
+    if (duration == null) return 0;
+
+    final cutoff = DateTime.now().subtract(duration);
+    final peerIds = await getActivePeerIds();
+    var cleaned = 0;
+
+    for (final peerId in peerIds) {
+      try {
+        await deleteMessagesBefore(peerId, cutoff);
+        cleaned++;
+      } catch (e) {
+        logger.error(_tag, 'Failed to auto-delete messages for $peerId', e);
+      }
+    }
+
+    if (cleaned > 0) {
+      logger.info(_tag,
+          'Auto-delete cleanup: processed $cleaned peers (cutoff: $cutoff)');
+    }
+
+    return cleaned;
+  }
+
+  /// Dispose the service and cancel the timer.
+  void dispose() {
+    stop();
   }
 }

@@ -81,9 +81,10 @@ class Environment {
   /// Call this during app startup. Throws in release mode if E2E_TEST is true.
   /// Uses a runtime check (not assert) because assert is stripped from release.
   static void assertNoE2eTestInRelease() {
-    if (kReleaseMode && isE2eTest) {
+    // Allow E2E in QA release builds (CI uses --release --dart-define=ENV=qa)
+    if (kReleaseMode && isE2eTest && !isQA) {
       throw StateError(
-        'FATAL: E2E_TEST=true must never be used in release builds. '
+        'FATAL: E2E_TEST=true must never be used in production release builds. '
         'This flag disables security features including pair request approval.',
       );
     }

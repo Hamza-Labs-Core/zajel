@@ -3,49 +3,39 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../logging/logger_service.dart';
-import '../network/connection_manager.dart';
 
-/// Handles incoming pair and link request dialogs.
+/// Handles incoming pair request dialogs.
 ///
-/// Subscribes to [ConnectionManager.pairRequests] and
-/// [ConnectionManager.linkRequests], shows approval dialogs, and
-/// calls back to respond.
+/// Uses closure-based DI for testability -- Riverpod stays in main.dart.
 class PairRequestHandler {
-  final ConnectionManager _connectionManager;
-  final GlobalKey<NavigatorState> _navigatorKey;
+  final Stream<(String, String, String?)> pairRequests;
+  final void Function(String code, {required bool accept}) respondToPairRequest;
+  final BuildContext? Function() getContext;
 
-  StreamSubscription<(String, String, String?)>? _pairRequestSubscription;
-  StreamSubscription<(String, String, String)>? _linkRequestSubscription;
+  StreamSubscription<(String, String, String?)>? _subscription;
 
   PairRequestHandler({
-    required ConnectionManager connectionManager,
-    required GlobalKey<NavigatorState> navigatorKey,
-  })  : _connectionManager = connectionManager,
-        _navigatorKey = navigatorKey;
+    required this.pairRequests,
+    required this.respondToPairRequest,
+    required this.getContext,
+  });
 
-  void start() {
-    _pairRequestSubscription = _connectionManager.pairRequests.listen((event) {
+  /// Start listening for pair requests.
+  void listen() {
+    _subscription = pairRequests.listen((event) {
       final (fromCode, fromPublicKey, proposedName) = event;
       logger.info(
           'PairRequestHandler', 'Showing pair request dialog for $fromCode');
-      _showPairRequestDialog(fromCode, fromPublicKey,
-          proposedName: proposedName);
-    });
-
-    _linkRequestSubscription = _connectionManager.linkRequests.listen((event) {
-      final (linkCode, publicKey, deviceName) = event;
-      logger.info('PairRequestHandler',
-          'Showing link request dialog for $linkCode from $deviceName');
-      _showLinkRequestDialog(linkCode, publicKey, deviceName);
+      _showDialog(fromCode, fromPublicKey, proposedName: proposedName);
     });
   }
 
-  Future<void> _showPairRequestDialog(String fromCode, String fromPublicKey,
+  Future<void> _showDialog(String fromCode, String fromPublicKey,
       {String? proposedName}) async {
-    final context = _navigatorKey.currentContext;
+    final context = getContext();
     if (context == null) {
-      logger.warning(
-          'PairRequestHandler', 'No context for pair request dialog');
+      logger.warning('PairRequestHandler',
+          'No context available to show pair request dialog');
       return;
     }
 
@@ -129,7 +119,7 @@ class PairRequestHandler {
       ),
     );
 
-    _connectionManager.respondToPairRequest(fromCode, accept: accepted == true);
+    respondToPairRequest(fromCode, accept: accepted == true);
 
     if (accepted == true) {
       logger.info('PairRequestHandler', 'Pair request from $fromCode accepted');
@@ -138,135 +128,8 @@ class PairRequestHandler {
     }
   }
 
-  Future<void> _showLinkRequestDialog(
-    String linkCode,
-    String publicKey,
-    String deviceName,
-  ) async {
-    final context = _navigatorKey.currentContext;
-    if (context == null) {
-      logger.warning(
-          'PairRequestHandler', 'No context for link request dialog');
-      return;
-    }
-
-    // Generate fingerprint for verification (first 32 chars, grouped by 4)
-    final truncated =
-        publicKey.length > 32 ? publicKey.substring(0, 32) : publicKey;
-    final fingerprint = truncated
-        .replaceAllMapped(
-          RegExp(r'.{4}'),
-          (match) => '${match.group(0)} ',
-        )
-        .trim();
-
-    final approved = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.computer, color: Colors.blue),
-            SizedBox(width: 8),
-            Text('Link Request'),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('$deviceName wants to link with this device.'),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Link Code',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                  Text(
-                    linkCode,
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 2,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Key Fingerprint',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                  Text(
-                    fingerprint,
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 10,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.orange.shade50,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.orange.shade200),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.warning_amber, color: Colors.orange, size: 20),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Only approve if you initiated this link request.',
-                      style: TextStyle(fontSize: 12),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Reject'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Approve'),
-          ),
-        ],
-      ),
-    );
-
-    _connectionManager.respondToLinkRequest(
-      linkCode,
-      accept: approved == true,
-      deviceId: approved == true ? 'link_$linkCode' : null,
-    );
-
-    if (approved == true) {
-      logger.info(
-          'PairRequestHandler', 'Link request from $deviceName approved');
-    } else {
-      logger.info(
-          'PairRequestHandler', 'Link request from $deviceName rejected');
-    }
-  }
-
+  /// Cancel the subscription.
   void dispose() {
-    _pairRequestSubscription?.cancel();
-    _linkRequestSubscription?.cancel();
+    _subscription?.cancel();
   }
 }

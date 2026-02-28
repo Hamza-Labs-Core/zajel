@@ -1,34 +1,49 @@
 import 'dart:async';
 
-import '../network/connection_manager.dart';
-import '../storage/file_receive_service.dart';
+import '../logging/logger_service.dart';
+import '../models/models.dart';
 
-/// Listens to file transfer events from ConnectionManager and coordinates
-/// with FileReceiveService to assemble received files.
+/// Listens to file transfer streams and coordinates file reception.
 ///
-/// The [onFileReceived] callback is invoked after a file is successfully saved,
-/// allowing the caller to update chat messages and show notifications.
+/// Uses closure-based DI for testability -- Riverpod stays in main.dart.
 class FileTransferListener {
-  final ConnectionManager _connectionManager;
-  final FileReceiveService _fileReceiveService;
-  final void Function(String peerId, String fileId, String savedPath,
-      FileTransfer transfer)? onFileReceived;
+  final Stream<(String, String, String, int, int)> fileStarts;
+  final Stream<(String, String, dynamic, int, int)> fileChunks;
+  final Stream<(String, String)> fileCompletes;
+
+  final void Function({
+    required String peerId,
+    required String fileId,
+    required String fileName,
+    required int totalSize,
+    required int totalChunks,
+  }) startTransfer;
+
+  final void Function(String fileId, int index, dynamic chunk) addChunk;
+  final Future<String?> Function(String fileId) completeTransfer;
+  final ({String fileName, int totalSize})? Function(String fileId) getTransfer;
+  final void Function(String peerId, Message message) addMessage;
 
   StreamSubscription? _fileStartSubscription;
   StreamSubscription? _fileChunkSubscription;
   StreamSubscription? _fileCompleteSubscription;
 
   FileTransferListener({
-    required ConnectionManager connectionManager,
-    required FileReceiveService fileReceiveService,
-    this.onFileReceived,
-  })  : _connectionManager = connectionManager,
-        _fileReceiveService = fileReceiveService;
+    required this.fileStarts,
+    required this.fileChunks,
+    required this.fileCompletes,
+    required this.startTransfer,
+    required this.addChunk,
+    required this.completeTransfer,
+    required this.getTransfer,
+    required this.addMessage,
+  });
 
-  void start() {
-    _fileStartSubscription = _connectionManager.fileStarts.listen((event) {
+  /// Start listening to file transfer events.
+  void listen() {
+    _fileStartSubscription = fileStarts.listen((event) {
       final (peerId, fileId, fileName, totalSize, totalChunks) = event;
-      _fileReceiveService.startTransfer(
+      startTransfer(
         peerId: peerId,
         fileId: fileId,
         fileName: fileName,
@@ -37,25 +52,41 @@ class FileTransferListener {
       );
     });
 
-    _fileChunkSubscription = _connectionManager.fileChunks.listen((event) {
+    _fileChunkSubscription = fileChunks.listen((event) {
       final (_, fileId, chunk, index, _) = event;
-      _fileReceiveService.addChunk(fileId, index, chunk);
+      addChunk(fileId, index, chunk);
     });
 
-    _fileCompleteSubscription =
-        _connectionManager.fileCompletes.listen((event) async {
+    _fileCompleteSubscription = fileCompletes.listen((event) async {
       final (peerId, fileId) = event;
-      final savedPath = await _fileReceiveService.completeTransfer(fileId);
+      final savedPath = await completeTransfer(fileId);
 
       if (savedPath != null) {
-        final transfer = _fileReceiveService.getTransfer(fileId);
+        final transfer = getTransfer(fileId);
         if (transfer != null) {
-          onFileReceived?.call(peerId, fileId, savedPath, transfer);
+          addMessage(
+            peerId,
+            Message(
+              localId: fileId,
+              peerId: peerId,
+              content: 'Received file: ${transfer.fileName}',
+              type: MessageType.file,
+              timestamp: DateTime.now(),
+              isOutgoing: false,
+              status: MessageStatus.delivered,
+              attachmentPath: savedPath,
+              attachmentName: transfer.fileName,
+              attachmentSize: transfer.totalSize,
+            ),
+          );
         }
       }
     });
+
+    logger.info('FileTransferListener', 'File transfer listeners started');
   }
 
+  /// Cancel all subscriptions.
   void dispose() {
     _fileStartSubscription?.cancel();
     _fileChunkSubscription?.cancel();
