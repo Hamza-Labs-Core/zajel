@@ -600,9 +600,10 @@ class WebRTCService {
         return;
       }
     } catch (e) {
-      // Non-JSON data is expected for encrypted messages.
-      // Log actual handshake errors (not just JSON parse failures on ciphertext)
-      if (text.contains('"handshake"')) {
+      // Non-JSON data is expected for encrypted messages (jsonDecode will
+      // throw FormatException). Only log non-parse errors or actual handshake
+      // failures — those indicate real problems.
+      if (e is! FormatException) {
         logger.error(
             'WebRTCService', 'Handshake processing failed for $peerId: $e');
       }
@@ -613,10 +614,10 @@ class WebRTCService {
       final plaintext = await _cryptoService.decrypt(peerId, text);
       onMessage?.call(peerId, plaintext);
     } catch (e) {
-      // Intentionally silenced for connection resilience.
       // Decryption failures may occur during handshake transitions or
-      // when receiving malformed data. Logging for debugging only.
-      logger.debug(
+      // when receiving malformed data. Log at warning so they're visible
+      // in production logs for debugging silent message drops.
+      logger.warning(
           'WebRTCService', 'Message decryption failed for $peerId: $e');
     }
   }

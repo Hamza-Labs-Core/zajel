@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 
+import '../../../core/logging/logger_service.dart';
 import '../models/channel.dart';
 import '../models/chunk.dart';
 
@@ -152,7 +153,9 @@ class ChannelCryptoService {
       final signature = Signature(signatureBytes, publicKey: publicKey);
 
       return await _ed25519.verify(signableBytes, signature: signature);
-    } catch (_) {
+    } catch (e) {
+      logger.warning('ChannelCryptoService',
+          'Manifest verification failed unexpectedly: $e');
       return false;
     }
   }
@@ -298,7 +301,9 @@ class ChannelCryptoService {
         chunk.encryptedPayload,
         signature: signature,
       );
-    } catch (_) {
+    } catch (e) {
+      logger.warning('ChannelCryptoService',
+          'Chunk signature verification failed unexpectedly: $e');
       return false;
     }
   }

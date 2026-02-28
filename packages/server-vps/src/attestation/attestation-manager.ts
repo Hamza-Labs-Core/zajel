@@ -293,7 +293,7 @@ export class AttestationManager {
 
       if (!response.ok) {
         const errorText = await response.text();
-        logger.warn(`[Attestation] Challenge request failed: ${response.status} - ${errorText}`);
+        logger.error(`[Attestation] Challenge request failed (HTTP ${response.status}): ${errorText}`);
         session.attestationPending = false;
         return null;
       }
@@ -301,7 +301,7 @@ export class AttestationManager {
       const result = (await response.json()) as BootstrapChallengeResponse;
       return result;
     } catch (err) {
-      logger.warn(`[Attestation] Challenge request error: ${err}`);
+      logger.error(`[Attestation] Challenge request error (network/parse): ${err}`);
       session.attestationPending = false;
       return null;
     }
@@ -339,7 +339,7 @@ export class AttestationManager {
 
       if (!response.ok) {
         const errorText = await response.text();
-        logger.warn(`[Attestation] Verify request failed: ${response.status} - ${errorText}`);
+        logger.error(`[Attestation] Verify request failed (HTTP ${response.status}): ${errorText}`);
         session.attestationPending = false;
         return { valid: false };
       }
@@ -355,12 +355,12 @@ export class AttestationManager {
         logger.info(`[Attestation] Client attested successfully (connection: ${connectionId.substring(0, 8)}...)`);
       } else {
         session.attestationPending = false;
-        logger.warn(`[Attestation] Client attestation failed (connection: ${connectionId.substring(0, 8)}...)`);
+        logger.warn(`[Attestation] Client attestation rejected (connection: ${connectionId.substring(0, 8)}...)`);
       }
 
       return result;
     } catch (err) {
-      logger.warn(`[Attestation] Verify request error: ${err}`);
+      logger.error(`[Attestation] Verify request error (network/parse): ${err}`);
       session.attestationPending = false;
       return { valid: false };
     }

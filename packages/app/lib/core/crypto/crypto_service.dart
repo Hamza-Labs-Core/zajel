@@ -727,7 +727,7 @@ class CryptoService {
         return sessionKey;
       }
     } catch (e) {
-      logger.debug('CryptoService',
+      logger.warning('CryptoService',
           'Session key load failed for $peerId - will re-establish on next connection. Error: $e');
     }
 
