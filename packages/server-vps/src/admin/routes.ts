@@ -24,11 +24,13 @@ export class AdminRoutes {
     res: ServerResponse,
     path: string
   ): Promise<boolean> {
-    // CORS headers
-    res.setHeader('Access-Control-Allow-Origin', this.config.cfAdminUrl || '*');
+    // CORS headers — only set when cfAdminUrl is configured (no wildcard fallback)
+    if (this.config.cfAdminUrl) {
+      res.setHeader('Access-Control-Allow-Origin', this.config.cfAdminUrl);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);

@@ -240,6 +240,9 @@ export class TestServerHarness extends EventEmitter {
         dailyPointTtl: 48 * 60 * 60 * 1000,
         hourlyTokenTtl: 3 * 60 * 60 * 1000,
       },
+      admin: {
+        jwtSecret: '', // No auth in tests — /stats and /metrics stay accessible
+      },
     };
 
     // Merge custom overrides

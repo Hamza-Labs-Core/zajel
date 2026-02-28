@@ -159,6 +159,18 @@ export const PEER_ID = {
 } as const;
 
 // =============================================================================
+// UPSTREAM QUEUE LIMITS
+// =============================================================================
+
+export const UPSTREAM_QUEUE = {
+  /** Maximum queued messages per channel when owner is offline */
+  MAX_QUEUE_SIZE: 100,
+
+  /** TTL for queued messages (5 minutes in ms) — stale messages are evicted */
+  TTL_MS: 5 * 60 * 1000,
+} as const;
+
+// =============================================================================
 // RELAY REGISTRATION LIMITS
 // =============================================================================
 

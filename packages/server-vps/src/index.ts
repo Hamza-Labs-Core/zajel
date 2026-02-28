@@ -23,6 +23,7 @@ import { DistributedRendezvous } from './registry/distributed-rendezvous.js';
 import { ClientHandler, type ClientHandlerConfig } from './client/handler.js';
 import { logger } from './utils/logger.js';
 import { createAdminModule, type AdminModule } from './admin/index.js';
+import { requireAuth, sendJson } from './admin/auth.js';
 
 
 export interface ZajelServer {
@@ -104,8 +105,12 @@ export async function createZajelServer(
       return;
     }
 
-    // Stats endpoint (public — operational metrics only)
+    // Stats endpoint (requires auth when JWT is configured)
     if (req.url === '/stats') {
+      if (config.admin.jwtSecret) {
+        const auth = requireAuth(req, res, config.admin.jwtSecret);
+        if (!auth) return; // requireAuth already sent 401
+      }
 
       const handler = clientHandlerRef;
       const stats = {
@@ -126,8 +131,12 @@ export async function createZajelServer(
       return;
     }
 
-    // Metrics endpoint (Issue #41: Pairing code entropy monitoring)
+    // Metrics endpoint (Issue #41: Pairing code entropy monitoring, requires auth)
     if (req.url === '/metrics') {
+      if (config.admin.jwtSecret) {
+        const auth = requireAuth(req, res, config.admin.jwtSecret);
+        if (!auth) return; // requireAuth already sent 401
+      }
 
       const handler = clientHandlerRef;
       if (!handler) {

@@ -14,7 +14,7 @@ import { DistributedRendezvous, type PartialResult } from '../registry/distribut
 import type { DeadDropResult, LiveMatchResult } from '../registry/rendezvous-registry.js';
 import { logger } from '../utils/logger.js';
 
-import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING, ATTESTATION, RENDEZVOUS_LIMITS, CHUNK_LIMITS, PEER_ID, RELAY } from '../constants.js';
+import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING, ATTESTATION, RENDEZVOUS_LIMITS, CHUNK_LIMITS, PEER_ID, RELAY, UPSTREAM_QUEUE } from '../constants.js';
 import { ChunkRelay } from './chunk-relay.js';
 import type { Storage } from '../storage/interface.js';
 import { AttestationManager, type AttestationConfig } from '../attestation/attestation-manager.js';
@@ -387,8 +387,8 @@ export class ClientHandler extends EventEmitter {
 
   // Chunk relay service (optional - only initialized when storage is provided)
   private chunkRelay: ChunkRelay | null = null;
-  // Maximum queued upstream messages per channel
-  private static readonly MAX_UPSTREAM_QUEUE_SIZE = 100;
+  // Maximum queued upstream messages per channel (from constants)
+  private static readonly MAX_UPSTREAM_QUEUE_SIZE = UPSTREAM_QUEUE.MAX_QUEUE_SIZE;
   // Upstream rate limit: max messages per window
   private static readonly MAX_UPSTREAM_PER_WINDOW = 30;
 
@@ -587,89 +587,90 @@ export class ClientHandler extends EventEmitter {
    * Validate required fields and types for incoming messages.
    * Returns an error string if invalid, or null if valid.
    */
-  private validateMessage(message: Record<string, unknown>): string | null {
-    if (typeof message !== 'object' || message === null) {
+  private validateMessage(msg: Record<string, unknown>): string | null {
+    if (typeof msg !== 'object' || msg === null) {
       return 'Message must be a JSON object';
     }
-    if (typeof message.type !== 'string') {
+    const type = msg['type'];
+    if (typeof type !== 'string') {
       return 'Missing or invalid "type" field';
     }
-    switch (message.type) {
+    switch (type) {
       case 'register':
-        if ('pairingCode' in message) {
-          if (typeof message.pairingCode !== 'string') return 'register: pairingCode must be a string';
-          if (typeof message.publicKey !== 'string') return 'register: publicKey must be a string';
+        if ('pairingCode' in msg) {
+          if (typeof msg['pairingCode'] !== 'string') return 'register: pairingCode must be a string';
+          if (typeof msg['publicKey'] !== 'string') return 'register: publicKey must be a string';
         } else {
-          if (typeof message.peerId !== 'string') return 'register: peerId must be a string';
+          if (typeof msg['peerId'] !== 'string') return 'register: peerId must be a string';
         }
         break;
       case 'pair_request':
-        if (typeof message.targetCode !== 'string') return 'pair_request: targetCode must be a string';
+        if (typeof msg['targetCode'] !== 'string') return 'pair_request: targetCode must be a string';
         break;
       case 'pair_response':
-        if (typeof message.targetCode !== 'string') return 'pair_response: targetCode must be a string';
-        if (typeof message.accepted !== 'boolean') return 'pair_response: accepted must be a boolean';
+        if (typeof msg['targetCode'] !== 'string') return 'pair_response: targetCode must be a string';
+        if (typeof msg['accepted'] !== 'boolean') return 'pair_response: accepted must be a boolean';
         break;
       case 'offer':
       case 'answer':
       case 'ice_candidate':
-        if (typeof message.target !== 'string') return `${message.type}: target must be a string`;
+        if (typeof msg['target'] !== 'string') return `${type}: target must be a string`;
         break;
       case 'call_offer':
       case 'call_answer':
       case 'call_reject':
       case 'call_hangup':
       case 'call_ice':
-        if (typeof message.target !== 'string') return `${message.type}: target must be a string`;
+        if (typeof msg['target'] !== 'string') return `${type}: target must be a string`;
         break;
       case 'link_request':
-        if (typeof message.linkCode !== 'string') return 'link_request: linkCode must be a string';
-        if (typeof message.publicKey !== 'string') return 'link_request: publicKey must be a string';
+        if (typeof msg['linkCode'] !== 'string') return 'link_request: linkCode must be a string';
+        if (typeof msg['publicKey'] !== 'string') return 'link_request: publicKey must be a string';
         break;
       case 'link_response':
-        if (typeof message.linkCode !== 'string') return 'link_response: linkCode must be a string';
-        if (typeof message.accepted !== 'boolean') return 'link_response: accepted must be a boolean';
+        if (typeof msg['linkCode'] !== 'string') return 'link_response: linkCode must be a string';
+        if (typeof msg['accepted'] !== 'boolean') return 'link_response: accepted must be a boolean';
         break;
       case 'upstream-message':
-        if (typeof message.channelId !== 'string') return 'upstream-message: channelId must be a string';
-        if (typeof message.ephemeralPublicKey !== 'string') return 'upstream-message: ephemeralPublicKey must be a string';
+        if (typeof msg['channelId'] !== 'string') return 'upstream-message: channelId must be a string';
+        if (typeof msg['ephemeralPublicKey'] !== 'string') return 'upstream-message: ephemeralPublicKey must be a string';
         break;
       case 'stream-start':
       case 'stream-frame':
       case 'stream-end':
-        if (typeof message.streamId !== 'string') return `${message.type}: streamId must be a string`;
-        if (typeof message.channelId !== 'string') return `${message.type}: channelId must be a string`;
+        if (typeof msg['streamId'] !== 'string') return `${type}: streamId must be a string`;
+        if (typeof msg['channelId'] !== 'string') return `${type}: channelId must be a string`;
         break;
       case 'channel-subscribe':
       case 'channel-owner-register':
-        if (typeof message.channelId !== 'string') return `${message.type}: channelId must be a string`;
+        if (typeof msg['channelId'] !== 'string') return `${type}: channelId must be a string`;
         break;
       case 'chunk_announce':
-        if (typeof message.peerId !== 'string') return 'chunk_announce: peerId must be a string';
-        if (!Array.isArray(message.chunks)) return 'chunk_announce: chunks must be an array';
+        if (typeof msg['peerId'] !== 'string') return 'chunk_announce: peerId must be a string';
+        if (!Array.isArray(msg['chunks'])) return 'chunk_announce: chunks must be an array';
         break;
       case 'chunk_request':
       case 'chunk_push':
-        if (typeof message.chunkId !== 'string') return `${message.type}: chunkId must be a string`;
-        if (typeof message.channelId !== 'string') return `${message.type}: channelId must be a string`;
+        if (typeof msg['chunkId'] !== 'string') return `${type}: chunkId must be a string`;
+        if (typeof msg['channelId'] !== 'string') return `${type}: channelId must be a string`;
         break;
       case 'update_load':
-        if (typeof message.peerId !== 'string') return 'update_load: peerId must be a string';
+        if (typeof msg['peerId'] !== 'string') return 'update_load: peerId must be a string';
         break;
       case 'register_rendezvous':
-        if (typeof message.peerId !== 'string') return 'register_rendezvous: peerId must be a string';
-        if (typeof message.relayId !== 'string') return 'register_rendezvous: relayId must be a string';
+        if (typeof msg['peerId'] !== 'string') return 'register_rendezvous: peerId must be a string';
+        if (typeof msg['relayId'] !== 'string') return 'register_rendezvous: relayId must be a string';
         break;
       case 'heartbeat':
-        if (typeof message.peerId !== 'string') return 'heartbeat: peerId must be a string';
+        if (typeof msg['peerId'] !== 'string') return 'heartbeat: peerId must be a string';
         break;
       case 'attest_request':
-        if (typeof message.build_token !== 'string') return 'attest_request: build_token must be a string';
-        if (typeof message.device_id !== 'string') return 'attest_request: device_id must be a string';
+        if (typeof msg['build_token'] !== 'string') return 'attest_request: build_token must be a string';
+        if (typeof msg['device_id'] !== 'string') return 'attest_request: device_id must be a string';
         break;
       case 'attest_response':
-        if (typeof message.nonce !== 'string') return 'attest_response: nonce must be a string';
-        if (!Array.isArray(message.responses)) return 'attest_response: responses must be an array';
+        if (typeof msg['nonce'] !== 'string') return 'attest_response: nonce must be a string';
+        if (!Array.isArray(msg['responses'])) return 'attest_response: responses must be an array';
         break;
       case 'ping':
       case 'get_relays':
@@ -1946,10 +1947,12 @@ export class ClientHandler extends EventEmitter {
 
     this.channelOwners.set(channelId, ws);
 
-    // Flush any queued upstream messages
+    // Flush any queued upstream messages (filter out expired ones)
     const queue = this.upstreamQueues.get(channelId);
     if (queue && queue.length > 0) {
-      for (const item of queue) {
+      const now = Date.now();
+      const valid = queue.filter(item => now - item.timestamp < UPSTREAM_QUEUE.TTL_MS);
+      for (const item of valid) {
         this.send(ws, item.data);
       }
       this.upstreamQueues.delete(channelId);
@@ -2550,7 +2553,7 @@ export class ClientHandler extends EventEmitter {
         }
         this.wsToConnectionId.delete(ws);
       } catch (e) {
-        logger.warn('[ClientHandler] Error cleaning up attestation session:', e);
+        logger.warn(`[ClientHandler] Error cleaning up attestation session: ${e}`);
       }
 
       // Clean up rate limiting tracking (sync, safe)
@@ -2579,7 +2582,7 @@ export class ClientHandler extends EventEmitter {
           }
         }
       } catch (e) {
-        logger.warn('[ClientHandler] Error cleaning up channel owners:', e);
+        logger.warn(`[ClientHandler] Error cleaning up channel owners: ${e}`);
       }
 
       // Clean up channel subscriber registrations
@@ -2588,7 +2591,7 @@ export class ClientHandler extends EventEmitter {
           subscribers.delete(ws);
         }
       } catch (e) {
-        logger.warn('[ClientHandler] Error cleaning up channel subscribers:', e);
+        logger.warn(`[ClientHandler] Error cleaning up channel subscribers: ${e}`);
       }
 
       // Clean up pairing code mappings (for signaling clients)
@@ -2657,7 +2660,7 @@ export class ClientHandler extends EventEmitter {
           logger.pairingEvent('disconnected', { code: pairingCode });
         }
       } catch (e) {
-        logger.warn('[ClientHandler] Error cleaning up pairing code mappings:', e);
+        logger.warn(`[ClientHandler] Error cleaning up pairing code mappings: ${e}`);
       }
 
       // Clean up peerId mappings (for relay clients)
@@ -2685,7 +2688,7 @@ export class ClientHandler extends EventEmitter {
         // Always clean up the reverse mapping for this WebSocket
         this.wsToClient.delete(ws);
       } catch (e) {
-        logger.warn('[ClientHandler] Error cleaning up peerId mappings:', e);
+        logger.warn(`[ClientHandler] Error cleaning up peerId mappings: ${e}`);
       }
     } catch (e) {
       // Outer catch: prevents any uncaught error from propagating as unhandled rejection
@@ -2828,6 +2831,17 @@ export class ClientHandler extends EventEmitter {
         this.wsPairRequestRateLimits.delete(ws);
       }
     }
+
+    // Clean up expired upstream queue entries
+    for (const [channelId, queue] of this.upstreamQueues) {
+      const valid = queue.filter(item => now - item.timestamp < UPSTREAM_QUEUE.TTL_MS);
+      if (valid.length === 0) {
+        this.upstreamQueues.delete(channelId);
+      } else if (valid.length < queue.length) {
+        this.upstreamQueues.set(channelId, valid);
+      }
+    }
+
     return stale.length;
   }
 

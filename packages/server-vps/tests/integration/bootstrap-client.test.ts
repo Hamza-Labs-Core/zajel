@@ -172,6 +172,9 @@ function createTestConfig(
       indirectPingCount: 2,
       stateExchangeInterval: 5000,
     },
+    admin: {
+      jwtSecret: '', // No auth in tests — /stats and /metrics stay accessible
+    },
   };
 }
 
