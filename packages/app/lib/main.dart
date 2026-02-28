@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -18,6 +19,8 @@ import 'core/services/link_request_handler.dart';
 import 'core/services/notification_listener_service.dart';
 import 'core/services/pair_request_handler.dart';
 import 'core/services/voip_call_handler.dart';
+import 'features/channels/providers/channel_providers.dart';
+import 'features/groups/providers/group_providers.dart';
 import 'shared/theme/app_theme.dart';
 
 const bool _isE2eTest = bool.fromEnvironment('E2E_TEST');
@@ -70,6 +73,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     with WidgetsBindingObserver {
   bool _initialized = false;
   bool _disposed = false;
+  bool _showPrivacyScreen = false;
 
   late final AppInitializationService _initService;
   late final FileTransferListener _fileTransferListener;
@@ -92,6 +96,10 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       initializeCrypto: () => ref.read(cryptoServiceProvider).initialize(),
       initializeMessageStorage: () =>
           ref.read(messageStorageProvider).initialize(),
+      initializeChannelStorage: () =>
+          ref.read(channelStorageServiceProvider).initialize(),
+      initializeGroupStorage: () =>
+          ref.read(groupStorageServiceProvider).initialize(),
       getAllTrustedPeers: () =>
           ref.read(trustedPeersStorageProvider).getAllPeers(),
       setPeerAliases: (aliases) =>
@@ -263,9 +271,32 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Clean up native resources when app is detached (closing)
     if (state == AppLifecycleState.detached && !_disposed) {
       _disposed = true;
       _disposeServicesSync();
+    }
+
+    // Track foreground state for notification suppression
+    ref.read(appInForegroundProvider.notifier).state =
+        state == AppLifecycleState.resumed;
+
+    // Privacy screen: obscure app content when backgrounded.
+    // On mobile: inactive/paused when app goes to background or task switcher.
+    // On desktop: hidden when minimized, inactive when losing focus.
+    final privacyEnabled = ref.read(privacyScreenProvider);
+    if (privacyEnabled) {
+      if (state == AppLifecycleState.inactive ||
+          state == AppLifecycleState.paused ||
+          state == AppLifecycleState.hidden) {
+        if (mounted && !_showPrivacyScreen) {
+          setState(() => _showPrivacyScreen = true);
+        }
+      } else if (state == AppLifecycleState.resumed) {
+        if (mounted && _showPrivacyScreen) {
+          setState(() => _showPrivacyScreen = false);
+        }
+      }
     }
   }
 
@@ -289,6 +320,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     _notificationListener.listen();
     _setupPeerStatusNotifications();
     _setupVoipCallListener();
+    _syncAndroidSecureFlag();
 
     if (mounted) {
       setState(() => _initialized = true);
@@ -339,6 +371,24 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     });
   }
 
+  static const _privacyChannel = MethodChannel('com.zajel.zajel/privacy');
+
+  Future<void> _syncAndroidSecureFlag() async {
+    if (!Platform.isAndroid && !Platform.isWindows) return;
+    // Never set FLAG_SECURE in E2E mode — it blocks Appium screenshots
+    if (_isE2eTest) return;
+    try {
+      final enabled = ref.read(privacyScreenProvider);
+      if (enabled) {
+        await _privacyChannel.invokeMethod('enableSecureScreen');
+      } else {
+        await _privacyChannel.invokeMethod('disableSecureScreen');
+      }
+    } catch (e) {
+      logger.warning('ZajelApp', 'Failed to set secure screen flag: $e');
+    }
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -368,13 +418,62 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       );
     }
 
-    return MaterialApp.router(
+    final app = MaterialApp.router(
       title: 'Zajel',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: ref.watch(themeModeProvider),
       routerConfig: appRouter,
+    );
+
+    if (!_showPrivacyScreen) return app;
+
+    // Overlay the app with a privacy screen when backgrounded.
+    // Directionality is required because the Stack is above MaterialApp.
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: Stack(
+        children: [
+          app,
+          const _PrivacyOverlay(),
+        ],
+      ),
+    );
+  }
+}
+
+class _PrivacyOverlay extends StatelessWidget {
+  const _PrivacyOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        backgroundColor: const Color(0xFF1A1A2E),
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.lock_outline,
+                size: 64,
+                color: Colors.white.withValues(alpha: 0.7),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Zajel',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white.withValues(alpha: 0.8),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

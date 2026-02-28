@@ -12,6 +12,8 @@ void main() {
     // --- Tracking variables for closure calls ---
     late bool cryptoInitialized;
     late bool messageStorageInitialized;
+    late bool channelStorageInitialized;
+    late bool groupStorageInitialized;
     late bool connectionManagerInitialized;
     late bool deviceLinkServiceInitialized;
     late bool notificationsInitialized;
@@ -37,6 +39,8 @@ void main() {
     setUp(() {
       cryptoInitialized = false;
       messageStorageInitialized = false;
+      channelStorageInitialized = false;
+      groupStorageInitialized = false;
       connectionManagerInitialized = false;
       deviceLinkServiceInitialized = false;
       notificationsInitialized = false;
@@ -75,6 +79,12 @@ void main() {
         initializeMessageStorage: () async {
           messageStorageInitialized = true;
         },
+        initializeChannelStorage: () async {
+          channelStorageInitialized = true;
+        },
+        initializeGroupStorage: () async {
+          groupStorageInitialized = true;
+        },
         getAllTrustedPeers: getAllTrustedPeersStub,
         setPeerAliases: (aliases) => peerAliasesSet = aliases,
         initializeConnectionManager: () async {
@@ -112,6 +122,8 @@ void main() {
         expect(result, isTrue);
         expect(cryptoInitialized, isTrue);
         expect(messageStorageInitialized, isTrue);
+        expect(channelStorageInitialized, isTrue);
+        expect(groupStorageInitialized, isTrue);
         expect(connectionManagerInitialized, isTrue);
         expect(deviceLinkServiceInitialized, isTrue);
         expect(notificationsInitialized, isTrue);
@@ -160,8 +172,15 @@ void main() {
       test('returns false and logs error when crypto init fails', () async {
         service = AppInitializationService(
           initializeCrypto: () async => throw Exception('Crypto failed'),
-          initializeMessageStorage: () async =>
-              messageStorageInitialized = true,
+          initializeMessageStorage: () async {
+            messageStorageInitialized = true;
+          },
+          initializeChannelStorage: () async {
+            channelStorageInitialized = true;
+          },
+          initializeGroupStorage: () async {
+            groupStorageInitialized = true;
+          },
           getAllTrustedPeers: getAllTrustedPeersStub,
           setPeerAliases: (aliases) => peerAliasesSet = aliases,
           initializeConnectionManager: () async =>
@@ -199,6 +218,9 @@ void main() {
           initializeCrypto: () async => cryptoInitialized = true,
           initializeMessageStorage: () async =>
               throw Exception('DB init failed'),
+          initializeChannelStorage: () async =>
+              channelStorageInitialized = true,
+          initializeGroupStorage: () async => groupStorageInitialized = true,
           getAllTrustedPeers: getAllTrustedPeersStub,
           setPeerAliases: (aliases) => peerAliasesSet = aliases,
           initializeConnectionManager: () async =>

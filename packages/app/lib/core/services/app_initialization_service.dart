@@ -28,6 +28,8 @@ class AppInitializationService {
   // --- Core service accessors (closures over ref.read) ---
   final Future<void> Function() initializeCrypto;
   final Future<void> Function() initializeMessageStorage;
+  final Future<void> Function() initializeChannelStorage;
+  final Future<void> Function() initializeGroupStorage;
   final Future<List<TrustedPeer>> Function() getAllTrustedPeers;
   final void Function(Map<String, String> aliases) setPeerAliases;
   final Future<void> Function() initializeConnectionManager;
@@ -59,6 +61,8 @@ class AppInitializationService {
   AppInitializationService({
     required this.initializeCrypto,
     required this.initializeMessageStorage,
+    required this.initializeChannelStorage,
+    required this.initializeGroupStorage,
     required this.getAllTrustedPeers,
     required this.setPeerAliases,
     required this.initializeConnectionManager,
@@ -89,6 +93,12 @@ class AppInitializationService {
 
       logger.info(_tag, 'Initializing message storage...');
       await initializeMessageStorage();
+
+      logger.info(_tag, 'Initializing channel storage...');
+      await initializeChannelStorage();
+
+      logger.info(_tag, 'Initializing group storage...');
+      await initializeGroupStorage();
 
       // Load peer aliases from TrustedPeersStorage
       final allPeers = await getAllTrustedPeers();
