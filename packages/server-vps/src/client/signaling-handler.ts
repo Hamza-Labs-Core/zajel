@@ -2,8 +2,10 @@
  * Signaling Handler
  *
  * Manages pairing code registration, pair request/response flows, WebRTC signaling
- * forwarding (offer/answer/ice), device linking, and VoIP call signaling.
+ * forwarding (offer/answer/ice), and VoIP call signaling.
  * Extracted from ClientHandler to separate signaling concerns.
+ *
+ * Device linking has been further extracted to LinkHandler.
  */
 
 import type { WebSocket } from 'ws';
@@ -23,8 +25,6 @@ import type {
   CallRejectMessage,
   CallHangupMessage,
   CallIceMessage,
-  LinkRequestMessage,
-  LinkResponseMessage,
 } from './types.js';
 
 export interface SignalingHandlerDeps {
@@ -43,17 +43,6 @@ export class SignalingHandler {
   private pairingCodeToPublicKey: Map<string, string> = new Map();
   // Pending pair requests: targetCode -> list of pending requests
   private pendingPairRequests: Map<string, PendingPairRequest[]> = new Map();
-
-  // Pending device link requests: linkCode -> request info
-  private pendingLinkRequests: Map<string, {
-    webClientCode: string;
-    webPublicKey: string;
-    deviceName: string;
-    timestamp: number;
-  }> = new Map();
-
-  // Timer references for link request expiration (Issue #9: Memory leak fix)
-  private linkRequestTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   // Timer references for pair request expiration (to prevent memory leaks)
   private pairRequestTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
@@ -84,7 +73,7 @@ export class SignalingHandler {
   }
 
   /**
-   * Get pairing code WebSocket (used by cross-server pair requests).
+   * Get pairing code WebSocket (used by cross-server pair requests and link handler).
    */
   getPairingCodeWs(code: string): WebSocket | undefined {
     return this.pairingCodeToWs.get(code);
@@ -95,6 +84,13 @@ export class SignalingHandler {
    */
   getWsPairingCode(ws: WebSocket): string | undefined {
     return this.wsToPairingCode.get(ws);
+  }
+
+  /**
+   * Get the public key for a pairing code (used by link handler).
+   */
+  getPairingCodePublicKey(code: string): string | undefined {
+    return this.pairingCodeToPublicKey.get(code);
   }
 
   /**
@@ -480,180 +476,6 @@ export class SignalingHandler {
   }
 
   // ---------------------------------------------------------------------------
-  // Device linking
-  // ---------------------------------------------------------------------------
-
-  handleLinkRequest(ws: WebSocket, message: LinkRequestMessage): void {
-    const { linkCode, publicKey, deviceName = 'Unknown Browser' } = message;
-    const webClientCode = this.wsToPairingCode.get(ws);
-
-    if (!webClientCode) {
-      this.sendError(ws, 'Not registered. Send register message first.');
-      return;
-    }
-
-    if (!linkCode) {
-      this.sendError(ws, 'Missing required field: linkCode');
-      return;
-    }
-
-    // Validate link code format (Issue #17)
-    if (!PAIRING_CODE.REGEX.test(linkCode)) {
-      this.sendError(ws, 'Invalid link code format');
-      return;
-    }
-
-    if (!publicKey) {
-      this.sendError(ws, 'Missing required field: publicKey');
-      return;
-    }
-
-    const mobileWs = this.pairingCodeToWs.get(linkCode);
-
-    if (!mobileWs) {
-      this.send(ws, {
-        type: 'link_error',
-        error: 'Link request could not be processed',
-      });
-      return;
-    }
-
-    // Clear any existing timer for this link code
-    const existingLinkTimer = this.linkRequestTimers.get(linkCode);
-    if (existingLinkTimer) {
-      clearTimeout(existingLinkTimer);
-      this.linkRequestTimers.delete(linkCode);
-    }
-
-    this.pendingLinkRequests.set(linkCode, {
-      webClientCode,
-      webPublicKey: publicKey,
-      deviceName,
-      timestamp: Date.now(),
-    });
-
-    // Set timeout (Issue #9: Prevents memory leak)
-    const linkTimer = setTimeout(() => {
-      this.expireLinkRequest(linkCode);
-      this.linkRequestTimers.delete(linkCode);
-    }, this.pairRequestTimeout);
-    this.linkRequestTimers.set(linkCode, linkTimer);
-
-    this.send(mobileWs, {
-      type: 'link_request',
-      linkCode,
-      publicKey,
-      deviceName,
-      expiresIn: this.pairRequestTimeout,
-    });
-
-    logger.debug(`[Link] Request: web ${logger.pairingCode(webClientCode)} -> mobile ${logger.pairingCode(linkCode)}`);
-  }
-
-  handleLinkResponse(ws: WebSocket, message: LinkResponseMessage): void {
-    const { linkCode, accepted, deviceId } = message;
-    const mobileCode = this.wsToPairingCode.get(ws);
-
-    if (!mobileCode) {
-      this.sendError(ws, 'Not registered. Send register message first.');
-      return;
-    }
-
-    if (!linkCode || !PAIRING_CODE.REGEX.test(linkCode)) {
-      this.sendError(ws, 'Invalid link code format');
-      return;
-    }
-
-    if (mobileCode !== linkCode) {
-      this.sendError(ws, 'Cannot respond to link request for another device');
-      return;
-    }
-
-    const pending = this.pendingLinkRequests.get(linkCode);
-    if (!pending) {
-      this.send(ws, {
-        type: 'link_error',
-        error: 'No pending link request found',
-      });
-      return;
-    }
-
-    // Clear the timer (Issue #9)
-    const existingLinkTimer = this.linkRequestTimers.get(linkCode);
-    if (existingLinkTimer) {
-      clearTimeout(existingLinkTimer);
-      this.linkRequestTimers.delete(linkCode);
-    }
-
-    this.pendingLinkRequests.delete(linkCode);
-
-    const webWs = this.pairingCodeToWs.get(pending.webClientCode);
-    if (!webWs) {
-      return; // Web client disconnected
-    }
-
-    if (accepted) {
-      const mobilePublicKey = this.pairingCodeToPublicKey.get(mobileCode);
-      if (!mobilePublicKey) {
-        this.sendError(ws, 'Public key not found');
-        return;
-      }
-
-      this.send(webWs, {
-        type: 'link_matched',
-        linkCode,
-        peerPublicKey: mobilePublicKey,
-        isInitiator: true,
-        deviceId,
-      });
-
-      this.send(ws, {
-        type: 'link_matched',
-        linkCode,
-        peerPublicKey: pending.webPublicKey,
-        isInitiator: false,
-        webClientCode: pending.webClientCode,
-        deviceName: pending.deviceName,
-      });
-
-      logger.debug(`[Link] Matched: web ${logger.pairingCode(pending.webClientCode)} <-> mobile ${logger.pairingCode(mobileCode)}`);
-    } else {
-      this.send(webWs, {
-        type: 'link_rejected',
-        linkCode,
-      });
-
-      logger.debug(`[Link] Rejected: web ${logger.pairingCode(pending.webClientCode)} by mobile ${logger.pairingCode(mobileCode)}`);
-    }
-  }
-
-  private expireLinkRequest(linkCode: string): void {
-    const pending = this.pendingLinkRequests.get(linkCode);
-
-    if (pending) {
-      this.pendingLinkRequests.delete(linkCode);
-
-      const webWs = this.pairingCodeToWs.get(pending.webClientCode);
-      if (webWs) {
-        this.send(webWs, {
-          type: 'link_timeout',
-          linkCode,
-        });
-      }
-
-      const mobileWs = this.pairingCodeToWs.get(linkCode);
-      if (mobileWs) {
-        this.send(mobileWs, {
-          type: 'link_timeout',
-          linkCode,
-        });
-      }
-
-      logger.debug(`[Link] Expired: web ${logger.pairingCode(pending.webClientCode)} -> mobile ${logger.pairingCode(linkCode)}`);
-    }
-  }
-
-  // ---------------------------------------------------------------------------
   // WebRTC signaling forwarding
   // ---------------------------------------------------------------------------
 
@@ -822,7 +644,11 @@ export class SignalingHandler {
   // Disconnect cleanup
   // ---------------------------------------------------------------------------
 
-  handleDisconnect(ws: WebSocket): void {
+  /**
+   * Clean up signaling state when a WebSocket disconnects.
+   * Returns the pairing code if one was registered (used by link handler cleanup).
+   */
+  handleDisconnect(ws: WebSocket): string | undefined {
     try {
       const pairingCode = this.wsToPairingCode.get(ws);
       if (pairingCode) {
@@ -855,39 +681,13 @@ export class SignalingHandler {
           }
         }
 
-        // Clean up pending link requests where this peer was the mobile app (Issue #9)
-        const mobileTimer = this.linkRequestTimers.get(pairingCode);
-        if (mobileTimer) {
-          clearTimeout(mobileTimer);
-          this.linkRequestTimers.delete(pairingCode);
-        }
-        this.pendingLinkRequests.delete(pairingCode);
-
-        // Also clean up link requests where this peer was the web client
-        for (const [linkCode, request] of this.pendingLinkRequests) {
-          if (request.webClientCode === pairingCode) {
-            const webClientTimer = this.linkRequestTimers.get(linkCode);
-            if (webClientTimer) {
-              clearTimeout(webClientTimer);
-              this.linkRequestTimers.delete(linkCode);
-            }
-            this.pendingLinkRequests.delete(linkCode);
-            // Notify mobile app that web client disconnected
-            const mobileWs = this.pairingCodeToWs.get(linkCode);
-            if (mobileWs) {
-              this.send(mobileWs, {
-                type: 'link_timeout',
-                linkCode,
-              });
-            }
-          }
-        }
-
         logger.pairingEvent('disconnected', { code: pairingCode });
+        return pairingCode;
       }
     } catch (e) {
       logger.warn(`[SignalingHandler] Error cleaning up pairing code mappings: ${e}`);
     }
+    return undefined;
   }
 
   // ---------------------------------------------------------------------------
@@ -909,12 +709,6 @@ export class SignalingHandler {
     }
     this.pairRequestWarningTimers.clear();
 
-    // Clear link request timers (Issue #9)
-    for (const timer of this.linkRequestTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.linkRequestTimers.clear();
-
     // Close all signaling WebSockets
     for (const [, ws] of this.pairingCodeToWs) {
       try {
@@ -928,6 +722,5 @@ export class SignalingHandler {
     this.wsToPairingCode.clear();
     this.pairingCodeToPublicKey.clear();
     this.pendingPairRequests.clear();
-    this.pendingLinkRequests.clear();
   }
 }

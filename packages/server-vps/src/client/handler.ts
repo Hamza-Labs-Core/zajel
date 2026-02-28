@@ -1,23 +1,34 @@
 /**
  * Client WebSocket Handler
  *
- * Handles WebSocket messages from Zajel peers/clients.
- * Routes messages to appropriate registries with federation awareness.
- * Provides redirect information when requests belong to other servers.
+ * Thin facade that receives WebSocket messages, applies rate limiting,
+ * validates payloads, and delegates to the appropriate sub-handler:
+ *
+ *   - SignalingHandler  — pairing codes, pair request/response, WebRTC & call forwarding
+ *   - LinkHandler       — device linking (web <-> mobile)
+ *   - ChannelHandler    — channel owner/subscribe, upstream, streaming
+ *   - ChunkRelay        — chunk announce/request/push
+ *   - RelayHandler      — relay registration, load updates, heartbeat, rendezvous, getRelays
+ *   - AttestationHandler— attestation request/response, gating
+ *
+ * Shared state (clients map, wsToClient map, etc.) is exposed via HandlerContext.
  */
 
 import { EventEmitter } from 'events';
 import type { WebSocket } from 'ws';
 import type { ServerIdentity, ServerMetadata } from '../types.js';
 import { RelayRegistry } from '../registry/relay-registry.js';
-import { DistributedRendezvous, type PartialResult } from '../registry/distributed-rendezvous.js';
-import type { DeadDropResult, LiveMatchResult } from '../registry/rendezvous-registry.js';
+import { DistributedRendezvous } from '../registry/distributed-rendezvous.js';
 import { logger } from '../utils/logger.js';
 
-import { WEBSOCKET, RATE_LIMIT, PAIRING, ATTESTATION, RENDEZVOUS_LIMITS, CHUNK_LIMITS, PEER_ID, RELAY } from '../constants.js';
+import { WEBSOCKET, RATE_LIMIT, PAIRING, CHUNK_LIMITS, PEER_ID } from '../constants.js';
 import { ChunkRelay } from './chunk-relay.js';
 import { ChannelHandler } from './channel-handler.js';
 import { SignalingHandler } from './signaling-handler.js';
+import { LinkHandler } from './link-handler.js';
+import { RelayHandler } from './relay-handler.js';
+import { AttestationHandler } from './attestation-handler.js';
+import type { HandlerContext } from './context.js';
 import type { Storage } from '../storage/interface.js';
 import { AttestationManager, type AttestationConfig } from '../attestation/attestation-manager.js';
 import type { FederationManager } from '../federation/federation-manager.js';
@@ -94,7 +105,10 @@ export class ClientHandler extends EventEmitter {
 
   // Sub-handlers
   private signalingHandler: SignalingHandler;
+  private linkHandler: LinkHandler;
   private channelHandler: ChannelHandler;
+  private relayHandler: RelayHandler;
+  private attestationHandler: AttestationHandler;
 
   // Chunk relay service (optional - only initialized when storage is provided)
   private chunkRelay: ChunkRelay | null = null;
@@ -133,6 +147,16 @@ export class ClientHandler extends EventEmitter {
       this.chunkRelay.startCleanup();
     }
 
+    // Initialize attestation manager if config is provided
+    if (attestationConfig) {
+      this.attestationManager = new AttestationManager(attestationConfig);
+    }
+
+    // Store federation reference for DHT redirect lookups
+    if (federation) {
+      this.federation = federation;
+    }
+
     // Initialize signaling handler
     this.signalingHandler = new SignalingHandler({
       send: (ws, message) => this.send(ws, message),
@@ -143,6 +167,16 @@ export class ClientHandler extends EventEmitter {
       pairRequestWarningTime: config.pairRequestWarningTime ?? PAIRING.DEFAULT_REQUEST_WARNING_TIME,
     });
 
+    // Initialize link handler
+    this.linkHandler = new LinkHandler({
+      send: (ws, message) => this.send(ws, message),
+      sendError: (ws, message) => this.sendError(ws, message),
+      getPairingCodeWs: (code) => this.signalingHandler.getPairingCodeWs(code),
+      getWsPairingCode: (ws) => this.signalingHandler.getWsPairingCode(ws),
+      getPairingCodePublicKey: (code) => this.signalingHandler.getPairingCodePublicKey(code),
+      linkRequestTimeout: config.pairRequestTimeout ?? PAIRING.DEFAULT_REQUEST_TIMEOUT,
+    });
+
     // Initialize channel handler
     this.channelHandler = new ChannelHandler({
       send: (ws, message) => this.send(ws, message),
@@ -150,15 +184,32 @@ export class ClientHandler extends EventEmitter {
       chunkRelay: this.chunkRelay,
     });
 
-    // Initialize attestation manager if config is provided
-    if (attestationConfig) {
-      this.attestationManager = new AttestationManager(attestationConfig);
-    }
+    // Build the HandlerContext for context-based sub-handlers
+    const ctx: HandlerContext = {
+      identity: this.identity,
+      endpoint: this.endpoint,
+      metadata: this.metadata,
+      config: this.config,
+      relayRegistry: this.relayRegistry,
+      distributedRendezvous: this.distributedRendezvous,
+      attestationManager: this.attestationManager,
+      federation: this.federation,
+      chunkRelay: this.chunkRelay,
+      signalingHandler: this.signalingHandler,
+      channelHandler: this.channelHandler,
+      clients: this.clients,
+      wsToClient: this.wsToClient,
+      wsToConnectionId: this.wsToConnectionId,
+      send: (ws, message) => this.send(ws, message),
+      sendError: (ws, message) => this.sendError(ws, message),
+      notifyClient: (peerId, message) => this.notifyClient(peerId, message),
+    };
 
-    // Store federation reference for DHT redirect lookups
-    if (federation) {
-      this.federation = federation;
-    }
+    // Initialize relay handler
+    this.relayHandler = new RelayHandler(ctx);
+
+    // Initialize attestation handler
+    this.attestationHandler = new AttestationHandler(ctx);
 
     // Forward match notifications to clients
     this.distributedRendezvous.on('match', (peerId, match) => {
@@ -211,24 +262,19 @@ export class ClientHandler extends EventEmitter {
     let rateLimitInfo = this.wsRateLimits.get(ws);
 
     if (!rateLimitInfo) {
-      // First message from this connection
       rateLimitInfo = { messageCount: 1, windowStart: now };
       this.wsRateLimits.set(ws, rateLimitInfo);
       return true;
     }
 
-    // Check if we're in a new window
     if (now - rateLimitInfo.windowStart >= RATE_LIMIT.WINDOW_MS) {
-      // Reset the window
       rateLimitInfo.messageCount = 1;
       rateLimitInfo.windowStart = now;
       return true;
     }
 
-    // Increment message count
     rateLimitInfo.messageCount++;
 
-    // Check if over limit
     if (rateLimitInfo.messageCount > RATE_LIMIT.MAX_MESSAGES) {
       return false;
     }
@@ -238,31 +284,25 @@ export class ClientHandler extends EventEmitter {
 
   /**
    * Check and update pair request rate limit for a WebSocket connection
-   * Returns true if the pair request should be allowed, false if rate limited
    */
   private checkPairRequestRateLimit(ws: WebSocket): boolean {
     const now = Date.now();
     let rateLimitInfo = this.wsPairRequestRateLimits.get(ws);
 
     if (!rateLimitInfo) {
-      // First pair request from this connection
       rateLimitInfo = { requestCount: 1, windowStart: now };
       this.wsPairRequestRateLimits.set(ws, rateLimitInfo);
       return true;
     }
 
-    // Check if we're in a new window
     if (now - rateLimitInfo.windowStart >= RATE_LIMIT.WINDOW_MS) {
-      // Reset the window
       rateLimitInfo.requestCount = 1;
       rateLimitInfo.windowStart = now;
       return true;
     }
 
-    // Increment request count
     rateLimitInfo.requestCount++;
 
-    // Check if over limit
     if (rateLimitInfo.requestCount > RATE_LIMIT.MAX_PAIR_REQUESTS) {
       return false;
     }
@@ -270,9 +310,6 @@ export class ClientHandler extends EventEmitter {
     return true;
   }
 
-  /**
-   * Handle incoming WebSocket message
-   */
   /**
    * Validate required fields and types for incoming messages.
    * Returns an error string if invalid, or null if valid.
@@ -366,15 +403,16 @@ export class ClientHandler extends EventEmitter {
       case 'get_relays':
         break; // no required fields
       default:
-        // Unknown types handled by the switch default case in handleMessage
         break;
     }
     return null;
   }
 
+  /**
+   * Handle incoming WebSocket message
+   */
   async handleMessage(ws: WebSocket, data: string): Promise<void> {
-    // Size validation (defense in depth - primary limit is at WebSocket level)
-    // This catches any messages that slip through or are used in testing
+    // Size validation (defense in depth)
     if (data.length > WEBSOCKET.MAX_MESSAGE_SIZE) {
       console.warn(`[Security] Rejected oversized message: ${data.length} bytes (limit: ${WEBSOCKET.MAX_MESSAGE_SIZE})`);
       this.sendError(ws, 'Message too large');
@@ -405,8 +443,6 @@ export class ClientHandler extends EventEmitter {
     }
 
     // Verify peerId consistency for non-register messages that include a peerId.
-    // If the WebSocket is bound to a peerId (relay client), enforce that subsequent
-    // messages use the same peerId. This prevents identity spoofing across messages.
     if ('peerId' in message && message.type !== 'register') {
       const boundPeerId = this.wsToClient.get(ws);
       if (boundPeerId) {
@@ -414,24 +450,29 @@ export class ClientHandler extends EventEmitter {
           this.sendError(ws, 'peerId mismatch with registered identity');
           return;
         }
-        // Override with bound peerId to prevent spoofing
         (message as { peerId: string }).peerId = boundPeerId;
       }
     }
 
     try {
       switch (message.type) {
+        // ----- Registration -----
         case 'register':
-          // Check if this is a pairing code registration or a peerId registration
           if ('pairingCode' in message) {
             this.signalingHandler.handlePairingCodeRegister(ws, message as SignalingRegisterMessage);
           } else {
-            await this.handleRegister(ws, message);
+            await this.relayHandler.handleRegister(ws, message as RegisterMessage);
+            // Emit client-connected event (relay handler stores the mapping)
+            const peerId = (message as RegisterMessage).peerId;
+            const client = this.clients.get(peerId);
+            if (client) {
+              this.emit('client-connected', client);
+            }
           }
           break;
 
+        // ----- Pairing -----
         case 'pair_request':
-          // Apply stricter rate limit for expensive pair_request operations
           if (!this.checkPairRequestRateLimit(ws)) {
             this.sendError(ws, 'Too many pair requests. Please slow down.');
             return;
@@ -443,6 +484,7 @@ export class ClientHandler extends EventEmitter {
           this.signalingHandler.handlePairResponse(ws, message as PairResponseMessage);
           break;
 
+        // ----- WebRTC signaling -----
         case 'offer':
           this.signalingHandler.handleSignalingForward(ws, message as SignalingOfferMessage);
           break;
@@ -455,7 +497,7 @@ export class ClientHandler extends EventEmitter {
           this.signalingHandler.handleSignalingForward(ws, message as SignalingIceCandidateMessage);
           break;
 
-        // VoIP call signaling messages - relay to paired peer (delegated to SignalingHandler)
+        // ----- VoIP call signaling -----
         case 'call_offer':
           this.signalingHandler.handleCallSignalingForward(ws, message as CallOfferMessage);
           break;
@@ -476,15 +518,16 @@ export class ClientHandler extends EventEmitter {
           this.signalingHandler.handleCallSignalingForward(ws, message as CallIceMessage);
           break;
 
+        // ----- Device linking -----
         case 'link_request':
-          this.signalingHandler.handleLinkRequest(ws, message as LinkRequestMessage);
+          this.linkHandler.handleLinkRequest(ws, message as LinkRequestMessage);
           break;
 
         case 'link_response':
-          this.signalingHandler.handleLinkResponse(ws, message as LinkResponseMessage);
+          this.linkHandler.handleLinkResponse(ws, message as LinkResponseMessage);
           break;
 
-        // Channel upstream and streaming messages (delegated to ChannelHandler)
+        // ----- Channels -----
         case 'upstream-message':
           this.channelHandler.handleUpstreamMessage(ws, message as UpstreamMessageData);
           break;
@@ -509,32 +552,33 @@ export class ClientHandler extends EventEmitter {
           this.channelHandler.handleChannelOwnerRegister(ws, message as ChannelOwnerRegisterMessage);
           break;
 
-        // Chunk relay messages (attestation-gated)
+        // ----- Chunk relay (attestation-gated) -----
         case 'chunk_announce':
-          if (!this.checkAttestation(ws)) return;
+          if (!this.attestationHandler.checkAttestation(ws)) return;
           await this.handleChunkAnnounce(ws, message as ChunkAnnounceMessage);
           break;
 
         case 'chunk_request':
-          if (!this.checkAttestation(ws)) return;
+          if (!this.attestationHandler.checkAttestation(ws)) return;
           await this.handleChunkRequest(ws, message as ChunkRequestMessage);
           break;
 
         case 'chunk_push':
-          if (!this.checkAttestation(ws)) return;
+          if (!this.attestationHandler.checkAttestation(ws)) return;
           await this.handleChunkPush(ws, message as ChunkPushMessage);
           break;
 
+        // ----- Relay & rendezvous -----
         case 'update_load':
-          this.handleUpdateLoad(ws, message);
+          this.relayHandler.handleUpdateLoad(ws, message as UpdateLoadMessage);
           break;
 
         case 'register_rendezvous':
-          await this.handleRegisterRendezvous(ws, message);
+          await this.relayHandler.handleRegisterRendezvous(ws, message as RegisterRendezvousMessage);
           break;
 
         case 'get_relays':
-          this.handleGetRelays(ws, message);
+          this.relayHandler.handleGetRelays(ws, message as GetRelaysMessage);
           break;
 
         case 'ping':
@@ -542,16 +586,16 @@ export class ClientHandler extends EventEmitter {
           break;
 
         case 'heartbeat':
-          this.handleHeartbeat(ws, message);
+          this.relayHandler.handleHeartbeat(ws, message as HeartbeatMessage);
           break;
 
-        // Attestation messages
+        // ----- Attestation -----
         case 'attest_request':
-          await this.handleAttestRequest(ws, message as AttestRequestMessage);
+          await this.attestationHandler.handleAttestRequest(ws, message as AttestRequestMessage);
           break;
 
         case 'attest_response':
-          await this.handleAttestResponse(ws, message as AttestResponseMessage);
+          await this.attestationHandler.handleAttestResponse(ws, message as AttestResponseMessage);
           break;
 
         default:
@@ -564,455 +608,11 @@ export class ClientHandler extends EventEmitter {
     }
   }
 
-  /**
-   * Handle peer registration
-   */
-  private async handleRegister(ws: WebSocket, message: RegisterMessage): Promise<void> {
-    const { peerId, maxConnections = 20, publicKey } = message;
-
-    if (!isValidPeerId(peerId)) {
-      this.sendError(ws, 'Invalid peerId: must be 1-128 alphanumeric characters, hyphens, or underscores');
-      return;
-    }
-
-    // Validate maxConnections
-    const maxConn = Number(maxConnections);
-    if (!Number.isFinite(maxConn) || maxConn < RELAY.MIN_MAX_CONNECTIONS || maxConn > RELAY.MAX_MAX_CONNECTIONS) {
-      this.sendError(ws, `maxConnections must be a finite number between ${RELAY.MIN_MAX_CONNECTIONS} and ${RELAY.MAX_MAX_CONNECTIONS}`);
-      return;
-    }
-
-    // Check if peerId is already registered by a different WebSocket
-    const existingClient = this.clients.get(peerId);
-    if (existingClient && existingClient.ws !== ws) {
-      this.sendError(ws, 'Peer ID already in use by another connection');
-      return;
-    }
-
-    // Check if this WebSocket is already registered with a different peerId
-    const existingPeerId = this.wsToClient.get(ws);
-    if (existingPeerId && existingPeerId !== peerId) {
-      this.sendError(ws, 'Cannot re-register with a different peerId');
-      return;
-    }
-
-    const now = Date.now();
-
-    // Create client info
-    const info: ClientInfo = {
-      peerId,
-      ws,
-      connectedAt: now,
-      lastSeen: now,
-      isRelay: true,
-    };
-
-    // Store mappings
-    this.clients.set(peerId, info);
-    this.wsToClient.set(ws, peerId);
-
-    // Register in relay registry
-    this.relayRegistry.register(peerId, {
-      maxConnections: maxConn,
-      publicKey,
-    });
-
-    // Get available relays (excluding self)
-    const relays = this.relayRegistry.getAvailableRelays(peerId, 10);
-
-    this.send(ws, {
-      type: 'registered',
-      peerId,
-      serverId: this.identity.serverId,
-      relays,
-    });
-
-    this.emit('client-connected', info);
-  }
-
-  /**
-   * Handle load update from a relay peer
-   */
-  private handleUpdateLoad(ws: WebSocket, message: UpdateLoadMessage): void {
-    const { peerId, connectedCount } = message;
-
-    if (!isValidPeerId(peerId)) {
-      this.sendError(ws, 'Invalid peerId');
-      return;
-    }
-
-    const count = Number(connectedCount);
-    if (!Number.isFinite(count) || count < 0 || count > RELAY.MAX_CONNECTED_COUNT) {
-      this.sendError(ws, 'Invalid connectedCount');
-      return;
-    }
-
-    // Update client's last seen
-    const client = this.clients.get(peerId);
-    if (client) {
-      client.lastSeen = Date.now();
-    }
-
-    this.relayRegistry.updateLoad(peerId, count);
-
-    this.send(ws, {
-      type: 'load_updated',
-      peerId,
-      connectedCount: count,
-    });
-  }
-
-  /**
-   * Handle rendezvous point registration with routing awareness.
-   *
-   * Supports both legacy format (single deadDrop) and new format (deadDrops map).
-   * Also supports both camelCase and snake_case field names for compatibility.
-   */
-  private async handleRegisterRendezvous(
-    ws: WebSocket,
-    message: RegisterRendezvousMessage
-  ): Promise<void> {
-    const { peerId, relayId } = message;
-
-    if (!isValidPeerId(peerId)) {
-      this.sendError(ws, 'Invalid peerId');
-      return;
-    }
-
-    // Support both naming conventions
-    const dailyPoints = message.dailyPoints || message.daily_points || [];
-    const hourlyTokens = message.hourlyTokens || message.hourly_tokens || [];
-
-    // Validate array sizes
-    if (!Array.isArray(dailyPoints) || dailyPoints.length > RENDEZVOUS_LIMITS.MAX_POINTS_PER_MESSAGE) {
-      this.sendError(ws, `Too many daily points (max ${RENDEZVOUS_LIMITS.MAX_POINTS_PER_MESSAGE})`);
-      return;
-    }
-    if (!Array.isArray(hourlyTokens) || hourlyTokens.length > RENDEZVOUS_LIMITS.MAX_TOKENS_PER_MESSAGE) {
-      this.sendError(ws, `Too many hourly tokens (max ${RENDEZVOUS_LIMITS.MAX_TOKENS_PER_MESSAGE})`);
-      return;
-    }
-
-    // Validate array element types and lengths
-    if (!dailyPoints.every(p => typeof p === 'string' && p.length <= RENDEZVOUS_LIMITS.MAX_HASH_LENGTH)) {
-      this.sendError(ws, 'Invalid daily points format');
-      return;
-    }
-    if (!hourlyTokens.every(t => typeof t === 'string' && t.length <= RENDEZVOUS_LIMITS.MAX_HASH_LENGTH)) {
-      this.sendError(ws, 'Invalid hourly tokens format');
-      return;
-    }
-
-    // Validate relayId field size
-    if (relayId && (typeof relayId !== 'string' || relayId.length > RENDEZVOUS_LIMITS.MAX_RELAY_ID_LENGTH)) {
-      this.sendError(ws, 'Invalid relayId');
-      return;
-    }
-
-    // Support both single dead drop (legacy) and map (new format)
-    // Priority: dead_drops > deadDrops > deadDrop (legacy)
-    const deadDropsMap: Record<string, string> =
-      message.dead_drops || message.deadDrops || {};
-    const legacyDeadDrop = message.deadDrop || '';
-
-    // Validate dead drops map size and values
-    if (Object.keys(deadDropsMap).length > RENDEZVOUS_LIMITS.MAX_POINTS_PER_MESSAGE) {
-      this.sendError(ws, 'Too many dead drops');
-      return;
-    }
-    for (const [key, value] of Object.entries(deadDropsMap)) {
-      if (typeof key !== 'string' || key.length > RENDEZVOUS_LIMITS.MAX_HASH_LENGTH) {
-        this.sendError(ws, 'Invalid dead drop key');
-        return;
-      }
-      if (typeof value !== 'string' || value.length > RENDEZVOUS_LIMITS.MAX_DEAD_DROP_SIZE) {
-        this.sendError(ws, 'Dead drop payload too large (max 4KB)');
-        return;
-      }
-    }
-
-    // Validate legacy dead drop size
-    if (legacyDeadDrop && (typeof legacyDeadDrop !== 'string' || legacyDeadDrop.length > RENDEZVOUS_LIMITS.MAX_DEAD_DROP_SIZE)) {
-      this.sendError(ws, 'Dead drop payload too large (max 4KB)');
-      return;
-    }
-
-    // Update client's last seen
-    const client = this.clients.get(peerId);
-    if (client) {
-      client.lastSeen = Date.now();
-    }
-
-    // Aggregate dead drops results
-    const allDeadDrops: DeadDropResult[] = [];
-    const allDailyRedirects: Array<{ serverId: string; endpoint: string; items: string[] }> = [];
-
-    // If we have per-point dead drops, register each point with its specific dead drop
-    const hasPerPointDeadDrops = Object.keys(deadDropsMap).length > 0;
-
-    if (hasPerPointDeadDrops) {
-      // Group points by whether they have a dead drop
-      const pointsWithDeadDrop: string[] = [];
-      const pointsWithoutDeadDrop: string[] = [];
-
-      for (const point of dailyPoints) {
-        if (deadDropsMap[point]) {
-          pointsWithDeadDrop.push(point);
-        } else {
-          pointsWithoutDeadDrop.push(point);
-        }
-      }
-
-      // Register points that have dead drops - each with its own dead drop
-      for (const point of pointsWithDeadDrop) {
-        const deadDrop = deadDropsMap[point]!;
-        const result = await this.distributedRendezvous.registerDailyPoints(peerId, {
-          points: [point],
-          deadDrop,
-          relayId,
-        });
-        allDeadDrops.push(...result.local.deadDrops);
-        allDailyRedirects.push(...result.redirects);
-      }
-
-      // Register points without dead drops (if any)
-      if (pointsWithoutDeadDrop.length > 0) {
-        const result = await this.distributedRendezvous.registerDailyPoints(peerId, {
-          points: pointsWithoutDeadDrop,
-          deadDrop: '', // No dead drop for these points
-          relayId,
-        });
-        allDeadDrops.push(...result.local.deadDrops);
-        allDailyRedirects.push(...result.redirects);
-      }
-    } else {
-      // Legacy mode: single dead drop for all points
-      const dailyResult = await this.distributedRendezvous.registerDailyPoints(peerId, {
-        points: dailyPoints,
-        deadDrop: legacyDeadDrop,
-        relayId,
-      });
-      allDeadDrops.push(...dailyResult.local.deadDrops);
-      allDailyRedirects.push(...dailyResult.redirects);
-    }
-
-    // Register hourly tokens (with routing)
-    const hourlyResult = await this.distributedRendezvous.registerHourlyTokens(peerId, {
-      tokens: hourlyTokens,
-      relayId,
-    });
-
-    // Check if we need to send redirects
-    const hasRedirects = allDailyRedirects.length > 0 || hourlyResult.redirects.length > 0;
-
-    if (hasRedirects) {
-      // Send partial result with redirect information
-      this.send(ws, {
-        type: 'rendezvous_partial',
-        local: {
-          liveMatches: hourlyResult.local.liveMatches,
-          deadDrops: allDeadDrops,
-        },
-        redirects: this.mergeRedirects(allDailyRedirects, hourlyResult.redirects),
-      });
-    } else {
-      // All points handled locally - send regular result
-      this.send(ws, {
-        type: 'rendezvous_result',
-        liveMatches: hourlyResult.local.liveMatches,
-        deadDrops: allDeadDrops,
-      });
-    }
-  }
-
-  /**
-   * Handle get relays request
-   */
-  private handleGetRelays(ws: WebSocket, message: GetRelaysMessage): void {
-    const { peerId, count = 10 } = message;
-
-    if (!isValidPeerId(peerId)) {
-      this.sendError(ws, 'Invalid peerId');
-      return;
-    }
-
-    const relays = this.relayRegistry.getAvailableRelays(peerId, count);
-
-    this.send(ws, {
-      type: 'relays',
-      relays,
-    });
-  }
-
-  /**
-   * Handle heartbeat message
-   */
-  private handleHeartbeat(ws: WebSocket, message: HeartbeatMessage): void {
-    const { peerId } = message;
-
-    if (!isValidPeerId(peerId)) {
-      this.sendError(ws, 'Invalid peerId');
-      return;
-    }
-
-    // Update last seen
-    const client = this.clients.get(peerId);
-    if (client) {
-      client.lastSeen = Date.now();
-    }
-
-    // Update relay registry
-    const peer = this.relayRegistry.getPeer(peerId);
-    if (peer) {
-      this.relayRegistry.updateLoad(peerId, peer.connectedCount);
-    }
-
-    this.send(ws, {
-      type: 'heartbeat_ack',
-      timestamp: Date.now(),
-    });
-  }
-
   // ---------------------------------------------------------------------------
-  // Attestation handlers
+  // Chunk relay handlers (still in handler.ts because they need cross-handler
+  // lookups between channel subscribers and signaling pairing codes)
   // ---------------------------------------------------------------------------
 
-  /**
-   * Check if the client is attested or within grace period.
-   * If not, send an error and return false.
-   * If attestation is not configured, always returns true.
-   */
-  private checkAttestation(ws: WebSocket): boolean {
-    if (!this.attestationManager) return true;
-
-    const connectionId = this.wsToConnectionId.get(ws);
-    if (!connectionId) return true; // No attestation session = not tracked
-
-    if (this.attestationManager.isAllowed(connectionId)) {
-      return true;
-    }
-
-    // Client is not attested and grace period expired
-    this.send(ws, {
-      type: 'error',
-      code: ATTESTATION.ERROR_CODE_NOT_ATTESTED,
-      message: 'Attestation required',
-    });
-    return false;
-  }
-
-  /**
-   * Handle attest_request: Client sends build_token and device_id.
-   * VPS forwards to bootstrap's POST /attest/challenge.
-   */
-  private async handleAttestRequest(ws: WebSocket, message: AttestRequestMessage): Promise<void> {
-    if (!this.attestationManager) {
-      this.sendError(ws, 'Attestation not configured');
-      return;
-    }
-
-    const { build_token, device_id } = message;
-
-    if (!build_token) {
-      this.sendError(ws, 'Missing required field: build_token');
-      return;
-    }
-
-    if (!device_id) {
-      this.sendError(ws, 'Missing required field: device_id');
-      return;
-    }
-
-    const connectionId = this.wsToConnectionId.get(ws);
-    if (!connectionId) {
-      this.sendError(ws, 'No attestation session');
-      return;
-    }
-
-    const challenge = await this.attestationManager.requestChallenge(
-      connectionId,
-      build_token,
-      device_id
-    );
-
-    if (!challenge) {
-      this.send(ws, {
-        type: 'attest_error',
-        message: 'Failed to get attestation challenge from bootstrap',
-      });
-      return;
-    }
-
-    this.send(ws, {
-      type: 'attest_challenge',
-      nonce: challenge.nonce,
-      regions: challenge.regions,
-    });
-  }
-
-  /**
-   * Handle attest_response: Client sends HMAC responses for the challenge.
-   * VPS forwards to bootstrap's POST /attest/verify.
-   */
-  private async handleAttestResponse(ws: WebSocket, message: AttestResponseMessage): Promise<void> {
-    if (!this.attestationManager) {
-      this.sendError(ws, 'Attestation not configured');
-      return;
-    }
-
-    const { nonce, responses } = message;
-
-    if (!nonce) {
-      this.sendError(ws, 'Missing required field: nonce');
-      return;
-    }
-
-    if (!responses || !Array.isArray(responses) || responses.length === 0) {
-      this.sendError(ws, 'Missing or empty responses array');
-      return;
-    }
-
-    const connectionId = this.wsToConnectionId.get(ws);
-    if (!connectionId) {
-      this.sendError(ws, 'No attestation session');
-      return;
-    }
-
-    const result = await this.attestationManager.verifyAttestation(
-      connectionId,
-      nonce,
-      responses
-    );
-
-    if (result.valid) {
-      this.send(ws, {
-        type: 'attest_success',
-        session_token: result.session_token || null,
-      });
-    } else {
-      this.send(ws, {
-        type: 'attest_failed',
-        message: 'Attestation verification failed',
-      });
-      // Disconnect client after attestation failure
-      ws.close(ATTESTATION.WS_CLOSE_CODE_ATTESTATION_FAILED, 'Attestation failed');
-    }
-  }
-
-  /**
-   * Get the attestation manager (for testing or external access).
-   */
-  getAttestationManager(): AttestationManager | null {
-    return this.attestationManager;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Chunk relay handlers
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Handle chunk_announce: peer announces it has chunks.
-   */
   private async handleChunkAnnounce(ws: WebSocket, message: ChunkAnnounceMessage): Promise<void> {
     if (!this.chunkRelay) {
       this.sendError(ws, 'Chunk relay not available');
@@ -1031,13 +631,11 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
-    // Validate chunk array length
     if (chunks.length > CHUNK_LIMITS.MAX_CHUNKS_PER_ANNOUNCE) {
       this.sendError(ws, `Too many chunks per announce (max ${CHUNK_LIMITS.MAX_CHUNKS_PER_ANNOUNCE})`);
       return;
     }
 
-    // Validate individual chunk entries
     for (const chunk of chunks) {
       if (!chunk.chunkId || typeof chunk.chunkId !== 'string' || chunk.chunkId.length > CHUNK_LIMITS.MAX_CHUNK_ID_LENGTH) {
         this.sendError(ws, 'Invalid chunk entry: chunkId must be a string up to 256 chars');
@@ -1049,7 +647,6 @@ export class ClientHandler extends EventEmitter {
       }
     }
 
-    // Register the peer as online for chunk relay
     this.chunkRelay.registerPeer(peerId, ws);
 
     const result = await this.chunkRelay.handleAnnounce(peerId, chunks);
@@ -1064,7 +661,7 @@ export class ClientHandler extends EventEmitter {
       registered: result.registered,
     });
 
-    // Notify channel subscribers about new chunks so they can request them.
+    // Notify channel subscribers about new chunks
     if (channelId) {
       const subscribers = this.channelHandler.getSubscribers(channelId);
       if (subscribers) {
@@ -1083,9 +680,6 @@ export class ClientHandler extends EventEmitter {
     }
   }
 
-  /**
-   * Handle chunk_request: peer requests a chunk.
-   */
   private async handleChunkRequest(ws: WebSocket, message: ChunkRequestMessage): Promise<void> {
     if (!this.chunkRelay) {
       this.sendError(ws, 'Chunk relay not available');
@@ -1104,14 +698,12 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
-    // Identify the requesting peer
     const peerId = this.wsToClient.get(ws) || this.signalingHandler.getWsPairingCode(ws);
     if (!peerId) {
       this.sendError(ws, 'Not registered');
       return;
     }
 
-    // Register this peer as online for relay purposes
     this.chunkRelay.registerPeer(peerId, ws);
 
     const result = await this.chunkRelay.handleRequest(peerId, ws, chunkId, channelId);
@@ -1123,18 +715,13 @@ export class ClientHandler extends EventEmitter {
         error: result.error,
       });
     } else if (!result.served && result.pulling) {
-      // Notify the requester that we're pulling the chunk
       this.send(ws, {
         type: 'chunk_pulling',
         chunkId,
       });
     }
-    // If result.served is true, chunk_data was already sent by the relay
   }
 
-  /**
-   * Handle chunk_push: peer sends chunk data (response to chunk_pull).
-   */
   private async handleChunkPush(ws: WebSocket, message: ChunkPushMessage): Promise<void> {
     if (!this.chunkRelay) {
       this.sendError(ws, 'Chunk relay not available');
@@ -1158,7 +745,6 @@ export class ClientHandler extends EventEmitter {
       return;
     }
 
-    // Identify the pushing peer
     const peerId = this.wsToClient.get(ws) || this.signalingHandler.getWsPairingCode(ws);
     if (!peerId) {
       this.sendError(ws, 'Not registered');
@@ -1180,16 +766,10 @@ export class ClientHandler extends EventEmitter {
     });
   }
 
-  /**
-   * Get the chunk relay instance (for testing or external access).
-   */
-  getChunkRelay(): ChunkRelay | null {
-    return this.chunkRelay;
-  }
+  // ---------------------------------------------------------------------------
+  // Disconnect
+  // ---------------------------------------------------------------------------
 
-  /**
-   * Handle WebSocket disconnect
-   */
   async handleDisconnect(ws: WebSocket): Promise<void> {
     try {
       // Clean up attestation session
@@ -1207,77 +787,66 @@ export class ClientHandler extends EventEmitter {
       this.wsRateLimits.delete(ws);
       this.wsPairRequestRateLimits.delete(ws);
 
-      // Clean up channel state (delegated to ChannelHandler)
+      // Clean up channel state
       this.channelHandler.handleDisconnect(ws);
 
-      // Clean up signaling state (delegated to SignalingHandler)
-      this.signalingHandler.handleDisconnect(ws);
+      // Clean up signaling state (returns pairing code for link handler cleanup)
+      const pairingCode = this.signalingHandler.handleDisconnect(ws);
+
+      // Clean up link requests for the disconnected peer
+      if (pairingCode) {
+        this.linkHandler.handleDisconnect(pairingCode);
+      }
 
       // Clean up peerId mappings (for relay clients)
       try {
         const peerId = this.wsToClient.get(ws);
         if (peerId) {
-          // Only clean up if this WebSocket is still the registered one for this peerId
           const client = this.clients.get(peerId);
           if (client && client.ws === ws) {
-            // Remove from registries
             this.relayRegistry.unregister(peerId);
             await this.distributedRendezvous.unregisterPeer(peerId);
 
-            // Clean up chunk relay for this peer
             if (this.chunkRelay) {
               await this.chunkRelay.unregisterPeer(peerId);
             }
 
-            // Clean up mappings
             this.clients.delete(peerId);
 
             this.emit('client-disconnected', peerId);
           }
         }
-        // Always clean up the reverse mapping for this WebSocket
         this.wsToClient.delete(ws);
       } catch (e) {
         logger.warn(`[ClientHandler] Error cleaning up peerId mappings: ${e}`);
       }
     } catch (e) {
-      // Outer catch: prevents any uncaught error from propagating as unhandled rejection
       logger.error('[ClientHandler] Unexpected error in handleDisconnect:', e);
     }
   }
 
-  /**
-   * Notify a specific client
-   */
+  // ---------------------------------------------------------------------------
+  // Utility
+  // ---------------------------------------------------------------------------
+
   notifyClient(peerId: string, message: object): boolean {
-    // Check relay clients first
     const client = this.clients.get(peerId);
     if (client) return this.send(client.ws, message);
 
-    // Fall back to signaling clients (pairing code registrations)
     const signalingWs = this.signalingHandler.getPairingCodeWs(peerId);
     if (signalingWs) return this.send(signalingWs, message);
 
     return false;
   }
 
-  /**
-   * Get connected client count
-   */
   get clientCount(): number {
     return this.clients.size;
   }
 
-  /**
-   * Get client info
-   */
   getClient(peerId: string): ClientInfo | undefined {
     return this.clients.get(peerId);
   }
 
-  /**
-   * Send a message to a WebSocket
-   */
   private send(ws: WebSocket, message: object): boolean {
     try {
       if (ws.readyState === ws.OPEN) {
@@ -1290,9 +859,6 @@ export class ClientHandler extends EventEmitter {
     return false;
   }
 
-  /**
-   * Send an error message
-   */
   private sendError(ws: WebSocket, message: string): void {
     this.send(ws, {
       type: 'error',
@@ -1300,55 +866,10 @@ export class ClientHandler extends EventEmitter {
     });
   }
 
-  /**
-   * Merge redirect lists from daily and hourly results
-   */
-  private mergeRedirects(
-    dailyRedirects: Array<{ serverId: string; endpoint: string; items: string[] }>,
-    hourlyRedirects: Array<{ serverId: string; endpoint: string; items: string[] }>
-  ): Array<{
-    serverId: string;
-    endpoint: string;
-    dailyPoints: string[];
-    hourlyTokens: string[];
-  }> {
-    const merged = new Map<string, {
-      serverId: string;
-      endpoint: string;
-      dailyPoints: string[];
-      hourlyTokens: string[];
-    }>();
+  // ---------------------------------------------------------------------------
+  // Cleanup
+  // ---------------------------------------------------------------------------
 
-    for (const redirect of dailyRedirects) {
-      if (!merged.has(redirect.serverId)) {
-        merged.set(redirect.serverId, {
-          serverId: redirect.serverId,
-          endpoint: redirect.endpoint,
-          dailyPoints: [],
-          hourlyTokens: [],
-        });
-      }
-      merged.get(redirect.serverId)!.dailyPoints.push(...redirect.items);
-    }
-
-    for (const redirect of hourlyRedirects) {
-      if (!merged.has(redirect.serverId)) {
-        merged.set(redirect.serverId, {
-          serverId: redirect.serverId,
-          endpoint: redirect.endpoint,
-          dailyPoints: [],
-          hourlyTokens: [],
-        });
-      }
-      merged.get(redirect.serverId)!.hourlyTokens.push(...redirect.items);
-    }
-
-    return Array.from(merged.values());
-  }
-
-  /**
-   * Cleanup stale clients (based on heartbeat timeout)
-   */
   async cleanup(): Promise<number> {
     const now = Date.now();
     const stale: string[] = [];
@@ -1367,10 +888,8 @@ export class ClientHandler extends EventEmitter {
       }
     }
 
-
-    // Clean up stale rate limiter entries for signaling clients that may have
-    // disconnected without triggering the WebSocket 'close' event (Issue #4)
-    const STALE_THRESHOLD = 5 * 60 * 1000; // 5 minutes
+    // Clean up stale rate limiter entries (Issue #4)
+    const STALE_THRESHOLD = 5 * 60 * 1000;
     for (const [ws, rateLimitInfo] of this.wsRateLimits) {
       if (now - rateLimitInfo.windowStart > STALE_THRESHOLD) {
         this.wsRateLimits.delete(ws);
@@ -1382,36 +901,32 @@ export class ClientHandler extends EventEmitter {
       }
     }
 
-    // Clean up expired upstream queue entries (delegated to ChannelHandler)
     this.channelHandler.cleanupExpiredQueues();
 
     return stale.length;
   }
 
-  /**
-   * Shutdown - disconnect all clients
-   */
+  // ---------------------------------------------------------------------------
+  // Shutdown
+  // ---------------------------------------------------------------------------
+
   async shutdown(): Promise<void> {
-    // Clear rate limiting data
     this.wsRateLimits.clear();
     this.wsPairRequestRateLimits.clear();
 
-    // Shutdown sub-handlers
     this.signalingHandler.shutdown();
+    this.linkHandler.shutdown();
     this.channelHandler.shutdown();
 
-    // Shutdown chunk relay
     if (this.chunkRelay) {
       this.chunkRelay.shutdown();
     }
 
-    // Shutdown attestation manager
     if (this.attestationManager) {
       this.attestationManager.shutdown();
     }
     this.wsToConnectionId.clear();
 
-    // Close all relay clients
     for (const [, client] of this.clients) {
       try {
         client.ws.close(1001, 'Server shutting down');
@@ -1424,17 +939,23 @@ export class ClientHandler extends EventEmitter {
     this.wsToClient.clear();
   }
 
-  /**
-   * Get signaling client count
-   */
+  // ---------------------------------------------------------------------------
+  // Accessors
+  // ---------------------------------------------------------------------------
+
   get signalingClientCount(): number {
     return this.signalingHandler.clientCount;
   }
 
-  /**
-   * Get entropy metrics for pairing codes (Issue #41)
-   */
   getEntropyMetrics(): EntropyMetrics {
     return this.signalingHandler.getEntropyMetrics();
+  }
+
+  getAttestationManager(): AttestationManager | null {
+    return this.attestationManager;
+  }
+
+  getChunkRelay(): ChunkRelay | null {
+    return this.chunkRelay;
   }
 }
