@@ -14,8 +14,9 @@ import { DistributedRendezvous, type PartialResult } from '../registry/distribut
 import type { DeadDropResult, LiveMatchResult } from '../registry/rendezvous-registry.js';
 import { logger } from '../utils/logger.js';
 
-import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING, ATTESTATION, RENDEZVOUS_LIMITS, CHUNK_LIMITS, PEER_ID, RELAY, UPSTREAM_QUEUE } from '../constants.js';
+import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING, ATTESTATION, RENDEZVOUS_LIMITS, CHUNK_LIMITS, PEER_ID, RELAY } from '../constants.js';
 import { ChunkRelay } from './chunk-relay.js';
+import { ChannelHandler } from './channel-handler.js';
 import type { Storage } from '../storage/interface.js';
 import { AttestationManager, type AttestationConfig } from '../attestation/attestation-manager.js';
 import type { FederationManager } from '../federation/federation-manager.js';
@@ -132,23 +133,11 @@ export class ClientHandler extends EventEmitter {
     collisionAttempts: 0,
   };
 
-  // Channel owner tracking: channelId -> WebSocket of the owner
-  private channelOwners: Map<string, WebSocket> = new Map();
-  // Channel subscriber tracking: channelId -> Set of subscriber WebSockets
-  private channelSubscribers: Map<string, Set<WebSocket>> = new Map();
-  // Active stream tracking: channelId -> stream metadata
-  private activeStreams: Map<string, { streamId: string; title: string; ownerWs: WebSocket }> = new Map();
-  // Upstream rate limiting per WebSocket: ws -> { count, windowStart }
-  private upstreamRateLimits: Map<WebSocket, RateLimitInfo> = new Map();
-  // Upstream message queue for offline owners: channelId -> queued messages
-  private upstreamQueues: Map<string, Array<{ data: object; timestamp: number }>> = new Map();
+  // Channel handler (manages ownership, subscriptions, upstream, streaming)
+  private channelHandler: ChannelHandler;
 
   // Chunk relay service (optional - only initialized when storage is provided)
   private chunkRelay: ChunkRelay | null = null;
-  // Maximum queued upstream messages per channel (from constants)
-  private static readonly MAX_UPSTREAM_QUEUE_SIZE = UPSTREAM_QUEUE.MAX_QUEUE_SIZE;
-  // Upstream rate limit: max messages per window
-  private static readonly MAX_UPSTREAM_PER_WINDOW = 30;
 
   // Attestation manager (optional - only initialized when attestation config is provided)
   private attestationManager: AttestationManager | null = null;
@@ -187,6 +176,13 @@ export class ClientHandler extends EventEmitter {
       this.chunkRelay.setSendCallback((peerId, message) => this.notifyClient(peerId, message));
       this.chunkRelay.startCleanup();
     }
+
+    // Initialize channel handler
+    this.channelHandler = new ChannelHandler({
+      send: (ws, message) => this.send(ws, message),
+      sendError: (ws, message) => this.sendError(ws, message),
+      chunkRelay: this.chunkRelay,
+    });
 
     // Initialize attestation manager if config is provided
     if (attestationConfig) {
@@ -552,29 +548,29 @@ export class ClientHandler extends EventEmitter {
           this.handleLinkResponse(ws, message as LinkResponseMessage);
           break;
 
-        // Channel upstream and streaming messages
+        // Channel upstream and streaming messages (delegated to ChannelHandler)
         case 'upstream-message':
-          this.handleUpstreamMessage(ws, message as UpstreamMessageData);
+          this.channelHandler.handleUpstreamMessage(ws, message as UpstreamMessageData);
           break;
 
         case 'stream-start':
-          this.handleStreamStart(ws, message as StreamStartMessage);
+          this.channelHandler.handleStreamStart(ws, message as StreamStartMessage);
           break;
 
         case 'stream-frame':
-          this.handleStreamFrame(ws, message as StreamFrameMessage);
+          this.channelHandler.handleStreamFrame(ws, message as StreamFrameMessage);
           break;
 
         case 'stream-end':
-          this.handleStreamEnd(ws, message as StreamEndMessage);
+          this.channelHandler.handleStreamEnd(ws, message as StreamEndMessage);
           break;
 
         case 'channel-subscribe':
-          await this.handleChannelSubscribe(ws, message as ChannelSubscribeMessage);
+          await this.channelHandler.handleChannelSubscribe(ws, message as ChannelSubscribeMessage);
           break;
 
         case 'channel-owner-register':
-          this.handleChannelOwnerRegister(ws, message as ChannelOwnerRegisterMessage);
+          this.channelHandler.handleChannelOwnerRegister(ws, message as ChannelOwnerRegisterMessage);
           break;
 
         // Chunk relay messages (attestation-gated)
@@ -1688,303 +1684,6 @@ export class ClientHandler extends EventEmitter {
   }
 
   // ---------------------------------------------------------------------------
-  // Channel upstream and streaming handlers
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Handle channel owner registration.
-   * The owner registers to receive upstream messages for their channel.
-   */
-  private handleChannelOwnerRegister(ws: WebSocket, message: ChannelOwnerRegisterMessage): void {
-    const { channelId } = message;
-
-    if (!channelId) {
-      this.sendError(ws, 'Missing required field: channelId');
-      return;
-    }
-
-    this.channelOwners.set(channelId, ws);
-
-    // Flush any queued upstream messages (filter out expired ones)
-    const queue = this.upstreamQueues.get(channelId);
-    if (queue && queue.length > 0) {
-      const now = Date.now();
-      const valid = queue.filter(item => now - item.timestamp < UPSTREAM_QUEUE.TTL_MS);
-      for (const item of valid) {
-        this.send(ws, item.data);
-      }
-      this.upstreamQueues.delete(channelId);
-    }
-
-    this.send(ws, {
-      type: 'channel-owner-registered',
-      channelId,
-    });
-  }
-
-  /**
-   * Handle channel subscription registration.
-   * Subscribers register to receive stream frames and broadcasts.
-   */
-  private async handleChannelSubscribe(ws: WebSocket, message: ChannelSubscribeMessage): Promise<void> {
-    const { channelId } = message;
-
-    if (!channelId) {
-      this.sendError(ws, 'Missing required field: channelId');
-      return;
-    }
-
-    let subscribers = this.channelSubscribers.get(channelId);
-    if (!subscribers) {
-      subscribers = new Set();
-      this.channelSubscribers.set(channelId, subscribers);
-    }
-    subscribers.add(ws);
-
-    this.send(ws, {
-      type: 'channel-subscribed',
-      channelId,
-    });
-
-    // If there's an active stream, notify the new subscriber
-    const activeStream = this.activeStreams.get(channelId);
-    if (activeStream) {
-      this.send(ws, {
-        type: 'stream-start',
-        streamId: activeStream.streamId,
-        channelId,
-        title: activeStream.title,
-      });
-    }
-
-    // Send existing cached chunks so late-joining subscribers can fetch content.
-    if (this.chunkRelay) {
-      const chunkIds = await this.chunkRelay.getCachedChunkIdsForChannel(channelId);
-      if (chunkIds.length > 0) {
-        this.send(ws, {
-          type: 'chunk_available',
-          channelId,
-          chunkIds,
-        });
-      }
-    }
-  }
-
-  /**
-   * Check upstream rate limit for a WebSocket connection.
-   * Returns true if the upstream message should be allowed.
-   */
-  private checkUpstreamRateLimit(ws: WebSocket): boolean {
-    const now = Date.now();
-    let rateLimitInfo = this.upstreamRateLimits.get(ws);
-
-    if (!rateLimitInfo) {
-      rateLimitInfo = { messageCount: 1, windowStart: now };
-      this.upstreamRateLimits.set(ws, rateLimitInfo);
-      return true;
-    }
-
-    if (now - rateLimitInfo.windowStart >= RATE_LIMIT.WINDOW_MS) {
-      rateLimitInfo.messageCount = 1;
-      rateLimitInfo.windowStart = now;
-      return true;
-    }
-
-    rateLimitInfo.messageCount++;
-
-    if (rateLimitInfo.messageCount > ClientHandler.MAX_UPSTREAM_PER_WINDOW) {
-      return false;
-    }
-
-    return true;
-  }
-
-  /**
-   * Handle upstream message (subscriber -> VPS -> owner).
-   *
-   * The VPS routes the message to the channel owner only.
-   * Rate limited per peer to prevent spam.
-   * Messages are queued if the owner is offline (up to MAX_UPSTREAM_QUEUE_SIZE).
-   */
-  private handleUpstreamMessage(ws: WebSocket, message: UpstreamMessageData): void {
-    const { channelId } = message;
-
-    if (!channelId) {
-      this.sendError(ws, 'Missing required field: channelId');
-      return;
-    }
-
-    if (!message.message) {
-      this.sendError(ws, 'Missing required field: message');
-      return;
-    }
-
-    // Rate limit upstream messages
-    if (!this.checkUpstreamRateLimit(ws)) {
-      this.sendError(ws, 'Upstream rate limit exceeded. Please slow down.');
-      return;
-    }
-
-    const ownerWs = this.channelOwners.get(channelId);
-
-    const forwardData = {
-      type: 'upstream-message',
-      channelId,
-      message: message.message,
-      ephemeralPublicKey: message.ephemeralPublicKey,
-    };
-
-    if (ownerWs && ownerWs.readyState === ownerWs.OPEN) {
-      // Owner is online, forward directly
-      this.send(ownerWs, forwardData);
-    } else {
-      // Owner is offline, queue the message
-      let queue = this.upstreamQueues.get(channelId);
-      if (!queue) {
-        queue = [];
-        this.upstreamQueues.set(channelId, queue);
-      }
-
-      if (queue.length < ClientHandler.MAX_UPSTREAM_QUEUE_SIZE) {
-        queue.push({ data: forwardData, timestamp: Date.now() });
-      }
-      // Silently drop if queue is full (DoS protection)
-    }
-
-    // Acknowledge receipt to the sender
-    this.send(ws, {
-      type: 'upstream-ack',
-      channelId,
-      messageId: (message.message as Record<string, unknown>)['id'] || null,
-    });
-  }
-
-  /**
-   * Handle stream-start from the channel owner.
-   *
-   * Notifies all subscribed peers about the new live stream.
-   * VPS tracks the active stream to notify late-joining subscribers.
-   */
-  private handleStreamStart(ws: WebSocket, message: StreamStartMessage): void {
-    const { streamId, channelId, title } = message;
-
-    if (!streamId || !channelId) {
-      this.sendError(ws, 'Missing required fields: streamId, channelId');
-      return;
-    }
-
-    // Verify this is the channel owner
-    const ownerWs = this.channelOwners.get(channelId);
-    if (ownerWs !== ws) {
-      this.sendError(ws, 'Only the channel owner can start a stream');
-      return;
-    }
-
-    // Track the active stream
-    this.activeStreams.set(channelId, { streamId, title, ownerWs: ws });
-
-    // Fan out to all subscribers
-    const subscribers = this.channelSubscribers.get(channelId);
-    if (subscribers) {
-      const notification = {
-        type: 'stream-start',
-        streamId,
-        channelId,
-        title,
-      };
-      for (const subWs of subscribers) {
-        this.send(subWs, notification);
-      }
-    }
-
-    // Acknowledge
-    this.send(ws, {
-      type: 'stream-started',
-      streamId,
-      channelId,
-      subscriberCount: subscribers?.size || 0,
-    });
-  }
-
-  /**
-   * Handle stream-frame from the channel owner.
-   *
-   * VPS acts as SFU: receives encrypted frame, fans out to all subscribers.
-   * No store-and-forward delay -- pure streaming relay.
-   */
-  private handleStreamFrame(ws: WebSocket, message: StreamFrameMessage): void {
-    const { streamId, channelId, frame } = message;
-
-    if (!streamId || !channelId || !frame) {
-      return; // Silently drop malformed frames for performance
-    }
-
-    // Verify the stream is active and the sender is the owner
-    const activeStream = this.activeStreams.get(channelId);
-    if (!activeStream || activeStream.ownerWs !== ws) {
-      return; // Silently drop unauthorized frames
-    }
-
-    // Fan out to all subscribers (SFU pattern)
-    const subscribers = this.channelSubscribers.get(channelId);
-    if (subscribers) {
-      const frameMsg = {
-        type: 'stream-frame',
-        streamId,
-        channelId,
-        frame,
-      };
-      for (const subWs of subscribers) {
-        this.send(subWs, frameMsg);
-      }
-    }
-  }
-
-  /**
-   * Handle stream-end from the channel owner.
-   *
-   * Notifies all subscribers and cleans up the active stream.
-   */
-  private handleStreamEnd(ws: WebSocket, message: StreamEndMessage): void {
-    const { streamId, channelId } = message;
-
-    if (!streamId || !channelId) {
-      this.sendError(ws, 'Missing required fields: streamId, channelId');
-      return;
-    }
-
-    // Verify the stream is active and the sender is the owner
-    const activeStream = this.activeStreams.get(channelId);
-    if (!activeStream || activeStream.ownerWs !== ws) {
-      this.sendError(ws, 'Cannot end stream: not the owner or no active stream');
-      return;
-    }
-
-    // Clean up the active stream
-    this.activeStreams.delete(channelId);
-
-    // Notify all subscribers
-    const subscribers = this.channelSubscribers.get(channelId);
-    if (subscribers) {
-      const endMsg = {
-        type: 'stream-end',
-        streamId,
-        channelId,
-      };
-      for (const subWs of subscribers) {
-        this.send(subWs, endMsg);
-      }
-    }
-
-    // Acknowledge
-    this.send(ws, {
-      type: 'stream-ended',
-      streamId,
-      channelId,
-    });
-  }
-
-  // ---------------------------------------------------------------------------
   // Attestation handlers
   // ---------------------------------------------------------------------------
 
@@ -2177,7 +1876,7 @@ export class ClientHandler extends EventEmitter {
 
     // Notify channel subscribers about new chunks so they can request them.
     if (channelId) {
-      const subscribers = this.channelSubscribers.get(channelId);
+      const subscribers = this.channelHandler.getSubscribers(channelId);
       if (subscribers) {
         const chunkIds = chunks.map(c => c.chunkId);
         const notification = {
@@ -2317,40 +2016,9 @@ export class ClientHandler extends EventEmitter {
       // Clean up rate limiting tracking (sync, safe)
       this.wsRateLimits.delete(ws);
       this.wsPairRequestRateLimits.delete(ws);
-      this.upstreamRateLimits.delete(ws);
 
-      // Clean up channel owner registrations
-      try {
-        for (const [channelId, ownerWs] of this.channelOwners) {
-          if (ownerWs === ws) {
-            this.channelOwners.delete(channelId);
-            // End any active streams for this owner
-            const activeStream = this.activeStreams.get(channelId);
-            if (activeStream && activeStream.ownerWs === ws) {
-              this.activeStreams.delete(channelId);
-              // Notify subscribers that stream ended
-              const subscribers = this.channelSubscribers.get(channelId);
-              if (subscribers) {
-                const endMsg = { type: 'stream-end', streamId: activeStream.streamId, channelId };
-                for (const subWs of subscribers) {
-                  this.send(subWs, endMsg);
-                }
-              }
-            }
-          }
-        }
-      } catch (e) {
-        logger.warn(`[ClientHandler] Error cleaning up channel owners: ${e}`);
-      }
-
-      // Clean up channel subscriber registrations
-      try {
-        for (const [, subscribers] of this.channelSubscribers) {
-          subscribers.delete(ws);
-        }
-      } catch (e) {
-        logger.warn(`[ClientHandler] Error cleaning up channel subscribers: ${e}`);
-      }
+      // Clean up channel state (delegated to ChannelHandler)
+      this.channelHandler.handleDisconnect(ws);
 
       // Clean up pairing code mappings (for signaling clients)
       try {
@@ -2590,15 +2258,8 @@ export class ClientHandler extends EventEmitter {
       }
     }
 
-    // Clean up expired upstream queue entries
-    for (const [channelId, queue] of this.upstreamQueues) {
-      const valid = queue.filter(item => now - item.timestamp < UPSTREAM_QUEUE.TTL_MS);
-      if (valid.length === 0) {
-        this.upstreamQueues.delete(channelId);
-      } else if (valid.length < queue.length) {
-        this.upstreamQueues.set(channelId, valid);
-      }
-    }
+    // Clean up expired upstream queue entries (delegated to ChannelHandler)
+    this.channelHandler.cleanupExpiredQueues();
 
     return stale.length;
   }
@@ -2628,13 +2289,9 @@ export class ClientHandler extends EventEmitter {
     // Clear rate limiting data
     this.wsRateLimits.clear();
     this.wsPairRequestRateLimits.clear();
-    this.upstreamRateLimits.clear();
 
-    // Clear channel data
-    this.channelOwners.clear();
-    this.channelSubscribers.clear();
-    this.activeStreams.clear();
-    this.upstreamQueues.clear();
+    // Shutdown channel handler
+    this.channelHandler.shutdown();
 
     // Shutdown chunk relay
     if (this.chunkRelay) {
