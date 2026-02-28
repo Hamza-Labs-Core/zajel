@@ -14,9 +14,10 @@ import { DistributedRendezvous, type PartialResult } from '../registry/distribut
 import type { DeadDropResult, LiveMatchResult } from '../registry/rendezvous-registry.js';
 import { logger } from '../utils/logger.js';
 
-import { WEBSOCKET, CRYPTO, RATE_LIMIT, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING, ATTESTATION, RENDEZVOUS_LIMITS, CHUNK_LIMITS, PEER_ID, RELAY } from '../constants.js';
+import { WEBSOCKET, RATE_LIMIT, PAIRING, ATTESTATION, RENDEZVOUS_LIMITS, CHUNK_LIMITS, PEER_ID, RELAY } from '../constants.js';
 import { ChunkRelay } from './chunk-relay.js';
 import { ChannelHandler } from './channel-handler.js';
+import { SignalingHandler } from './signaling-handler.js';
 import type { Storage } from '../storage/interface.js';
 import { AttestationManager, type AttestationConfig } from '../attestation/attestation-manager.js';
 import type { FederationManager } from '../federation/federation-manager.js';
@@ -30,7 +31,6 @@ import type {
   ClientInfo,
   ClientMessage,
   EntropyMetrics,
-  PendingPairRequest,
   RateLimitInfo,
   PairRequestRateLimitInfo,
   RegisterMessage,
@@ -86,54 +86,14 @@ export class ClientHandler extends EventEmitter {
   private distributedRendezvous: DistributedRendezvous;
   private clients: Map<string, ClientInfo> = new Map();
   private wsToClient: Map<WebSocket, string> = new Map();
-  // Pairing code-based client tracking for WebRTC signaling
-  private pairingCodeToWs: Map<string, WebSocket> = new Map();
-  private wsToPairingCode: Map<WebSocket, string> = new Map();
-  private pairingCodeToPublicKey: Map<string, string> = new Map();
-  // Pending pair requests: targetCode -> list of pending requests
-  private pendingPairRequests: Map<string, PendingPairRequest[]> = new Map();
-  // Default timeout: 120 seconds (2 minutes) to allow for fingerprint verification
-  // Default warning time: 30 seconds before timeout
-
-  // Pending device link requests: linkCode -> request info
-  private pendingLinkRequests: Map<string, {
-    webClientCode: string;   // The web client's pairing code
-    webPublicKey: string;    // The web client's public key
-    deviceName: string;      // Browser name
-    timestamp: number;
-  }> = new Map();
-
-  // Timer references for link request expiration (Issue #9: Memory leak fix)
-  // Key: linkCode
-  private linkRequestTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
-
-  // Configurable timeout values (set in constructor from config)
-  private readonly pairRequestTimeout: number;
-  private readonly pairRequestWarningTime: number;
-
-  // Timer references for pair request expiration (to prevent memory leaks)
-  // Key: "requesterCode:targetCode"
-  private pairRequestTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
-  // Timer references for pair request warnings (sent before timeout)
-  // Key: "requesterCode:targetCode"
-  private pairRequestWarningTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   // Rate limiting
   private wsRateLimits: Map<WebSocket, RateLimitInfo> = new Map();
   // Pair request rate limiting (stricter limit for expensive operations)
   private wsPairRequestRateLimits: Map<WebSocket, PairRequestRateLimitInfo> = new Map();
 
-  // Entropy monitoring thresholds (Issue #41)
-  // Based on birthday paradox analysis: collision risk increases at ~33k active codes
-
-  // Entropy metrics tracking
-  private entropyMetrics = {
-    peakActiveCodes: 0,
-    totalRegistrations: 0,
-    collisionAttempts: 0,
-  };
-
-  // Channel handler (manages ownership, subscriptions, upstream, streaming)
+  // Sub-handlers
+  private signalingHandler: SignalingHandler;
   private channelHandler: ChannelHandler;
 
   // Chunk relay service (optional - only initialized when storage is provided)
@@ -166,16 +126,22 @@ export class ClientHandler extends EventEmitter {
     this.distributedRendezvous = distributedRendezvous;
     this.metadata = metadata;
 
-    // Initialize configurable timeout values
-    this.pairRequestTimeout = config.pairRequestTimeout ?? PAIRING.DEFAULT_REQUEST_TIMEOUT;
-    this.pairRequestWarningTime = config.pairRequestWarningTime ?? PAIRING.DEFAULT_REQUEST_WARNING_TIME;
-
     // Initialize chunk relay if storage is provided
     if (storage) {
       this.chunkRelay = new ChunkRelay(storage);
       this.chunkRelay.setSendCallback((peerId, message) => this.notifyClient(peerId, message));
       this.chunkRelay.startCleanup();
     }
+
+    // Initialize signaling handler
+    this.signalingHandler = new SignalingHandler({
+      send: (ws, message) => this.send(ws, message),
+      sendError: (ws, message) => this.sendError(ws, message),
+      getServerId: () => this.identity.serverId,
+      getPairingCodeRedirects: (code) => this.getPairingCodeRedirects(code),
+      pairRequestTimeout: config.pairRequestTimeout ?? PAIRING.DEFAULT_REQUEST_TIMEOUT,
+      pairRequestWarningTime: config.pairRequestWarningTime ?? PAIRING.DEFAULT_REQUEST_WARNING_TIME,
+    });
 
     // Initialize channel handler
     this.channelHandler = new ChannelHandler({
@@ -201,36 +167,6 @@ export class ClientHandler extends EventEmitter {
         match,
       });
     });
-  }
-
-  /**
-   * Clear a pair request timer and remove it from the map
-   */
-  private clearPairRequestTimer(timerKey: string): void {
-    const timer = this.pairRequestTimers.get(timerKey);
-    if (timer) {
-      clearTimeout(timer);
-      this.pairRequestTimers.delete(timerKey);
-    }
-  }
-
-  /**
-   * Clear a pair request warning timer and remove it from the map
-   */
-  private clearPairRequestWarningTimer(timerKey: string): void {
-    const timer = this.pairRequestWarningTimers.get(timerKey);
-    if (timer) {
-      clearTimeout(timer);
-      this.pairRequestWarningTimers.delete(timerKey);
-    }
-  }
-
-  /**
-   * Clear both pair request and warning timers for a given key
-   */
-  private clearPairRequestTimers(timerKey: string): void {
-    this.clearPairRequestTimer(timerKey);
-    this.clearPairRequestWarningTimer(timerKey);
   }
 
   /**
@@ -488,7 +424,7 @@ export class ClientHandler extends EventEmitter {
         case 'register':
           // Check if this is a pairing code registration or a peerId registration
           if ('pairingCode' in message) {
-            this.handlePairingCodeRegister(ws, message as SignalingRegisterMessage);
+            this.signalingHandler.handlePairingCodeRegister(ws, message as SignalingRegisterMessage);
           } else {
             await this.handleRegister(ws, message);
           }
@@ -500,52 +436,52 @@ export class ClientHandler extends EventEmitter {
             this.sendError(ws, 'Too many pair requests. Please slow down.');
             return;
           }
-          this.handlePairRequest(ws, message as PairRequestMessage);
+          this.signalingHandler.handlePairRequest(ws, message as PairRequestMessage);
           break;
 
         case 'pair_response':
-          this.handlePairResponse(ws, message as PairResponseMessage);
+          this.signalingHandler.handlePairResponse(ws, message as PairResponseMessage);
           break;
 
         case 'offer':
-          this.handleSignalingForward(ws, message as SignalingOfferMessage);
+          this.signalingHandler.handleSignalingForward(ws, message as SignalingOfferMessage);
           break;
 
         case 'answer':
-          this.handleSignalingForward(ws, message as SignalingAnswerMessage);
+          this.signalingHandler.handleSignalingForward(ws, message as SignalingAnswerMessage);
           break;
 
         case 'ice_candidate':
-          this.handleSignalingForward(ws, message as SignalingIceCandidateMessage);
+          this.signalingHandler.handleSignalingForward(ws, message as SignalingIceCandidateMessage);
           break;
 
-        // VoIP call signaling messages - relay to paired peer
+        // VoIP call signaling messages - relay to paired peer (delegated to SignalingHandler)
         case 'call_offer':
-          this.handleCallSignalingForward(ws, message as CallOfferMessage);
+          this.signalingHandler.handleCallSignalingForward(ws, message as CallOfferMessage);
           break;
 
         case 'call_answer':
-          this.handleCallSignalingForward(ws, message as CallAnswerMessage);
+          this.signalingHandler.handleCallSignalingForward(ws, message as CallAnswerMessage);
           break;
 
         case 'call_reject':
-          this.handleCallSignalingForward(ws, message as CallRejectMessage);
+          this.signalingHandler.handleCallSignalingForward(ws, message as CallRejectMessage);
           break;
 
         case 'call_hangup':
-          this.handleCallSignalingForward(ws, message as CallHangupMessage);
+          this.signalingHandler.handleCallSignalingForward(ws, message as CallHangupMessage);
           break;
 
         case 'call_ice':
-          this.handleCallSignalingForward(ws, message as CallIceMessage);
+          this.signalingHandler.handleCallSignalingForward(ws, message as CallIceMessage);
           break;
 
         case 'link_request':
-          this.handleLinkRequest(ws, message as LinkRequestMessage);
+          this.signalingHandler.handleLinkRequest(ws, message as LinkRequestMessage);
           break;
 
         case 'link_response':
-          this.handleLinkResponse(ws, message as LinkResponseMessage);
+          this.signalingHandler.handleLinkResponse(ws, message as LinkResponseMessage);
           break;
 
         // Channel upstream and streaming messages (delegated to ChannelHandler)
@@ -937,752 +873,6 @@ export class ClientHandler extends EventEmitter {
     });
   }
 
-  /**
-   * Handle pairing code registration (for WebRTC signaling)
-   */
-  private handlePairingCodeRegister(ws: WebSocket, message: SignalingRegisterMessage): void {
-    const { pairingCode, publicKey } = message;
-
-    if (!pairingCode) {
-      this.sendError(ws, 'Missing required field: pairingCode');
-      return;
-    }
-
-    // Validate pairing code format (Issue #17)
-    if (!PAIRING_CODE.REGEX.test(pairingCode)) {
-      this.sendError(ws, 'Invalid pairing code format');
-      return;
-    }
-
-    if (!publicKey) {
-      this.sendError(ws, 'Missing required field: publicKey');
-      return;
-    }
-
-    // Validate public key format (must be valid base64)
-    if (!/^[A-Za-z0-9+/]+=*$/.test(publicKey)) {
-      this.sendError(ws, 'Invalid public key format');
-      return;
-    }
-
-    // Validate public key length (X25519 keys are 32 bytes)
-    try {
-      const decoded = Buffer.from(publicKey, 'base64');
-      if (decoded.length !== CRYPTO.X25519_KEY_SIZE) {
-        this.sendError(ws, 'Invalid public key length');
-        return;
-      }
-    } catch (error) {
-      // Base64 decoding failed - log for debugging, send generic error to client
-      console.warn('[ClientHandler] Invalid public key base64 encoding:', error);
-      this.sendError(ws, 'Invalid public key encoding');
-      return;
-    }
-
-    // Issue #41: Collision detection
-    // Check if pairing code already exists (collision)
-    if (this.pairingCodeToWs.has(pairingCode)) {
-      this.entropyMetrics.collisionAttempts++;
-      logger.warn(`Pairing code collision detected: ${logger.pairingCode(pairingCode)} (total collisions: ${this.entropyMetrics.collisionAttempts})`);
-
-      // Notify client to regenerate code and reconnect
-      this.send(ws, {
-        type: 'code_collision',
-        message: 'Pairing code already in use. Please reconnect with a new code.',
-      });
-      return;
-    }
-
-    // Store pairing code -> WebSocket and public key mappings
-    this.pairingCodeToWs.set(pairingCode, ws);
-    this.wsToPairingCode.set(ws, pairingCode);
-    this.pairingCodeToPublicKey.set(pairingCode, publicKey);
-
-    // Issue #41: Update entropy metrics
-    this.entropyMetrics.totalRegistrations++;
-    const currentActiveCount = this.pairingCodeToWs.size;
-
-    // Track peak active codes
-    if (currentActiveCount > this.entropyMetrics.peakActiveCodes) {
-      this.entropyMetrics.peakActiveCodes = currentActiveCount;
-    }
-
-    // Log warnings at threshold crossings
-    if (currentActiveCount === ENTROPY.COLLISION_HIGH_THRESHOLD) {
-      logger.warn(`HIGH collision risk: ${currentActiveCount} active codes - consider extending code length`);
-    } else if (currentActiveCount === ENTROPY.COLLISION_MEDIUM_THRESHOLD) {
-      logger.warn(`MEDIUM collision risk: ${currentActiveCount} active codes - monitor closely`);
-    } else if (currentActiveCount === ENTROPY.COLLISION_LOW_THRESHOLD) {
-      logger.info(`Approaching collision threshold: ${currentActiveCount} active codes`);
-    }
-
-    logger.pairingEvent('registered', { code: pairingCode, activeCodes: currentActiveCount });
-
-    // Compute DHT redirects: other servers that should also know about this code
-    const redirects = this.getPairingCodeRedirects(pairingCode);
-
-    // Send confirmation with optional redirects for cross-server pairing
-    this.send(ws, {
-      type: 'registered',
-      pairingCode,
-      serverId: this.identity.serverId,
-      ...(redirects.length > 0 ? { redirects } : {}),
-    });
-  }
-
-  /**
-   * Handle pair request (mutual approval flow)
-   */
-  private handlePairRequest(ws: WebSocket, message: PairRequestMessage): void {
-    const { targetCode, proposedName } = message;
-    const requesterCode = this.wsToPairingCode.get(ws);
-
-    if (!requesterCode) {
-      this.sendError(ws, 'Not registered. Send register message first.');
-      return;
-    }
-
-    if (!targetCode) {
-      this.sendError(ws, 'Missing required field: targetCode');
-      return;
-    }
-
-    // Validate target code format (Issue #17)
-    if (!PAIRING_CODE.REGEX.test(targetCode)) {
-      this.sendError(ws, 'Invalid target code format');
-      return;
-    }
-
-    if (targetCode === requesterCode) {
-      // Use generic error to prevent enumeration attacks
-      this.send(ws, {
-        type: 'pair_error',
-        error: 'Pair request could not be processed',
-      });
-      return;
-    }
-
-    const targetWs = this.pairingCodeToWs.get(targetCode);
-
-    if (!targetWs) {
-      // Target not found locally — with DHT redirects, the client should have
-      // registered on all responsible servers. If it's not here, it's not available.
-      // SECURITY: Use generic error message to prevent enumeration attacks
-      this.send(ws, {
-        type: 'pair_error',
-        error: 'Pair request could not be processed',
-      });
-      return;
-    }
-
-    const requesterPublicKey = this.pairingCodeToPublicKey.get(requesterCode);
-    if (!requesterPublicKey) {
-      // Use generic error to prevent information leakage
-      this.send(ws, {
-        type: 'pair_error',
-        error: 'Pair request could not be processed',
-      });
-      return;
-    }
-
-    this.processPairRequest(requesterCode, requesterPublicKey, targetCode, targetWs, proposedName);
-  }
-
-  /**
-   * Process a pair request (used for both local and cross-server requests).
-   * The target must be a local WebSocket connection.
-   */
-  private processPairRequest(
-    requesterCode: string,
-    requesterPublicKey: string,
-    targetCode: string,
-    targetWs: WebSocket,
-    proposedName?: string
-  ): void {
-    // Check for DoS: limit pending requests per target
-    const pending = this.pendingPairRequests.get(targetCode) || [];
-
-    // Remove any existing request from the same requester (in-place modification)
-    const existingIndex = pending.findIndex(r => r.requesterCode === requesterCode);
-    if (existingIndex !== -1) {
-      // Clear the existing timers for this request
-      const timerKey = `${requesterCode}:${targetCode}`;
-      this.clearPairRequestTimers(timerKey);
-      pending.splice(existingIndex, 1);
-    }
-
-    // SECURITY: Limit pending requests per target to prevent DoS
-    if (pending.length >= PAIRING.MAX_PENDING_REQUESTS_PER_TARGET) {
-      const requesterWs = this.pairingCodeToWs.get(requesterCode);
-      if (requesterWs) {
-        this.send(requesterWs, {
-          type: 'pair_error',
-          error: 'Pair request could not be processed',
-        });
-      }
-      return;
-    }
-
-    // Create pending pair request
-    const request: PendingPairRequest = {
-      requesterCode,
-      requesterPublicKey,
-      targetCode,
-      timestamp: Date.now(),
-    };
-
-    // Store pending request
-    pending.push(request);
-    this.pendingPairRequests.set(targetCode, pending);
-
-    // Notify target about incoming pair request (include timeout for UI countdown)
-    this.send(targetWs, {
-      type: 'pair_incoming',
-      fromCode: requesterCode,
-      fromPublicKey: requesterPublicKey,
-      expiresIn: this.pairRequestTimeout, // Include timeout for client-side countdown
-      ...(proposedName ? { proposedName } : {}),
-    });
-
-    logger.pairingEvent('request', { requester: requesterCode, target: targetCode });
-
-    // Set timeout for this request and store the timer reference
-    const timerKey = `${requesterCode}:${targetCode}`;
-    const timer = setTimeout(() => {
-      this.expirePairRequest(requesterCode, targetCode);
-      // Clean up both timers
-      this.clearPairRequestTimers(timerKey);
-    }, this.pairRequestTimeout);
-    this.pairRequestTimers.set(timerKey, timer);
-
-    // Set warning timer (fires before timeout to warn users)
-    // Only set if warning time is less than total timeout
-    if (this.pairRequestWarningTime < this.pairRequestTimeout) {
-      const warningDelay = this.pairRequestTimeout - this.pairRequestWarningTime;
-      const warningTimer = setTimeout(() => {
-        this.sendPairExpiringWarning(requesterCode, targetCode);
-        this.pairRequestWarningTimers.delete(timerKey);
-      }, warningDelay);
-      this.pairRequestWarningTimers.set(timerKey, warningTimer);
-    }
-  }
-
-  /**
-   * Send warning to both peers that the pair request is about to expire
-   */
-  private sendPairExpiringWarning(requesterCode: string, targetCode: string): void {
-    const remainingSeconds = Math.ceil(this.pairRequestWarningTime / 1000);
-
-    // Warn the requester (who is waiting for approval)
-    const requesterWs = this.pairingCodeToWs.get(requesterCode);
-    if (requesterWs) {
-      this.send(requesterWs, {
-        type: 'pair_expiring',
-        peerCode: targetCode,
-        remainingSeconds,
-      });
-    }
-
-    // Warn the target (who needs to approve)
-    const targetWs = this.pairingCodeToWs.get(targetCode);
-    if (targetWs) {
-      this.send(targetWs, {
-        type: 'pair_expiring',
-        peerCode: requesterCode,
-        remainingSeconds,
-      });
-    }
-
-    logger.debug(`[Pairing] expiring warning`, { remainingSeconds });
-  }
-
-  /**
-   * Handle pair response (accept/reject)
-   */
-  private handlePairResponse(ws: WebSocket, message: PairResponseMessage): void {
-    const { targetCode, accepted } = message;
-    const responderCode = this.wsToPairingCode.get(ws);
-
-    if (!responderCode) {
-      this.sendError(ws, 'Not registered. Send register message first.');
-      return;
-    }
-
-    // Validate target code format (Issue #17)
-    if (!targetCode || !PAIRING_CODE.REGEX.test(targetCode)) {
-      this.sendError(ws, 'Invalid target code format');
-      return;
-    }
-
-    // Find the pending request
-    const pending = this.pendingPairRequests.get(responderCode) || [];
-    const requestIndex = pending.findIndex(r => r.requesterCode === targetCode);
-
-    if (requestIndex === -1) {
-      this.send(ws, {
-        type: 'pair_error',
-        error: 'No pending request from this peer',
-      });
-      return;
-    }
-
-    // Get the request with explicit undefined check for safety
-    const request = pending[requestIndex];
-    if (!request) {
-      this.send(ws, {
-        type: 'pair_error',
-        error: 'Request not found',
-      });
-      return;
-    }
-
-    // Clear the timers for this request
-    const timerKey = `${targetCode}:${responderCode}`;
-    this.clearPairRequestTimers(timerKey);
-
-    // Remove the request from pending
-    pending.splice(requestIndex, 1);
-    if (pending.length === 0) {
-      this.pendingPairRequests.delete(responderCode);
-    } else {
-      this.pendingPairRequests.set(responderCode, pending);
-    }
-
-    if (accepted) {
-      // Get responder's public key
-      const responderPublicKey = this.pairingCodeToPublicKey.get(responderCode);
-      if (!responderPublicKey) {
-        this.sendError(ws, 'Public key not found');
-        return;
-      }
-
-      // Notify both peers about the match
-      // The requester is the initiator (creates WebRTC offer)
-      const requesterWs = this.pairingCodeToWs.get(targetCode);
-      if (requesterWs) {
-        this.send(requesterWs, {
-          type: 'pair_matched',
-          peerCode: responderCode,
-          peerPublicKey: responderPublicKey,
-          isInitiator: true,
-        });
-      }
-
-      this.send(ws, {
-        type: 'pair_matched',
-        peerCode: targetCode,
-        peerPublicKey: request.requesterPublicKey,
-        isInitiator: false,
-      });
-
-      logger.pairingEvent('matched', { requester: targetCode, target: responderCode });
-    } else {
-      // Notify requester about rejection
-      const requesterWs = this.pairingCodeToWs.get(targetCode);
-      if (requesterWs) {
-        this.send(requesterWs, {
-          type: 'pair_rejected',
-          peerCode: responderCode,
-        });
-      }
-
-      logger.pairingEvent('rejected', { requester: targetCode, target: responderCode });
-    }
-  }
-
-  /**
-   * Expire a pending pair request
-   */
-  private expirePairRequest(requesterCode: string, targetCode: string): void {
-    const pending = this.pendingPairRequests.get(targetCode) || [];
-    const requestIndex = pending.findIndex(r => r.requesterCode === requesterCode);
-
-    if (requestIndex !== -1) {
-      // Request is still pending, expire it
-      pending.splice(requestIndex, 1);
-      if (pending.length === 0) {
-        this.pendingPairRequests.delete(targetCode);
-      } else {
-        this.pendingPairRequests.set(targetCode, pending);
-      }
-
-      // Notify requester about timeout
-      const requesterWs = this.pairingCodeToWs.get(requesterCode);
-      if (requesterWs) {
-        this.send(requesterWs, {
-          type: 'pair_timeout',
-          peerCode: targetCode,
-        });
-      }
-
-      logger.pairingEvent('expired', { requester: requesterCode, target: targetCode });
-    }
-  }
-
-  /**
-   * Handle device link request (web client wanting to link to mobile app).
-   *
-   * The link flow is:
-   * 1. Mobile app generates link code and displays QR
-   * 2. Web client scans QR and sends link_request with the link code
-   * 3. Server forwards request to mobile app (via pairing code match)
-   * 4. Mobile app approves/rejects
-   * 5. On approval, both sides get link_matched to start WebRTC
-   */
-  private handleLinkRequest(ws: WebSocket, message: LinkRequestMessage): void {
-    const { linkCode, publicKey, deviceName = 'Unknown Browser' } = message;
-    const webClientCode = this.wsToPairingCode.get(ws);
-
-    if (!webClientCode) {
-      this.sendError(ws, 'Not registered. Send register message first.');
-      return;
-    }
-
-    if (!linkCode) {
-      this.sendError(ws, 'Missing required field: linkCode');
-      return;
-    }
-
-    // Validate link code format (Issue #17)
-    if (!PAIRING_CODE.REGEX.test(linkCode)) {
-      this.sendError(ws, 'Invalid link code format');
-      return;
-    }
-
-    if (!publicKey) {
-      this.sendError(ws, 'Missing required field: publicKey');
-      return;
-    }
-
-    // The linkCode IS the mobile app's pairing code
-    // Find the mobile app's WebSocket
-    const mobileWs = this.pairingCodeToWs.get(linkCode);
-
-    if (!mobileWs) {
-      // Use generic error to prevent enumeration attacks
-      this.send(ws, {
-        type: 'link_error',
-        error: 'Link request could not be processed',
-      });
-      return;
-    }
-
-    // Clear any existing timer for this link code (in case of duplicate request)
-    const existingLinkTimer = this.linkRequestTimers.get(linkCode);
-    if (existingLinkTimer) {
-      clearTimeout(existingLinkTimer);
-      this.linkRequestTimers.delete(linkCode);
-    }
-
-    // Store pending link request
-    this.pendingLinkRequests.set(linkCode, {
-      webClientCode,
-      webPublicKey: publicKey,
-      deviceName,
-      timestamp: Date.now(),
-    });
-
-    // Set timeout for this link request (reuse pairRequestTimeout - 120s default)
-    // Issue #9: Prevents memory leak if mobile app never responds
-    const linkTimer = setTimeout(() => {
-      this.expireLinkRequest(linkCode);
-      this.linkRequestTimers.delete(linkCode);
-    }, this.pairRequestTimeout);
-    this.linkRequestTimers.set(linkCode, linkTimer);
-
-    // Forward request to mobile app (include timeout for UI countdown)
-    this.send(mobileWs, {
-      type: 'link_request',
-      linkCode,
-      publicKey,
-      deviceName,
-      expiresIn: this.pairRequestTimeout,
-    });
-
-    logger.debug(`[Link] Request: web ${logger.pairingCode(webClientCode)} -> mobile ${logger.pairingCode(linkCode)}`);
-  }
-
-  /**
-   * Handle device link response from mobile app.
-   */
-  private handleLinkResponse(ws: WebSocket, message: LinkResponseMessage): void {
-    const { linkCode, accepted, deviceId } = message;
-    const mobileCode = this.wsToPairingCode.get(ws);
-
-    if (!mobileCode) {
-      this.sendError(ws, 'Not registered. Send register message first.');
-      return;
-    }
-
-    // Validate link code format (Issue #17)
-    if (!linkCode || !PAIRING_CODE.REGEX.test(linkCode)) {
-      this.sendError(ws, 'Invalid link code format');
-      return;
-    }
-
-    // Verify this is the mobile app that owns the link code
-    if (mobileCode !== linkCode) {
-      this.sendError(ws, 'Cannot respond to link request for another device');
-      return;
-    }
-
-    // Find the pending request
-    const pending = this.pendingLinkRequests.get(linkCode);
-    if (!pending) {
-      this.send(ws, {
-        type: 'link_error',
-        error: 'No pending link request found',
-      });
-      return;
-    }
-
-    // Clear the timer for this request (Issue #9)
-    const existingLinkTimer = this.linkRequestTimers.get(linkCode);
-    if (existingLinkTimer) {
-      clearTimeout(existingLinkTimer);
-      this.linkRequestTimers.delete(linkCode);
-    }
-
-    // Remove the pending request
-    this.pendingLinkRequests.delete(linkCode);
-
-    // Find the web client
-    const webWs = this.pairingCodeToWs.get(pending.webClientCode);
-
-    if (!webWs) {
-      // Web client disconnected
-      return;
-    }
-
-    if (accepted) {
-      // Get mobile app's public key
-      const mobilePublicKey = this.pairingCodeToPublicKey.get(mobileCode);
-      if (!mobilePublicKey) {
-        this.sendError(ws, 'Public key not found');
-        return;
-      }
-
-      // Notify both sides about the match
-      // Web client is initiator (creates WebRTC offer)
-      this.send(webWs, {
-        type: 'link_matched',
-        linkCode,
-        peerPublicKey: mobilePublicKey,
-        isInitiator: true,
-        deviceId,
-      });
-
-      // Mobile app is responder
-      this.send(ws, {
-        type: 'link_matched',
-        linkCode,
-        peerPublicKey: pending.webPublicKey,
-        isInitiator: false,
-        webClientCode: pending.webClientCode,
-        deviceName: pending.deviceName,
-      });
-
-      logger.debug(`[Link] Matched: web ${logger.pairingCode(pending.webClientCode)} <-> mobile ${logger.pairingCode(mobileCode)}`);
-    } else {
-      // Notify web client about rejection
-      this.send(webWs, {
-        type: 'link_rejected',
-        linkCode,
-      });
-
-      logger.debug(`[Link] Rejected: web ${logger.pairingCode(pending.webClientCode)} by mobile ${logger.pairingCode(mobileCode)}`);
-    }
-  }
-
-  /**
-   * Expire a pending link request (Issue #9: Memory leak fix)
-   *
-   * Called when the mobile app does not respond within the timeout period.
-   * Notifies both parties that the request has expired.
-   */
-  private expireLinkRequest(linkCode: string): void {
-    const pending = this.pendingLinkRequests.get(linkCode);
-
-    if (pending) {
-      // Request is still pending, expire it
-      this.pendingLinkRequests.delete(linkCode);
-
-      // Notify web client about timeout
-      const webWs = this.pairingCodeToWs.get(pending.webClientCode);
-      if (webWs) {
-        this.send(webWs, {
-          type: 'link_timeout',
-          linkCode,
-        });
-      }
-
-      // Notify mobile app about timeout (in case they have stale UI state)
-      const mobileWs = this.pairingCodeToWs.get(linkCode);
-      if (mobileWs) {
-        this.send(mobileWs, {
-          type: 'link_timeout',
-          linkCode,
-        });
-      }
-
-      logger.debug(`[Link] Expired: web ${logger.pairingCode(pending.webClientCode)} -> mobile ${logger.pairingCode(linkCode)}`);
-    }
-  }
-
-  /**
-   * Handle signaling message forwarding (offer, answer, ice_candidate)
-   */
-  private handleSignalingForward(
-    ws: WebSocket,
-    message: SignalingOfferMessage | SignalingAnswerMessage | SignalingIceCandidateMessage
-  ): void {
-    const { type, target, payload } = message;
-    const senderPairingCode = this.wsToPairingCode.get(ws);
-
-    if (!senderPairingCode) {
-      this.sendError(ws, 'Not registered. Send register message first.');
-      return;
-    }
-
-    if (!target) {
-      this.sendError(ws, 'Missing required field: target');
-      return;
-    }
-
-    // Validate target code format (Issue #17)
-    if (!PAIRING_CODE.REGEX.test(target)) {
-      this.sendError(ws, 'Invalid target code format');
-      return;
-    }
-
-    // Forward the message to target
-    const targetWs = this.pairingCodeToWs.get(target);
-    if (targetWs) {
-      this.send(targetWs, {
-        type,
-        from: senderPairingCode,
-        payload,
-      });
-      logger.pairingEvent('forwarded', { requester: senderPairingCode, target, type });
-    } else {
-      logger.pairingEvent('not_found', { target, type });
-      this.send(ws, {
-        type: 'error',
-        message: `Peer not found: ${target}`,
-      });
-    }
-  }
-
-  /**
-   * Validate call signaling payload based on message type.
-   * Returns error message if invalid, undefined if valid.
-   */
-  private validateCallSignalingPayload(
-    type: string,
-    payload: Record<string, unknown>
-  ): string | undefined {
-    if (!payload || typeof payload !== 'object') {
-      return 'Missing or invalid payload';
-    }
-
-    // All call messages require callId
-    const callId = payload['callId'];
-    if (typeof callId !== 'string' || !CALL_SIGNALING.UUID_REGEX.test(callId)) {
-      return 'Invalid or missing callId (must be UUID v4 format)';
-    }
-
-    switch (type) {
-      case 'call_offer':
-      case 'call_answer': {
-        // Require sdp field with content
-        const sdp = payload['sdp'];
-        if (typeof sdp !== 'string' || sdp.length === 0) {
-          return `Missing or invalid sdp in ${type}`;
-        }
-        if (sdp.length > CALL_SIGNALING.MAX_SDP_LENGTH) {
-          return `SDP too large (max ${CALL_SIGNALING.MAX_SDP_LENGTH} bytes)`;
-        }
-        break;
-      }
-
-      case 'call_ice': {
-        // Require candidate field with content
-        const candidate = payload['candidate'];
-        if (typeof candidate !== 'string' || candidate.length === 0) {
-          return 'Missing or invalid candidate in call_ice';
-        }
-        if (candidate.length > CALL_SIGNALING.MAX_ICE_CANDIDATE_LENGTH) {
-          return `ICE candidate too large (max ${CALL_SIGNALING.MAX_ICE_CANDIDATE_LENGTH} bytes)`;
-        }
-        break;
-      }
-
-      case 'call_reject':
-      case 'call_hangup':
-        // Only callId is required, which is already validated above
-        break;
-
-      default:
-        return `Unknown call signaling type: ${type}`;
-    }
-
-    return undefined; // Valid
-  }
-
-  /**
-   * Handle VoIP call signaling message forwarding (call_offer, call_answer, call_reject, call_hangup, call_ice)
-   *
-   * Uses the same validation and forwarding pattern as WebRTC data channel signaling.
-   * The server acts as a simple relay - no call state tracking needed.
-   */
-  private handleCallSignalingForward(
-    ws: WebSocket,
-    message: CallOfferMessage | CallAnswerMessage | CallRejectMessage | CallHangupMessage | CallIceMessage
-  ): void {
-    const { type, target, payload } = message;
-    const senderPairingCode = this.wsToPairingCode.get(ws);
-
-    if (!senderPairingCode) {
-      this.sendError(ws, 'Not registered. Send register message first.');
-      return;
-    }
-
-    if (!target) {
-      this.sendError(ws, 'Missing required field: target');
-      return;
-    }
-
-    // Validate target code format
-    if (!PAIRING_CODE.REGEX.test(target)) {
-      this.sendError(ws, 'Invalid target code format');
-      return;
-    }
-
-    // Validate payload structure based on message type
-    const payloadError = this.validateCallSignalingPayload(type, payload);
-    if (payloadError) {
-      this.sendError(ws, payloadError);
-      return;
-    }
-
-    // Forward the message to target
-    const targetWs = this.pairingCodeToWs.get(target);
-    if (targetWs) {
-      this.send(targetWs, {
-        type,
-        from: senderPairingCode,
-        payload,
-      });
-      logger.pairingEvent('forwarded', { requester: senderPairingCode, target, type });
-    } else {
-      logger.pairingEvent('not_found', { target, type });
-      this.send(ws, {
-        type: 'error',
-        message: `Peer not found: ${target}`,
-      });
-    }
-  }
-
   // ---------------------------------------------------------------------------
   // Attestation handlers
   // ---------------------------------------------------------------------------
@@ -1915,7 +1105,7 @@ export class ClientHandler extends EventEmitter {
     }
 
     // Identify the requesting peer
-    const peerId = this.wsToClient.get(ws) || this.wsToPairingCode.get(ws);
+    const peerId = this.wsToClient.get(ws) || this.signalingHandler.getWsPairingCode(ws);
     if (!peerId) {
       this.sendError(ws, 'Not registered');
       return;
@@ -1969,7 +1159,7 @@ export class ClientHandler extends EventEmitter {
     }
 
     // Identify the pushing peer
-    const peerId = this.wsToClient.get(ws) || this.wsToPairingCode.get(ws);
+    const peerId = this.wsToClient.get(ws) || this.signalingHandler.getWsPairingCode(ws);
     if (!peerId) {
       this.sendError(ws, 'Not registered');
       return;
@@ -2020,74 +1210,8 @@ export class ClientHandler extends EventEmitter {
       // Clean up channel state (delegated to ChannelHandler)
       this.channelHandler.handleDisconnect(ws);
 
-      // Clean up pairing code mappings (for signaling clients)
-      try {
-        const pairingCode = this.wsToPairingCode.get(ws);
-        if (pairingCode) {
-          this.pairingCodeToWs.delete(pairingCode);
-          this.wsToPairingCode.delete(ws);
-          this.pairingCodeToPublicKey.delete(pairingCode);
-
-          // Clean up timers for requests where this peer was the target
-          const pendingAsTarget = this.pendingPairRequests.get(pairingCode) || [];
-          for (const request of pendingAsTarget) {
-            const timerKey = `${request.requesterCode}:${pairingCode}`;
-            this.clearPairRequestTimers(timerKey);
-          }
-          this.pendingPairRequests.delete(pairingCode);
-
-          // Also remove requests where this peer was the requester and clean up timers
-          for (const [targetCode, requests] of this.pendingPairRequests) {
-            const filtered = requests.filter(r => {
-              if (r.requesterCode === pairingCode) {
-                // Clear the timers for this request
-                const timerKey = `${pairingCode}:${targetCode}`;
-                this.clearPairRequestTimers(timerKey);
-                return false;
-              }
-              return true;
-            });
-            if (filtered.length === 0) {
-              this.pendingPairRequests.delete(targetCode);
-            } else if (filtered.length !== requests.length) {
-              this.pendingPairRequests.set(targetCode, filtered);
-            }
-          }
-
-          // Clean up pending link requests where this peer was the mobile app (Issue #9)
-          const mobileTimer = this.linkRequestTimers.get(pairingCode);
-          if (mobileTimer) {
-            clearTimeout(mobileTimer);
-            this.linkRequestTimers.delete(pairingCode);
-          }
-          this.pendingLinkRequests.delete(pairingCode);
-
-          // Also clean up link requests where this peer was the web client
-          for (const [linkCode, request] of this.pendingLinkRequests) {
-            if (request.webClientCode === pairingCode) {
-              // Clear the timer for this link request (Issue #9)
-              const webClientTimer = this.linkRequestTimers.get(linkCode);
-              if (webClientTimer) {
-                clearTimeout(webClientTimer);
-                this.linkRequestTimers.delete(linkCode);
-              }
-              this.pendingLinkRequests.delete(linkCode);
-              // Notify mobile app that web client disconnected
-              const mobileWs = this.pairingCodeToWs.get(linkCode);
-              if (mobileWs) {
-                this.send(mobileWs, {
-                  type: 'link_timeout',
-                  linkCode,
-                });
-              }
-            }
-          }
-
-          logger.pairingEvent('disconnected', { code: pairingCode });
-        }
-      } catch (e) {
-        logger.warn(`[ClientHandler] Error cleaning up pairing code mappings: ${e}`);
-      }
+      // Clean up signaling state (delegated to SignalingHandler)
+      this.signalingHandler.handleDisconnect(ws);
 
       // Clean up peerId mappings (for relay clients)
       try {
@@ -2131,7 +1255,7 @@ export class ClientHandler extends EventEmitter {
     if (client) return this.send(client.ws, message);
 
     // Fall back to signaling clients (pairing code registrations)
-    const signalingWs = this.pairingCodeToWs.get(peerId);
+    const signalingWs = this.signalingHandler.getPairingCodeWs(peerId);
     if (signalingWs) return this.send(signalingWs, message);
 
     return false;
@@ -2268,29 +1392,12 @@ export class ClientHandler extends EventEmitter {
    * Shutdown - disconnect all clients
    */
   async shutdown(): Promise<void> {
-    // Clear all pair request timers to prevent memory leaks
-    for (const timer of this.pairRequestTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.pairRequestTimers.clear();
-
-    // Clear all pair request warning timers
-    for (const timer of this.pairRequestWarningTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.pairRequestWarningTimers.clear();
-
-    // Clear all link request timers to prevent memory leaks (Issue #9)
-    for (const timer of this.linkRequestTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.linkRequestTimers.clear();
-
     // Clear rate limiting data
     this.wsRateLimits.clear();
     this.wsPairRequestRateLimits.clear();
 
-    // Shutdown channel handler
+    // Shutdown sub-handlers
+    this.signalingHandler.shutdown();
     this.channelHandler.shutdown();
 
     // Shutdown chunk relay
@@ -2305,7 +1412,7 @@ export class ClientHandler extends EventEmitter {
     this.wsToConnectionId.clear();
 
     // Close all relay clients
-    for (const [peerId, client] of this.clients) {
+    for (const [, client] of this.clients) {
       try {
         client.ws.close(1001, 'Server shutting down');
       } catch {
@@ -2315,61 +1422,19 @@ export class ClientHandler extends EventEmitter {
     }
     this.clients.clear();
     this.wsToClient.clear();
-
-    // Close all signaling clients
-    for (const [pairingCode, ws] of this.pairingCodeToWs) {
-      try {
-        ws.close(1001, 'Server shutting down');
-      } catch {
-        // Intentionally ignored: WebSocket may already be closed or in invalid state
-        // during shutdown. Best-effort cleanup is acceptable here.
-      }
-    }
-    this.pairingCodeToWs.clear();
-    this.wsToPairingCode.clear();
-    this.pairingCodeToPublicKey.clear();
-    this.pendingPairRequests.clear();
-    this.pendingLinkRequests.clear();
   }
 
   /**
    * Get signaling client count
    */
   get signalingClientCount(): number {
-    return this.pairingCodeToWs.size;
+    return this.signalingHandler.clientCount;
   }
 
   /**
    * Get entropy metrics for pairing codes (Issue #41)
-   *
-   * Returns metrics for monitoring pairing code entropy and collision risk.
-   * Based on birthday paradox analysis:
-   * - 30-bit entropy (6 chars from 32-char alphabet) = ~1 billion possible codes
-   * - Collision risk increases at ~33k active codes (birthday bound)
-   *
-   * Risk levels:
-   * - low: < 10,000 active codes (collision probability < 0.005%)
-   * - medium: 10,000 - 30,000 active codes (collision probability 0.005% - 0.05%)
-   * - high: > 30,000 active codes (collision probability > 0.05%)
    */
   getEntropyMetrics(): EntropyMetrics {
-    const activeCodes = this.pairingCodeToWs.size;
-
-    let collisionRisk: 'low' | 'medium' | 'high';
-    if (activeCodes >= ENTROPY.COLLISION_HIGH_THRESHOLD) {
-      collisionRisk = 'high';
-    } else if (activeCodes >= ENTROPY.COLLISION_LOW_THRESHOLD) {
-      collisionRisk = 'medium';
-    } else {
-      collisionRisk = 'low';
-    }
-
-    return {
-      activeCodes,
-      peakActiveCodes: this.entropyMetrics.peakActiveCodes,
-      totalRegistrations: this.entropyMetrics.totalRegistrations,
-      collisionAttempts: this.entropyMetrics.collisionAttempts,
-      collisionRisk,
-    };
+    return this.signalingHandler.getEntropyMetrics();
   }
 }
