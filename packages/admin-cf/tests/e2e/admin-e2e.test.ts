@@ -4,8 +4,8 @@
  * Runs against the live QA deployment at ADMIN_CF_URL.
  * Tests are sequential — they share auth state and created resources.
  *
- * Required env: none (defaults to QA URL and admin/admin1234567890)
- * Optional env: ADMIN_CF_URL, ADMIN_CF_USERNAME, ADMIN_CF_PASSWORD
+ * Required env: ADMIN_CF_PASSWORD
+ * Optional env: ADMIN_CF_URL, ADMIN_CF_USERNAME
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';

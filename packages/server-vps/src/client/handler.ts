@@ -117,6 +117,8 @@ export class ClientHandler extends EventEmitter {
   private attestationManager: AttestationManager | null = null;
   // WebSocket -> attestation connection ID mapping
   private wsToConnectionId: Map<WebSocket, string> = new Map();
+  // Guard: track WebSockets that have already been disconnected (prevents double cleanup)
+  private disconnectedSockets: WeakSet<WebSocket> = new WeakSet();
 
   // Federation manager for DHT redirect info (optional)
   private federation: FederationManager | null = null;
@@ -771,6 +773,10 @@ export class ClientHandler extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   async handleDisconnect(ws: WebSocket): Promise<void> {
+    // Idempotent guard: skip if already disconnected (e.g. cleanup() + ws 'close' event)
+    if (this.disconnectedSockets.has(ws)) return;
+    this.disconnectedSockets.add(ws);
+
     try {
       // Clean up attestation session
       try {

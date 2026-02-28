@@ -608,6 +608,161 @@ describe('Cleanup', () => {
     const errors = ownerWs.sentMessages.filter((m: any) => m.type === 'error');
     expect(errors.length).toBe(0);
   });
+
+  it('should be safe to call handleDisconnect twice (idempotent)', async () => {
+    // Bug: cleanup() calls handleDisconnect(ws) then ws.close(), which triggers
+    // the 'close' event that calls handleDisconnect(ws) again.
+    const ownerWs = new MockWebSocket();
+    handler.handleConnection(ownerWs as any);
+    await registerPeer(handler, ownerWs, OWNER_CODE, VALID_PUBKEY_1);
+
+    await handler.handleMessage(ownerWs as any, JSON.stringify({
+      type: 'channel-owner-register',
+      channelId: 'ch_double',
+    }));
+
+    // Listen for client-disconnected events
+    let disconnectCount = 0;
+    handler.on('client-disconnected', () => {
+      disconnectCount++;
+    });
+
+    // Call handleDisconnect twice (simulates cleanup() + ws 'close' event)
+    await handler.handleDisconnect(ownerWs as any);
+    await handler.handleDisconnect(ownerWs as any);
+
+    // Should only emit client-disconnected once, not twice
+    expect(disconnectCount).toBeLessThanOrEqual(1);
+  });
+
+  it('should reject channel-owner-register when channel already has an active owner', async () => {
+    // Bug: any client can hijack any channelId by sending channel-owner-register
+    const ownerWs = new MockWebSocket();
+    handler.handleConnection(ownerWs as any);
+    await registerPeer(handler, ownerWs, OWNER_CODE, VALID_PUBKEY_1);
+
+    // Register as owner
+    await handler.handleMessage(ownerWs as any, JSON.stringify({
+      type: 'channel-owner-register',
+      channelId: 'ch_owned',
+    }));
+
+    // Another client tries to claim the same channel
+    const hijackerWs = new MockWebSocket();
+    handler.handleConnection(hijackerWs as any);
+    await registerPeer(handler, hijackerWs, SUB_CODE_1, VALID_PUBKEY_2);
+    hijackerWs.clearMessages();
+
+    await handler.handleMessage(hijackerWs as any, JSON.stringify({
+      type: 'channel-owner-register',
+      channelId: 'ch_owned',
+    }));
+
+    // The hijacker should get an error, NOT a success
+    const lastMsg = hijackerWs.getLastMessage();
+    expect(lastMsg.type).toBe('error');
+  });
+
+  it('should allow re-registration when previous owner disconnected', async () => {
+    const ownerWs = new MockWebSocket();
+    handler.handleConnection(ownerWs as any);
+    await registerPeer(handler, ownerWs, OWNER_CODE, VALID_PUBKEY_1);
+
+    // Register as owner
+    await handler.handleMessage(ownerWs as any, JSON.stringify({
+      type: 'channel-owner-register',
+      channelId: 'ch_reown',
+    }));
+
+    // Owner disconnects
+    await handler.handleDisconnect(ownerWs as any);
+
+    // New client should be able to register as owner
+    const newOwnerWs = new MockWebSocket();
+    handler.handleConnection(newOwnerWs as any);
+    await registerPeer(handler, newOwnerWs, SUB_CODE_1, VALID_PUBKEY_2);
+    newOwnerWs.clearMessages();
+
+    await handler.handleMessage(newOwnerWs as any, JSON.stringify({
+      type: 'channel-owner-register',
+      channelId: 'ch_reown',
+    }));
+
+    const lastMsg = newOwnerWs.getLastMessage();
+    expect(lastMsg.type).toBe('channel-owner-registered');
+  });
+
+  it('should clean up upstreamQueues when owner disconnects', async () => {
+    // Bug: upstreamQueues for a channel are never cleaned when the owner disconnects
+    const ownerWs = new MockWebSocket();
+    handler.handleConnection(ownerWs as any);
+    await registerPeer(handler, ownerWs, OWNER_CODE, VALID_PUBKEY_1);
+
+    const subWs = new MockWebSocket();
+    handler.handleConnection(subWs as any);
+    await registerPeer(handler, subWs, SUB_CODE_1, VALID_PUBKEY_2);
+
+    // Register owner
+    await handler.handleMessage(ownerWs as any, JSON.stringify({
+      type: 'channel-owner-register',
+      channelId: 'ch_queue_cleanup',
+    }));
+
+    // Owner disconnects
+    await handler.handleDisconnect(ownerWs as any);
+
+    // Subscriber sends upstream messages (these get queued since owner is offline)
+    for (let i = 0; i < 5; i++) {
+      await handler.handleMessage(subWs as any, JSON.stringify({
+        type: 'upstream-message',
+        channelId: 'ch_queue_cleanup',
+        message: { id: `up_${i}`, content: 'test' },
+        ephemeralPublicKey: 'key',
+      }));
+    }
+
+    // New owner reconnects and registers
+    const newOwnerWs = new MockWebSocket();
+    handler.handleConnection(newOwnerWs as any);
+    await registerPeer(handler, newOwnerWs, 'NEW234', VALID_PUBKEY_3);
+    newOwnerWs.clearMessages();
+
+    await handler.handleMessage(newOwnerWs as any, JSON.stringify({
+      type: 'channel-owner-register',
+      channelId: 'ch_queue_cleanup',
+    }));
+
+    // The new owner should get the queued messages flushed to them
+    const upstreamMsgs = newOwnerWs.sentMessages.filter((m: any) => m.type === 'upstream-message');
+    expect(upstreamMsgs.length).toBe(5);
+
+    // After flushing, disconnect the new owner too
+    await handler.handleDisconnect(newOwnerWs as any);
+
+    // No more queued messages should exist - send more upstream messages
+    for (let i = 0; i < 3; i++) {
+      await handler.handleMessage(subWs as any, JSON.stringify({
+        type: 'upstream-message',
+        channelId: 'ch_queue_cleanup',
+        message: { id: `up_new_${i}`, content: 'test' },
+        ephemeralPublicKey: 'key',
+      }));
+    }
+
+    // Another new owner registers - should only get the 3 new messages, not old ones
+    const thirdOwnerWs = new MockWebSocket();
+    handler.handleConnection(thirdOwnerWs as any);
+    await registerPeer(handler, thirdOwnerWs, 'THD234', VALID_PUBKEY_1);
+    thirdOwnerWs.clearMessages();
+
+    await handler.handleMessage(thirdOwnerWs as any, JSON.stringify({
+      type: 'channel-owner-register',
+      channelId: 'ch_queue_cleanup',
+    }));
+
+    const thirdUpstreamMsgs = thirdOwnerWs.sentMessages.filter((m: any) => m.type === 'upstream-message');
+    expect(thirdUpstreamMsgs.length).toBe(3);
+  });
 });
 
 // Helper: create a handler with real storage for chunk relay (channel tests)

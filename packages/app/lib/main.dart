@@ -82,6 +82,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   late final NotificationListenerService _notificationListener;
   late final VoipCallHandler _voipCallHandler;
   StreamSubscription? _signalingReconnectSubscription;
+  ProviderSubscription? _peerStatusSubscription;
+  ProviderSubscription? _voipSubscription;
 
   @override
   void initState() {
@@ -320,7 +322,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     _notificationListener.listen();
     _setupPeerStatusNotifications();
     _setupVoipCallListener();
-    _syncAndroidSecureFlag();
+    unawaited(_syncAndroidSecureFlag());
 
     if (mounted) {
       setState(() => _initialized = true);
@@ -342,7 +344,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     final notificationService = ref.read(notificationServiceProvider);
     final knownStates = <String, PeerConnectionState>{};
 
-    ref.listenManual(peersProvider, (previous, next) {
+    _peerStatusSubscription = ref.listenManual(peersProvider, (previous, next) {
       next.whenData((peers) {
         for (final peer in peers) {
           final prev = knownStates[peer.id];
@@ -366,7 +368,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   }
 
   void _setupVoipCallListener() {
-    ref.listenManual(voipServiceProvider, (previous, next) {
+    _voipSubscription = ref.listenManual(voipServiceProvider, (previous, next) {
       _voipCallHandler.subscribeToService(next);
     });
   }
@@ -399,6 +401,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     _notificationListener.dispose();
     _voipCallHandler.dispose();
     _signalingReconnectSubscription?.cancel();
+    _peerStatusSubscription?.close();
+    _voipSubscription?.close();
 
     if (!_disposed) {
       _disposed = true;

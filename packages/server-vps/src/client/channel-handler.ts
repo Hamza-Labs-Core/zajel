@@ -71,6 +71,13 @@ export class ChannelHandler {
       return;
     }
 
+    // Prevent hijacking: reject if channel already has an active owner
+    const existingOwner = this.channelOwners.get(channelId);
+    if (existingOwner && existingOwner !== ws && existingOwner.readyState === existingOwner.OPEN) {
+      this.sendError(ws, 'Channel already has an active owner');
+      return;
+    }
+
     this.channelOwners.set(channelId, ws);
 
     // Flush any queued upstream messages (filter out expired ones)
