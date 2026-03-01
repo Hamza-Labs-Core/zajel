@@ -17,6 +17,7 @@ export class AdminWebSocketHandler {
   private clients: Set<WebSocket> = new Set();
   private metricsInterval: ReturnType<typeof setInterval> | null = null;
   private lastFederationHash: string = '';
+  private lastScalingLevel: string = 'normal';
 
   constructor(
     wss: WebSocketServer,
@@ -144,19 +145,22 @@ export class AdminWebSocketHandler {
       }
     }
 
-    // Check for alerts
+    // Check for alerts (only send when scaling level changes)
     const scaling = this.metricsCollector.getScalingRecommendation();
-    if (scaling.level !== 'normal') {
-      const alertMessage: AdminWsMessage = {
-        type: 'alert',
-        data: {
-          level: scaling.level === 'critical' ? 'error' : 'warning',
-          message: scaling.message + ' ' + scaling.recommendations[0],
-        },
-      };
-      for (const client of this.clients) {
-        if (client.readyState === client.OPEN) {
-          this.sendMessage(client, alertMessage);
+    if (scaling.level !== this.lastScalingLevel) {
+      this.lastScalingLevel = scaling.level;
+      if (scaling.level !== 'normal') {
+        const alertMessage: AdminWsMessage = {
+          type: 'alert',
+          data: {
+            level: scaling.level === 'critical' ? 'error' : 'warning',
+            message: scaling.message + ' ' + scaling.recommendations[0],
+          },
+        };
+        for (const client of this.clients) {
+          if (client.readyState === client.OPEN) {
+            this.sendMessage(client, alertMessage);
+          }
         }
       }
     }

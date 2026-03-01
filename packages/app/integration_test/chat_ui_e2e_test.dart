@@ -230,7 +230,7 @@ void main() {
 
       // Set up message listener on Device B
       final messageCompleter = Completer<(String, String)>();
-      connectionManagerB.messages.listen((msg) {
+      connectionManagerB.peerMessages.listen((msg) {
         if (!messageCompleter.isCompleted) {
           messageCompleter.complete(msg);
         }
@@ -294,7 +294,7 @@ void main() {
       }
 
       final messagesAtB = <(String, String)>[];
-      connectionManagerB.messages.listen((msg) => messagesAtB.add(msg));
+      connectionManagerB.peerMessages.listen((msg) => messagesAtB.add(msg));
 
       await tester.pumpWidget(createChatScreenTestWidget(
         peerId: pairingCodeB,
@@ -362,7 +362,7 @@ void main() {
       }
 
       final messagesAtB = <(String, String)>[];
-      connectionManagerB.messages.listen((msg) => messagesAtB.add(msg));
+      connectionManagerB.peerMessages.listen((msg) => messagesAtB.add(msg));
 
       await tester.pumpWidget(createChatScreenTestWidget(
         peerId: pairingCodeB,

@@ -179,6 +179,9 @@ function createTestConfig(
       pairRequestTimeout: 120000,
       pairRequestWarningTime: 30000,
     },
+    admin: {
+      jwtSecret: '', // No auth in tests — /stats and /metrics stay accessible
+    },
   };
 }
 

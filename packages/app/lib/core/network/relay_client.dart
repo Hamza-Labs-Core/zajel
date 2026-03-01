@@ -418,7 +418,10 @@ class RelayClient {
       state: RelayConnectionState.connecting,
     );
 
-    // Send our handshake with source ID
+    // Wait for data channel to actually open before sending handshake
+    await _webrtcService.waitForDataChannel(relay.peerId);
+
+    // NOW send our handshake with source ID (channel is open)
     await _webrtcService.sendMessage(
       relay.peerId,
       jsonEncode({

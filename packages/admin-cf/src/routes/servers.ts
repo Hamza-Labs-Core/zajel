@@ -13,9 +13,6 @@ import { requireAuth } from './auth.js';
 // Default bootstrap URL if not configured (fallback for local dev)
 const DEFAULT_BOOTSTRAP_URL = 'https://signal.zajel.hamzalabs.dev';
 
-// Health check timeout in milliseconds
-const HEALTH_CHECK_TIMEOUT = 5000;
-
 // TTL for considering a server offline (5 minutes)
 const OFFLINE_TTL = 5 * 60 * 1000;
 
@@ -77,77 +74,55 @@ export async function handleListServers(
       region?: string;
       lastSeen?: number;
       lastHeartbeat?: number;
+      connections?: number;
+      relayConnections?: number;
+      signalingConnections?: number;
+      activeCodes?: number;
     }
 
     const registryData = await response.json() as { servers?: RegistryServer[] };
     const registryServers = registryData.servers || [];
 
-    // Enrich with health checks and stats (in parallel)
-    const servers: VpsServer[] = await Promise.all(
-      registryServers.map(async (server: RegistryServer, index: number) => {
-        const vpsServer: VpsServer = {
-          id: `srv-${String(index + 1).padStart(2, '0')}`,
-          endpoint: server.endpoint,
-          region: server.region || 'unknown',
-          lastHeartbeat: server.lastSeen || server.lastHeartbeat || Date.now(),
-          status: 'healthy',
-        };
+    // Determine health from heartbeat freshness.
+    // CF Workers cannot fetch bare IP addresses (Cloudflare error 1003),
+    // so we rely on the bootstrap heartbeat timestamp instead of direct
+    // HTTP health checks to /stats and /metrics.
+    const servers: VpsServer[] = registryServers.map((server: RegistryServer, index: number) => {
+      const connections = server.connections ?? 0;
+      const relayConnections = server.relayConnections ?? 0;
+      const signalingConnections = server.signalingConnections ?? 0;
+      const activeCodes = server.activeCodes ?? 0;
 
-        // Check if server is offline based on heartbeat
-        const timeSinceHeartbeat = Date.now() - vpsServer.lastHeartbeat;
-        if (timeSinceHeartbeat > OFFLINE_TTL) {
-          vpsServer.status = 'offline';
-          return vpsServer;
-        }
+      // Determine collision risk from active codes count
+      let collisionRisk: 'low' | 'medium' | 'high' = 'low';
+      if (activeCodes >= 20000) {
+        collisionRisk = 'high';
+      } else if (activeCodes >= 10000) {
+        collisionRisk = 'medium';
+      }
 
-        // Try to fetch stats from the server
-        try {
-          const statsUrl = server.endpoint.replace('wss://', 'https://').replace('ws://', 'http://');
-          const statsResponse = await fetch(`${statsUrl}/stats`, {
-            signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT),
-          });
+      const vpsServer: VpsServer = {
+        id: `srv-${String(index + 1).padStart(2, '0')}`,
+        endpoint: server.endpoint,
+        region: server.region || 'unknown',
+        lastHeartbeat: server.lastSeen || server.lastHeartbeat || Date.now(),
+        status: 'healthy',
+        stats: {
+          connections,
+          relayConnections,
+          signalingConnections,
+          activeCodes,
+          collisionRisk,
+        },
+      };
 
-          if (statsResponse.ok) {
-            interface StatsData {
-              connections?: number;
-              relayConnections?: number;
-              signalingConnections?: number;
-              activeCodes?: number;
-              collisionRisk?: 'low' | 'medium' | 'high';
-            }
-            const stats = await statsResponse.json() as StatsData;
-            vpsServer.stats = {
-              connections: stats.connections || 0,
-              relayConnections: stats.relayConnections || 0,
-              signalingConnections: stats.signalingConnections || 0,
-              activeCodes: stats.activeCodes || 0,
-              collisionRisk: stats.collisionRisk || 'low',
-            };
+      const timeSinceHeartbeat = Date.now() - vpsServer.lastHeartbeat;
+      if (timeSinceHeartbeat > OFFLINE_TTL) {
+        vpsServer.status = 'offline';
+      }
 
-            // Check if metrics endpoint returns degraded status
-            const metricsResponse = await fetch(`${statsUrl}/metrics`, {
-              signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT),
-            });
-            if (metricsResponse.ok) {
-              interface MetricsData {
-                collisionRisk?: 'low' | 'medium' | 'high';
-              }
-              const metrics = await metricsResponse.json() as MetricsData;
-              if (metrics.collisionRisk === 'high') {
-                vpsServer.status = 'degraded';
-              }
-            }
-          } else {
-            vpsServer.status = 'degraded';
-          }
-        } catch {
-          // Server unreachable
-          vpsServer.status = 'offline';
-        }
-
-        return vpsServer;
-      })
-    );
+      return vpsServer;
+    });
 
     // Sort by region, then by ID
     servers.sort((a, b) => {

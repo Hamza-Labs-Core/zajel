@@ -25,9 +25,17 @@ export interface BootstrapClient {
   stopHeartbeat(): void;
 }
 
+export interface BootstrapMetrics {
+  connections: number;
+  relayConnections: number;
+  signalingConnections: number;
+  activeCodes: number;
+}
+
 export function createBootstrapClient(
   config: ServerConfig,
-  identity: ServerIdentity
+  identity: ServerIdentity,
+  getMetrics?: () => BootstrapMetrics
 ): BootstrapClient {
   let heartbeatTimer: NodeJS.Timeout | null = null;
   const baseUrl = config.bootstrap.serverUrl;
@@ -35,11 +43,16 @@ export function createBootstrapClient(
   async function register(): Promise<void> {
     const url = `${baseUrl}/servers`;
 
+    const metrics = getMetrics?.();
     const body = {
       serverId: identity.serverId,
       endpoint: config.network.publicEndpoint,
       publicKey: base64Encode(identity.publicKey),
       region: config.network.region || 'unknown',
+      connections: metrics?.connections ?? 0,
+      relayConnections: metrics?.relayConnections ?? 0,
+      signalingConnections: metrics?.signalingConnections ?? 0,
+      activeCodes: metrics?.activeCodes ?? 0,
     };
 
     console.log(`[Bootstrap] Registering with ${baseUrl}...`);
@@ -95,7 +108,7 @@ export function createBootstrapClient(
       const result = await response.json() as { servers: BootstrapServerEntry[] };
       return result.servers.filter(s => s.serverId !== identity.serverId);
     } catch (error) {
-      console.error(`[Bootstrap] Get servers error:`, error);
+      console.warn(`[Bootstrap] Get servers failed (returning empty - NOT the same as "no servers"):`, error);
       return [];
     }
   }
@@ -104,10 +117,17 @@ export function createBootstrapClient(
     const url = `${baseUrl}/servers/heartbeat`;
 
     try {
+      const metrics = getMetrics?.();
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ serverId: identity.serverId }),
+        body: JSON.stringify({
+          serverId: identity.serverId,
+          connections: metrics?.connections ?? 0,
+          relayConnections: metrics?.relayConnections ?? 0,
+          signalingConnections: metrics?.signalingConnections ?? 0,
+          activeCodes: metrics?.activeCodes ?? 0,
+        }),
       });
 
       if (!response.ok) {
@@ -123,7 +143,7 @@ export function createBootstrapClient(
       const result = await response.json() as { success: boolean; peers: BootstrapServerEntry[] };
       return result.peers;
     } catch (error) {
-      console.error(`[Bootstrap] Heartbeat error:`, error);
+      console.warn(`[Bootstrap] Heartbeat failed (returning empty - NOT the same as "no peers"):`, error);
       return [];
     }
   }
@@ -135,9 +155,11 @@ export function createBootstrapClient(
       const peers = await heartbeat();
       if (peers.length > 0) {
         console.log(`[Bootstrap] Heartbeat: ${peers.length} peers known`);
-        if (onPeersDiscovered) {
-          onPeersDiscovered(peers);
-        }
+      } else {
+        console.debug(`[Bootstrap] Heartbeat returned 0 peers`);
+      }
+      if (onPeersDiscovered) {
+        onPeersDiscovered(peers);
       }
     }, config.bootstrap.heartbeatInterval);
 

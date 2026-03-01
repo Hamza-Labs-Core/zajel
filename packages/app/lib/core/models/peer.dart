@@ -7,6 +7,7 @@ import 'package:equatable/equatable.dart';
 class Peer extends Equatable {
   final String id;
   final String displayName;
+  final String? username;
   final String? ipAddress;
   final int? port;
   final String? publicKey;
@@ -17,6 +18,7 @@ class Peer extends Equatable {
   const Peer({
     required this.id,
     required this.displayName,
+    this.username,
     this.ipAddress,
     this.port,
     this.publicKey,
@@ -28,6 +30,7 @@ class Peer extends Equatable {
   Peer copyWith({
     String? id,
     String? displayName,
+    String? username,
     String? ipAddress,
     int? port,
     String? publicKey,
@@ -38,6 +41,7 @@ class Peer extends Equatable {
     return Peer(
       id: id ?? this.id,
       displayName: displayName ?? this.displayName,
+      username: username ?? this.username,
       ipAddress: ipAddress ?? this.ipAddress,
       port: port ?? this.port,
       publicKey: publicKey ?? this.publicKey,
@@ -50,6 +54,7 @@ class Peer extends Equatable {
   Map<String, dynamic> toJson() => {
         'id': id,
         'displayName': displayName,
+        'username': username,
         'ipAddress': ipAddress,
         'port': port,
         'publicKey': publicKey,
@@ -61,6 +66,7 @@ class Peer extends Equatable {
   factory Peer.fromJson(Map<String, dynamic> json) => Peer(
         id: json['id'] as String,
         displayName: json['displayName'] as String,
+        username: json['username'] as String?,
         ipAddress: json['ipAddress'] as String?,
         port: json['port'] as int?,
         publicKey: json['publicKey'] as String?,
@@ -73,7 +79,8 @@ class Peer extends Equatable {
       );
 
   @override
-  List<Object?> get props => [id, displayName, publicKey];
+  List<Object?> get props =>
+      [id, displayName, username, publicKey, connectionState, isLocal];
 }
 
 enum PeerConnectionState {

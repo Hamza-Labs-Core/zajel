@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 
 import '../config/environment.dart';
+import '../logging/logger_service.dart';
 
 /// Verifies Ed25519 signatures on bootstrap server responses.
 ///
@@ -66,7 +67,9 @@ class BootstrapVerifier {
       final responseTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
       final age = DateTime.now().difference(responseTime).abs();
       return age <= maxAge;
-    } catch (_) {
+    } catch (e) {
+      logger.warning('BootstrapVerifier',
+          'Signature verification threw an exception (returning false): $e');
       return false;
     }
   }
