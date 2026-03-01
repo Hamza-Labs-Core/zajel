@@ -23,7 +23,7 @@ import { DistributedRendezvous } from './registry/distributed-rendezvous.js';
 import { ClientHandler, type ClientHandlerConfig } from './client/handler.js';
 import { logger } from './utils/logger.js';
 import { createAdminModule, type AdminModule } from './admin/index.js';
-import { requireAuth, sendJson } from './admin/auth.js';
+import { requireAuth } from './admin/auth.js';
 
 
 export interface ZajelServer {
