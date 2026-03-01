@@ -7,6 +7,7 @@ import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'app_router.dart';
 import 'core/config/environment.dart';
@@ -33,6 +34,13 @@ void main() async {
 
   if (_isE2eTest) {
     SemanticsBinding.instance.ensureSemantics();
+  }
+
+  // Initialize sqflite FFI for desktop platforms (Windows, Linux, macOS).
+  // On Android/iOS sqflite uses native platform channels and doesn't need this.
+  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
   }
 
   await logger.initialize();
