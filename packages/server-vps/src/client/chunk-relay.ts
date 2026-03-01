@@ -198,7 +198,8 @@ export class ChunkRelay {
       try {
         cachedData = JSON.parse(cached.data.toString('utf-8'));
       } catch {
-        cachedData = cached.data.toString('base64'); // Legacy fallback
+        console.warn(`[ChunkRelay] Failed to parse cached chunk as JSON, using base64 fallback`);
+        cachedData = cached.data.toString('base64');
       }
       this.sendToWs(ws, {
         type: 'chunk_data',

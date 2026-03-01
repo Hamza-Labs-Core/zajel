@@ -74,11 +74,17 @@ export class AdminWebSocketHandler {
 
     // Handle messages from client
     ws.on('message', (data) => {
+      let message;
       try {
-        const message = JSON.parse(data.toString()) as { type: string };
-        this.handleClientMessage(ws, message);
+        message = JSON.parse(data.toString()) as { type: string };
       } catch {
-        // Ignore malformed messages
+        console.warn('[Admin WS] Malformed message from client');
+        return;
+      }
+      try {
+        this.handleClientMessage(ws, message);
+      } catch (e) {
+        console.error('[Admin WS] Error handling client message:', e);
       }
     });
 

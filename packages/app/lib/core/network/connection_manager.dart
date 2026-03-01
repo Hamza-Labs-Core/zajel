@@ -1079,8 +1079,11 @@ class ConnectionManager {
         String? ourStableId;
         try {
           ourStableId = _cryptoService.stableId;
-        } catch (_) {
+        } on CryptoException catch (_) {
           // CryptoService not yet initialized — stableId will be omitted
+        } catch (e) {
+          logger.warning(
+              'ConnectionManager', 'Unexpected error accessing stableId: $e');
         }
         _webrtcService.performHandshake(_toCode(peerId),
             username: _username, stableId: ourStableId);

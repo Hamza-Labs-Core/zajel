@@ -312,7 +312,8 @@ export class RelayHandler {
       return;
     }
 
-    const relays = this.ctx.relayRegistry.getAvailableRelays(peerId, count);
+    const safeCount = Math.min(Math.max(1, count), 100);
+    const relays = this.ctx.relayRegistry.getAvailableRelays(peerId, safeCount);
 
     this.ctx.send(ws, {
       type: 'relays',

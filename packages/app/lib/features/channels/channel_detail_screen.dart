@@ -52,7 +52,10 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
   void dispose() {
     try {
       ref.read(activeScreenProvider.notifier).state = ActiveScreen.other;
-    } catch (_) {} // ref may be invalid during tree teardown
+    } catch (e) {
+      debugPrint(
+          '[ChannelDetailScreen] dispose error (may be expected during teardown): $e');
+    }
     _messageController.dispose();
     _messageFocusNode.dispose();
     _scrollController.dispose();

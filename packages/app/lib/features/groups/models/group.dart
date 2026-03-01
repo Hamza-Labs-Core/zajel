@@ -96,11 +96,10 @@ class Group extends Equatable {
 
   /// Get our own member entry.
   GroupMember? get selfMember {
-    try {
-      return members.firstWhere((m) => m.deviceId == selfDeviceId);
-    } catch (_) {
-      return null;
+    for (final m in members) {
+      if (m.deviceId == selfDeviceId) return m;
     }
+    return null;
   }
 
   /// Get all other members (everyone except us).

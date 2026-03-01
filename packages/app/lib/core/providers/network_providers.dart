@@ -87,7 +87,7 @@ final peerReconnectionServiceProvider =
 
   // Wire up signaling rendezvous events if signaling is connected
   if (signalingClient != null) {
-    signalingClient.rendezvousEvents.listen((event) {
+    final sub = signalingClient.rendezvousEvents.listen((event) {
       switch (event) {
         case RendezvousResult(:final liveMatches, :final deadDrops):
           // Process live matches
@@ -118,6 +118,7 @@ final peerReconnectionServiceProvider =
           service.processLiveMatchFromRendezvous(peerId, relayId);
       }
     });
+    ref.onDispose(() => sub.cancel());
   }
 
   ref.onDispose(() => service.dispose());

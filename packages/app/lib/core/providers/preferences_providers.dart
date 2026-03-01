@@ -69,8 +69,11 @@ final userIdentityProvider = Provider<String>((ref) {
     final cryptoService = ref.watch(cryptoServiceProvider);
     final tag = CryptoService.tagFromStableId(cryptoService.stableId);
     return '$username#$tag';
-  } catch (_) {
+  } on CryptoException catch (_) {
     // CryptoService not initialized yet
+    return username;
+  } catch (e) {
+    // Unexpected error (e.g. ArgumentError from tagFromStableId)
     return username;
   }
 });

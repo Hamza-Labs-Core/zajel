@@ -321,8 +321,8 @@ export class FederationManager extends EventEmitter {
         url.pathname = '/federation';
       }
       return url.toString();
-    } catch {
-      // Fallback: simple string append
+    } catch (e) {
+      console.warn(`[Federation] Invalid endpoint URL "${endpoint}", using string fallback:`, e);
       const base = endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
       return `${base}/federation`;
     }
@@ -369,8 +369,8 @@ export class FederationManager extends EventEmitter {
             const membership = this.gossip.getMembership();
             for (const member of membership.getAlive()) {
               if (member.serverId !== this.identity.serverId) {
-                this.transport.connect(member).catch(() => {
-                  // Ignore connection failures during bootstrap
+                this.transport.connect(member).catch((err) => {
+                  console.warn(`[Federation] Failed to connect to ${member.endpoint} during bootstrap:`, err);
                 });
               }
             }
@@ -412,8 +412,8 @@ export class FederationManager extends EventEmitter {
       // Try to connect (unless suppressed by addDiscoveredPeer which handles
       // peers from bootstrap — those connect lazily via incoming or gossip sync)
       if (!this.suppressTransportConnect) {
-        this.transport.connect(entry).catch(() => {
-          // Will retry later
+        this.transport.connect(entry).catch((err) => {
+          console.warn(`[Federation] Failed to connect to ${entry.endpoint} during member-join:`, err);
         });
       }
 

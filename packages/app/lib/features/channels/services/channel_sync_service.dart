@@ -323,7 +323,9 @@ class ChannelSyncService {
         } else {
           return;
         }
-      } catch (_) {
+      } catch (e) {
+        logger.warning(
+            'ChannelSyncService', 'Failed to parse cache data for chunk: $e');
         return;
       }
     } else {

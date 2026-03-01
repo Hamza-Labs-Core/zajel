@@ -438,8 +438,8 @@ class CryptoService {
         secretKey: sessionKey,
       );
       return utf8.decode(plaintextBytes);
-    } catch (_) {
-      // Try previous key during grace period after a ratchet
+    } on SecretBoxAuthenticationError catch (_) {
+      // MAC mismatch — try previous key during grace period after a ratchet
       final prev = _previousSessionKeys[peerId];
       if (prev != null &&
           DateTime.now().difference(prev.expiry) < _graceTimeout) {

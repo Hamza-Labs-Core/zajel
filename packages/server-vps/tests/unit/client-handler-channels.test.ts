@@ -242,6 +242,12 @@ describe('Upstream Message Routing', () => {
       channelId: 'ch_upstream',
     }));
 
+    // Subscribe subWs to channel (required for upstream messages)
+    await handler.handleMessage(subWs as any, JSON.stringify({
+      type: 'channel-subscribe',
+      channelId: 'ch_upstream',
+    }));
+
     ownerWs.clearMessages();
     subWs.clearMessages();
   });
@@ -705,6 +711,12 @@ describe('Cleanup', () => {
     // Register owner
     await handler.handleMessage(ownerWs as any, JSON.stringify({
       type: 'channel-owner-register',
+      channelId: 'ch_queue_cleanup',
+    }));
+
+    // Subscribe subWs to channel (required for upstream messages)
+    await handler.handleMessage(subWs as any, JSON.stringify({
+      type: 'channel-subscribe',
       channelId: 'ch_queue_cleanup',
     }));
 

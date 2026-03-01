@@ -610,7 +610,7 @@ function getDashboardHtml(cfAdminUrl?: string): string {
 
   <script type="module">
     // CF Admin URL for authentication redirect
-    const CF_ADMIN_URL = ${cfAdminUrl ? `'${cfAdminUrl}'` : 'null'};
+    const CF_ADMIN_URL = ${JSON.stringify(cfAdminUrl || null)};
 
     // State
     let state = {

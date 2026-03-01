@@ -66,8 +66,8 @@ export class ChannelHandler {
   handleChannelOwnerRegister(ws: WebSocket, message: ChannelOwnerRegisterMessage): void {
     const { channelId } = message;
 
-    if (!channelId) {
-      this.sendError(ws, 'Missing required field: channelId');
+    if (!channelId || typeof channelId !== 'string' || channelId.length > 256) {
+      this.sendError(ws, 'Invalid channel ID');
       return;
     }
 
@@ -104,8 +104,8 @@ export class ChannelHandler {
   async handleChannelSubscribe(ws: WebSocket, message: ChannelSubscribeMessage): Promise<void> {
     const { channelId } = message;
 
-    if (!channelId) {
-      this.sendError(ws, 'Missing required field: channelId');
+    if (!channelId || typeof channelId !== 'string' || channelId.length > 256) {
+      this.sendError(ws, 'Invalid channel ID');
       return;
     }
 
@@ -184,13 +184,20 @@ export class ChannelHandler {
   handleUpstreamMessage(ws: WebSocket, message: UpstreamMessageData): void {
     const { channelId } = message;
 
-    if (!channelId) {
-      this.sendError(ws, 'Missing required field: channelId');
+    if (!channelId || typeof channelId !== 'string' || channelId.length > 256) {
+      this.sendError(ws, 'Invalid channel ID');
       return;
     }
 
     if (!message.message) {
       this.sendError(ws, 'Missing required field: message');
+      return;
+    }
+
+    // Verify sender is a subscriber of this channel
+    const subscribers = this.channelSubscribers.get(channelId);
+    if (!subscribers || !subscribers.has(ws)) {
+      this.sendError(ws, 'Not subscribed to this channel');
       return;
     }
 
@@ -392,8 +399,11 @@ export class ChannelHandler {
 
     // Clean up channel subscriber registrations
     try {
-      for (const [, subscribers] of this.channelSubscribers) {
+      for (const [channelId, subscribers] of this.channelSubscribers) {
         subscribers.delete(ws);
+        if (subscribers.size === 0) {
+          this.channelSubscribers.delete(channelId);
+        }
       }
     } catch (e) {
       logger.warn(`[ChannelHandler] Error cleaning up channel subscribers: ${e}`);

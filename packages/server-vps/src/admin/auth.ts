@@ -53,7 +53,8 @@ export function verifyJwt(token: string, secret: string): JwtPayload | null {
     }
 
     return payload;
-  } catch {
+  } catch (error) {
+    console.warn('[Admin Auth] JWT verification failed:', error);
     return null;
   }
 }
