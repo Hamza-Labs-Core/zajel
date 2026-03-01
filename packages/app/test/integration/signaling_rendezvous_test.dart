@@ -54,11 +54,11 @@ void main() {
         // by testing the RendezvousResult class construction
         final result = RendezvousResult(
           liveMatches: [
-            LiveMatch(peerId: 'peer1', relayId: 'relay1'),
-            LiveMatch(peerId: 'peer2', relayId: null),
+            SignalingLiveMatch(peerId: 'peer1', relayId: 'relay1'),
+            SignalingLiveMatch(peerId: 'peer2', relayId: null),
           ],
           deadDrops: [
-            DeadDrop(
+            SignalingDeadDrop(
                 peerId: 'peer3',
                 encryptedData: 'encrypted-data-1',
                 relayId: 'relay2'),
@@ -82,7 +82,7 @@ void main() {
         // Test RendezvousPartial class construction
         final partial = RendezvousPartial(
           liveMatches: [
-            LiveMatch(peerId: 'local-peer', relayId: 'relay1'),
+            SignalingLiveMatch(peerId: 'local-peer', relayId: 'relay1'),
           ],
           deadDrops: [],
           redirects: [
@@ -126,15 +126,15 @@ void main() {
         void handleEvent(RendezvousEvent event) {
           switch (event) {
             case RendezvousResult(:final liveMatches, :final deadDrops):
-              expect(liveMatches, isA<List<LiveMatch>>());
-              expect(deadDrops, isA<List<DeadDrop>>());
+              expect(liveMatches, isA<List<SignalingLiveMatch>>());
+              expect(deadDrops, isA<List<SignalingDeadDrop>>());
             case RendezvousPartial(
                 :final liveMatches,
                 :final deadDrops,
                 :final redirects
               ):
-              expect(liveMatches, isA<List<LiveMatch>>());
-              expect(deadDrops, isA<List<DeadDrop>>());
+              expect(liveMatches, isA<List<SignalingLiveMatch>>());
+              expect(deadDrops, isA<List<SignalingDeadDrop>>());
               expect(redirects, isA<List<RendezvousRedirect>>());
             case RendezvousMatch(
                 :final peerId,
@@ -155,10 +155,10 @@ void main() {
       });
     });
 
-    group('LiveMatch', () {
+    group('SignalingLiveMatch', () {
       test('stores peerId and optional relayId', () {
-        final match1 = LiveMatch(peerId: 'peer-1', relayId: 'relay-1');
-        final match2 = LiveMatch(peerId: 'peer-2');
+        final match1 = SignalingLiveMatch(peerId: 'peer-1', relayId: 'relay-1');
+        final match2 = SignalingLiveMatch(peerId: 'peer-2');
 
         expect(match1.peerId, equals('peer-1'));
         expect(match1.relayId, equals('relay-1'));
@@ -167,9 +167,9 @@ void main() {
       });
     });
 
-    group('DeadDrop', () {
+    group('SignalingDeadDrop', () {
       test('stores peerId, encryptedData, and optional relayId', () {
-        final drop = DeadDrop(
+        final drop = SignalingDeadDrop(
           peerId: 'peer-1',
           encryptedData: 'encrypted-connection-info',
           relayId: 'relay-1',

@@ -217,6 +217,7 @@ export type ServerMessage =
 export interface HandshakeMessage {
   type: 'handshake';
   publicKey: string;
+  stableId?: string;
 }
 
 export interface FileStartMessage {

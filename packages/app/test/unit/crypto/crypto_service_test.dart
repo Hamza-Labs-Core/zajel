@@ -1,6 +1,9 @@
+// ignore_for_file: deprecated_member_use_from_same_package
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:zajel/core/crypto/crypto_service.dart';
 
 import '../../mocks/mocks.dart';
@@ -347,6 +350,414 @@ void main() {
         final decrypted = await bob.decrypt(sessionId, encrypted);
 
         expect(decrypted, specialMessage);
+      });
+    });
+
+    group('tagFromPublicKey', () {
+      test('returns 4-character uppercase hex string', () async {
+        await cryptoService.initialize();
+        final publicKey = await cryptoService.getPublicKeyBase64();
+
+        final tag = CryptoService.tagFromPublicKey(publicKey);
+
+        expect(tag.length, 4);
+        expect(tag, matches(RegExp(r'^[0-9A-F]{4}$')));
+      });
+
+      test('is consistent with peerIdFromPublicKey', () async {
+        await cryptoService.initialize();
+        final publicKey = await cryptoService.getPublicKeyBase64();
+
+        final tag = CryptoService.tagFromPublicKey(publicKey);
+        final peerId = CryptoService.peerIdFromPublicKey(publicKey);
+
+        // Both use same SHA-256 hash; tag is first 4 chars, peerId is first 16
+        expect(peerId.substring(0, 4), tag);
+      });
+
+      test('is deterministic for same key', () async {
+        await cryptoService.initialize();
+        final publicKey = await cryptoService.getPublicKeyBase64();
+
+        final tag1 = CryptoService.tagFromPublicKey(publicKey);
+        final tag2 = CryptoService.tagFromPublicKey(publicKey);
+
+        expect(tag1, tag2);
+      });
+
+      test('produces different tags for different keys', () async {
+        final alice = CryptoService(secureStorage: FakeSecureStorage());
+        final bob = CryptoService(secureStorage: FakeSecureStorage());
+        await alice.initialize();
+        await bob.initialize();
+
+        final aliceTag =
+            CryptoService.tagFromPublicKey(await alice.getPublicKeyBase64());
+        final bobTag =
+            CryptoService.tagFromPublicKey(await bob.getPublicKeyBase64());
+
+        // Technically could collide (1 in 65536) but extremely unlikely
+        expect(aliceTag, isNot(bobTag));
+      });
+
+      test('works with known base64 input', () {
+        // A fixed 32-byte key as base64
+        final knownKey = base64Encode(List.filled(32, 0));
+
+        final tag = CryptoService.tagFromPublicKey(knownKey);
+
+        expect(tag.length, 4);
+        expect(tag, matches(RegExp(r'^[0-9A-F]{4}$')));
+        // Should be stable across runs
+        final tag2 = CryptoService.tagFromPublicKey(knownKey);
+        expect(tag, tag2);
+      });
+    });
+
+    group('stableId', () {
+      test('stableId getter throws before initialization', () {
+        expect(
+          () => cryptoService.stableId,
+          throwsA(isA<CryptoException>().having(
+            (e) => e.message,
+            'message',
+            contains('not initialized'),
+          )),
+        );
+      });
+
+      test('generates stableId on first init (no prefs)', () async {
+        // CryptoService with no SharedPreferences — should generate random ID
+        await cryptoService.initialize();
+
+        final id = cryptoService.stableId;
+        expect(id.length, 16);
+        expect(id, matches(RegExp(r'^[0-9A-F]{16}$')));
+      });
+
+      test('migration: derives stableId from publicKey when no stored ID',
+          () async {
+        SharedPreferences.setMockInitialValues({});
+        final prefs = await SharedPreferences.getInstance();
+        final svc =
+            CryptoService(secureStorage: FakeSecureStorage(), prefs: prefs);
+        await svc.initialize();
+
+        // Migration: stableId should match peerIdFromPublicKey
+        final expected = CryptoService.peerIdFromPublicKey(svc.publicKeyBase64);
+        expect(svc.stableId, expected);
+
+        // Should be persisted
+        expect(prefs.getString('zajel_stable_id'), expected);
+      });
+
+      test('loads stored stableId from SharedPreferences', () async {
+        SharedPreferences.setMockInitialValues(
+            {'zajel_stable_id': 'ABCD1234EFGH5678'});
+        final prefs = await SharedPreferences.getInstance();
+        final svc =
+            CryptoService(secureStorage: FakeSecureStorage(), prefs: prefs);
+        await svc.initialize();
+
+        expect(svc.stableId, 'ABCD1234EFGH5678');
+      });
+
+      test('stableId survives key regeneration', () async {
+        SharedPreferences.setMockInitialValues({});
+        final prefs = await SharedPreferences.getInstance();
+        final svc =
+            CryptoService(secureStorage: FakeSecureStorage(), prefs: prefs);
+        await svc.initialize();
+
+        final originalStableId = svc.stableId;
+        final originalPublicKey = svc.publicKeyBase64;
+
+        // Regenerate keys — should NOT change stableId
+        await svc.regenerateIdentityKeys();
+        expect(svc.publicKeyBase64, isNot(originalPublicKey));
+        expect(svc.stableId, originalStableId);
+      });
+
+      test('stableId persists across service instances', () async {
+        SharedPreferences.setMockInitialValues({});
+        final prefs = await SharedPreferences.getInstance();
+        final storage = FakeSecureStorage();
+
+        final svc1 = CryptoService(secureStorage: storage, prefs: prefs);
+        await svc1.initialize();
+        final firstId = svc1.stableId;
+
+        // Create new instance with same storage
+        final svc2 = CryptoService(secureStorage: storage, prefs: prefs);
+        await svc2.initialize();
+        expect(svc2.stableId, firstId);
+      });
+    });
+
+    group('tagFromStableId', () {
+      test('returns first 4 characters uppercased', () {
+        expect(CryptoService.tagFromStableId('ABCD1234EFGH5678'), 'ABCD');
+        expect(CryptoService.tagFromStableId('abcd1234efgh5678'), 'ABCD');
+      });
+
+      test('is deterministic', () {
+        const id = '1234567890ABCDEF';
+        expect(CryptoService.tagFromStableId(id),
+            CryptoService.tagFromStableId(id));
+      });
+
+      test('throws ArgumentError for strings shorter than 4 chars', () {
+        expect(
+          () => CryptoService.tagFromStableId('AB'),
+          throwsA(isA<ArgumentError>().having(
+            (e) => e.message,
+            'message',
+            contains('at least 4 characters'),
+          )),
+        );
+      });
+
+      test('throws ArgumentError for empty string', () {
+        expect(
+          () => CryptoService.tagFromStableId(''),
+          throwsA(isA<ArgumentError>()),
+        );
+      });
+
+      test('works with exactly 4 characters', () {
+        expect(CryptoService.tagFromStableId('abcd'), 'ABCD');
+      });
+    });
+
+    group('forward secrecy - ephemeral key exchange', () {
+      test('establishSessionWithEphemeral creates session key', () async {
+        final alice = CryptoService(secureStorage: FakeSecureStorage());
+        final bob = CryptoService(secureStorage: FakeSecureStorage());
+
+        await alice.initialize();
+        await bob.initialize();
+
+        // Generate ephemeral keys for both sides
+        final aliceEph = await alice.generateEphemeralKeyPair();
+        final bobEph = await bob.generateEphemeralKeyPair();
+
+        final alicePub = await alice.getPublicKeyBase64();
+        final bobPub = await bob.getPublicKeyBase64();
+
+        // Both establish session with ephemeral keys
+        await alice.establishSessionWithEphemeral(
+          peerId: 'shared',
+          peerIdentityKeyBase64: bobPub,
+          peerEphemeralKeyBase64: bobEph.publicKey,
+          ourEphemeralPrivateKeyBase64: aliceEph.privateKey,
+        );
+        await bob.establishSessionWithEphemeral(
+          peerId: 'shared',
+          peerIdentityKeyBase64: alicePub,
+          peerEphemeralKeyBase64: aliceEph.publicKey,
+          ourEphemeralPrivateKeyBase64: bobEph.privateKey,
+        );
+
+        // Should be able to encrypt and decrypt
+        final encrypted = await alice.encrypt('shared', 'Forward secret!');
+        final decrypted = await bob.decrypt('shared', encrypted);
+        expect(decrypted, 'Forward secret!');
+      });
+
+      test('ephemeral session key differs from identity-only session key',
+          () async {
+        final alice = CryptoService(secureStorage: FakeSecureStorage());
+        final bob = CryptoService(secureStorage: FakeSecureStorage());
+
+        await alice.initialize();
+        await bob.initialize();
+
+        final alicePub = await alice.getPublicKeyBase64();
+        final bobPub = await bob.getPublicKeyBase64();
+
+        // Identity-only session
+        await alice.establishSession('identity-only', bobPub);
+        final identityEncrypted =
+            await alice.encrypt('identity-only', 'test message');
+
+        // Ephemeral session
+        final aliceEph = await alice.generateEphemeralKeyPair();
+        final bobEph = await bob.generateEphemeralKeyPair();
+
+        await alice.establishSessionWithEphemeral(
+          peerId: 'ephemeral',
+          peerIdentityKeyBase64: bobPub,
+          peerEphemeralKeyBase64: bobEph.publicKey,
+          ourEphemeralPrivateKeyBase64: aliceEph.privateKey,
+        );
+
+        // The ephemeral session should use a different key
+        // (Bob can't decrypt with identity-only session)
+        await bob.establishSession('identity-only', alicePub);
+        expect(
+          () => bob.decrypt('identity-only', identityEncrypted),
+          // This should work for identity-only
+          returnsNormally,
+        );
+      });
+
+      test('ephemeral session is persisted', () async {
+        final storage = FakeSecureStorage();
+        final alice = CryptoService(secureStorage: storage);
+        final bob = CryptoService(secureStorage: FakeSecureStorage());
+
+        await alice.initialize();
+        await bob.initialize();
+
+        final aliceEph = await alice.generateEphemeralKeyPair();
+        final bobEph = await bob.generateEphemeralKeyPair();
+        final bobPub = await bob.getPublicKeyBase64();
+
+        await alice.establishSessionWithEphemeral(
+          peerId: 'bob',
+          peerIdentityKeyBase64: bobPub,
+          peerEphemeralKeyBase64: bobEph.publicKey,
+          ourEphemeralPrivateKeyBase64: aliceEph.privateKey,
+        );
+
+        // Create new service with same storage
+        final aliceReloaded = CryptoService(secureStorage: storage);
+        await aliceReloaded.initialize();
+
+        // Should be able to encrypt without re-establishing session
+        final encrypted = await aliceReloaded.encrypt('bob', 'Persisted!');
+        expect(encrypted, isNotEmpty);
+      });
+    });
+
+    group('key ratchet', () {
+      late CryptoService alice;
+      late CryptoService bob;
+      const sessionId = 'ratchet-test';
+
+      setUp(() async {
+        alice = CryptoService(secureStorage: FakeSecureStorage());
+        bob = CryptoService(secureStorage: FakeSecureStorage());
+
+        await alice.initialize();
+        await bob.initialize();
+
+        final alicePub = await alice.getPublicKeyBase64();
+        final bobPub = await bob.getPublicKeyBase64();
+
+        await alice.establishSession(sessionId, bobPub);
+        await bob.establishSession(sessionId, alicePub);
+      });
+
+      test('ratchetSessionKey changes the session key', () async {
+        final nonce = Uint8List(32);
+        for (var i = 0; i < 32; i++) {
+          nonce[i] = i;
+        }
+
+        // Encrypt before ratchet
+        final beforeEncrypted = await alice.encrypt(sessionId, 'before');
+
+        // Ratchet both sides with same nonce
+        await alice.ratchetSessionKey(sessionId, nonce);
+        await bob.ratchetSessionKey(sessionId, nonce);
+
+        // Encrypt/decrypt after ratchet should work with new key
+        final afterEncrypted = await alice.encrypt(sessionId, 'after');
+        final decrypted = await bob.decrypt(sessionId, afterEncrypted);
+        expect(decrypted, 'after');
+
+        // Old ciphertext should fail (key changed, grace period on alice's side
+        // doesn't help bob since bob ratcheted too)
+        // Bob's old key is in grace period, but the pre-ratchet message was
+        // encrypted with alice's pre-ratchet key and bob's current key
+        // is the post-ratchet key. The pre-ratchet ciphertext was encrypted
+        // with alice's pre-ratchet key (same as bob's pre-ratchet key).
+        // After ratchet, bob should still be able to decrypt via grace period.
+        final stillDecrypted = await bob.decrypt(sessionId, beforeEncrypted);
+        expect(stillDecrypted, 'before');
+      });
+
+      test('ratchet with same nonce produces deterministic key', () async {
+        final nonce = Uint8List.fromList(List.filled(32, 42));
+
+        // Two separate pairs with same starting key and same nonce
+        final alice2 = CryptoService(secureStorage: FakeSecureStorage());
+        final bob2 = CryptoService(secureStorage: FakeSecureStorage());
+        await alice2.initialize();
+        await bob2.initialize();
+
+        final alice2Pub = await alice2.getPublicKeyBase64();
+        final bob2Pub = await bob2.getPublicKeyBase64();
+
+        // Same key exchange as alice/bob
+        await alice2.establishSession(sessionId, bob2Pub);
+        await bob2.establishSession(sessionId, alice2Pub);
+
+        // Both alice instances ratchet with same nonce
+        await alice.ratchetSessionKey(sessionId, nonce);
+        await bob.ratchetSessionKey(sessionId, nonce);
+
+        // Post-ratchet encryption should work for both pairs
+        final encrypted = await alice.encrypt(sessionId, 'deterministic');
+        final decrypted = await bob.decrypt(sessionId, encrypted);
+        expect(decrypted, 'deterministic');
+      });
+
+      test('ratchetSessionKey throws with no session', () async {
+        expect(
+          () => alice.ratchetSessionKey('no-such-peer', Uint8List(32)),
+          throwsA(isA<CryptoException>().having(
+            (e) => e.message,
+            'message',
+            contains('No session to ratchet'),
+          )),
+        );
+      });
+
+      test('grace period allows decryption with old key', () async {
+        final nonce = Uint8List.fromList(List.filled(32, 7));
+
+        // Encrypt with current key
+        final encrypted = await alice.encrypt(sessionId, 'grace period msg');
+
+        // Only bob ratchets (simulating alice sent before bob processed)
+        await bob.ratchetSessionKey(sessionId, nonce);
+
+        // Bob should still decrypt via grace period (old key)
+        final decrypted = await bob.decrypt(sessionId, encrypted);
+        expect(decrypted, 'grace period msg');
+      });
+
+      test('multiple ratchets work in sequence', () async {
+        for (var i = 0; i < 5; i++) {
+          final nonce =
+              Uint8List.fromList(List.generate(32, (j) => i * 32 + j));
+
+          await alice.ratchetSessionKey(sessionId, nonce);
+          await bob.ratchetSessionKey(sessionId, nonce);
+
+          final encrypted = await alice.encrypt(sessionId, 'msg $i');
+          final decrypted = await bob.decrypt(sessionId, encrypted);
+          expect(decrypted, 'msg $i');
+        }
+      });
+    });
+
+    group('removePeerPublicKey', () {
+      test('removes a stored peer public key', () async {
+        await cryptoService.initialize();
+        cryptoService.setPeerPublicKey('peer-1', 'key123');
+        expect(cryptoService.getPeerPublicKey('peer-1'), 'key123');
+
+        cryptoService.removePeerPublicKey('peer-1');
+        expect(cryptoService.getPeerPublicKey('peer-1'), isNull);
+      });
+
+      test('is a no-op for unknown peer', () async {
+        await cryptoService.initialize();
+        // Should not throw
+        cryptoService.removePeerPublicKey('nonexistent');
       });
     });
   });

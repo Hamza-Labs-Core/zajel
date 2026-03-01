@@ -450,6 +450,90 @@ describe('validateDataChannelMessage', () => {
       expect(result.success).toBe(true);
     });
 
+    it('should validate handshake with valid 16-hex-char stableId', () => {
+      const result = validateDataChannelMessage({
+        type: 'handshake',
+        publicKey: VALID_PUBLIC_KEY,
+        stableId: 'abcdef1234567890',
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.stableId).toBe('abcdef1234567890');
+      }
+    });
+
+    it('should validate handshake with uppercase hex stableId', () => {
+      const result = validateDataChannelMessage({
+        type: 'handshake',
+        publicKey: VALID_PUBLIC_KEY,
+        stableId: 'ABCDEF1234567890',
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.stableId).toBe('ABCDEF1234567890');
+      }
+    });
+
+    it('should ignore stableId that is too short', () => {
+      const result = validateDataChannelMessage({
+        type: 'handshake',
+        publicKey: VALID_PUBLIC_KEY,
+        stableId: 'abc123',
+      });
+      // Handshake still succeeds, stableId is just omitted
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.stableId).toBeUndefined();
+      }
+    });
+
+    it('should ignore stableId that is too long', () => {
+      const result = validateDataChannelMessage({
+        type: 'handshake',
+        publicKey: VALID_PUBLIC_KEY,
+        stableId: 'abcdef12345678901', // 17 chars
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.stableId).toBeUndefined();
+      }
+    });
+
+    it('should ignore stableId with non-hex characters', () => {
+      const result = validateDataChannelMessage({
+        type: 'handshake',
+        publicKey: VALID_PUBLIC_KEY,
+        stableId: 'ghijkl1234567890', // g-l are not hex
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.stableId).toBeUndefined();
+      }
+    });
+
+    it('should ignore non-string stableId', () => {
+      const result = validateDataChannelMessage({
+        type: 'handshake',
+        publicKey: VALID_PUBLIC_KEY,
+        stableId: 12345,
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.stableId).toBeUndefined();
+      }
+    });
+
+    it('should validate handshake without stableId (backward compat)', () => {
+      const result = validateDataChannelMessage({
+        type: 'handshake',
+        publicKey: VALID_PUBLIC_KEY,
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.stableId).toBeUndefined();
+      }
+    });
+
     it('should reject handshake with short public key', () => {
       const result = validateDataChannelMessage({
         type: 'handshake',
@@ -915,6 +999,30 @@ describe('validateHandshake', () => {
       publicKey: 'short', // Less than 32 chars
     });
     expect(result.success).toBe(false);
+  });
+
+  it('should accept valid stableId in handshake', () => {
+    const result = validateHandshake({
+      type: 'handshake',
+      publicKey: VALID_PUBLIC_KEY,
+      stableId: 'a1b2c3d4e5f67890',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.stableId).toBe('a1b2c3d4e5f67890');
+    }
+  });
+
+  it('should silently drop invalid stableId in handshake', () => {
+    const result = validateHandshake({
+      type: 'handshake',
+      publicKey: VALID_PUBLIC_KEY,
+      stableId: 'not-hex!!',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.stableId).toBeUndefined();
+    }
   });
 });
 
