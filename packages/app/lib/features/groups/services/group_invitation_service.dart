@@ -173,7 +173,12 @@ class GroupInvitationService {
     try {
       final encryptedBytes = Uint8List.fromList(base64Decode(payloadB64));
 
-      // Try each group where fromPeerId is a member
+      // The encrypted payload has no unencrypted group-ID header (by design:
+      // revealing which group a message belongs to would leak metadata).
+      // We therefore try decryption against each group where fromPeerId is a
+      // member. This is O(G) in the number of groups, but bounded by
+      // MAX_GROUP_MEMBERS (15 groups max per user) and short-circuits on the
+      // first successful decryption.
       final groups = await _groupService.getAllGroups();
       for (final group in groups) {
         final isMember = group.members.any((m) => m.deviceId == fromPeerId);

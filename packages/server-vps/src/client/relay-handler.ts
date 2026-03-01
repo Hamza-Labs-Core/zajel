@@ -118,6 +118,13 @@ export class RelayHandler {
       return;
     }
 
+    // Verify WebSocket owns this peerId
+    const client = this.ctx.clients.get(peerId);
+    if (!client || client.ws !== ws) {
+      // Ignore load update from non-owner
+      return;
+    }
+
     const count = Number(connectedCount);
     if (!Number.isFinite(count) || count < 0 || count > RELAY.MAX_CONNECTED_COUNT) {
       this.ctx.sendError(ws, 'Invalid connectedCount');
@@ -125,10 +132,7 @@ export class RelayHandler {
     }
 
     // Update client's last seen
-    const client = this.ctx.clients.get(peerId);
-    if (client) {
-      client.lastSeen = Date.now();
-    }
+    client.lastSeen = Date.now();
 
     this.ctx.relayRegistry.updateLoad(peerId, count);
 
@@ -333,11 +337,15 @@ export class RelayHandler {
       return;
     }
 
-    // Update last seen
+    // Verify WebSocket owns this peerId
     const client = this.ctx.clients.get(peerId);
-    if (client) {
-      client.lastSeen = Date.now();
+    if (!client || client.ws !== ws) {
+      // Ignore heartbeat from non-owner
+      return;
     }
+
+    // Update last seen
+    client.lastSeen = Date.now();
 
     // Update relay registry
     const peer = this.ctx.relayRegistry.getPeer(peerId);

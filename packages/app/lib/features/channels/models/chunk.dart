@@ -173,12 +173,20 @@ class Chunk extends Equatable {
       throw FormatException(
           'Invalid base64 in encrypted_payload for chunk ${json['chunk_id']}');
     }
+
+    final chunkIndex = json['chunk_index'] as int;
+    final totalChunks = json['total_chunks'] as int;
+    if (chunkIndex < 0 || totalChunks <= 0 || chunkIndex >= totalChunks) {
+      throw FormatException(
+          'Invalid chunk indices: index=$chunkIndex, total=$totalChunks');
+    }
+
     return Chunk(
       chunkId: json['chunk_id'] as String,
       routingHash: json['routing_hash'] as String,
       sequence: json['sequence'] as int,
-      chunkIndex: json['chunk_index'] as int,
-      totalChunks: json['total_chunks'] as int,
+      chunkIndex: chunkIndex,
+      totalChunks: totalChunks,
       size: json['size'] as int,
       signature: json['signature'] as String,
       authorPubkey: json['author_pubkey'] as String,

@@ -37,6 +37,8 @@ class CryptoService {
   String? _stableId;
   bool _keysWereRegenerated = false;
   final Map<String, SecretKey> _sessionKeys = {};
+  final Map<String, ({SecretKey newKey, SecretKey oldKey, Uint8List nonce})>
+      _pendingRatchets = {};
   final Map<String, String> _peerPublicKeys = {};
 
   CryptoService({FlutterSecureStorage? secureStorage, SharedPreferences? prefs})
@@ -439,7 +441,22 @@ class CryptoService {
       );
       return utf8.decode(plaintextBytes);
     } on SecretBoxAuthenticationError catch (_) {
-      // MAC mismatch — try previous key during grace period after a ratchet
+      // Try pending ratchet key (we're the initiator, peer already ratcheted and is using new key)
+      final pending = _pendingRatchets[peerId];
+      if (pending != null) {
+        try {
+          final plaintextBytes = await _chacha20.decrypt(
+            secretBox,
+            secretKey: pending.newKey,
+          );
+          // Peer proved they have the new key — commit the ratchet
+          commitRatchet(peerId);
+          return utf8.decode(plaintextBytes);
+        } on SecretBoxAuthenticationError catch (_) {
+          // Not encrypted with new key either, continue to grace period check
+        }
+      }
+      // Try previous key during grace period after a ratchet
       final prev = _previousSessionKeys[peerId];
       if (prev != null &&
           DateTime.now().difference(prev.expiry) < _graceTimeout) {
@@ -565,6 +582,10 @@ class CryptoService {
       nonce: const [],
     );
 
+    // Clean up expired previous keys while we're here
+    _previousSessionKeys.removeWhere(
+        (_, prev) => DateTime.now().difference(prev.expiry) >= _graceTimeout);
+
     // Keep old key briefly for grace period
     _previousSessionKeys[peerId] = (key: currentKey, expiry: DateTime.now());
 
@@ -577,6 +598,52 @@ class CryptoService {
     logger.info('CryptoService',
         'ratchetSessionKey($peerId): newHash=${hash.substring(0, 16)}');
   }
+
+  /// Prepare a ratchet without committing it.
+  ///
+  /// Derives the new key but does NOT replace [_sessionKeys]. The caller
+  /// must later call [commitRatchet] once the peer has acknowledged or
+  /// proved they hold the new key (by successfully decrypting with it).
+  /// This avoids the race where the initiator switches keys before the
+  /// peer has received the ratchet control message.
+  Future<void> prepareRatchet(String peerId, Uint8List nonce) async {
+    final currentKey = _sessionKeys[peerId];
+    if (currentKey == null) {
+      throw CryptoException('No session key for peer $peerId');
+    }
+    final currentKeyBytes = await currentKey.extractBytes();
+    final input = Uint8List(currentKeyBytes.length + nonce.length);
+    input.setAll(0, currentKeyBytes);
+    input.setAll(currentKeyBytes.length, nonce);
+    final newKey = await _hkdf.deriveKey(
+      secretKey: SecretKey(input),
+      info: utf8.encode('zajel_ratchet'),
+      nonce: const [],
+    );
+    _pendingRatchets[peerId] =
+        (newKey: newKey, oldKey: currentKey, nonce: nonce);
+  }
+
+  /// Commit a previously prepared ratchet.
+  ///
+  /// Moves the old key into [_previousSessionKeys] for the grace period
+  /// and installs the new key as the active session key.
+  void commitRatchet(String peerId) {
+    final pending = _pendingRatchets.remove(peerId);
+    if (pending == null) return;
+    // Clean up expired previous keys
+    _previousSessionKeys.removeWhere(
+        (_, prev) => DateTime.now().difference(prev.expiry) >= _graceTimeout);
+    _previousSessionKeys[peerId] =
+        (key: pending.oldKey, expiry: DateTime.now());
+    _sessionKeys[peerId] = pending.newKey;
+    _storeSessionKey(peerId, pending.newKey);
+    logger.info('CryptoService',
+        'Ratchet committed for peer ${peerId.substring(0, 8)}...');
+  }
+
+  /// Whether a prepared-but-not-committed ratchet exists for [peerId].
+  bool hasPendingRatchet(String peerId) => _pendingRatchets.containsKey(peerId);
 
   /// Grace period for old session keys after a ratchet.
   ///

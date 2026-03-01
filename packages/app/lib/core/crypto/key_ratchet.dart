@@ -80,7 +80,12 @@ class KeyRatchet {
     }
   }
 
-  /// Initiate a ratchet: generate nonce, ratchet locally, send control.
+  /// Initiate a ratchet: generate nonce, prepare (but don't commit) locally, send control.
+  ///
+  /// The ratchet is only committed when the peer proves they hold the new key
+  /// (by sending a message encrypted with it), or when [commitRatchet] is
+  /// called explicitly. This avoids the race where the initiator switches keys
+  /// before the peer has received and processed the ratchet control message.
   Future<void> _initiateRatchet(String peerId) async {
     final epoch = (_epochs[peerId] ?? 0) + 1;
     _epochs[peerId] = epoch;
@@ -91,8 +96,8 @@ class KeyRatchet {
       nonce[i] = _random.nextInt(256);
     }
 
-    // Ratchet our own key first
-    await _cryptoService.ratchetSessionKey(peerId, nonce);
+    // Prepare the new key but do NOT install it yet
+    await _cryptoService.prepareRatchet(peerId, nonce);
     _resetCounters(peerId);
 
     // Send ratchet control message to peer
@@ -103,6 +108,14 @@ class KeyRatchet {
       'version': 1,
     });
     _sendControl(peerId, 'ratchet:$control');
+
+    // Retry ratchet message after 10s if not yet committed
+    Future.delayed(const Duration(seconds: 10), () {
+      if (_cryptoService.hasPendingRatchet(peerId)) {
+        _sendControl(peerId, 'ratchet:$control');
+        logger.info('KeyRatchet', 'Retried ratchet for $peerId (epoch=$epoch)');
+      }
+    });
 
     logger.info('KeyRatchet', 'Initiated ratchet for $peerId (epoch=$epoch)');
   }

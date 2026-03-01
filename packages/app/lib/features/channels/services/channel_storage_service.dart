@@ -80,7 +80,7 @@ class ChannelStorageService {
           'CREATE INDEX idx_chunks_sequence ON $_chunksTable (channel_id, sequence)',
         );
         await db.execute(
-          'CREATE INDEX idx_chunks_routing ON $_chunksTable (routing_hash)',
+          'CREATE INDEX idx_chunks_routing ON $_chunksTable (routing_hash, channel_id)',
         );
       },
     );

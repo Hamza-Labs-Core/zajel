@@ -458,6 +458,14 @@ class ChannelService {
       _storageService.getChannel(channelId);
 
   /// Save chunks to local storage.
+  ///
+  /// Note: Per-chunk rate limiting is intentionally NOT applied here.
+  /// Chunks arrive in batches (not as an unbounded stream) and every chunk
+  /// is required for successful reassembly — dropping any chunk would cause
+  /// permanent data loss because there is no retry/sync mechanism to recover
+  /// missed chunks. CPU exhaustion protection is instead provided by
+  /// [maxMessageSize] and [maxChunkPayloadSize] limits enforced during
+  /// reassembly.
   Future<void> saveChunks(String channelId, List<Chunk> chunks) async {
     for (final chunk in chunks) {
       await _storageService.saveChunk(channelId, chunk);

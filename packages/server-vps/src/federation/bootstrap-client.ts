@@ -108,7 +108,7 @@ export function createBootstrapClient(
       const result = await response.json() as { servers: BootstrapServerEntry[] };
       return result.servers.filter(s => s.serverId !== identity.serverId);
     } catch (error) {
-      console.warn(`[Bootstrap] Get servers failed (returning empty - NOT the same as "no servers"):`, error);
+      console.error(`[Bootstrap] Get servers failed (returning empty - NOT the same as "no servers"):`, error);
       return [];
     }
   }
@@ -143,7 +143,7 @@ export function createBootstrapClient(
       const result = await response.json() as { success: boolean; peers: BootstrapServerEntry[] };
       return result.peers;
     } catch (error) {
-      console.warn(`[Bootstrap] Heartbeat failed (returning empty - NOT the same as "no peers"):`, error);
+      console.error(`[Bootstrap] Heartbeat failed (returning empty - NOT the same as "no peers"):`, error);
       return [];
     }
   }
