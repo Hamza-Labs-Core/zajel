@@ -62,7 +62,7 @@ void main() {
 
   group('ChatMessagesNotifier', () {
     test('initial state is empty list', () {
-      expect(notifier.debugState, isEmpty);
+      expect(notifier.state, isEmpty);
     });
 
     group('addMessage', () {
@@ -71,9 +71,9 @@ void main() {
 
         notifier.addMessage(msg);
 
-        expect(notifier.debugState, hasLength(1));
-        expect(notifier.debugState.first.localId, 'msg-1');
-        expect(notifier.debugState.first.content, 'Hi there');
+        expect(notifier.state, hasLength(1));
+        expect(notifier.state.first.localId, 'msg-1');
+        expect(notifier.state.first.content, 'Hi there');
         verify(() => mockStorage.saveMessage(msg)).called(1);
       });
 
@@ -84,8 +84,8 @@ void main() {
         notifier.addMessage(msg1);
         notifier.addMessage(msg2);
 
-        expect(notifier.debugState, hasLength(1));
-        expect(notifier.debugState.first.content, 'first');
+        expect(notifier.state, hasLength(1));
+        expect(notifier.state.first.content, 'first');
         // saveMessage should only be called once — the duplicate is skipped
         verify(() => mockStorage.saveMessage(any())).called(1);
       });
@@ -99,9 +99,9 @@ void main() {
         notifier.addMessage(msg2);
         notifier.addMessage(msg3);
 
-        expect(notifier.debugState, hasLength(3));
+        expect(notifier.state, hasLength(3));
         expect(
-          notifier.debugState.map((m) => m.localId).toList(),
+          notifier.state.map((m) => m.localId).toList(),
           ['id-1', 'id-2', 'id-3'],
         );
         verify(() => mockStorage.saveMessage(any())).called(3);
@@ -121,15 +121,15 @@ void main() {
 
         await notifier.reload();
 
-        expect(notifier.debugState, hasLength(2));
-        expect(notifier.debugState[0].localId, 'stored-1');
-        expect(notifier.debugState[1].localId, 'stored-2');
+        expect(notifier.state, hasLength(2));
+        expect(notifier.state[0].localId, 'stored-1');
+        expect(notifier.state[1].localId, 'stored-2');
       });
 
       test('replaces existing state on reload', () async {
         // Start by adding a message in-memory
         notifier.addMessage(makeMessage(localId: 'in-mem'));
-        expect(notifier.debugState, hasLength(1));
+        expect(notifier.state, hasLength(1));
 
         // Simulate storage returning a different set of messages
         final dbMessages = [
@@ -143,9 +143,9 @@ void main() {
 
         await notifier.reload();
 
-        expect(notifier.debugState, hasLength(3));
+        expect(notifier.state, hasLength(3));
         expect(
-          notifier.debugState.map((m) => m.localId).toList(),
+          notifier.state.map((m) => m.localId).toList(),
           ['db-only-1', 'db-only-2', 'db-only-3'],
         );
       });
@@ -158,7 +158,7 @@ void main() {
 
         notifier.updateMessageStatus('msg-1', MessageStatus.sent);
 
-        expect(notifier.debugState.first.status, MessageStatus.sent);
+        expect(notifier.state.first.status, MessageStatus.sent);
         verify(() =>
                 mockStorage.updateMessageStatus('msg-1', MessageStatus.sent))
             .called(1);
@@ -170,8 +170,8 @@ void main() {
 
         notifier.updateMessageStatus('a', MessageStatus.delivered);
 
-        expect(notifier.debugState[0].status, MessageStatus.delivered);
-        expect(notifier.debugState[1].status, MessageStatus.pending);
+        expect(notifier.state[0].status, MessageStatus.delivered);
+        expect(notifier.state[1].status, MessageStatus.pending);
       });
     });
 
@@ -179,11 +179,11 @@ void main() {
       test('clears state and deletes from storage', () {
         notifier.addMessage(makeMessage(localId: 'x'));
         notifier.addMessage(makeMessage(localId: 'y'));
-        expect(notifier.debugState, hasLength(2));
+        expect(notifier.state, hasLength(2));
 
         notifier.clearMessages();
 
-        expect(notifier.debugState, isEmpty);
+        expect(notifier.state, isEmpty);
         verify(() => mockStorage.deleteMessages(peerId)).called(1);
       });
     });

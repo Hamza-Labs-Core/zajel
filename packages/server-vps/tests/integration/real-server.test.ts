@@ -320,7 +320,7 @@ describe('Real Server Integration Tests', () => {
         });
 
         const error = await waitForMessage(ws, 'error');
-        expect(error.message).toContain('Missing required field: publicKey');
+        expect(error.message).toContain('publicKey must be a string');
       } finally {
         ws.close();
       }

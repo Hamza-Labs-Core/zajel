@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/providers/app_providers.dart';
 import '../../core/storage/trusted_peers_storage.dart';
+import '../../core/utils/identity_utils.dart';
 import '../../shared/widgets/relative_time.dart';
 
 /// Detail screen for a single contact, allowing edit alias, notes, block/remove.
@@ -63,7 +64,7 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
     }
 
     final peer = _peer!;
-    final displayName = peer.alias ?? peer.displayName;
+    final displayName = resolveTrustedPeerDisplayName(peer);
 
     return Scaffold(
       appBar: AppBar(
@@ -95,7 +96,9 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
                 ),
                 if (peer.alias != null)
                   Text(
-                    peer.displayName,
+                    peer.username != null && peer.tag != null
+                        ? '${peer.username}#${peer.tag}'
+                        : peer.displayName,
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           color: Colors.grey,
                         ),
@@ -208,7 +211,10 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
     await _loadPeer();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Alias saved')),
+        const SnackBar(
+          content: Text('Alias saved'),
+          duration: Duration(seconds: 3),
+        ),
       );
     }
   }
@@ -220,7 +226,10 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
     await _loadPeer();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Alias cleared')),
+        const SnackBar(
+          content: Text('Alias cleared'),
+          duration: Duration(seconds: 3),
+        ),
       );
     }
   }
@@ -231,7 +240,7 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Block Contact?'),
         content: Text(
-          'Block ${_peer?.alias ?? _peer?.displayName}? They won\'t be able to connect.',
+          'Block ${_peer != null ? resolveTrustedPeerDisplayName(_peer!) : 'this contact'}? They won\'t be able to connect.',
         ),
         actions: [
           TextButton(
@@ -252,12 +261,12 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
 
     if (confirmed == true && _peer != null) {
       await ref.read(blockedPeersProvider.notifier).block(
-            _peer!.publicKey,
-            displayName: _peer!.alias ?? _peer!.displayName,
+            _peer!.id,
+            publicKey: _peer!.publicKey,
+            displayName: resolveTrustedPeerDisplayName(_peer!),
           );
-      if (mounted) {
-        context.go('/contacts');
-      }
+      if (!context.mounted) return;
+      context.go('/contacts');
     }
   }
 
@@ -289,9 +298,8 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
     if (confirmed == true) {
       final storage = ref.read(trustedPeersStorageProvider);
       await storage.removePeer(widget.peerId);
-      if (mounted) {
-        context.go('/contacts');
-      }
+      if (!context.mounted) return;
+      context.go('/contacts');
     }
   }
 }
