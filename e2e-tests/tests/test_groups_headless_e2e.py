@@ -62,7 +62,7 @@ class TestGroupsHeadlessE2E:
 
         # Group should be visible in the list
         helper._find("E2E Family Chat")
-        helper._find("1 members")
+        helper._find("1 member")
 
     @pytest.mark.slow
     def test_create_multiple_groups(
@@ -254,7 +254,7 @@ class TestGroupsHeadlessE2E:
         helper.open_group("Count Test Group")
 
         # Initially 1 member
-        helper._find("1 members")
+        helper._find("1 member")
         helper.take_screenshot("group_one_member")
 
         # Invite HeadlessBob

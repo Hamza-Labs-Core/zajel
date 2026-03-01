@@ -770,6 +770,10 @@ class SignalingClient:
                 case "error":
                     logger.error("Server error: %s", msg.get("message"))
                     await self._errors.put(msg.get("message", "unknown"))
+                    # Treat generic server errors as pair errors so pair_with()
+                    # can fast-fail to the next server instead of waiting 2s.
+                    self._last_pair_error = msg.get("message", "unknown")
+                    self._pair_error_event.set()
 
                 case _:
                     logger.debug("Unhandled message type: %s", msg_type)
