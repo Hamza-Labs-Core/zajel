@@ -82,6 +82,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   bool _initialized = false;
   bool _disposed = false;
   bool _showPrivacyScreen = false;
+  String? _initError;
 
   late final AppInitializationService _initService;
   late final FileTransferListener _fileTransferListener;
@@ -322,7 +323,15 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   }
 
   Future<void> _initialize() async {
-    await _initService.initializeCore();
+    final coreOk = await _initService.initializeCore();
+    if (!coreOk) {
+      // DB or crypto failed — app cannot function without core services.
+      if (mounted) {
+        setState(() => _initError = 'Failed to initialize app. '
+            'Please restart or reinstall.');
+      }
+      return;
+    }
 
     _fileTransferListener.listen();
     _pairRequestHandler.listen();
@@ -422,6 +431,30 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
 
   @override
   Widget build(BuildContext context) {
+    if (_initError != null) {
+      return MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.error_outline, size: 64, color: Colors.red),
+                  const SizedBox(height: 16),
+                  Text(
+                    _initError!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 16),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     if (!_initialized) {
       return const MaterialApp(
         home: Scaffold(
