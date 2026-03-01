@@ -136,7 +136,9 @@ class LoggerService {
     }
 
     // Emit to stream for real-time monitoring
-    _logController.add(entry);
+    if (!_logController.isClosed) {
+      _logController.add(entry);
+    }
 
     // Write to file asynchronously (fire and forget)
     if (_initialized && _logSink != null) {

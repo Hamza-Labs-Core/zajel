@@ -23,10 +23,21 @@ void main() {
         expect(peer.publicKey, isNull);
       });
 
-      test('creates peer with all fields', () {
+      test('creates peer with default null username', () {
         final peer = Peer(
           id: 'test-id',
           displayName: 'Test Peer',
+          lastSeen: testDate,
+        );
+
+        expect(peer.username, isNull);
+      });
+
+      test('creates peer with all fields including username', () {
+        final peer = Peer(
+          id: 'test-id',
+          displayName: 'Test Peer',
+          username: 'Alice',
           ipAddress: '192.168.1.100',
           port: 8080,
           publicKey: 'base64-public-key',
@@ -35,6 +46,7 @@ void main() {
           isLocal: false,
         );
 
+        expect(peer.username, 'Alice');
         expect(peer.ipAddress, '192.168.1.100');
         expect(peer.port, 8080);
         expect(peer.publicKey, 'base64-public-key');
@@ -62,6 +74,23 @@ void main() {
         expect(copy.lastSeen, original.lastSeen);
       });
 
+      test('copyWith preserves and modifies username', () {
+        final original = Peer(
+          id: 'test-id',
+          displayName: 'Test',
+          username: 'Alice',
+          lastSeen: testDate,
+        );
+
+        // Preserves when not specified
+        final copy1 = original.copyWith();
+        expect(copy1.username, 'Alice');
+
+        // Modifies when specified
+        final copy2 = original.copyWith(username: 'Bob');
+        expect(copy2.username, 'Bob');
+      });
+
       test('creates identical copy when no fields specified', () {
         final original = Peer(
           id: 'test-id',
@@ -85,6 +114,7 @@ void main() {
         final peer = Peer(
           id: 'test-id',
           displayName: 'Test Peer',
+          username: 'Alice',
           ipAddress: '192.168.1.100',
           port: 8080,
           publicKey: 'test-key',
@@ -97,6 +127,7 @@ void main() {
 
         expect(json['id'], 'test-id');
         expect(json['displayName'], 'Test Peer');
+        expect(json['username'], 'Alice');
         expect(json['ipAddress'], '192.168.1.100');
         expect(json['port'], 8080);
         expect(json['publicKey'], 'test-key');
@@ -105,10 +136,23 @@ void main() {
         expect(json['isLocal'], true);
       });
 
+      test('toJson includes null username when not set', () {
+        final peer = Peer(
+          id: 'test-id',
+          displayName: 'Test Peer',
+          lastSeen: testDate,
+        );
+
+        final json = peer.toJson();
+        expect(json.containsKey('username'), true);
+        expect(json['username'], isNull);
+      });
+
       test('fromJson creates valid peer', () {
         final json = {
           'id': 'test-id',
           'displayName': 'Test Peer',
+          'username': 'Alice',
           'ipAddress': '192.168.1.100',
           'port': 8080,
           'publicKey': 'test-key',
@@ -121,12 +165,25 @@ void main() {
 
         expect(peer.id, 'test-id');
         expect(peer.displayName, 'Test Peer');
+        expect(peer.username, 'Alice');
         expect(peer.ipAddress, '192.168.1.100');
         expect(peer.port, 8080);
         expect(peer.publicKey, 'test-key');
         expect(peer.connectionState, PeerConnectionState.connected);
         expect(peer.lastSeen, testDate);
         expect(peer.isLocal, true);
+      });
+
+      test('fromJson handles missing username (backward compat)', () {
+        final json = {
+          'id': 'test-id',
+          'displayName': 'Test Peer',
+          'connectionState': 'disconnected',
+          'lastSeen': testDate.toIso8601String(),
+        };
+
+        final peer = Peer.fromJson(json);
+        expect(peer.username, isNull);
       });
 
       test('fromJson handles null optional fields', () {
@@ -161,10 +218,11 @@ void main() {
         expect(peer.connectionState, PeerConnectionState.disconnected);
       });
 
-      test('roundtrip serialization preserves data', () {
+      test('roundtrip serialization preserves data including username', () {
         final original = Peer(
           id: 'test-id',
           displayName: 'Test Peer',
+          username: 'Alice',
           ipAddress: '192.168.1.100',
           port: 8080,
           publicKey: 'test-key',
@@ -178,6 +236,7 @@ void main() {
 
         expect(restored.id, original.id);
         expect(restored.displayName, original.displayName);
+        expect(restored.username, original.username);
         expect(restored.ipAddress, original.ipAddress);
         expect(restored.port, original.port);
         expect(restored.publicKey, original.publicKey);
@@ -201,10 +260,27 @@ void main() {
           displayName: 'Test',
           publicKey: 'key',
           lastSeen: DateTime.now(), // Different timestamp
-          connectionState: PeerConnectionState.connected, // Different state
         );
 
         expect(peer1, equals(peer2));
+      });
+
+      test('peers with different username are not equal', () {
+        final peer1 = Peer(
+          id: 'test-id',
+          displayName: 'Test',
+          username: 'Alice',
+          lastSeen: testDate,
+        );
+
+        final peer2 = Peer(
+          id: 'test-id',
+          displayName: 'Test',
+          username: 'Bob',
+          lastSeen: testDate,
+        );
+
+        expect(peer1, isNot(equals(peer2)));
       });
 
       test('peers with different id are not equal', () {

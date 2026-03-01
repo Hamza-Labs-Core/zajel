@@ -123,6 +123,7 @@ class VoIPService extends ChangeNotifier {
   final MediaService _mediaService;
   final SignalingClient _signaling;
   final List<Map<String, dynamic>>? _iceServers;
+  final bool _forceRelay;
 
   RTCPeerConnection? _peerConnection;
   CallInfo? _currentCall;
@@ -155,9 +156,11 @@ class VoIPService extends ChangeNotifier {
   ///
   /// [mediaService] - Service for managing local media tracks.
   /// [signalingClient] - Client for signaling message exchange.
+  /// [forceRelay] - If true, force all traffic through TURN relay (for E2E tests).
   VoIPService(this._mediaService, this._signaling,
-      {List<Map<String, dynamic>>? iceServers})
-      : _iceServers = iceServers {
+      {List<Map<String, dynamic>>? iceServers, bool forceRelay = false})
+      : _iceServers = iceServers,
+        _forceRelay = forceRelay {
     _setupSignalingHandlers();
   }
 
@@ -375,7 +378,7 @@ class VoIPService extends ChangeNotifier {
     final config = <String, dynamic>{
       'iceServers': _iceServers ?? WebRTCConstants.defaultIceServers,
     };
-    if (_iceServers != null) {
+    if (_forceRelay) {
       config['iceTransportPolicy'] = 'relay';
     }
 
@@ -668,15 +671,17 @@ class VoIPService extends ChangeNotifier {
 
   /// Notify listeners of state change.
   void _notifyState(CallState state) {
-    if (!_stateController.isClosed) {
-      _stateController.add(state);
-    }
+    if (_disposed || _stateController.isClosed) return;
+    _stateController.add(state);
     notifyListeners();
   }
+
+  bool _disposed = false;
 
   @override
   void dispose() {
     logger.info(_tag, 'Disposing VoIPService');
+    _disposed = true;
 
     // Cancel subscriptions
     for (final sub in _subscriptions) {
@@ -684,7 +689,7 @@ class VoIPService extends ChangeNotifier {
     }
     _subscriptions.clear();
 
-    // Cleanup call resources
+    // Cleanup call resources (fire-and-forget — _disposed guard prevents state updates)
     _cleanup();
 
     // Close stream controllers

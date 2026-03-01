@@ -10,9 +10,16 @@
 export const BASE_URL =
   process.env['ADMIN_CF_URL'] || 'https://admin.zajel.qa.hamzalabs.dev';
 
+function requireEnv(name: string, fallback?: string): string {
+  const value = process.env[name];
+  if (value) return value;
+  if (fallback) return fallback;
+  throw new Error(`Required env var ${name} is not set`);
+}
+
 export const SUPER_ADMIN_CREDS = {
-  username: process.env['ADMIN_CF_USERNAME'] || 'admin',
-  password: process.env['ADMIN_CF_PASSWORD'] || 'admin1234567890',
+  username: requireEnv('ADMIN_CF_USERNAME', 'admin'),
+  password: requireEnv('ADMIN_CF_PASSWORD'),
 };
 
 export const TEST_USER_PREFIX = 'e2e_test_user_';
