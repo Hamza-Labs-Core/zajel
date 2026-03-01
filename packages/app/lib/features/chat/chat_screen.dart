@@ -120,9 +120,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     // Messages are persisted by the global listener in main.dart.
     // Here we just reload from DB when a new message arrives for this peer.
     ref.listenManual(messagesStreamProvider, (previous, next) {
-      final data = next.valueOrNull;
-      if (data != null) {
-        final (peerId, _) = data;
+      if (next case AsyncData(:final value)) {
+        final (peerId, _) = value;
         if (peerId == widget.peerId) {
           ref.read(chatMessagesProvider(widget.peerId).notifier).reload();
           _scrollToBottom();
@@ -143,7 +142,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     // Clear active screen so notifications resume for this chat
     try {
       ref.read(activeScreenProvider.notifier).state = ActiveScreen.other;
-    } catch (_) {} // ref may be invalid during tree teardown
+    } catch (e) {
+      debugPrint(
+          '[ChatScreen] dispose error (may be expected during teardown): $e');
+    }
     WidgetsBinding.instance.removeObserver(this);
     _voipStateSubscription?.cancel();
     _scrollController.removeListener(_onScroll);
@@ -186,7 +188,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               ],
             ),
           ),
-        if (pendingKeyChanges.valueOrNull?.containsKey(widget.peerId) == true)
+        if (switch (pendingKeyChanges) {
+          AsyncData(:final value) => value.containsKey(widget.peerId),
+          _ => false,
+        })
           _KeyChangeBanner(
             peerId: widget.peerId,
             peerName: peerName,
@@ -536,9 +541,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
     // Check if the actual peer (not selectedPeerProvider) is connected
     bool isConnected = false;
-    final peers = ref.read(peersProvider).valueOrNull;
-    if (peers != null) {
-      final peer = peers.where((p) => p.id == widget.peerId).firstOrNull;
+    if (ref.read(peersProvider) case AsyncData(:final value)) {
+      final peer = value.where((p) => p.id == widget.peerId).firstOrNull;
       isConnected = peer?.connectionState == PeerConnectionState.connected;
     }
     if (!isConnected) {

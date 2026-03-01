@@ -31,8 +31,8 @@ final visiblePeersProvider = Provider<AsyncValue<List<Peer>>>((ref) {
   final peersAsync = ref.watch(peersProvider);
   final blockedPeerIds = ref.watch(blockedPeersProvider);
 
-  final peers = peersAsync.valueOrNull;
-  if (peers == null) return peersAsync;
+  if (peersAsync is! AsyncData<List<Peer>>) return peersAsync;
+  final peers = peersAsync.value;
 
   final visible = peers.where((peer) {
     return !blockedPeerIds.contains(peer.id);

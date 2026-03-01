@@ -108,9 +108,8 @@ class _ContactTile extends ConsumerWidget {
 
     // Check if this contact is currently online
     bool isOnline = false;
-    final peersList = peersAsync.valueOrNull;
-    if (peersList != null) {
-      isOnline = peersList.any((p) =>
+    if (peersAsync case AsyncData(:final value)) {
+      isOnline = value.any((p) =>
           p.id == contact.id &&
           p.connectionState == PeerConnectionState.connected);
     }
@@ -150,10 +149,8 @@ class _ContactTile extends ConsumerWidget {
           : null,
       onTap: () {
         // Set selected peer and navigate to chat
-        final contactPeers = peersAsync.valueOrNull;
-        if (contactPeers != null) {
-          final peer =
-              contactPeers.where((p) => p.id == contact.id).firstOrNull;
+        if (peersAsync case AsyncData(:final value)) {
+          final peer = value.where((p) => p.id == contact.id).firstOrNull;
           if (peer != null) {
             ref.read(selectedPeerProvider.notifier).state = peer;
           }

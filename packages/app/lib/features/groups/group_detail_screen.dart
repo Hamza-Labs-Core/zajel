@@ -61,7 +61,10 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
   void dispose() {
     try {
       ref.read(activeScreenProvider.notifier).state = ActiveScreen.other;
-    } catch (_) {} // ref may be invalid during tree teardown
+    } catch (e) {
+      debugPrint(
+          '[GroupDetailScreen] dispose error (may be expected during teardown): $e');
+    }
     if (_groupActivated && _cachedConnectionService != null) {
       try {
         _cachedConnectionService!.deactivateGroup(widget.groupId);
@@ -363,7 +366,10 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
   Future<void> _showAddMemberDialog(BuildContext context, Group group) async {
     final peersAsync = ref.read(visiblePeersProvider);
 
-    final peers = peersAsync.valueOrNull;
+    final peers = switch (peersAsync) {
+      AsyncData(:final value) => value,
+      _ => null,
+    };
     if (peers == null) return;
 
     // Filter out peers already in the group, peers without public keys,

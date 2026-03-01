@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:workmanager/workmanager.dart';
 
 import '../models/channel.dart';
@@ -540,6 +540,7 @@ Future<bool> backgroundSyncCallback() async {
 
     return result.errors == 0;
   } catch (e) {
+    debugPrint('[BackgroundSync] Callback failed: $e');
     return false;
   }
 }

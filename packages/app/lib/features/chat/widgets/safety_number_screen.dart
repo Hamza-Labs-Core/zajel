@@ -72,11 +72,14 @@ class _SafetyNumberScreenState extends ConsumerState<SafetyNumberScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final peer = ref.watch(peersProvider).valueOrNull?.firstWhere(
+    final peer = switch (ref.watch(peersProvider)) {
+      AsyncData(:final value) => value.firstWhere(
           (p) => p.id == widget.peerId,
           orElse: () => Peer(
               id: widget.peerId, displayName: 'Peer', lastSeen: DateTime.now()),
-        );
+        ),
+      _ => null,
+    };
     final aliases = ref.watch(peerAliasesProvider);
     final peerName = peer != null
         ? resolvePeerDisplayName(peer, alias: aliases[peer.id])
