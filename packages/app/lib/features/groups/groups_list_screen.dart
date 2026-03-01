@@ -67,7 +67,8 @@ class GroupsListScreen extends ConsumerWidget {
                   ),
                 ),
                 title: Text(group.name),
-                subtitle: Text('${group.memberCount} members'),
+                subtitle: Text(
+                    '${group.memberCount} ${group.memberCount == 1 ? 'member' : 'members'}'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => context.push('/group/${group.id}'),
               );

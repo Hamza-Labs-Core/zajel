@@ -10,43 +10,13 @@ import 'package:zajel/features/groups/services/group_crypto_service.dart';
 import 'package:zajel/features/groups/services/group_invitation_service.dart';
 import 'package:zajel/features/groups/services/group_service.dart';
 
+import '../../mocks/mocks.dart';
+
 // --- Mock classes ---
 
 class MockGroupService extends Mock implements GroupService {}
 
 class MockGroupCryptoService extends Mock implements GroupCryptoService {}
-
-/// Fake ConnectionManager that exposes stream controllers directly.
-///
-/// Using a fake instead of a mock avoids issues with mocktail and
-/// Dart record types in stream getters.
-class FakeConnectionManager {
-  final invitationController = StreamController<(String, String)>.broadcast();
-  final groupDataController = StreamController<(String, String)>.broadcast();
-
-  Stream<(String, String)> get groupInvitations => invitationController.stream;
-  Stream<(String, String)> get groupData => groupDataController.stream;
-
-  final List<(String, String)> sentMessages = [];
-
-  Future<void> sendMessage(String peerId, String message) async {
-    sentMessages.add((peerId, message));
-  }
-
-  void dispose() {
-    invitationController.close();
-    groupDataController.close();
-  }
-}
-
-/// Adapter that wraps FakeConnectionManager to match the interface
-/// GroupInvitationService expects. Since GroupInvitationService accesses
-/// connectionManager.groupInvitations, groupData, and sendMessage(),
-/// we create a thin wrapper that delegates to our fake.
-///
-/// Since GroupInvitationService takes a ConnectionManager (concrete class)
-/// we need a different approach. We'll create the service with our own
-/// streams and callbacks instead.
 
 // --- Test helpers ---
 
@@ -128,29 +98,32 @@ void main() {
 
   late MockGroupService groupService;
   late MockGroupCryptoService cryptoService;
+  late MockConnectionManager mockConnectionManager;
   late StreamController<(String, String)> invitationController;
   late StreamController<(String, String)> groupDataController;
-  late List<(String, String)> sentMessages;
-  late _TestableGroupInvitationService invitationService;
+  late GroupInvitationService invitationService;
 
   const selfDeviceId = 'self_device';
 
   setUp(() {
     groupService = MockGroupService();
     cryptoService = MockGroupCryptoService();
+    mockConnectionManager = MockConnectionManager();
     invitationController = StreamController<(String, String)>.broadcast();
     groupDataController = StreamController<(String, String)>.broadcast();
-    sentMessages = [];
 
-    invitationService = _TestableGroupInvitationService(
+    when(() => mockConnectionManager.groupInvitations)
+        .thenAnswer((_) => invitationController.stream);
+    when(() => mockConnectionManager.groupData)
+        .thenAnswer((_) => groupDataController.stream);
+    when(() => mockConnectionManager.sendMessage(any(), any()))
+        .thenAnswer((_) async {});
+
+    invitationService = GroupInvitationService(
+      connectionManager: mockConnectionManager,
       groupService: groupService,
       cryptoService: cryptoService,
       selfDeviceId: selfDeviceId,
-      invitations: invitationController.stream,
-      groupData: groupDataController.stream,
-      onSendMessage: (peerId, message) async {
-        sentMessages.add((peerId, message));
-      },
     );
   });
 
@@ -177,9 +150,12 @@ void main() {
         inviteeSenderKey: inviteeSenderKey,
       );
 
-      expect(sentMessages, hasLength(1));
-      final (peerId, payload) = sentMessages.first;
-      expect(peerId, 'peer_bob');
+      final captured = verify(
+        () => mockConnectionManager.sendMessage('peer_bob', captureAny()),
+      ).captured;
+      expect(captured, hasLength(1));
+
+      final payload = captured.first as String;
       expect(payload, startsWith('ginv:'));
 
       final json = jsonDecode(payload.substring(5)) as Map<String, dynamic>;
@@ -202,7 +178,10 @@ void main() {
         inviteeSenderKey: 'key',
       );
 
-      final payload = sentMessages.first.$2;
+      final captured = verify(
+        () => mockConnectionManager.sendMessage('peer_bob', captureAny()),
+      ).captured;
+      final payload = captured.first as String;
       final json = jsonDecode(payload.substring(5)) as Map<String, dynamic>;
       final members = json['members'] as List;
       expect(members, hasLength(2));
@@ -225,7 +204,10 @@ void main() {
 
       verify(() => cryptoService.exportGroupKeys('grp_1')).called(1);
 
-      final payload = sentMessages.first.$2;
+      final captured = verify(
+        () => mockConnectionManager.sendMessage('peer_bob', captureAny()),
+      ).captured;
+      final payload = captured.first as String;
       final json = jsonDecode(payload.substring(5)) as Map<String, dynamic>;
       final senderKeys = json['senderKeys'] as Map<String, dynamic>;
       expect(senderKeys, hasLength(2));
@@ -606,149 +588,4 @@ void main() {
       expect(joinedGroup, isNotNull);
     });
   });
-}
-
-/// Testable version of [GroupInvitationService] that accepts streams
-/// and a sendMessage callback directly, bypassing [ConnectionManager].
-///
-/// This avoids mocking ConnectionManager's getters which use record types
-/// that are problematic with mocktail.
-class _TestableGroupInvitationService {
-  final GroupService _groupService;
-  final GroupCryptoService _cryptoService;
-  final String _selfDeviceId;
-  final Stream<(String, String)> _invitations;
-  final Stream<(String, String)> _groupData;
-  final Future<void> Function(String peerId, String message) _onSendMessage;
-
-  StreamSubscription<(String, String)>? _inviteSub;
-  StreamSubscription<(String, String)>? _groupDataSub;
-
-  void Function(Group group)? onGroupJoined;
-  void Function(String groupId, GroupMessage message)? onGroupMessageReceived;
-
-  _TestableGroupInvitationService({
-    required GroupService groupService,
-    required GroupCryptoService cryptoService,
-    required String selfDeviceId,
-    required Stream<(String, String)> invitations,
-    required Stream<(String, String)> groupData,
-    required Future<void> Function(String peerId, String message) onSendMessage,
-  })  : _groupService = groupService,
-        _cryptoService = cryptoService,
-        _selfDeviceId = selfDeviceId,
-        _invitations = invitations,
-        _groupData = groupData,
-        _onSendMessage = onSendMessage;
-
-  void start() {
-    _inviteSub = _invitations.listen((event) {
-      final (peerId, payload) = event;
-      _handleInvitation(peerId, payload);
-    });
-    _groupDataSub = _groupData.listen((event) {
-      final (peerId, payload) = event;
-      _handleGroupData(peerId, payload);
-    });
-  }
-
-  Future<void> dispose() async {
-    await _inviteSub?.cancel();
-    _inviteSub = null;
-    await _groupDataSub?.cancel();
-    _groupDataSub = null;
-  }
-
-  Future<void> sendInvitation({
-    required String targetPeerId,
-    required Group group,
-    required String inviteeSenderKey,
-  }) async {
-    final senderKeys = await _cryptoService.exportGroupKeys(group.id);
-
-    final invitation = {
-      'groupId': group.id,
-      'groupName': group.name,
-      'createdBy': group.createdBy,
-      'createdAt': group.createdAt.toIso8601String(),
-      'members': group.members.map((m) => m.toJson()).toList(),
-      'senderKeys': senderKeys,
-      'inviteeSenderKey': inviteeSenderKey,
-      'inviterDeviceId': _selfDeviceId,
-    };
-
-    final payload = 'ginv:${jsonEncode(invitation)}';
-    await _onSendMessage(targetPeerId, payload);
-  }
-
-  Future<void> _handleInvitation(String fromPeerId, String payload) async {
-    try {
-      final data = jsonDecode(payload) as Map<String, dynamic>;
-
-      final groupId = data['groupId'] as String;
-      final groupName = data['groupName'] as String;
-      final createdBy = data['createdBy'] as String;
-      final createdAt = DateTime.parse(data['createdAt'] as String);
-      final membersJson = data['members'] as List<dynamic>;
-      final senderKeys =
-          (data['senderKeys'] as Map<String, dynamic>).cast<String, String>();
-      final inviteeSenderKey = data['inviteeSenderKey'] as String;
-
-      final existing = await _groupService.getGroup(groupId);
-      if (existing != null) return;
-
-      final members = membersJson
-          .map((m) => GroupMember.fromJson(m as Map<String, dynamic>))
-          .toList();
-
-      final group = Group(
-        id: groupId,
-        name: groupName,
-        selfDeviceId: _selfDeviceId,
-        members: members,
-        createdAt: createdAt,
-        createdBy: createdBy,
-      );
-
-      _cryptoService.importGroupKeys(groupId, senderKeys);
-      _cryptoService.setSenderKey(groupId, _selfDeviceId, inviteeSenderKey);
-
-      await _groupService.acceptInvitation(
-        group: group,
-        senderKeys: {...senderKeys, _selfDeviceId: inviteeSenderKey},
-      );
-
-      onGroupJoined?.call(group);
-    } catch (e) {
-      // Gracefully handle errors
-    }
-  }
-
-  Future<void> _handleGroupData(String fromPeerId, String payloadB64) async {
-    try {
-      final encryptedBytes = Uint8List.fromList(base64Decode(payloadB64));
-
-      final groups = await _groupService.getAllGroups();
-      for (final group in groups) {
-        final isMember = group.members.any((m) => m.deviceId == fromPeerId);
-        if (!isMember) continue;
-
-        try {
-          final message = await _groupService.receiveMessage(
-            groupId: group.id,
-            authorDeviceId: fromPeerId,
-            encryptedBytes: encryptedBytes,
-          );
-          if (message != null) {
-            onGroupMessageReceived?.call(group.id, message);
-          }
-          return;
-        } catch (e) {
-          // Try next group
-        }
-      }
-    } catch (e) {
-      // Gracefully handle errors
-    }
-  }
 }

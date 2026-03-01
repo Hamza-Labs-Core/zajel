@@ -173,7 +173,7 @@ void main() {
       expect(find.text('Family Chat'), findsOneWidget);
       expect(find.text('Solo Group'), findsOneWidget);
       expect(find.text('3 members'), findsOneWidget);
-      expect(find.text('1 members'), findsOneWidget);
+      expect(find.text('1 member'), findsOneWidget);
     });
 
     testWidgets('FAB is present for creating groups', (tester) async {

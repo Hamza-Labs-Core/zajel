@@ -80,9 +80,45 @@ class TestFileTransferService:
         os.unlink(test_path)
 
     def test_chunking_math(self):
-        """Test that chunk count is calculated correctly."""
-        test_sizes = [0, 1, 4095, 4096, 4097, 10000, 100000]
+        """Test that send_file produces the correct number of chunks for various sizes."""
+        import asyncio
+        import json
+
+        test_sizes = [1, 4095, 4096, 4097, 10000, 100000]
         for size in test_sizes:
-            expected = math.ceil(size / FILE_CHUNK_SIZE) if size > 0 else 0
-            actual = math.ceil(size / FILE_CHUNK_SIZE) if size > 0 else 0
-            assert actual == expected, f"Failed for size {size}"
+            sent: list[str] = []
+            transfer = FileTransferService(
+                crypto=self.alice_crypto,
+                send_fn=lambda data, _sent=sent: _sent.append(data),
+            )
+
+            # Create a temp file of the given size
+            test_data = os.urandom(size)
+            with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+                f.write(test_data)
+                test_path = f.name
+
+            try:
+                asyncio.run(transfer.send_file("bob", test_path))
+
+                # Parse sent messages to count actual chunks and get declared total
+                chunk_messages = [
+                    json.loads(m) for m in sent if json.loads(m)["type"] == "file_chunk"
+                ]
+                start_msg = json.loads(sent[0])
+                assert start_msg["type"] == "file_start"
+
+                declared_total_chunks = start_msg["totalChunks"]
+                actual_chunk_count = len(chunk_messages)
+
+                expected = math.ceil(size / FILE_CHUNK_SIZE)
+                assert declared_total_chunks == expected, (
+                    f"size={size}: declared totalChunks={declared_total_chunks}, "
+                    f"expected={expected}"
+                )
+                assert actual_chunk_count == expected, (
+                    f"size={size}: actual chunks sent={actual_chunk_count}, "
+                    f"expected={expected}"
+                )
+            finally:
+                os.unlink(test_path)

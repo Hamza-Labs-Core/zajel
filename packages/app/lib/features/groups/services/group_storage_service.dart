@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
@@ -29,6 +30,15 @@ class GroupStorageService {
             const FlutterSecureStorage(
               aOptions: AndroidOptions(encryptedSharedPreferences: true),
             );
+
+  /// Test-only constructor that accepts a pre-opened [Database], bypassing
+  /// [initialize] (which requires path_provider platform channels).
+  @visibleForTesting
+  GroupStorageService.withDatabase({
+    required Database database,
+    required FlutterSecureStorage secureStorage,
+  })  : _db = database,
+        _secureStorage = secureStorage;
 
   /// Open the database, creating tables if necessary.
   ///

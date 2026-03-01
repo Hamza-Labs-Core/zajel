@@ -61,23 +61,20 @@ void main() {
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
 
-  late Database db;
+  late GroupStorageService service;
   late FakeSecureStorage secureStorage;
-
-  // Constants matching the production code.
-  const groupsTable = 'groups';
-  const messagesTable = 'group_messages';
-  const vectorClocksTable = 'vector_clocks';
-  const secureKeyPrefix = 'zajel_group_';
 
   setUp(() async {
     secureStorage = FakeSecureStorage();
-    db = await openDatabase(
+
+    // Open an in-memory database with the same schema the service uses,
+    // then inject it via the @visibleForTesting constructor.
+    final db = await openDatabase(
       inMemoryDatabasePath,
       version: 1,
       onCreate: (db, version) async {
         await db.execute('''
-          CREATE TABLE $groupsTable (
+          CREATE TABLE groups (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             self_device_id TEXT NOT NULL,
@@ -87,7 +84,7 @@ void main() {
           )
         ''');
         await db.execute('''
-          CREATE TABLE $messagesTable (
+          CREATE TABLE group_messages (
             group_id TEXT NOT NULL,
             author_device_id TEXT NOT NULL,
             sequence_number INTEGER NOT NULL,
@@ -101,13 +98,13 @@ void main() {
           )
         ''');
         await db.execute(
-          'CREATE INDEX idx_messages_group ON $messagesTable (group_id)',
+          'CREATE INDEX idx_messages_group ON group_messages (group_id)',
         );
         await db.execute(
-          'CREATE INDEX idx_messages_timestamp ON $messagesTable (group_id, timestamp)',
+          'CREATE INDEX idx_messages_timestamp ON group_messages (group_id, timestamp)',
         );
         await db.execute('''
-          CREATE TABLE $vectorClocksTable (
+          CREATE TABLE vector_clocks (
             group_id TEXT NOT NULL,
             device_id TEXT NOT NULL,
             sequence_number INTEGER NOT NULL DEFAULT 0,
@@ -116,158 +113,16 @@ void main() {
         ''');
       },
     );
+
+    service = GroupStorageService.withDatabase(
+      database: db,
+      secureStorage: secureStorage,
+    );
   });
 
   tearDown(() async {
-    await db.close();
+    await service.close();
   });
-
-  // -- Helper functions replicating the service SQL logic --
-
-  Future<void> saveGroup(Group group) async {
-    await db.insert(groupsTable, group.toJson(),
-        conflictAlgorithm: ConflictAlgorithm.replace);
-  }
-
-  Future<Group?> getGroup(String groupId) async {
-    final rows = await db.query(groupsTable,
-        where: 'id = ?', whereArgs: [groupId], limit: 1);
-    if (rows.isEmpty) return null;
-    return Group.fromJson(rows.first);
-  }
-
-  Future<List<Group>> getAllGroups() async {
-    final rows = await db.query(groupsTable, orderBy: 'created_at DESC');
-    return rows.map((r) => Group.fromJson(r)).toList();
-  }
-
-  Future<void> updateGroup(Group group) async {
-    await db.update(groupsTable, group.toJson(),
-        where: 'id = ?', whereArgs: [group.id]);
-  }
-
-  Future<void> deleteGroup(String groupId) async {
-    await db.delete(groupsTable, where: 'id = ?', whereArgs: [groupId]);
-    await db.delete(messagesTable, where: 'group_id = ?', whereArgs: [groupId]);
-    await db
-        .delete(vectorClocksTable, where: 'group_id = ?', whereArgs: [groupId]);
-    // Clean up sender keys
-    final allKeys = await secureStorage.readAll();
-    final prefix = '$secureKeyPrefix${groupId}_sender_';
-    for (final key in allKeys.keys) {
-      if (key.startsWith(prefix)) {
-        await secureStorage.delete(key: key);
-      }
-    }
-  }
-
-  Future<void> saveMessage(GroupMessage message) async {
-    await db.insert(messagesTable, message.toJson(),
-        conflictAlgorithm: ConflictAlgorithm.replace);
-  }
-
-  Future<GroupMessage?> getMessage(
-    String groupId,
-    String authorDeviceId,
-    int sequenceNumber,
-  ) async {
-    final rows = await db.query(
-      messagesTable,
-      where: 'group_id = ? AND author_device_id = ? AND sequence_number = ?',
-      whereArgs: [groupId, authorDeviceId, sequenceNumber],
-      limit: 1,
-    );
-    if (rows.isEmpty) return null;
-    return GroupMessage.fromJson(rows.first);
-  }
-
-  Future<List<GroupMessage>> getMessages(
-    String groupId, {
-    int? limit,
-    int? offset,
-  }) async {
-    final rows = await db.query(
-      messagesTable,
-      where: 'group_id = ?',
-      whereArgs: [groupId],
-      orderBy: 'timestamp ASC',
-      limit: limit,
-      offset: offset,
-    );
-    return rows.map((r) => GroupMessage.fromJson(r)).toList();
-  }
-
-  Future<List<GroupMessage>> getLatestMessages(
-    String groupId, {
-    int limit = 50,
-  }) async {
-    final rows = await db.query(
-      messagesTable,
-      where: 'group_id = ?',
-      whereArgs: [groupId],
-      orderBy: 'timestamp DESC',
-      limit: limit,
-    );
-    return rows.map((r) => GroupMessage.fromJson(r)).toList().reversed.toList();
-  }
-
-  Future<int> getMessageCount(String groupId) async {
-    final result = await db.rawQuery(
-      'SELECT COUNT(*) as count FROM $messagesTable WHERE group_id = ?',
-      [groupId],
-    );
-    return (result.first['count'] as int?) ?? 0;
-  }
-
-  Future<VectorClock> getVectorClock(String groupId) async {
-    final rows = await db
-        .query(vectorClocksTable, where: 'group_id = ?', whereArgs: [groupId]);
-    final clock = <String, int>{};
-    for (final row in rows) {
-      clock[row['device_id'] as String] = row['sequence_number'] as int;
-    }
-    return VectorClock.fromMap(clock);
-  }
-
-  Future<void> saveVectorClock(String groupId, VectorClock clock) async {
-    final batch = db.batch();
-    batch
-        .delete(vectorClocksTable, where: 'group_id = ?', whereArgs: [groupId]);
-    for (final entry in clock.toMap().entries) {
-      batch.insert(vectorClocksTable, {
-        'group_id': groupId,
-        'device_id': entry.key,
-        'sequence_number': entry.value,
-      });
-    }
-    await batch.commit(noResult: true);
-  }
-
-  Future<void> saveSenderKey(
-      String groupId, String deviceId, String key) async {
-    await secureStorage.write(
-      key: '$secureKeyPrefix${groupId}_sender_$deviceId',
-      value: key,
-    );
-  }
-
-  Future<String?> loadSenderKey(String groupId, String deviceId) async {
-    return secureStorage.read(
-      key: '$secureKeyPrefix${groupId}_sender_$deviceId',
-    );
-  }
-
-  Future<Map<String, String>> loadAllSenderKeys(String groupId) async {
-    final allKeys = await secureStorage.readAll();
-    final prefix = '$secureKeyPrefix${groupId}_sender_';
-    final groupKeys = <String, String>{};
-    for (final entry in allKeys.entries) {
-      if (entry.key.startsWith(prefix)) {
-        groupKeys[entry.key.substring(prefix.length)] = entry.value;
-      }
-    }
-    return groupKeys;
-  }
 
   // -- Tests --
 
@@ -316,9 +171,9 @@ void main() {
   group('GroupStorageService — saveGroup and getGroup', () {
     test('saves and retrieves a group with all fields', () async {
       final group = _makeGroup();
-      await saveGroup(group);
+      await service.saveGroup(group);
 
-      final retrieved = await getGroup('grp_1');
+      final retrieved = await service.getGroup('grp_1');
       expect(retrieved, isNotNull);
       expect(retrieved!.id, 'grp_1');
       expect(retrieved.name, 'Test Group');
@@ -329,7 +184,7 @@ void main() {
     });
 
     test('getGroup returns null for non-existent group', () async {
-      expect(await getGroup('missing'), isNull);
+      expect(await service.getGroup('missing'), isNull);
     });
 
     test('saves group with multiple members', () async {
@@ -349,50 +204,50 @@ void main() {
           ),
         ],
       );
-      await saveGroup(group);
+      await service.saveGroup(group);
 
-      final retrieved = await getGroup('grp_1');
+      final retrieved = await service.getGroup('grp_1');
       expect(retrieved!.members, hasLength(2));
       expect(retrieved.members[1].displayName, 'Bob');
     });
 
     test('replaces existing group on conflict', () async {
-      await saveGroup(_makeGroup(name: 'Original'));
-      await saveGroup(_makeGroup(name: 'Updated'));
+      await service.saveGroup(_makeGroup(name: 'Original'));
+      await service.saveGroup(_makeGroup(name: 'Updated'));
 
-      final retrieved = await getGroup('grp_1');
+      final retrieved = await service.getGroup('grp_1');
       expect(retrieved!.name, 'Updated');
     });
   });
 
   group('GroupStorageService — getAllGroups', () {
     test('returns empty list when no groups exist', () async {
-      expect(await getAllGroups(), isEmpty);
+      expect(await service.getAllGroups(), isEmpty);
     });
 
     test('returns all saved groups', () async {
-      await saveGroup(
+      await service.saveGroup(
           _makeGroup(id: 'grp_1', createdAt: DateTime.utc(2026, 1, 1)));
-      await saveGroup(
+      await service.saveGroup(
           _makeGroup(id: 'grp_2', createdAt: DateTime.utc(2026, 3, 1)));
 
-      final groups = await getAllGroups();
+      final groups = await service.getAllGroups();
       expect(groups, hasLength(2));
     });
 
     test('groups are ordered by created_at DESC', () async {
-      await saveGroup(_makeGroup(
+      await service.saveGroup(_makeGroup(
         id: 'old',
         name: 'Old Group',
         createdAt: DateTime.utc(2025, 1, 1),
       ));
-      await saveGroup(_makeGroup(
+      await service.saveGroup(_makeGroup(
         id: 'new',
         name: 'New Group',
         createdAt: DateTime.utc(2026, 6, 1),
       ));
 
-      final groups = await getAllGroups();
+      final groups = await service.getAllGroups();
       expect(groups.first.id, 'new');
       expect(groups.last.id, 'old');
     });
@@ -400,7 +255,7 @@ void main() {
 
   group('GroupStorageService — updateGroup', () {
     test('updates group name and members', () async {
-      await saveGroup(_makeGroup());
+      await service.saveGroup(_makeGroup());
 
       final updated = _makeGroup(name: 'Renamed Group', members: [
         GroupMember(
@@ -416,9 +271,9 @@ void main() {
           joinedAt: DateTime.utc(2026, 2, 5),
         ),
       ]);
-      await updateGroup(updated);
+      await service.updateGroup(updated);
 
-      final retrieved = await getGroup('grp_1');
+      final retrieved = await service.getGroup('grp_1');
       expect(retrieved!.name, 'Renamed Group');
       expect(retrieved.members, hasLength(2));
     });
@@ -426,50 +281,50 @@ void main() {
 
   group('GroupStorageService — deleteGroup', () {
     test('removes group from database', () async {
-      await saveGroup(_makeGroup());
-      await deleteGroup('grp_1');
-      expect(await getGroup('grp_1'), isNull);
+      await service.saveGroup(_makeGroup());
+      await service.deleteGroup('grp_1');
+      expect(await service.getGroup('grp_1'), isNull);
     });
 
     test('removes associated messages', () async {
-      await saveGroup(_makeGroup());
-      await saveMessage(_makeMessage());
-      await deleteGroup('grp_1');
+      await service.saveGroup(_makeGroup());
+      await service.saveMessage(_makeMessage());
+      await service.deleteGroup('grp_1');
 
-      final rows = await db
-          .query(messagesTable, where: 'group_id = ?', whereArgs: ['grp_1']);
-      expect(rows, isEmpty);
+      final count = await service.getMessageCount('grp_1');
+      expect(count, 0);
     });
 
     test('removes vector clock entries', () async {
-      await saveGroup(_makeGroup());
-      await saveVectorClock('grp_1', VectorClock.fromMap({'device_A': 5}));
-      await deleteGroup('grp_1');
+      await service.saveGroup(_makeGroup());
+      await service.saveVectorClock(
+          'grp_1', VectorClock.fromMap({'device_A': 5}));
+      await service.deleteGroup('grp_1');
 
-      final clock = await getVectorClock('grp_1');
+      final clock = await service.getVectorClock('grp_1');
       expect(clock.isEmpty, isTrue);
     });
 
     test('removes sender keys from secure storage', () async {
-      await saveSenderKey('grp_1', 'device_A', 'key_a');
-      await saveSenderKey('grp_1', 'device_B', 'key_b');
-      await deleteGroup('grp_1');
+      await service.saveSenderKey('grp_1', 'device_A', 'key_a');
+      await service.saveSenderKey('grp_1', 'device_B', 'key_b');
+      await service.deleteGroup('grp_1');
 
-      expect(await loadSenderKey('grp_1', 'device_A'), isNull);
-      expect(await loadSenderKey('grp_1', 'device_B'), isNull);
+      expect(await service.loadSenderKey('grp_1', 'device_A'), isNull);
+      expect(await service.loadSenderKey('grp_1', 'device_B'), isNull);
     });
 
     test('is safe to call for non-existent group', () async {
-      await deleteGroup('missing'); // should not throw
+      await service.deleteGroup('missing'); // should not throw
     });
   });
 
   group('GroupStorageService — message CRUD', () {
     test('saves and retrieves a message', () async {
       final msg = _makeMessage(content: 'Hello world');
-      await saveMessage(msg);
+      await service.saveMessage(msg);
 
-      final retrieved = await getMessage('grp_1', 'device_A', 1);
+      final retrieved = await service.getMessage('grp_1', 'device_A', 1);
       expect(retrieved, isNotNull);
       expect(retrieved!.content, 'Hello world');
       expect(retrieved.type, GroupMessageType.text);
@@ -478,7 +333,7 @@ void main() {
     });
 
     test('getMessage returns null for non-existent message', () async {
-      expect(await getMessage('grp_1', 'device_A', 99), isNull);
+      expect(await service.getMessage('grp_1', 'device_A', 99), isNull);
     });
 
     test('saves message with metadata', () async {
@@ -493,40 +348,40 @@ void main() {
         status: GroupMessageStatus.sent,
         isOutgoing: true,
       );
-      await saveMessage(msg);
+      await service.saveMessage(msg);
 
-      final retrieved = await getMessage('grp_1', 'device_A', 1);
+      final retrieved = await service.getMessage('grp_1', 'device_A', 1);
       expect(retrieved!.type, GroupMessageType.file);
       expect(retrieved.metadata['filename'], 'report.pdf');
       expect(retrieved.isOutgoing, isTrue);
     });
 
     test('replaces message on primary key conflict', () async {
-      await saveMessage(_makeMessage(content: 'First'));
-      await saveMessage(_makeMessage(content: 'Second'));
+      await service.saveMessage(_makeMessage(content: 'First'));
+      await service.saveMessage(_makeMessage(content: 'Second'));
 
-      final retrieved = await getMessage('grp_1', 'device_A', 1);
+      final retrieved = await service.getMessage('grp_1', 'device_A', 1);
       expect(retrieved!.content, 'Second');
     });
 
     test('getMessages returns messages ordered by timestamp ASC', () async {
-      await saveMessage(_makeMessage(
+      await service.saveMessage(_makeMessage(
         sequenceNumber: 1,
         content: 'First',
         timestamp: DateTime.utc(2026, 2, 1, 12, 0),
       ));
-      await saveMessage(_makeMessage(
+      await service.saveMessage(_makeMessage(
         sequenceNumber: 2,
         content: 'Second',
         timestamp: DateTime.utc(2026, 2, 1, 12, 5),
       ));
-      await saveMessage(_makeMessage(
+      await service.saveMessage(_makeMessage(
         sequenceNumber: 3,
         content: 'Third',
         timestamp: DateTime.utc(2026, 2, 1, 12, 10),
       ));
 
-      final messages = await getMessages('grp_1');
+      final messages = await service.getMessages('grp_1');
       expect(messages, hasLength(3));
       expect(messages[0].content, 'First');
       expect(messages[2].content, 'Third');
@@ -534,14 +389,14 @@ void main() {
 
     test('getMessages supports limit and offset', () async {
       for (int i = 1; i <= 5; i++) {
-        await saveMessage(_makeMessage(
+        await service.saveMessage(_makeMessage(
           sequenceNumber: i,
           content: 'Msg $i',
           timestamp: DateTime.utc(2026, 2, 1, 12, i),
         ));
       }
 
-      final page = await getMessages('grp_1', limit: 2, offset: 1);
+      final page = await service.getMessages('grp_1', limit: 2, offset: 1);
       expect(page, hasLength(2));
       expect(page[0].content, 'Msg 2');
       expect(page[1].content, 'Msg 3');
@@ -550,14 +405,14 @@ void main() {
     test('getLatestMessages returns newest messages in chronological order',
         () async {
       for (int i = 1; i <= 10; i++) {
-        await saveMessage(_makeMessage(
+        await service.saveMessage(_makeMessage(
           sequenceNumber: i,
           content: 'Msg $i',
           timestamp: DateTime.utc(2026, 2, 1, 12, i),
         ));
       }
 
-      final latest = await getLatestMessages('grp_1', limit: 3);
+      final latest = await service.getLatestMessages('grp_1', limit: 3);
       expect(latest, hasLength(3));
       // Should be in chronological order (oldest first)
       expect(latest[0].content, 'Msg 8');
@@ -566,12 +421,12 @@ void main() {
     });
 
     test('getMessageCount returns correct count', () async {
-      expect(await getMessageCount('grp_1'), 0);
+      expect(await service.getMessageCount('grp_1'), 0);
 
-      await saveMessage(_makeMessage(sequenceNumber: 1));
-      await saveMessage(_makeMessage(sequenceNumber: 2));
+      await service.saveMessage(_makeMessage(sequenceNumber: 1));
+      await service.saveMessage(_makeMessage(sequenceNumber: 2));
 
-      expect(await getMessageCount('grp_1'), 2);
+      expect(await service.getMessageCount('grp_1'), 2);
     });
   });
 
@@ -581,55 +436,56 @@ void main() {
         'device_A': 5,
         'device_B': 3,
       });
-      await saveVectorClock('grp_1', clock);
+      await service.saveVectorClock('grp_1', clock);
 
-      final retrieved = await getVectorClock('grp_1');
+      final retrieved = await service.getVectorClock('grp_1');
       expect(retrieved['device_A'], 5);
       expect(retrieved['device_B'], 3);
     });
 
     test('getVectorClock returns empty clock for non-existent group', () async {
-      final clock = await getVectorClock('missing');
+      final clock = await service.getVectorClock('missing');
       expect(clock.isEmpty, isTrue);
     });
 
     test('saveVectorClock replaces existing entries', () async {
-      await saveVectorClock('grp_1', VectorClock.fromMap({'device_A': 1}));
-      await saveVectorClock(
+      await service.saveVectorClock(
+          'grp_1', VectorClock.fromMap({'device_A': 1}));
+      await service.saveVectorClock(
           'grp_1', VectorClock.fromMap({'device_A': 10, 'device_B': 5}));
 
-      final clock = await getVectorClock('grp_1');
+      final clock = await service.getVectorClock('grp_1');
       expect(clock['device_A'], 10);
       expect(clock['device_B'], 5);
     });
 
     test('saveVectorClock handles empty clock', () async {
-      await saveVectorClock('grp_1', const VectorClock());
+      await service.saveVectorClock('grp_1', const VectorClock());
 
-      final clock = await getVectorClock('grp_1');
+      final clock = await service.getVectorClock('grp_1');
       expect(clock.isEmpty, isTrue);
     });
   });
 
   group('GroupStorageService — sender key secure storage', () {
     test('saves and loads a sender key', () async {
-      await saveSenderKey('grp_1', 'device_A', 'base64_key_data');
+      await service.saveSenderKey('grp_1', 'device_A', 'base64_key_data');
 
-      final loaded = await loadSenderKey('grp_1', 'device_A');
+      final loaded = await service.loadSenderKey('grp_1', 'device_A');
       expect(loaded, 'base64_key_data');
     });
 
     test('loadSenderKey returns null for non-existent key', () async {
-      final loaded = await loadSenderKey('grp_1', 'missing');
+      final loaded = await service.loadSenderKey('grp_1', 'missing');
       expect(loaded, isNull);
     });
 
     test('loadAllSenderKeys returns all keys for a group', () async {
-      await saveSenderKey('grp_1', 'device_A', 'key_a');
-      await saveSenderKey('grp_1', 'device_B', 'key_b');
-      await saveSenderKey('grp_2', 'device_C', 'key_c');
+      await service.saveSenderKey('grp_1', 'device_A', 'key_a');
+      await service.saveSenderKey('grp_1', 'device_B', 'key_b');
+      await service.saveSenderKey('grp_2', 'device_C', 'key_c');
 
-      final keys = await loadAllSenderKeys('grp_1');
+      final keys = await service.loadAllSenderKeys('grp_1');
       expect(keys, hasLength(2));
       expect(keys['device_A'], 'key_a');
       expect(keys['device_B'], 'key_b');
@@ -638,16 +494,15 @@ void main() {
     });
 
     test('loadAllSenderKeys returns empty map when no keys exist', () async {
-      final keys = await loadAllSenderKeys('grp_1');
+      final keys = await service.loadAllSenderKeys('grp_1');
       expect(keys, isEmpty);
     });
 
     test('deleteSenderKey removes a specific key', () async {
-      await saveSenderKey('grp_1', 'device_A', 'key_a');
-      await secureStorage.delete(
-          key: '$secureKeyPrefix' 'grp_1_sender_device_A');
+      await service.saveSenderKey('grp_1', 'device_A', 'key_a');
+      await service.deleteSenderKey('grp_1', 'device_A');
 
-      expect(await loadSenderKey('grp_1', 'device_A'), isNull);
+      expect(await service.loadSenderKey('grp_1', 'device_A'), isNull);
     });
   });
 
@@ -680,9 +535,9 @@ void main() {
         ),
       ];
       final group = _makeGroup(members: members);
-      await saveGroup(group);
+      await service.saveGroup(group);
 
-      final retrieved = await getGroup('grp_1');
+      final retrieved = await service.getGroup('grp_1');
       expect(retrieved!.members, hasLength(2));
       expect(retrieved.members[0].deviceId, 'device_A');
       expect(retrieved.members[1].deviceId, 'device_B');
