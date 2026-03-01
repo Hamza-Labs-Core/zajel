@@ -31,28 +31,29 @@ final visiblePeersProvider = Provider<AsyncValue<List<Peer>>>((ref) {
   final peersAsync = ref.watch(peersProvider);
   final blockedPeerIds = ref.watch(blockedPeersProvider);
 
-  return peersAsync.whenData((peers) {
-    final visible = peers.where((peer) {
-      return !blockedPeerIds.contains(peer.id);
-    }).toList();
+  final peers = peersAsync.valueOrNull;
+  if (peers == null) return peersAsync;
 
-    // Sort: connected/connecting first, then offline by lastSeen descending
-    visible.sort((a, b) {
-      final aOnline = a.connectionState == PeerConnectionState.connected ||
-          a.connectionState == PeerConnectionState.connecting ||
-          a.connectionState == PeerConnectionState.handshaking;
-      final bOnline = b.connectionState == PeerConnectionState.connected ||
-          b.connectionState == PeerConnectionState.connecting ||
-          b.connectionState == PeerConnectionState.handshaking;
+  final visible = peers.where((peer) {
+    return !blockedPeerIds.contains(peer.id);
+  }).toList();
 
-      if (aOnline && !bOnline) return -1;
-      if (!aOnline && bOnline) return 1;
-      // Within same group, sort by lastSeen descending
-      return b.lastSeen.compareTo(a.lastSeen);
-    });
+  // Sort: connected/connecting first, then offline by lastSeen descending
+  visible.sort((a, b) {
+    final aOnline = a.connectionState == PeerConnectionState.connected ||
+        a.connectionState == PeerConnectionState.connecting ||
+        a.connectionState == PeerConnectionState.handshaking;
+    final bOnline = b.connectionState == PeerConnectionState.connected ||
+        b.connectionState == PeerConnectionState.connecting ||
+        b.connectionState == PeerConnectionState.handshaking;
 
-    return visible;
+    if (aOnline && !bOnline) return -1;
+    if (!aOnline && bOnline) return 1;
+    // Within same group, sort by lastSeen descending
+    return b.lastSeen.compareTo(a.lastSeen);
   });
+
+  return AsyncData(visible);
 });
 
 /// Provider for the currently selected peer.

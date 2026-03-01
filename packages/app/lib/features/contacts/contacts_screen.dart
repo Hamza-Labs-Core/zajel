@@ -108,11 +108,12 @@ class _ContactTile extends ConsumerWidget {
 
     // Check if this contact is currently online
     bool isOnline = false;
-    peersAsync.whenData((peers) {
-      isOnline = peers.any((p) =>
+    final peersList = peersAsync.valueOrNull;
+    if (peersList != null) {
+      isOnline = peersList.any((p) =>
           p.id == contact.id &&
           p.connectionState == PeerConnectionState.connected);
-    });
+    }
 
     return ListTile(
       leading: CircleAvatar(
@@ -149,12 +150,14 @@ class _ContactTile extends ConsumerWidget {
           : null,
       onTap: () {
         // Set selected peer and navigate to chat
-        peersAsync.whenData((peers) {
-          final peer = peers.where((p) => p.id == contact.id).firstOrNull;
+        final contactPeers = peersAsync.valueOrNull;
+        if (contactPeers != null) {
+          final peer =
+              contactPeers.where((p) => p.id == contact.id).firstOrNull;
           if (peer != null) {
             ref.read(selectedPeerProvider.notifier).state = peer;
           }
-        });
+        }
         context.push('/chat/${contact.id}');
       },
       onLongPress: () => context.push('/contacts/${contact.id}'),

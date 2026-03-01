@@ -363,127 +363,128 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
   Future<void> _showAddMemberDialog(BuildContext context, Group group) async {
     final peersAsync = ref.read(visiblePeersProvider);
 
-    peersAsync.whenData((peers) async {
-      // Filter out peers already in the group, peers without public keys,
-      // and disconnected peers (can't receive invitations over WebRTC).
-      final groupDeviceIds = group.members.map((m) => m.deviceId).toSet();
-      final availablePeers = peers
-          .where((p) =>
-              p.publicKey != null &&
-              !groupDeviceIds.contains(p.id) &&
-              p.connectionState == PeerConnectionState.connected)
-          .toList();
+    final peers = peersAsync.valueOrNull;
+    if (peers == null) return;
 
-      if (availablePeers.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-                'No connected peers available. Peers must be online to add.'),
-            duration: Duration(seconds: 3),
-          ),
-        );
-        return;
-      }
+    // Filter out peers already in the group, peers without public keys,
+    // and disconnected peers (can't receive invitations over WebRTC).
+    final groupDeviceIds = group.members.map((m) => m.deviceId).toSet();
+    final availablePeers = peers
+        .where((p) =>
+            p.publicKey != null &&
+            !groupDeviceIds.contains(p.id) &&
+            p.connectionState == PeerConnectionState.connected)
+        .toList();
 
-      final selectedPeer = await showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Add Member'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: availablePeers.length,
-              itemBuilder: (context, index) {
-                final peer = availablePeers[index];
-                return ListTile(
-                  leading: Stack(
-                    children: [
-                      const Icon(Icons.person),
-                      Positioned(
-                        right: 0,
-                        bottom: 0,
-                        child: Container(
-                          width: 10,
-                          height: 10,
-                          decoration: BoxDecoration(
-                            color: Colors.green,
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white, width: 1.5),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  title: Text(peer.displayName),
-                  subtitle: Text(
-                    peer.publicKey!.length > 16
-                        ? '${peer.publicKey!.substring(0, 16)}...'
-                        : peer.publicKey!,
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 11,
-                    ),
-                  ),
-                  onTap: () => Navigator.pop(context, peer),
-                );
-              },
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-          ],
+    if (availablePeers.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'No connected peers available. Peers must be online to add.'),
+          duration: Duration(seconds: 3),
         ),
       );
+      return;
+    }
 
-      if (selectedPeer != null) {
-        try {
-          final groupService = ref.read(groupServiceProvider);
-          final cryptoService = ref.read(groupCryptoServiceProvider);
-          final invitationService = ref.read(groupInvitationServiceProvider);
-          final senderKey = await cryptoService.generateSenderKey();
+    final selectedPeer = await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add Member'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: availablePeers.length,
+            itemBuilder: (context, index) {
+              final peer = availablePeers[index];
+              return ListTile(
+                leading: Stack(
+                  children: [
+                    const Icon(Icons.person),
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      child: Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: Colors.green,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 1.5),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                title: Text(peer.displayName),
+                subtitle: Text(
+                  peer.publicKey!.length > 16
+                      ? '${peer.publicKey!.substring(0, 16)}...'
+                      : peer.publicKey!,
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                  ),
+                ),
+                onTap: () => Navigator.pop(context, peer),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
 
-          final updatedGroup = await groupService.addMember(
-            groupId: widget.groupId,
-            newMember: GroupMember(
-              deviceId: selectedPeer.id,
-              displayName: selectedPeer.displayName,
-              publicKey: selectedPeer.publicKey!,
-              joinedAt: DateTime.now(),
-            ),
-            newMemberSenderKey: senderKey,
-          );
+    if (selectedPeer != null) {
+      try {
+        final groupService = ref.read(groupServiceProvider);
+        final cryptoService = ref.read(groupCryptoServiceProvider);
+        final invitationService = ref.read(groupInvitationServiceProvider);
+        final senderKey = await cryptoService.generateSenderKey();
 
-          // Send the invitation over the 1:1 P2P channel
-          await invitationService.sendInvitation(
-            targetPeerId: selectedPeer.id,
-            group: updatedGroup,
-            inviteeSenderKey: senderKey,
-          );
+        final updatedGroup = await groupService.addMember(
+          groupId: widget.groupId,
+          newMember: GroupMember(
+            deviceId: selectedPeer.id,
+            displayName: selectedPeer.displayName,
+            publicKey: selectedPeer.publicKey!,
+            joinedAt: DateTime.now(),
+          ),
+          newMemberSenderKey: senderKey,
+        );
 
-          ref.invalidate(groupByIdProvider(widget.groupId));
+        // Send the invitation over the 1:1 P2P channel
+        await invitationService.sendInvitation(
+          targetPeerId: selectedPeer.id,
+          group: updatedGroup,
+          inviteeSenderKey: senderKey,
+        );
 
-          if (!context.mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Invitation sent to ${selectedPeer.displayName}'),
-              duration: const Duration(seconds: 3),
-            ),
-          );
-        } catch (e) {
-          if (!context.mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to add member: $e'),
-              duration: const Duration(seconds: 3),
-            ),
-          );
-        }
+        ref.invalidate(groupByIdProvider(widget.groupId));
+
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Invitation sent to ${selectedPeer.displayName}'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      } catch (e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to add member: $e'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
       }
-    });
+    }
   }
 
   void _showMembersSheet(BuildContext context, Group group) {

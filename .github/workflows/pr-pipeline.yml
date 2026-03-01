@@ -2030,7 +2030,10 @@ jobs:
           # Output is tee'd to a log file so pump-loop diagnostics are captured
           # as a CI artifact even though flutter test runs in the background.
           mkdir -p ${{ github.workspace }}/test-artifacts
-          flutter test integration_test/appium_test.dart -d linux --no-pub 2>&1 | tee ${{ github.workspace }}/test-artifacts/flutter-shelf.log &
+          flutter test integration_test/appium_test.dart -d linux --no-pub \
+            --dart-define=BOOTSTRAP_URL=${{ vars.QA_BOOTSTRAP_URL }} \
+            --dart-define=E2E_TEST=true \
+            2>&1 | tee ${{ github.workspace }}/test-artifacts/flutter-shelf.log &
           FLUTTER_TEST_PID=$!
           echo "FLUTTER_TEST_PID=$FLUTTER_TEST_PID" >> $GITHUB_ENV
 

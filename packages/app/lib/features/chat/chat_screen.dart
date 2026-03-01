@@ -120,7 +120,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     // Messages are persisted by the global listener in main.dart.
     // Here we just reload from DB when a new message arrives for this peer.
     ref.listenManual(messagesStreamProvider, (previous, next) {
-      next.whenData((data) {
+      final data = next.valueOrNull;
+      if (data != null) {
         final (peerId, _) = data;
         if (peerId == widget.peerId) {
           ref.read(chatMessagesProvider(widget.peerId).notifier).reload();
@@ -128,7 +129,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           // Send read receipt when a new message arrives while viewing this chat
           _sendReadReceipt();
         }
-      });
+      }
     });
   }
 
@@ -535,10 +536,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
     // Check if the actual peer (not selectedPeerProvider) is connected
     bool isConnected = false;
-    ref.read(peersProvider).whenData((peers) {
+    final peers = ref.read(peersProvider).valueOrNull;
+    if (peers != null) {
       final peer = peers.where((p) => p.id == widget.peerId).firstOrNull;
       isConnected = peer?.connectionState == PeerConnectionState.connected;
-    });
+    }
     if (!isConnected) {
       // Queue as pending — will be sent on reconnect
       ref

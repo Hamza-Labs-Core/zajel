@@ -264,10 +264,11 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   String _resolvePeerName(String peerId) {
     String peerName = peerId;
     final peersAsync = ref.read(peersProvider);
-    peersAsync.whenData((peers) {
+    final peers = peersAsync.valueOrNull;
+    if (peers != null) {
       final peer = peers.where((p) => p.id == peerId).firstOrNull;
       if (peer != null) peerName = peer.displayName;
-    });
+    }
     return peerName;
   }
 
@@ -345,7 +346,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     final knownStates = <String, PeerConnectionState>{};
 
     _peerStatusSubscription = ref.listenManual(peersProvider, (previous, next) {
-      next.whenData((peers) {
+      final peers = next.valueOrNull;
+      if (peers != null) {
         for (final peer in peers) {
           final prev = knownStates[peer.id];
           final curr = peer.connectionState;
@@ -363,7 +365,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
             );
           }
         }
-      });
+      }
     });
   }
 
