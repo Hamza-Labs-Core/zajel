@@ -314,8 +314,7 @@ class AppHelper:
             )
         else:
             xpath = (
-                "//*[contains(@content-desc, 'Peer') and "
-                "contains(@content-desc, 'Connected') and "
+                "//*[contains(@content-desc, 'Connected') and "
                 "not(contains(@content-desc, 'Connected Peers'))]"
             )
         WebDriverWait(self.driver, 10).until(
