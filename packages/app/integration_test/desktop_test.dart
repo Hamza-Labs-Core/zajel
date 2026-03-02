@@ -1,0 +1,484 @@
+/// Desktop-specific integration tests.
+///
+/// Tests privacy screen lifecycle, settings interactions, onboarding flow,
+/// and navigation patterns that exercise desktop-relevant features.
+///
+/// These tests use provider overrides to supply mock data, avoiding the need
+/// for real storage or network services. They run on all platforms via
+/// `flutter test integration_test/desktop_test.dart -d linux --no-pub`.
+library;
+
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:integration_test/integration_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+import 'package:zajel/app_router.dart';
+import 'package:zajel/main.dart';
+import 'package:zajel/core/notifications/notification_service.dart';
+import 'package:zajel/core/providers/app_providers.dart';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// No-op notification service for integration tests.
+///
+/// On headless Linux CI, the real NotificationService hangs forever in
+/// `_plugin.initialize()` because flutter_local_notifications_linux tries
+/// to connect to the freedesktop notification daemon over D-Bus.
+class _TestNotificationService extends NotificationService {
+  @override
+  Future<void> initialize() async {}
+
+  @override
+  Future<bool> requestPermission() async => false;
+}
+
+/// Pump ZajelApp with overridden SharedPreferences and wait for initialization.
+///
+/// Uses a counted pump loop instead of pumpAndSettle because ZajelApp starts
+/// background processes (signaling connection, periodic auto-delete timer)
+/// that continuously schedule frames, preventing pumpAndSettle from settling.
+Future<void> _pumpApp(WidgetTester tester, SharedPreferences prefs) async {
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+        notificationServiceProvider
+            .overrideWithValue(_TestNotificationService()),
+      ],
+      child: const ZajelApp(),
+    ),
+  );
+  // Pump frames with real-time delays for _initialize() to complete.
+  // With in-memory secure storage, _initialize() completes in <3s.
+  // 40 iterations × 150ms = 6s is generous.
+  for (int i = 0; i < 40; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
+}
+
+/// Pump frames for a short duration after a UI action (e.g. tap, navigation).
+///
+/// Replacement for pumpAndSettle in tests where background processes prevent
+/// the frame scheduler from settling. Uses real-time delays between pumps
+/// so async operations (navigation transitions, provider updates) complete.
+Future<void> _pumpFrames(WidgetTester tester, {int count = 20}) async {
+  for (int i = 0; i < count; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
+}
+
+/// Simulate an app lifecycle state change without disabling the frame scheduler.
+///
+/// The binding's `handleAppLifecycleStateChanged` goes through
+/// `SchedulerBinding` which calls `_setFramesEnabledState(false)` for
+/// hidden/paused/detached states. This disables frame scheduling, causing
+/// `LiveTestWidgetsFlutterBinding.pump()` to hang forever.
+///
+/// This helper bypasses the scheduler by calling `didChangeAppLifecycleState`
+/// directly on ZajelApp's State (which is a `WidgetsBindingObserver`).
+void _simulateLifecycleState(WidgetTester tester, AppLifecycleState state) {
+  final element = tester.element(find.byType(ZajelApp));
+  final appState = (element as StatefulElement).state;
+  (appState as WidgetsBindingObserver).didChangeAppLifecycleState(state);
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+void main() {
+  final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+
+  // Use in-memory secure storage to avoid libsecret/gnome-keyring hangs on
+  // headless Linux CI. Without this, each test spends 40-55s waiting for
+  // secure storage timeouts (CryptoService, TrustedPeersStorage, DeviceLinkService).
+  FlutterSecureStorage.setMockInitialValues({});
+
+  // Initialize sqflite FFI for desktop platforms so the app can fully
+  // initialize its SQLite-backed storage (message, channel, group).
+  if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+  }
+
+  // Mock mobile_scanner platform channels to prevent PlatformException on
+  // headless Linux (no camera).
+  const scannerMethodChannel =
+      MethodChannel('dev.steenbakker.mobile_scanner/scanner/method');
+  const scannerEventChannel =
+      EventChannel('dev.steenbakker.mobile_scanner/scanner/event');
+
+  setUpAll(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(scannerMethodChannel,
+            (MethodCall call) async {
+      switch (call.method) {
+        case 'state':
+          return 1; // MobileScannerAuthorizationState.authorized
+        case 'request':
+          return true;
+        case 'start':
+          return {
+            'size': {'width': 1280.0, 'height': 720.0}
+          };
+        case 'stop':
+        case 'resetScale':
+        case 'setScale':
+        case 'pause':
+          return null;
+        default:
+          return null;
+      }
+    });
+
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockStreamHandler(
+            scannerEventChannel,
+            MockStreamHandler.inline(
+              onListen: (args, sink) {},
+            ));
+  });
+
+  // Force a narrow surface so MainLayout uses the mobile HomeScreen layout
+  // (< 720px wide) rather than the wide desktop sidebar layout.
+  // Reset GoRouter between tests to avoid leftover navigation state.
+  setUp(() {
+    FlutterSecureStorage.setMockInitialValues({});
+    appRouter.go('/');
+    binding.platformDispatcher.views.first.physicalSize = const Size(400, 800);
+    binding.platformDispatcher.views.first.devicePixelRatio = 1.0;
+  });
+
+  // ── Privacy Screen Lifecycle ──────────────────────────────────
+
+  group('Privacy Screen Lifecycle', () {
+    testWidgets('overlay appears on hidden and disappears on resumed',
+        (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'displayName': 'Test User',
+        'hasSeenOnboarding': true,
+        'privacyScreenEnabled': true,
+      });
+      final prefs = await SharedPreferences.getInstance();
+
+      await _pumpApp(tester, prefs);
+
+      // Privacy overlay should NOT be visible initially
+      expect(find.byIcon(Icons.lock_outline), findsNothing);
+
+      // Simulate desktop minimize
+      _simulateLifecycleState(tester, AppLifecycleState.hidden);
+      await _pumpFrames(tester);
+
+      // Privacy overlay SHOULD be visible
+      expect(find.byIcon(Icons.lock_outline), findsOneWidget);
+
+      // Resume — overlay should disappear
+      _simulateLifecycleState(tester, AppLifecycleState.resumed);
+      await _pumpFrames(tester);
+
+      expect(find.byIcon(Icons.lock_outline), findsNothing);
+    });
+
+    testWidgets('overlay appears on inactive (focus loss)', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'displayName': 'Test User',
+        'hasSeenOnboarding': true,
+        'privacyScreenEnabled': true,
+      });
+      final prefs = await SharedPreferences.getInstance();
+
+      await _pumpApp(tester, prefs);
+
+      // Simulate desktop focus loss
+      _simulateLifecycleState(tester, AppLifecycleState.inactive);
+      await _pumpFrames(tester);
+
+      expect(find.byIcon(Icons.lock_outline), findsOneWidget);
+
+      // Resume
+      _simulateLifecycleState(tester, AppLifecycleState.resumed);
+      await _pumpFrames(tester);
+
+      expect(find.byIcon(Icons.lock_outline), findsNothing);
+    });
+
+    testWidgets('no overlay when privacy screen is disabled', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'displayName': 'Test User',
+        'hasSeenOnboarding': true,
+        'privacyScreenEnabled': false,
+      });
+      final prefs = await SharedPreferences.getInstance();
+
+      await _pumpApp(tester, prefs);
+
+      // Simulate lifecycle change
+      _simulateLifecycleState(tester, AppLifecycleState.hidden);
+      await _pumpFrames(tester);
+
+      // Privacy overlay should NOT appear when disabled
+      expect(find.byIcon(Icons.lock_outline), findsNothing);
+
+      // Also test inactive
+      _simulateLifecycleState(tester, AppLifecycleState.inactive);
+      await _pumpFrames(tester);
+
+      expect(find.byIcon(Icons.lock_outline), findsNothing);
+    });
+  });
+
+  // ── Settings Screen ───────────────────────────────────────────
+
+  group('Settings Screen', () {
+    testWidgets('all sections are visible', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'displayName': 'Test User',
+        'hasSeenOnboarding': true,
+      });
+      final prefs = await SharedPreferences.getInstance();
+
+      await _pumpApp(tester, prefs);
+
+      // Navigate to settings
+      await tester.tap(find.byIcon(Icons.settings));
+      await _pumpFrames(tester);
+
+      expect(find.text('Settings'), findsOneWidget);
+      expect(find.text('Profile'), findsOneWidget);
+      expect(find.text('Appearance'), findsOneWidget);
+      expect(find.text('Privacy & Security'), findsOneWidget);
+
+      // Scroll down to reveal sections below the fold (ListView lazy rendering).
+      // Multiple drags ensure the section is in the viewport.
+      await tester.drag(find.byType(ListView), const Offset(0, -300));
+      await _pumpFrames(tester);
+      await tester.drag(find.byType(ListView), const Offset(0, -300));
+      await _pumpFrames(tester);
+      expect(find.text('External Connections'), findsOneWidget);
+    });
+
+    testWidgets('theme toggle shows all options', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'displayName': 'Test User',
+        'hasSeenOnboarding': true,
+      });
+      final prefs = await SharedPreferences.getInstance();
+
+      await _pumpApp(tester, prefs);
+
+      await tester.tap(find.byIcon(Icons.settings));
+      await _pumpFrames(tester);
+
+      // Theme segmented button should show all three options
+      expect(find.text('Light'), findsOneWidget);
+      expect(find.text('Dark'), findsOneWidget);
+      expect(find.text('System'), findsOneWidget);
+    });
+
+    testWidgets('privacy screen toggle is present', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'displayName': 'Test User',
+        'hasSeenOnboarding': true,
+        'privacyScreenEnabled': true,
+      });
+      final prefs = await SharedPreferences.getInstance();
+
+      await _pumpApp(tester, prefs);
+
+      await tester.tap(find.byIcon(Icons.settings));
+      await _pumpFrames(tester);
+
+      // Privacy screen toggle should be visible
+      expect(find.text('Privacy Screen'), findsOneWidget);
+      expect(find.text('Hide app content in app switcher'), findsOneWidget);
+    });
+  });
+
+  // ── Onboarding Flow ───────────────────────────────────────────
+
+  group('Onboarding Flow', () {
+    testWidgets('shows onboarding when not seen', (tester) async {
+      // No hasSeenOnboarding → should redirect to onboarding
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+
+      await _pumpApp(tester, prefs);
+
+      expect(find.text('Welcome to Zajel'), findsOneWidget);
+      expect(find.text('Skip'), findsOneWidget);
+      expect(find.text('Next'), findsOneWidget);
+    });
+
+    testWidgets('skip onboarding reaches home screen', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+
+      await _pumpApp(tester, prefs);
+
+      // Should be on onboarding
+      expect(find.text('Welcome to Zajel'), findsOneWidget);
+
+      // Tap Skip
+      await tester.tap(find.text('Skip'));
+      await _pumpFrames(tester, count: 30);
+
+      // Should be on the home screen
+      expect(find.text('Connected Peers'), findsOneWidget);
+    });
+
+    testWidgets('complete full onboarding flow', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+
+      await _pumpApp(tester, prefs);
+
+      // Page 1: Welcome
+      expect(find.text('Welcome to Zajel'), findsOneWidget);
+      await tester.tap(find.text('Next'));
+      await _pumpFrames(tester);
+
+      // Page 2: Username — Next is disabled until a valid username is entered
+      expect(find.text('Choose a Username'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), 'DesktopUser');
+      await _pumpFrames(tester);
+      await tester.tap(find.text('Next'));
+      await _pumpFrames(tester);
+
+      // Page 3: Identity
+      expect(find.text('Your Identity'), findsOneWidget);
+      await tester.tap(find.text('Next'));
+      await _pumpFrames(tester);
+
+      // Page 4: How to Connect
+      expect(find.text('How to Connect'), findsOneWidget);
+      await tester.tap(find.text('Next'));
+      await _pumpFrames(tester);
+
+      // Page 5: Get Started
+      expect(find.text("You're Ready"), findsOneWidget);
+      await tester.tap(find.text('Get Started'));
+      await _pumpFrames(tester, count: 30);
+
+      // Should now be on home screen
+      expect(find.text('Connected Peers'), findsOneWidget);
+    });
+  });
+
+  // ── Navigation Flow ───────────────────────────────────────────
+
+  group('Navigation Flow', () {
+    testWidgets('home to channels and back', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'displayName': 'Test User',
+        'hasSeenOnboarding': true,
+      });
+      final prefs = await SharedPreferences.getInstance();
+
+      await _pumpApp(tester, prefs);
+
+      // Navigate to channels via app bar icon
+      await tester.tap(find.byIcon(Icons.rss_feed));
+      await _pumpFrames(tester);
+
+      // Verify channels screen
+      expect(find.text('Channels'), findsOneWidget);
+
+      // Navigate back
+      await tester.tap(find.byType(BackButton).first);
+      await _pumpFrames(tester);
+
+      expect(find.text('Connected Peers'), findsOneWidget);
+    });
+
+    testWidgets('home to groups and back', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'displayName': 'Test User',
+        'hasSeenOnboarding': true,
+      });
+      final prefs = await SharedPreferences.getInstance();
+
+      await _pumpApp(tester, prefs);
+
+      // Navigate to groups via app bar icon
+      await tester.tap(find.byIcon(Icons.group));
+      await _pumpFrames(tester);
+
+      // Verify groups screen
+      expect(find.text('Groups'), findsOneWidget);
+
+      // Navigate back
+      await tester.tap(find.byType(BackButton).first);
+      await _pumpFrames(tester);
+
+      expect(find.text('Connected Peers'), findsOneWidget);
+    });
+
+    testWidgets('home to connect and switch tabs', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'displayName': 'Test User',
+        'hasSeenOnboarding': true,
+      });
+      final prefs = await SharedPreferences.getInstance();
+
+      await _pumpApp(tester, prefs);
+
+      // Navigate to connect
+      await tester.tap(find.byIcon(Icons.qr_code_scanner));
+      await _pumpFrames(tester);
+
+      // Verify connect screen with tabs
+      expect(find.text('My Code'), findsOneWidget);
+      expect(find.text('Scan'), findsOneWidget);
+      expect(find.text('Link Web'), findsOneWidget);
+
+      // Switch tabs
+      await tester.tap(find.text('Scan'));
+      await _pumpFrames(tester);
+      expect(find.text('Scan a QR code to connect'), findsOneWidget);
+
+      await tester.tap(find.text('Link Web'));
+      await _pumpFrames(tester);
+      expect(find.text('Generate Link Code'), findsOneWidget);
+
+      // Navigate back
+      await tester.tap(find.byType(BackButton).first);
+      await _pumpFrames(tester);
+
+      expect(find.text('Connected Peers'), findsOneWidget);
+    });
+
+    testWidgets('home to settings and back', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'displayName': 'Test User',
+        'hasSeenOnboarding': true,
+      });
+      final prefs = await SharedPreferences.getInstance();
+
+      await _pumpApp(tester, prefs);
+
+      // Navigate to settings
+      await tester.tap(find.byIcon(Icons.settings));
+      await _pumpFrames(tester);
+
+      expect(find.text('Settings'), findsOneWidget);
+
+      // Navigate back
+      await tester.tap(find.byType(BackButton).first);
+      await _pumpFrames(tester);
+
+      expect(find.text('Connected Peers'), findsOneWidget);
+    });
+  });
+}

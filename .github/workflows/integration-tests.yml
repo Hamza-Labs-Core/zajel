@@ -81,12 +81,17 @@ jobs:
           node-version: '20'
 
       - name: Restore node_modules
+        id: cache-restore
         uses: actions/cache/restore@v4
         with:
           path: |
             node_modules
             packages/*/node_modules
           key: node-modules-${{ hashFiles('package-lock.json') }}
+
+      - name: Install dependencies (fallback)
+        if: steps.cache-restore.outputs.cache-hit != 'true'
+        run: npm ci
 
       - name: Restore server-vps build
         uses: actions/cache/restore@v4
@@ -113,12 +118,17 @@ jobs:
           node-version: '20'
 
       - name: Restore node_modules
+        id: cache-restore
         uses: actions/cache/restore@v4
         with:
           path: |
             node_modules
             packages/*/node_modules
           key: node-modules-${{ hashFiles('package-lock.json') }}
+
+      - name: Install dependencies (fallback)
+        if: steps.cache-restore.outputs.cache-hit != 'true'
+        run: npm ci
 
       - name: Restore server-vps build
         uses: actions/cache/restore@v4

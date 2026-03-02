@@ -7,6 +7,7 @@ Stores:
 """
 
 import logging
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -39,7 +40,10 @@ class PeerStorage:
 
     def initialize(self) -> None:
         """Open or create the database."""
+        db_existed = os.path.exists(self._db_path)
         self._conn = sqlite3.connect(self._db_path)
+        if not db_existed:
+            os.chmod(self._db_path, 0o600)
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS peers (
                 peer_id TEXT PRIMARY KEY,
@@ -53,6 +57,7 @@ class PeerStorage:
             )
         """)
         self._conn.commit()
+        self._master_key = self._get_or_create_master_key(self._db_path)
 
     def save_peer(self, peer: StoredPeer) -> None:
         """Save or update a peer."""
@@ -133,23 +138,64 @@ class PeerStorage:
         self._conn.commit()
 
     def save_session_key(self, peer_id: str, session_key: bytes) -> None:
-        """Save a session key for a peer."""
+        """Save a session key for a peer (encrypted with master key)."""
         if self._conn is None:
             return
+        encrypted = self._encrypt_key(session_key)
         self._conn.execute(
             "UPDATE peers SET session_key = ? WHERE peer_id = ?",
-            (session_key, peer_id),
+            (encrypted, peer_id),
         )
         self._conn.commit()
 
     def get_session_key(self, peer_id: str) -> Optional[bytes]:
-        """Get the session key for a peer."""
+        """Get the session key for a peer (decrypted from storage)."""
         if self._conn is None:
             return None
         row = self._conn.execute(
             "SELECT session_key FROM peers WHERE peer_id = ?", (peer_id,)
         ).fetchone()
-        return row[0] if row and row[0] else None
+        if not row or not row[0]:
+            return None
+        try:
+            return self._decrypt_key(row[0])
+        except Exception:
+            logger.warning(
+                "Failed to decrypt session key for peer %s "
+                "(may be legacy plaintext)", peer_id
+            )
+            return row[0]
+
+    @staticmethod
+    def _get_or_create_master_key(db_path: str) -> bytes:
+        """Get or create a master key for encrypting session keys."""
+        key_path = db_path + ".key"
+        if os.path.exists(key_path):
+            with open(key_path, "rb") as f:
+                return f.read()
+        key = os.urandom(32)
+        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(key)
+        return key
+
+    def _encrypt_key(self, plaintext: bytes) -> bytes:
+        """Encrypt a session key using ChaCha20-Poly1305 with the master key."""
+        from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+        nonce = os.urandom(12)
+        cipher = ChaCha20Poly1305(self._master_key)
+        ciphertext = cipher.encrypt(nonce, plaintext, None)
+        return nonce + ciphertext
+
+    def _decrypt_key(self, data: bytes) -> bytes:
+        """Decrypt a session key using ChaCha20-Poly1305 with the master key."""
+        from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+        if len(data) < 12:
+            raise ValueError("Encrypted data too short")
+        nonce = data[:12]
+        ciphertext = data[12:]
+        cipher = ChaCha20Poly1305(self._master_key)
+        return cipher.decrypt(nonce, ciphertext, None)
 
     def close(self) -> None:
         """Close the database connection."""

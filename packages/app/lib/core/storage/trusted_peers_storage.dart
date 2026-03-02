@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import '../crypto/crypto_service.dart';
 import '../models/peer.dart';
 
 /// Storage interface for managing trusted peers.
@@ -53,6 +54,23 @@ abstract class TrustedPeersStorage {
   /// Check if a peer is trusted by their public key.
   Future<bool> isTrustedByPublicKey(String publicKey);
 
+  /// Find a trusted peer by their public key.
+  /// Returns null if no peer with this public key exists.
+  Future<TrustedPeer?> getPeerByPublicKey(String publicKey);
+
+  /// Record a key rotation for a peer.
+  ///
+  /// Stores the old public key, updates to the new one, and sets
+  /// keyChangeAcknowledged to false so the UI can show a warning.
+  Future<void> recordKeyRotation(
+      String peerId, String oldPublicKey, String newPublicKey);
+
+  /// Acknowledge a key change warning for a peer.
+  Future<void> acknowledgeKeyChange(String peerId);
+
+  /// Get all peers that have unacknowledged key changes.
+  Future<List<TrustedPeer>> getPeersWithPendingKeyChanges();
+
   /// Clear all trusted peers.
   Future<void> clear();
 }
@@ -67,6 +85,12 @@ class TrustedPeer {
 
   /// Human-readable name for the peer.
   final String displayName;
+
+  /// The peer's chosen username (Discord-style, without tag).
+  final String? username;
+
+  /// Short tag derived from the peer's public key (first 4 hex chars of SHA-256).
+  final String? tag;
 
   /// The peer's public key (base64 encoded).
   final String publicKey;
@@ -89,9 +113,20 @@ class TrustedPeer {
   /// When this peer was blocked (null if not blocked).
   final DateTime? blockedAt;
 
+  /// Previous public key before most recent rotation (null if never rotated).
+  final String? previousPublicKey;
+
+  /// When the most recent key rotation was detected.
+  final DateTime? keyRotatedAt;
+
+  /// Whether the user has acknowledged/dismissed the key change warning.
+  final bool keyChangeAcknowledged;
+
   const TrustedPeer({
     required this.id,
     required this.displayName,
+    this.username,
+    this.tag,
     required this.publicKey,
     required this.trustedAt,
     this.lastSeen,
@@ -99,11 +134,16 @@ class TrustedPeer {
     this.alias,
     this.isBlocked = false,
     this.blockedAt,
+    this.previousPublicKey,
+    this.keyRotatedAt,
+    this.keyChangeAcknowledged = true,
   });
 
   TrustedPeer copyWith({
     String? id,
     String? displayName,
+    String? username,
+    String? tag,
     String? publicKey,
     DateTime? trustedAt,
     DateTime? lastSeen,
@@ -113,10 +153,17 @@ class TrustedPeer {
     bool? isBlocked,
     DateTime? blockedAt,
     bool clearBlockedAt = false,
+    String? previousPublicKey,
+    bool clearPreviousPublicKey = false,
+    DateTime? keyRotatedAt,
+    bool clearKeyRotatedAt = false,
+    bool? keyChangeAcknowledged,
   }) {
     return TrustedPeer(
       id: id ?? this.id,
       displayName: displayName ?? this.displayName,
+      username: username ?? this.username,
+      tag: tag ?? this.tag,
       publicKey: publicKey ?? this.publicKey,
       trustedAt: trustedAt ?? this.trustedAt,
       lastSeen: lastSeen ?? this.lastSeen,
@@ -124,6 +171,13 @@ class TrustedPeer {
       alias: clearAlias ? null : (alias ?? this.alias),
       isBlocked: isBlocked ?? this.isBlocked,
       blockedAt: clearBlockedAt ? null : (blockedAt ?? this.blockedAt),
+      previousPublicKey: clearPreviousPublicKey
+          ? null
+          : (previousPublicKey ?? this.previousPublicKey),
+      keyRotatedAt:
+          clearKeyRotatedAt ? null : (keyRotatedAt ?? this.keyRotatedAt),
+      keyChangeAcknowledged:
+          keyChangeAcknowledged ?? this.keyChangeAcknowledged,
     );
   }
 
@@ -132,6 +186,8 @@ class TrustedPeer {
     return TrustedPeer(
       id: json['id'] as String,
       displayName: json['displayName'] as String,
+      username: json['username'] as String?,
+      tag: json['tag'] as String?,
       publicKey: json['publicKey'] as String,
       trustedAt: DateTime.parse(json['trustedAt'] as String),
       lastSeen: json['lastSeen'] != null
@@ -143,6 +199,11 @@ class TrustedPeer {
       blockedAt: json['blockedAt'] != null
           ? DateTime.parse(json['blockedAt'] as String)
           : null,
+      previousPublicKey: json['previousPublicKey'] as String?,
+      keyRotatedAt: json['keyRotatedAt'] != null
+          ? DateTime.parse(json['keyRotatedAt'] as String)
+          : null,
+      keyChangeAcknowledged: json['keyChangeAcknowledged'] as bool? ?? true,
     );
   }
 
@@ -150,6 +211,8 @@ class TrustedPeer {
   Map<String, dynamic> toJson() => {
         'id': id,
         'displayName': displayName,
+        'username': username,
+        'tag': tag,
         'publicKey': publicKey,
         'trustedAt': trustedAt.toIso8601String(),
         'lastSeen': lastSeen?.toIso8601String(),
@@ -157,9 +220,15 @@ class TrustedPeer {
         'alias': alias,
         'isBlocked': isBlocked,
         'blockedAt': blockedAt?.toIso8601String(),
+        'previousPublicKey': previousPublicKey,
+        'keyRotatedAt': keyRotatedAt?.toIso8601String(),
+        'keyChangeAcknowledged': keyChangeAcknowledged,
       };
 
   /// Create from a connected Peer.
+  ///
+  /// The peer's ID must already be set to the collision-safe stable ID
+  /// (derived from the public key by ConnectionManager._resolveStablePeerId).
   factory TrustedPeer.fromPeer(Peer peer) {
     if (peer.publicKey == null) {
       throw ArgumentError('Peer must have a public key to be trusted');
@@ -167,6 +236,8 @@ class TrustedPeer {
     return TrustedPeer(
       id: peer.id,
       displayName: peer.displayName,
+      username: peer.username,
+      tag: CryptoService.tagFromStableId(peer.id),
       publicKey: peer.publicKey!,
       trustedAt: DateTime.now().toUtc(),
       lastSeen: peer.lastSeen,

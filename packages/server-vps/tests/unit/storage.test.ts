@@ -40,6 +40,9 @@ describe('SQLiteStorage', () => {
         deadDrop: 'encrypted-data',
         relayId: 'relay-1',
         expiresAt: Date.now() + 3600000,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        vectorClock: {},
       };
 
       await storage.saveDailyPoint(entry);
@@ -61,6 +64,9 @@ describe('SQLiteStorage', () => {
         deadDrop: 'original-data',
         relayId: 'relay-1',
         expiresAt: Date.now() + 3600000,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        vectorClock: {},
       };
 
       const entry2: DailyPointEntry = {
@@ -69,6 +75,9 @@ describe('SQLiteStorage', () => {
         deadDrop: 'updated-data',
         relayId: 'relay-2',
         expiresAt: Date.now() + 7200000,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        vectorClock: {},
       };
 
       await storage.saveDailyPoint(entry1);
@@ -90,6 +99,9 @@ describe('SQLiteStorage', () => {
         deadDrop: 'data-1',
         relayId: 'relay-1',
         expiresAt: now + 3600000,
+        createdAt: now,
+        updatedAt: now,
+        vectorClock: {},
       });
 
       await storage.saveDailyPoint({
@@ -98,6 +110,9 @@ describe('SQLiteStorage', () => {
         deadDrop: 'data-2',
         relayId: 'relay-2',
         expiresAt: now + 3600000,
+        createdAt: now,
+        updatedAt: now,
+        vectorClock: {},
       });
 
       const results = await storage.getDailyPoints('shared-point');
@@ -112,6 +127,9 @@ describe('SQLiteStorage', () => {
         deadDrop: 'data',
         relayId: 'relay',
         expiresAt: Date.now() + 3600000,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        vectorClock: {},
       });
 
       await storage.saveDailyPoint({
@@ -120,6 +138,9 @@ describe('SQLiteStorage', () => {
         deadDrop: 'data',
         relayId: 'relay',
         expiresAt: Date.now() + 3600000,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        vectorClock: {},
       });
 
       const deleted = await storage.deleteDailyPointsByPeer('peer-1');
@@ -142,6 +163,9 @@ describe('SQLiteStorage', () => {
         deadDrop: 'data',
         relayId: 'relay',
         expiresAt: now - 1000, // Already expired
+        createdAt: now,
+        updatedAt: now,
+        vectorClock: {},
       });
 
       await storage.saveDailyPoint({
@@ -150,6 +174,9 @@ describe('SQLiteStorage', () => {
         deadDrop: 'data',
         relayId: 'relay',
         expiresAt: now + 3600000,
+        createdAt: now,
+        updatedAt: now,
+        vectorClock: {},
       });
 
       const deleted = await storage.deleteExpiredDailyPoints(now);
@@ -170,6 +197,9 @@ describe('SQLiteStorage', () => {
         deadDrop: 'data',
         relayId: 'relay',
         expiresAt: Date.now() + 3600000,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        vectorClock: {},
       });
 
       await storage.saveDailyPoint({
@@ -178,6 +208,9 @@ describe('SQLiteStorage', () => {
         deadDrop: 'data',
         relayId: 'relay',
         expiresAt: Date.now() + 3600000,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        vectorClock: {},
       });
 
       await storage.saveDailyPoint({
@@ -186,6 +219,9 @@ describe('SQLiteStorage', () => {
         deadDrop: 'data',
         relayId: 'relay',
         expiresAt: Date.now() + 3600000,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        vectorClock: {},
       });
 
       const stats = await storage.getDailyPointStats();
@@ -202,6 +238,8 @@ describe('SQLiteStorage', () => {
         peerId: 'peer-1',
         relayId: 'relay-1',
         expiresAt: Date.now() + 300000,
+        createdAt: Date.now(),
+        vectorClock: {},
       };
 
       await storage.saveHourlyToken(entry);
@@ -223,6 +261,8 @@ describe('SQLiteStorage', () => {
         peerId: 'peer-1',
         relayId: 'relay-1',
         expiresAt: now + 300000,
+        createdAt: now,
+        vectorClock: {},
       });
 
       await storage.saveHourlyToken({
@@ -230,6 +270,8 @@ describe('SQLiteStorage', () => {
         peerId: 'peer-2',
         relayId: 'relay-2',
         expiresAt: now + 300000,
+        createdAt: now,
+        vectorClock: {},
       });
 
       const results = await storage.getHourlyTokens('shared-token');
@@ -243,6 +285,8 @@ describe('SQLiteStorage', () => {
         peerId: 'peer-1',
         relayId: 'relay',
         expiresAt: Date.now() + 300000,
+        createdAt: Date.now(),
+        vectorClock: {},
       });
 
       await storage.saveHourlyToken({
@@ -250,6 +294,8 @@ describe('SQLiteStorage', () => {
         peerId: 'peer-1',
         relayId: 'relay',
         expiresAt: Date.now() + 300000,
+        createdAt: Date.now(),
+        vectorClock: {},
       });
 
       const deleted = await storage.deleteHourlyTokensByPeer('peer-1');
@@ -265,6 +311,8 @@ describe('SQLiteStorage', () => {
         peerId: 'peer-1',
         relayId: 'relay',
         expiresAt: now - 1000,
+        createdAt: now,
+        vectorClock: {},
       });
 
       await storage.saveHourlyToken({
@@ -272,6 +320,8 @@ describe('SQLiteStorage', () => {
         peerId: 'peer-2',
         relayId: 'relay',
         expiresAt: now + 300000,
+        createdAt: now,
+        vectorClock: {},
       });
 
       const deleted = await storage.deleteExpiredHourlyTokens(now);
@@ -285,6 +335,8 @@ describe('SQLiteStorage', () => {
         peerId: 'peer-1',
         relayId: 'relay',
         expiresAt: Date.now() + 300000,
+        createdAt: Date.now(),
+        vectorClock: {},
       });
 
       await storage.saveHourlyToken({
@@ -292,6 +344,8 @@ describe('SQLiteStorage', () => {
         peerId: 'peer-2',
         relayId: 'relay',
         expiresAt: Date.now() + 300000,
+        createdAt: Date.now(),
+        vectorClock: {},
       });
 
       await storage.saveHourlyToken({
@@ -299,6 +353,8 @@ describe('SQLiteStorage', () => {
         peerId: 'peer-1',
         relayId: 'relay',
         expiresAt: Date.now() + 300000,
+        createdAt: Date.now(),
+        vectorClock: {},
       });
 
       const stats = await storage.getHourlyTokenStats();
@@ -389,6 +445,9 @@ describe('SQLiteStorage', () => {
             deadDrop: `data-${i}`,
             relayId: `relay-${i}`,
             expiresAt: Date.now() + 3600000,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            vectorClock: {},
           })
         );
       }
@@ -406,6 +465,9 @@ describe('SQLiteStorage', () => {
         deadDrop: 'important-data',
         relayId: 'relay',
         expiresAt: Date.now() + 3600000,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        vectorClock: {},
       });
 
       storage.close();

@@ -170,7 +170,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
     if (approved == true) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Linked with $deviceName')),
+        SnackBar(
+          content: Text('Linked with $deviceName'),
+          duration: const Duration(seconds: 3),
+        ),
       );
       // Cancel the link session since it's now used
       setState(() => _linkSession = null);
@@ -196,7 +199,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
     // skip reconnection to avoid replacing the existing SignalingClient and
     // generating a new pairing code.
     final connectionManager = ref.read(connectionManagerProvider);
-    if (connectionManager.externalPairingCode != null) {
+    if (connectionManager.externalPairingCode != null ||
+        ref.read(pairingCodeProvider) != null) {
       return;
     }
 
@@ -235,6 +239,17 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
       ref.read(signalingConnectedProvider.notifier).state = true;
       ref.read(signalingDisplayStateProvider.notifier).state =
           SignalingDisplayState.connected;
+
+      // Connect to all other discovered servers for cross-server rendezvous
+      try {
+        final allServers = await discoveryService.fetchServers();
+        final allUrls =
+            allServers.map((s) => discoveryService.getWebSocketUrl(s)).toList();
+        await connectionManager.connectToAdditionalServers(allUrls);
+      } catch (e) {
+        logger.warning(
+            'ConnectScreen', 'Failed to connect to additional servers: $e');
+      }
 
       // Re-register meeting points for trusted peer reconnection
       await connectionManager.reconnectTrustedPeers();
@@ -281,7 +296,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
   Widget _buildMyCodeTab() {
     final pairingCode = ref.watch(pairingCodeProvider);
-    final displayName = ref.watch(displayNameProvider);
+    final identity = ref.watch(userIdentityProvider);
 
     if (_error != null) {
       return Center(
@@ -406,7 +421,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
                   onPressed: () {
                     Clipboard.setData(ClipboardData(text: pairingCode));
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Code copied to clipboard')),
+                      const SnackBar(
+                        content: Text('Code copied to clipboard'),
+                        duration: Duration(seconds: 3),
+                      ),
                     );
                   },
                 ),
@@ -415,7 +433,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
           ),
           const SizedBox(height: 8),
           Text(
-            'Visible as: $displayName',
+            'Your identity: $identity',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
@@ -429,7 +447,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
+                  color: Colors.black.withValues(alpha: 0.1),
                   blurRadius: 10,
                 ),
               ],
@@ -494,7 +512,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
               color: Theme.of(context)
                   .colorScheme
                   .primaryContainer
-                  .withOpacity(0.3),
+                  .withValues(alpha: 0.3),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Row(
@@ -529,7 +547,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
+                    color: Colors.black.withValues(alpha: 0.1),
                     blurRadius: 10,
                   ),
                 ],
@@ -566,7 +584,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
                       Clipboard.setData(
                           ClipboardData(text: _linkSession!.linkCode));
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Link code copied')),
+                        const SnackBar(
+                          content: Text('Link code copied'),
+                          duration: Duration(seconds: 3),
+                        ),
                       );
                     },
                   ),
@@ -730,7 +751,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
     if (serverUrl == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text('No server selected. Please wait or retry.')),
+            content: Text('No server selected. Please wait or retry.'),
+            duration: Duration(seconds: 3)),
       );
       return;
     }
@@ -742,7 +764,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to create link session: $e')),
+          SnackBar(
+            content: Text('Failed to create link session: $e'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }
@@ -784,7 +809,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
       await deviceLinkService.revokeDevice(device.id);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${device.deviceName} revoked')),
+          SnackBar(
+            content: Text('${device.deviceName} revoked'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }
@@ -813,7 +841,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
     if (code.isEmpty || code.length != 6) {
       logger.warning('ConnectScreen', 'Invalid code - empty or wrong length');
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a valid 6-character code')),
+        const SnackBar(
+          content: Text('Please enter a valid 6-character code'),
+          duration: Duration(seconds: 3),
+        ),
       );
       return;
     }
@@ -822,21 +853,28 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
     try {
       final connectionManager = ref.read(connectionManagerProvider);
+      final username = ref.read(usernameProvider);
       logger.info('ConnectScreen', 'Calling connectToPeer with code: $code');
-      await connectionManager.connectToPeer(code);
+      await connectionManager.connectToPeer(code, proposedName: username);
 
       logger.info('ConnectScreen', 'connectToPeer succeeded, popping screen');
       if (mounted) {
         context.pop();
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Connecting to peer...')),
+          const SnackBar(
+            content: Text('Connecting to peer...'),
+            duration: Duration(seconds: 3),
+          ),
         );
       }
     } catch (e) {
       logger.error('ConnectScreen', 'connectToPeer failed', e);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to connect: $e')),
+          SnackBar(
+            content: Text('Failed to connect: $e'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     } finally {

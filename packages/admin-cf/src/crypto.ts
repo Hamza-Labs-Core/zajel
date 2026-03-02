@@ -157,7 +157,8 @@ export async function verifyJwt<T = Record<string, unknown>>(
     }
 
     return payload;
-  } catch {
+  } catch (error) {
+    console.warn('[Auth] JWT verification failed:', error);
     return null;
   }
 }
@@ -204,13 +205,10 @@ function base64UrlDecode(str: string): string {
  * Timing-safe string comparison to prevent timing attacks
  */
 function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  const maxLen = Math.max(a.length, b.length);
+  let result = a.length ^ b.length; // non-zero if lengths differ
+  for (let i = 0; i < maxLen; i++) {
+    result |= (a.charCodeAt(i % a.length) ^ b.charCodeAt(i % b.length));
   }
   return result === 0;
 }

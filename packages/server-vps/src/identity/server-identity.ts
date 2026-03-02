@@ -49,8 +49,9 @@ export async function generateIdentity(ephemeralIdPrefix = 'srv'): Promise<Serve
   const nodeId = computeNodeId(publicKey);
   const ephemeralId = generateEphemeralId(ephemeralIdPrefix);
 
-  // Server ID format: "ed25519:<base64-encoded-public-key>"
-  const serverId = `ed25519:${Buffer.from(publicKey).toString('base64')}`;
+  // Server ID format: "ed25519:<base64url-encoded-public-key>"
+  // Uses base64url (RFC 4648 §5) to avoid +, /, = chars that fail bootstrap validation
+  const serverId = `ed25519:${Buffer.from(publicKey).toString('base64url')}`;
 
   return {
     serverId,
@@ -115,8 +116,10 @@ export function publicKeyFromServerId(serverId: string): Uint8Array {
   if (!serverId.startsWith('ed25519:')) {
     throw new Error('Invalid server ID format');
   }
-  const base64 = serverId.slice(8);
-  return new Uint8Array(Buffer.from(base64, 'base64'));
+  const encoded = serverId.slice(8);
+  // Support both base64url (new) and standard base64 (legacy) encoding
+  const encoding = /[+/=]/.test(encoded) ? 'base64' : 'base64url';
+  return new Uint8Array(Buffer.from(encoded, encoding));
 }
 
 /**
@@ -152,8 +155,18 @@ export function loadIdentity(path: string): ServerIdentity {
     privateKey: string;
   };
 
+  // Convert legacy base64 serverId to base64url if needed
+  let serverId = data.serverId;
+  if (serverId.startsWith('ed25519:')) {
+    const keyPart = serverId.slice(8);
+    if (/[+/=]/.test(keyPart)) {
+      const bytes = Buffer.from(keyPart, 'base64');
+      serverId = `ed25519:${Buffer.from(bytes).toString('base64url')}`;
+    }
+  }
+
   return {
-    serverId: data.serverId,
+    serverId,
     nodeId: data.nodeId,
     ephemeralId: data.ephemeralId,
     publicKey: new Uint8Array(Buffer.from(data.publicKey, 'base64')),

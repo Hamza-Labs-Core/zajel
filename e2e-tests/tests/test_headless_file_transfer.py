@@ -11,7 +11,6 @@ import tempfile
 import time
 import pytest
 
-from config import P2P_CONNECTION_TIMEOUT
 
 
 @pytest.mark.headless
@@ -29,12 +28,7 @@ class TestHeadlessFileTransfer:
         helper.get_pairing_code_from_connect_screen()
         helper.enter_peer_code(headless_bob.pairing_code)
 
-        time.sleep(P2P_CONNECTION_TIMEOUT)
-
-        helper.go_back_to_home()
-        time.sleep(3)
-
-        assert helper.is_peer_connected(), "Pairing must succeed"
+        assert helper.wait_for_peer_connected(timeout=60), "Pairing must succeed"
 
         helper.open_chat_with_peer()
         time.sleep(2)

@@ -22,7 +22,7 @@ const THRESHOLDS = {
   CONNECTION_CRITICAL: 5000,
   ENTROPY_WARNING: 10000,  // Active codes
   ENTROPY_CRITICAL: 20000,
-  FEDERATION_MINIMUM: 2,
+  FEDERATION_MINIMUM: 1,
 };
 
 export class MetricsCollector {

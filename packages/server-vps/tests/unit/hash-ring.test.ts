@@ -403,11 +403,13 @@ describe('Hash Ring', () => {
       expect(localKey).not.toBeNull();
       expect(remoteKey).not.toBeNull();
 
-      // Keys that route to local server should not create redirects
+      // With RF=3 >= server count (2), both servers are responsible for
+      // all hashes. getRedirectTargets always includes the remote server.
       const localTargets = routingTable.getRedirectTargets([localKey!]);
-      expect(localTargets).toHaveLength(0);
+      expect(localTargets).toHaveLength(1);
+      expect(localTargets[0]?.serverId).toBe('remote-server');
 
-      // Keys that route to remote server should create redirects
+      // Keys that route to remote server should also create redirects
       const remoteTargets = routingTable.getRedirectTargets([remoteKey!]);
       expect(remoteTargets).toHaveLength(1);
       expect(remoteTargets[0]?.serverId).toBe('remote-server');

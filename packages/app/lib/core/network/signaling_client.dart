@@ -112,6 +112,10 @@ class SignalingClient {
   // Rendezvous stream controller
   final _rendezvousController = StreamController<RendezvousEvent>.broadcast();
 
+  // Chunk relay stream controller — forwards raw chunk messages to ChannelSyncService
+  final _chunkMessageController =
+      StreamController<Map<String, dynamic>>.broadcast();
+
   final _logger = LoggerService.instance;
 
   bool _isConnected = false;
@@ -124,12 +128,14 @@ class SignalingClient {
     bool? usePinnedWebSocket,
   })  : _pairingCode = pairingCode,
         _publicKey = publicKey,
-        // Use pinned WebSocket only on platforms with native implementations (Android/iOS)
-        // Disabled on: web (no native access), desktop (no native impl), and test env
+        // Use pinned WebSocket only on platforms with native implementations.
+        // Disabled in test environments (FLUTTER_TEST or E2E_TEST) where
+        // native TLS dependencies (OpenSSL) may not be available.
         _usePinnedWebSocket = usePinnedWebSocket ??
             (_supportsPinnedWebSocket &&
                 !const bool.fromEnvironment('FLUTTER_TEST',
-                    defaultValue: false)) {
+                    defaultValue: false) &&
+                !const bool.fromEnvironment('E2E_TEST', defaultValue: false)) {
     _logger.debug(
       'SignalingClient',
       'Initialized: usePinnedWebSocket=$_usePinnedWebSocket, '
@@ -161,6 +167,10 @@ class SignalingClient {
 
   /// Stream of rendezvous events (matches, dead drops, partial results).
   Stream<RendezvousEvent> get rendezvousEvents => _rendezvousController.stream;
+
+  /// Stream of raw chunk relay messages for the channel sync service.
+  Stream<Map<String, dynamic>> get chunkMessages =>
+      _chunkMessageController.stream;
 
   /// Whether currently connected to the signaling server.
   bool get isConnected => _isConnected;
@@ -491,6 +501,8 @@ class SignalingClient {
     await _callIceController.close();
     // Close rendezvous stream controller
     await _rendezvousController.close();
+    // Close chunk message stream controller
+    await _chunkMessageController.close();
   }
 
   // Private methods
@@ -676,10 +688,58 @@ class SignalingClient {
           _handleRendezvousMatch(json);
           break;
 
+        // VPS server handshake messages
+        case 'server_info':
+          _logger.debug('SignalingClient',
+              'Server info: serverId=${json['serverId']}, region=${json['region']}');
+          break;
+
+        case 'server_identity':
+          _logger.debug('SignalingClient', 'Server identity proof received');
+          break;
+
+        // Chunk relay messages — forward to ChannelSyncService stream
+        case 'chunk_data':
+        case 'chunk_pull':
+        case 'chunk_available':
+        case 'chunk_not_found':
+        case 'chunk_announce_ack':
+        case 'chunk_push_ack':
+        case 'chunk_error':
+        case 'chunk_pulling':
+          _logger.debug('SignalingClient', 'Chunk message: $type');
+          _chunkMessageController.add(json);
+          break;
+
+        // Channel registration acknowledgements
+        case 'channel-owner-registered':
+        case 'channel-subscribed':
+          _logger.debug('SignalingClient', 'Channel registration: $type');
+          break;
+
         case 'pong':
+          _logger.debug('SignalingClient', 'Received pong');
+          break;
+
         case 'registered':
-          // Heartbeat and registration confirmation, ignore
-          _logger.debug('SignalingClient', 'Received $type message');
+          // Parse optional redirects for cross-server pairing
+          final rawRedirects = json['redirects'] as List<dynamic>? ?? [];
+          final redirects = rawRedirects
+              .whereType<Map<String, dynamic>>()
+              .map((r) => SignalingRedirect(
+                    serverId: r['serverId'] as String? ?? '',
+                    endpoint: r['endpoint'] as String? ?? '',
+                  ))
+              .where((r) => r.endpoint.isNotEmpty)
+              .toList();
+
+          _messageController.add(SignalingMessage.registered(
+            pairingCode: json['pairingCode'] as String? ?? '',
+            serverId: json['serverId'] as String? ?? '',
+            redirects: redirects,
+          ));
+          _logger.debug(
+              'SignalingClient', 'Registered: ${redirects.length} redirects');
           break;
 
         default:
@@ -781,12 +841,12 @@ class SignalingClient {
   }
 
   /// Parse live matches from JSON.
-  List<LiveMatch> _parseLiveMatches(dynamic data) {
+  List<SignalingLiveMatch> _parseLiveMatches(dynamic data) {
     if (data == null) return [];
     final list = data as List<dynamic>;
     return list.map((m) {
       final match = m as Map<String, dynamic>;
-      return LiveMatch(
+      return SignalingLiveMatch(
         peerId: match['peerId'] as String? ?? '',
         relayId: match['relayId'] as String?,
       );
@@ -794,12 +854,12 @@ class SignalingClient {
   }
 
   /// Parse dead drops from JSON.
-  List<DeadDrop> _parseDeadDrops(dynamic data) {
+  List<SignalingDeadDrop> _parseDeadDrops(dynamic data) {
     if (data == null) return [];
     final list = data as List<dynamic>;
     return list.map((d) {
       final drop = d as Map<String, dynamic>;
-      return DeadDrop(
+      return SignalingDeadDrop(
         peerId: drop['peerId'] as String? ?? '',
         encryptedData: drop['deadDrop'] as String? ?? '',
         relayId: drop['relayId'] as String?,
@@ -855,6 +915,12 @@ sealed class SignalingMessage {
       SignalingPairError;
 
   factory SignalingMessage.error({required String message}) = SignalingError;
+
+  factory SignalingMessage.registered({
+    required String pairingCode,
+    required String serverId,
+    required List<SignalingRedirect> redirects,
+  }) = SignalingRegistered;
 
   factory SignalingMessage.linkRequest({
     required String linkCode,
@@ -954,6 +1020,27 @@ class SignalingPairError extends SignalingMessage {
   final String error;
 
   const SignalingPairError({required this.error});
+}
+
+/// Server registration confirmation with optional DHT redirects.
+class SignalingRegistered extends SignalingMessage {
+  final String pairingCode;
+  final String serverId;
+  final List<SignalingRedirect> redirects;
+
+  const SignalingRegistered({
+    required this.pairingCode,
+    required this.serverId,
+    required this.redirects,
+  });
+}
+
+/// A redirect target for cross-server pairing registration.
+class SignalingRedirect {
+  final String serverId;
+  final String endpoint;
+
+  const SignalingRedirect({required this.serverId, required this.endpoint});
 }
 
 /// Device link request from a web client.
@@ -1184,8 +1271,8 @@ sealed class RendezvousEvent {
 
 /// Full rendezvous result when all points are handled locally.
 class RendezvousResult extends RendezvousEvent {
-  final List<LiveMatch> liveMatches;
-  final List<DeadDrop> deadDrops;
+  final List<SignalingLiveMatch> liveMatches;
+  final List<SignalingDeadDrop> deadDrops;
 
   const RendezvousResult({
     required this.liveMatches,
@@ -1195,8 +1282,8 @@ class RendezvousResult extends RendezvousEvent {
 
 /// Partial rendezvous result with redirects to other servers.
 class RendezvousPartial extends RendezvousEvent {
-  final List<LiveMatch> liveMatches;
-  final List<DeadDrop> deadDrops;
+  final List<SignalingLiveMatch> liveMatches;
+  final List<SignalingDeadDrop> deadDrops;
   final List<RendezvousRedirect> redirects;
 
   const RendezvousPartial({
@@ -1234,24 +1321,28 @@ class RendezvousRedirect {
   });
 }
 
-/// Live match info from rendezvous.
-class LiveMatch {
+/// Live match info from rendezvous signaling message.
+///
+/// Distinct from `dead_drop.dart`'s `LiveMatch` which is a richer domain model.
+class SignalingLiveMatch {
   final String peerId;
   final String? relayId;
 
-  const LiveMatch({
+  const SignalingLiveMatch({
     required this.peerId,
     this.relayId,
   });
 }
 
-/// Dead drop info from rendezvous.
-class DeadDrop {
+/// Dead drop info from rendezvous signaling message.
+///
+/// Distinct from `dead_drop.dart`'s `DeadDrop` which is a richer domain model.
+class SignalingDeadDrop {
   final String peerId;
   final String encryptedData;
   final String? relayId;
 
-  const DeadDrop({
+  const SignalingDeadDrop({
     required this.peerId,
     required this.encryptedData,
     this.relayId,

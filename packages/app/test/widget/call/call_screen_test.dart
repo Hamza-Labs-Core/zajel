@@ -125,6 +125,7 @@ void main() {
       expect(find.text('Mute'), findsOneWidget);
       expect(find.text('Video On'), findsOneWidget);
       expect(find.text('Flip'), findsOneWidget);
+      expect(find.text('Devices'), findsOneWidget);
       expect(find.text('End'), findsOneWidget);
     });
 
@@ -135,6 +136,7 @@ void main() {
       expect(find.byIcon(Icons.mic), findsOneWidget);
       expect(find.byIcon(Icons.videocam_off), findsOneWidget);
       expect(find.byIcon(Icons.switch_camera), findsOneWidget);
+      expect(find.byIcon(Icons.settings), findsOneWidget);
       expect(find.byIcon(Icons.call_end), findsOneWidget);
     });
 
@@ -182,6 +184,28 @@ void main() {
       await tester.pump();
 
       verify(() => mockVoIPService.hangup()).called(1);
+    });
+
+    testWidgets('opens device settings sheet when Devices button is pressed',
+        (tester) async {
+      // Setup MediaService mocks for the device sheet
+      when(() => mockMediaService.getAudioInputs()).thenAnswer((_) async => []);
+      when(() => mockMediaService.getAudioOutputs())
+          .thenAnswer((_) async => []);
+      when(() => mockMediaService.getVideoInputs()).thenAnswer((_) async => []);
+      when(() => mockMediaService.noiseSuppression).thenReturn(true);
+      when(() => mockMediaService.echoCancellation).thenReturn(true);
+      when(() => mockMediaService.autoGainControl).thenReturn(true);
+
+      await tester.pumpWidget(createTestWidget());
+      await tester.pump();
+
+      // Tap the Devices button (settings icon)
+      await tester.tap(find.byIcon(Icons.settings));
+      await tester.pumpAndSettle();
+
+      // Device Settings bottom sheet should appear
+      expect(find.text('Device Settings'), findsOneWidget);
     });
 
     testWidgets('updates mute button label after toggling', (tester) async {

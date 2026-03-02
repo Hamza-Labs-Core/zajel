@@ -98,7 +98,7 @@ class FileReceiveService {
     final transfer = FileTransfer(
       fileId: fileId,
       peerId: peerId,
-      fileName: fileName,
+      fileName: _sanitizeFileName(fileName),
       totalSize: totalSize,
       totalChunks: totalChunks,
     );
@@ -247,6 +247,19 @@ class FileReceiveService {
   /// Clean up a specific transfer.
   void removeTransfer(String fileId) {
     _activeTransfers.remove(fileId);
+  }
+
+  /// Sanitize a filename from a peer to prevent path traversal and shell injection.
+  static String _sanitizeFileName(String name) {
+    // Strip characters that are unsafe on any OS or exploitable by shells
+    var sanitized = name.replaceAll(RegExp(r'[/\\:*?"<>|&;$`\n\r\x00]'), '_');
+    // Prevent path traversal via .. components
+    sanitized = sanitized.replaceAll('..', '_');
+    // Trim leading/trailing whitespace and dots (Windows hidden file tricks)
+    sanitized = sanitized.trim().replaceAll(RegExp(r'^\.+|\.+$'), '');
+    // Ensure non-empty
+    if (sanitized.isEmpty) sanitized = 'unnamed_file';
+    return sanitized;
   }
 
   /// Dispose resources.

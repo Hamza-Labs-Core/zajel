@@ -21,6 +21,7 @@ import worker from '../../src/index.js';
 class MockStorage {
   constructor() {
     this.data = new Map();
+    this._alarm = null;
   }
 
   async get(key) {
@@ -32,21 +33,35 @@ class MockStorage {
   }
 
   async delete(key) {
-    this.data.delete(key);
+    if (Array.isArray(key)) {
+      for (const k of key) this.data.delete(k);
+    } else {
+      this.data.delete(key);
+    }
   }
 
-  async list({ prefix }) {
+  async list({ prefix, limit }) {
     const results = new Map();
     for (const [key, value] of this.data) {
       if (key.startsWith(prefix)) {
         results.set(key, value);
+        if (limit && results.size >= limit) break;
       }
     }
     return results;
   }
 
+  async getAlarm() {
+    return this._alarm;
+  }
+
+  async setAlarm(time) {
+    this._alarm = time;
+  }
+
   clear() {
     this.data.clear();
+    this._alarm = null;
   }
 }
 
@@ -56,6 +71,10 @@ class MockStorage {
 class MockState {
   constructor() {
     this.storage = new MockStorage();
+  }
+
+  blockConcurrencyWhile(fn) {
+    return fn();
   }
 }
 
@@ -132,7 +151,8 @@ describe('Bootstrap Service E2E Tests', () => {
       const request = createRequest('GET', '/health');
       const response = await worker.fetch(request, env);
 
-      expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      // CORS origin is only set when a matching Origin header is present
+      expect(response.headers.get('Access-Control-Allow-Methods')).toContain('GET');
       expect(response.headers.get('Content-Type')).toBe('application/json');
     });
 
@@ -409,6 +429,67 @@ describe('Bootstrap Service E2E Tests', () => {
       expect(listData.servers).toHaveLength(1);
     });
 
+    it('should update connections count via heartbeat', async () => {
+      const serverData = {
+        serverId: 'ed25519:metrics-server',
+        endpoint: 'wss://metrics.example.com',
+        publicKey: 'metrics-key',
+        region: 'eu-west',
+      };
+
+      await serverRegistry.fetch(createRequest('POST', '/servers', serverData));
+
+      // Send heartbeat with connections count
+      const heartbeatRequest = createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:metrics-server',
+        connections: 42,
+      });
+      const response = await serverRegistry.fetch(heartbeatRequest);
+      expect(response.status).toBe(200);
+
+      // Verify connections appears in server list
+      const listResponse = await serverRegistry.fetch(createRequest('GET', '/servers'));
+      const listData = await listResponse.json();
+
+      expect(listData.servers).toHaveLength(1);
+      expect(listData.servers[0].connections).toBe(42);
+    });
+
+    it('should include connections from registration in server list', async () => {
+      const serverData = {
+        serverId: 'ed25519:conn-server',
+        endpoint: 'wss://conn.example.com',
+        publicKey: 'conn-key',
+        region: 'eu-west',
+        connections: 10,
+      };
+
+      await serverRegistry.fetch(createRequest('POST', '/servers', serverData));
+
+      const listResponse = await serverRegistry.fetch(createRequest('GET', '/servers'));
+      const listData = await listResponse.json();
+
+      expect(listData.servers).toHaveLength(1);
+      expect(listData.servers[0].connections).toBe(10);
+    });
+
+    it('should default connections to 0 when not provided', async () => {
+      const serverData = {
+        serverId: 'ed25519:no-conn-server',
+        endpoint: 'wss://no-conn.example.com',
+        publicKey: 'no-conn-key',
+        region: 'eu-west',
+      };
+
+      await serverRegistry.fetch(createRequest('POST', '/servers', serverData));
+
+      const listResponse = await serverRegistry.fetch(createRequest('GET', '/servers'));
+      const listData = await listResponse.json();
+
+      expect(listData.servers).toHaveLength(1);
+      expect(listData.servers[0].connections).toBe(0);
+    });
+
     it('should return peers list with heartbeat response', async () => {
       // Register multiple servers
       const servers = [
@@ -608,9 +689,9 @@ describe('Bootstrap Service E2E Tests', () => {
   });
 
   describe('Edge Cases', () => {
-    it('should handle server IDs with special characters', async () => {
+    it('should handle server IDs with allowed special characters (colons, dots, hyphens)', async () => {
       const serverData = {
-        serverId: 'ed25519:abc123/def+456==',
+        serverId: 'ed25519:abc123.def-456',
         endpoint: 'wss://special.example.com',
         publicKey: 'special-key',
       };
@@ -623,6 +704,36 @@ describe('Bootstrap Service E2E Tests', () => {
       const listResponse = await serverRegistry.fetch(createRequest('GET', '/servers'));
       const listData = await listResponse.json();
       expect(listData.servers[0].serverId).toBe(serverData.serverId);
+    });
+
+    it('should accept server IDs with base64 characters', async () => {
+      const serverData = {
+        serverId: 'ed25519:abc123/def+456==',
+        endpoint: 'wss://special.example.com',
+        publicKey: 'special-key',
+      };
+
+      const registerResponse = await serverRegistry.fetch(
+        createRequest('POST', '/servers', serverData)
+      );
+      expect(registerResponse.status).toBe(200);
+      const data = await registerResponse.json();
+      expect(data.success).toBe(true);
+    });
+
+    it('should reject server IDs with invalid characters', async () => {
+      const serverData = {
+        serverId: 'ed25519:abc 123;def',
+        endpoint: 'wss://special.example.com',
+        publicKey: 'special-key',
+      };
+
+      const registerResponse = await serverRegistry.fetch(
+        createRequest('POST', '/servers', serverData)
+      );
+      expect(registerResponse.status).toBe(400);
+      const data = await registerResponse.json();
+      expect(data.error).toContain('Invalid serverId');
     });
 
     it('should handle very long endpoint URLs', async () => {

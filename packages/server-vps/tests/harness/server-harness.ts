@@ -2,7 +2,7 @@
  * Test Server Harness
  *
  * Utility for starting/stopping real VPS server instances during integration tests.
- * Supports dynamic port allocation, multiple server instances, and log capture.
+ * Uses port 0 so the OS assigns a free port — no manual allocation needed.
  */
 
 import { createZajelServer, type ZajelServer } from '../../src/index.js';
@@ -10,8 +10,6 @@ import type { ServerConfig } from '../../src/types.js';
 import { EventEmitter } from 'events';
 
 export interface TestServerHarnessOptions {
-  /** Base port for dynamic allocation. Each server gets basePort + index */
-  basePort?: number;
   /** Region for the server (used in server_info) */
   region?: string;
   /** Bootstrap server URL (should point to mock bootstrap) */
@@ -33,30 +31,12 @@ export interface ServerLog {
   data?: unknown;
 }
 
-// Port allocator to avoid conflicts
-let nextPort = 30000 + Math.floor(Math.random() * 5000);
-const allocatedPorts = new Set<number>();
-
-function allocatePort(): number {
-  let port = nextPort++;
-  // Ensure we don't reuse ports within a test run
-  while (allocatedPorts.has(port)) {
-    port = nextPort++;
-  }
-  allocatedPorts.add(port);
-  return port;
-}
-
-function releasePort(port: number): void {
-  allocatedPorts.delete(port);
-}
-
 /**
  * TestServerHarness - Manages a real VPS server instance for testing
  */
 export class TestServerHarness extends EventEmitter {
   private server: ZajelServer | null = null;
-  private _port: number;
+  private _port = 0;
   private _logs: ServerLog[] = [];
   private _options: TestServerHarnessOptions;
   private _isRunning = false;
@@ -66,7 +46,6 @@ export class TestServerHarness extends EventEmitter {
   constructor(options: TestServerHarnessOptions = {}) {
     super();
     this._options = {
-      basePort: undefined,
       region: 'test-region',
       bootstrapUrl: 'http://localhost:59999', // Invalid by default, should be overridden
       bootstrapNodes: [],
@@ -75,12 +54,11 @@ export class TestServerHarness extends EventEmitter {
       shutdownTimeout: 10000,
       ...options,
     };
-    this._port = options.basePort ?? allocatePort();
-    this._keyPath = `/tmp/zajel-test-${this._port}-${Date.now()}.key`;
+    this._keyPath = `/tmp/zajel-test-${Date.now()}-${Math.random().toString(36).slice(2)}.key`;
   }
 
   /**
-   * Start the server instance
+   * Start the server instance. Uses port 0 so the OS picks a free port.
    */
   async start(): Promise<void> {
     if (this._isRunning) {
@@ -93,6 +71,12 @@ export class TestServerHarness extends EventEmitter {
       this._startTime = Date.now();
       this.server = await createZajelServer(config);
       this._isRunning = true;
+
+      // Read the actual port the OS assigned
+      const addr = this.server.httpServer.address();
+      if (addr && typeof addr === 'object') {
+        this._port = addr.port;
+      }
 
       this.log('info', `Server started on port ${this._port}`);
       this.emit('started', { port: this._port, serverId: this.server.identity.serverId });
@@ -126,7 +110,6 @@ export class TestServerHarness extends EventEmitter {
     } finally {
       this._isRunning = false;
       this.server = null;
-      releasePort(this._port);
       this.emit('stopped', { port: this._port });
     }
   }
@@ -146,7 +129,7 @@ export class TestServerHarness extends EventEmitter {
   }
 
   /**
-   * Get the port number
+   * Get the port number (only valid after start())
    */
   get port(): number {
     return this._port;
@@ -219,8 +202,8 @@ export class TestServerHarness extends EventEmitter {
     const baseConfig: Partial<ServerConfig> = {
       network: {
         host: '127.0.0.1',
-        port: this._port,
-        publicEndpoint: `ws://127.0.0.1:${this._port}`,
+        port: 0, // OS picks a free port
+        publicEndpoint: 'ws://127.0.0.1:0', // Updated after start via httpServer.address()
         region: this._options.region,
       },
       bootstrap: {
@@ -256,6 +239,9 @@ export class TestServerHarness extends EventEmitter {
         interval: 60000,
         dailyPointTtl: 48 * 60 * 60 * 1000,
         hourlyTokenTtl: 3 * 60 * 60 * 1000,
+      },
+      admin: {
+        jwtSecret: '', // No auth in tests — /stats and /metrics stay accessible
       },
     };
 
@@ -314,7 +300,7 @@ export class TestServerHarness extends EventEmitter {
  */
 export async function createServerCluster(
   count: number,
-  options: Omit<TestServerHarnessOptions, 'basePort'> = {}
+  options: TestServerHarnessOptions = {}
 ): Promise<TestServerHarness[]> {
   const servers: TestServerHarness[] = [];
 

@@ -10,7 +10,7 @@ void main() {
       final prefs = await SharedPreferences.getInstance();
       final notifier = ThemeModeNotifier(prefs);
 
-      expect(notifier.debugState, ThemeMode.system);
+      expect(notifier.state, ThemeMode.system);
     });
 
     test('loads saved light preference correctly', () async {
@@ -18,7 +18,7 @@ void main() {
       final prefs = await SharedPreferences.getInstance();
       final notifier = ThemeModeNotifier(prefs);
 
-      expect(notifier.debugState, ThemeMode.light);
+      expect(notifier.state, ThemeMode.light);
     });
 
     test('loads saved dark preference correctly', () async {
@@ -26,7 +26,7 @@ void main() {
       final prefs = await SharedPreferences.getInstance();
       final notifier = ThemeModeNotifier(prefs);
 
-      expect(notifier.debugState, ThemeMode.dark);
+      expect(notifier.state, ThemeMode.dark);
     });
 
     test('setThemeMode updates state and persists to SharedPreferences',
@@ -35,18 +35,18 @@ void main() {
       final prefs = await SharedPreferences.getInstance();
       final notifier = ThemeModeNotifier(prefs);
 
-      expect(notifier.debugState, ThemeMode.system);
+      expect(notifier.state, ThemeMode.system);
 
       await notifier.setThemeMode(ThemeMode.dark);
-      expect(notifier.debugState, ThemeMode.dark);
+      expect(notifier.state, ThemeMode.dark);
       expect(prefs.getString('themeMode'), 'dark');
 
       await notifier.setThemeMode(ThemeMode.light);
-      expect(notifier.debugState, ThemeMode.light);
+      expect(notifier.state, ThemeMode.light);
       expect(prefs.getString('themeMode'), 'light');
 
       await notifier.setThemeMode(ThemeMode.system);
-      expect(notifier.debugState, ThemeMode.system);
+      expect(notifier.state, ThemeMode.system);
       expect(prefs.getString('themeMode'), 'system');
     });
 
@@ -55,7 +55,7 @@ void main() {
       final prefs = await SharedPreferences.getInstance();
       final notifier = ThemeModeNotifier(prefs);
 
-      expect(notifier.debugState, ThemeMode.system);
+      expect(notifier.state, ThemeMode.system);
     });
   });
 }

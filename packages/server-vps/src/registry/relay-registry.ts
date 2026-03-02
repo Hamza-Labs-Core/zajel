@@ -10,6 +10,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { secureShuffleArray } from '../crypto/secure-random.js';
 
 export interface RelayInfo {
   peerId: string;
@@ -43,12 +44,14 @@ export class RelayRegistry extends EventEmitter {
     options: { maxConnections?: number; publicKey?: string | null } = {}
   ): void {
     const { maxConnections = 20, publicKey = null } = options;
+    // Defense-in-depth: clamp maxConnections to valid range
+    const maxConn = Math.max(1, Math.min(1000, Number(maxConnections) || 20));
     const existing = this.peers.get(peerId);
     const now = Date.now();
 
     const info: RelayInfo = {
       peerId,
-      maxConnections,
+      maxConnections: maxConn,
       connectedCount: existing?.connectedCount ?? 0,
       publicKey,
       registeredAt: existing?.registeredAt ?? now,
@@ -104,11 +107,8 @@ export class RelayRegistry extends EventEmitter {
       }
     }
 
-    // Fisher-Yates shuffle for random distribution
-    for (let i = available.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [available[i], available[j]] = [available[j]!, available[i]!];
-    }
+    // Cryptographically secure shuffle for random distribution
+    secureShuffleArray(available);
 
     return available.slice(0, count);
   }
