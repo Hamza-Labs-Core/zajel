@@ -364,9 +364,9 @@ export class ServerRegistryDO {
         return await this.setTrustedKeys(request, corsHeaders);
       }
 
-      // GET /servers/trusted-keys - Read current trusted build keys (public)
+      // GET /servers/trusted-keys - Read current trusted build keys (authenticated)
       if (request.method === 'GET' && url.pathname === '/servers/trusted-keys') {
-        return await this.getTrustedKeys(corsHeaders);
+        return await this.getTrustedKeys(request, corsHeaders);
       }
 
       return new Response('Not Found', { status: 404, headers: corsHeaders });
@@ -899,9 +899,27 @@ export class ServerRegistryDO {
    * GET /servers/trusted-keys
    *
    * Returns the current set of trusted build signing public keys.
-   * Public endpoint — keys are public keys, not secrets.
+   * Requires CI_UPLOAD_SECRET authentication.
    */
-  async getTrustedKeys(corsHeaders) {
+  async getTrustedKeys(request, corsHeaders) {
+    if (!this.env.CI_UPLOAD_SECRET) {
+      return new Response(
+        JSON.stringify({ error: 'Trusted key management not configured' }),
+        { status: 503, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+      );
+    }
+
+    if (!this.verifyCIAuth(request)) {
+      this.logger.warn('[audit] Unauthorized trusted-keys read attempt', {
+        action: 'trusted_keys_read_failed',
+        ip: request.headers.get('CF-Connecting-IP'),
+      });
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized' }),
+        { status: 401, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+      );
+    }
+
     const stored = (await this.state.storage.get('trusted_build_keys')) || { keys: [], updatedAt: null };
     return new Response(
       JSON.stringify({ keys: stored.keys, updatedAt: stored.updatedAt }),
