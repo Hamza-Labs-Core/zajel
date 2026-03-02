@@ -99,6 +99,15 @@ class WebRTCService {
   Future<Map<String, dynamic>> createOffer(String peerId) async {
     final connection = await _createConnection(peerId);
 
+    // Pre-generate ephemeral keypair BEFORE data channel handlers fire.
+    // This prevents a race condition where the peer's handshake arrives
+    // before performHandshake() generates the key, causing a fallback to
+    // identity-only exchange while the peer uses ephemeral — resulting in
+    // mismatched session keys and decrypt failures.
+    final ephemeral = await _cryptoService.generateEphemeralKeyPair();
+    _pendingEphemeralKeys[peerId] = ephemeral.privateKey;
+    _pendingEphemeralPublicKeys[peerId] = ephemeral.publicKey;
+
     // Create data channels
     await _createDataChannels(connection);
 
@@ -124,6 +133,13 @@ class WebRTCService {
     Map<String, dynamic> offer,
   ) async {
     final connection = await _createConnection(peerId);
+
+    // Pre-generate ephemeral keypair BEFORE setRemoteDescription triggers
+    // data channel creation (for the answerer, channels arrive via
+    // onDataChannel after the remote description is applied).
+    final ephemeral = await _cryptoService.generateEphemeralKeyPair();
+    _pendingEphemeralKeys[peerId] = ephemeral.privateKey;
+    _pendingEphemeralPublicKeys[peerId] = ephemeral.publicKey;
 
     // Set remote description with timeout to prevent hanging
     await connection.pc
@@ -314,16 +330,24 @@ class WebRTCService {
       throw WebRTCException('No connection to peer: $peerId');
     }
 
-    // Generate ephemeral key pair for forward secrecy
-    final ephemeral = await _cryptoService.generateEphemeralKeyPair();
-    _pendingEphemeralKeys[peerId] = ephemeral.privateKey;
+    // Use pre-generated ephemeral key if available (from createOffer/handleOffer),
+    // otherwise generate a fresh one (e.g. reconnection paths).
+    final String ephemeralPublicKey;
+    final preGenPublic = _pendingEphemeralPublicKeys.remove(peerId);
+    if (preGenPublic != null) {
+      ephemeralPublicKey = preGenPublic;
+    } else {
+      final ephemeral = await _cryptoService.generateEphemeralKeyPair();
+      _pendingEphemeralKeys[peerId] = ephemeral.privateKey;
+      ephemeralPublicKey = ephemeral.publicKey;
+    }
 
     // Send our public key, ephemeral key, username, and stable ID
     final publicKey = await _cryptoService.getPublicKeyBase64();
     final handshakeData = <String, dynamic>{
       'type': 'handshake',
       'publicKey': publicKey,
-      'ephemeralKey': ephemeral.publicKey,
+      'ephemeralKey': ephemeralPublicKey,
       'ratchetVersion': 1,
     };
     if (username != null) {
@@ -341,10 +365,16 @@ class WebRTCService {
   /// Deleted immediately after session key derivation.
   final Map<String, String> _pendingEphemeralKeys = {};
 
+  /// Temporary storage for pre-generated ephemeral public keys.
+  /// Used by [performHandshake] to avoid regenerating keys that were
+  /// pre-generated during connection setup.
+  final Map<String, String> _pendingEphemeralPublicKeys = {};
+
   /// Close connection to a peer.
   Future<void> closeConnection(String peerId) async {
     _pendingCandidates.remove(peerId);
     _pendingEphemeralKeys.remove(peerId);
+    _pendingEphemeralPublicKeys.remove(peerId);
     final connection = _connections.remove(peerId);
     if (connection != null) {
       await connection.messageChannel?.close();

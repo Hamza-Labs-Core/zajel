@@ -601,6 +601,47 @@ void main() {
         );
       });
 
+      test('mixed exchange modes cause decrypt failure', () async {
+        // This test proves the race condition bug: if one side uses ephemeral
+        // key exchange (zajel_session_v2) and the other uses identity-only
+        // (zajel_session), the derived session keys differ and messages
+        // cannot be decrypted.
+        final alice = CryptoService(secureStorage: FakeSecureStorage());
+        final bob = CryptoService(secureStorage: FakeSecureStorage());
+
+        await alice.initialize();
+        await bob.initialize();
+
+        final alicePub = await alice.getPublicKeyBase64();
+        final bobPub = await bob.getPublicKeyBase64();
+
+        // Both generate ephemeral keys
+        final aliceEph = await alice.generateEphemeralKeyPair();
+        final bobEph = await bob.generateEphemeralKeyPair();
+
+        // Alice uses ephemeral exchange (dual ECDH → zajel_session_v2)
+        await alice.establishSessionWithEphemeral(
+          peerId: 'bob',
+          peerIdentityKeyBase64: bobPub,
+          peerEphemeralKeyBase64: bobEph.publicKey,
+          ourEphemeralPrivateKeyBase64: aliceEph.privateKey,
+        );
+
+        // Bob uses identity-only exchange (single ECDH → zajel_session)
+        // This simulates the race condition where Bob's handshake arrived
+        // before Alice generated her ephemeral key
+        await bob.establishSession('alice', alicePub);
+
+        // Alice encrypts with ephemeral-derived key
+        final encrypted = await alice.encrypt('bob', 'Hello from Alice');
+
+        // Bob cannot decrypt — different session keys
+        await expectLater(
+          bob.decrypt('alice', encrypted),
+          throwsA(anything),
+        );
+      });
+
       test('ephemeral session is persisted', () async {
         final storage = FakeSecureStorage();
         final alice = CryptoService(secureStorage: storage);
