@@ -6,7 +6,7 @@ Zajel has two server implementations, each with its own test suite, plus cross-c
 
 | Component | Test Path | Runner | CI Workflow |
 |-----------|-----------|--------|-------------|
-| CF Workers (signaling) | `packages/server/src/__tests__/` | Vitest | `server-tests.yml` |
+| CF Workers (signaling) | `packages/server/tests/` | Vitest | `server-tests.yml` |
 | VPS Server | `packages/server-vps/` | Vitest (2 shards) | `server-vps-tests.yml` |
 | Integration Tests | `packages/integration-tests/src/scenarios/` | Vitest + Playwright | `integration-tests.yml` |
 | Web Client | `packages/web-client/` | Vitest + Playwright (2 shards) | `web-client-tests.yml` |
@@ -17,18 +17,22 @@ The Cloudflare Workers signaling server (`packages/server/`) has unit and E2E te
 
 ### Unit Tests
 
-Located at `packages/server/src/__tests__/`:
+Located at `packages/server/tests/unit/`:
 
 | File | Tests |
 |------|-------|
-| `websocket-handler.test.js` | WebSocket message handling: registration, pairing protocol, signal relay, heartbeat, connection cleanup |
-| `websocket-handler-chunks.test.js` | Chunk relay: channel content chunk forwarding between publishers and subscribers |
-| `rendezvous-registry.test.js` | Rendezvous registry: meeting point registration, lookup, expiry for trusted peer reconnection |
-| `relay-registry.test.js` | Relay registry: channel relay routing, subscriber management |
-| `relay-registry-do.test.js` | Relay registry Durable Object: persistent relay state |
-| `chunk-index.test.js` | Chunk index: content-addressable chunk storage and retrieval |
+| `attestation-crypto.test.js` | Attestation cryptographic operations |
+| `signing.test.js` | Message signing and verification |
 
 ### E2E Tests
+
+Located at `packages/server/tests/e2e/`:
+
+| File | Tests |
+|------|-------|
+| `attestation.test.js` | Attestation end-to-end flow |
+| `bootstrap.test.js` | Bootstrap server discovery E2E |
+| `integration.test.js` | Full CF Workers integration test (registration, pairing, signal relay) |
 
 Run via `npm run test:e2e` in the server workspace. These test the full CF Workers stack including Durable Objects.
 
@@ -64,6 +68,36 @@ Concurrency group: `server-${{ github.ref }}` with cancel-in-progress.
 ## VPS Server Tests
 
 The VPS signaling server (`packages/server-vps/`) has unit and integration tests. Unit tests are sharded for faster CI execution.
+
+### Unit Tests
+
+Located at `packages/server-vps/tests/unit/`:
+
+| File | Tests |
+|------|-------|
+| `attestation.test.ts` | Attestation service |
+| `client-handler-call-signaling.test.ts` | Call signaling handler |
+| `client-handler-channels.test.ts` | Channel handler |
+| `client-handler-chunks.test.ts` | Chunk relay handler |
+| `client-handler-link.test.ts` | Link handler |
+| `client-handler-pairing.test.ts` | Pairing handler |
+| `client-handler-rendezvous.test.ts` | Rendezvous handler |
+| `hash-ring.test.ts` | Consistent hash ring |
+| `identity.test.ts` | Server identity |
+| `relay-registry.test.ts` | Relay registry |
+| `rendezvous-registry.test.ts` | Rendezvous registry |
+| `storage.test.ts` | Storage layer |
+
+### Integration Tests
+
+Located at `packages/server-vps/tests/integration/`:
+
+| File | Tests |
+|------|-------|
+| `bootstrap-client.test.ts` | Bootstrap client integration |
+| `distributed-rendezvous.test.ts` | Distributed rendezvous protocol |
+| `federation.test.ts` | Federation/SWIM gossip protocol |
+| `real-server.test.ts` | Real server lifecycle |
 
 ### Running Locally
 
@@ -245,6 +279,31 @@ headless-client-tests:
     - run: pip install -e packages/headless-client[dev]
     - run: pytest packages/headless-client/tests/ -v --timeout=30
     - run: pytest tests/test_channels_headless.py tests/test_groups_headless.py -v --timeout=60
+```
+
+## Headless Client Tests
+
+The Python headless client (`packages/headless-client/`) has unit tests at `packages/headless-client/tests/unit/`:
+
+| File | Tests |
+|------|-------|
+| `test_channels.py` | Channel operations |
+| `test_cli_protocol.py` | CLI protocol handling |
+| `test_cli_serializers.py` | CLI serializers |
+| `test_crypto.py` | Cryptographic operations (X25519, ChaCha20-Poly1305) |
+| `test_dead_drop.py` | Dead drop message exchange |
+| `test_file_transfer.py` | File transfer protocol |
+| `test_groups.py` | Group operations |
+| `test_protocol.py` | Message protocol encoding/decoding |
+| `test_signaling.py` | Signaling client |
+| `test_typing_receipts.py` | Typing indicators and read receipts |
+| `test_vector_clock.py` | Vector clock for causal ordering |
+
+### Running Locally
+
+```bash
+pip install -e packages/headless-client[dev]
+pytest packages/headless-client/tests/ -v --timeout=30
 ```
 
 ## Test Patterns

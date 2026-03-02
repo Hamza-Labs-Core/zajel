@@ -83,6 +83,7 @@ e2e-tests/
     test_blocked_enhanced.py   # Enhanced blocked list
     test_reconnection.py       # Meeting point reconnection
     test_connection_states.py  # Connection edge cases
+    test_desktop_ui.py         # Desktop E2E UI tests (real cursor via accessibility APIs)
     test_headless_pairing.py   # Headless client pairing
     test_headless_messaging.py # Headless client messaging
     test_headless_file_transfer.py     # Headless file transfer

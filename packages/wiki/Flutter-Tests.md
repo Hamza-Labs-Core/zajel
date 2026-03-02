@@ -9,15 +9,21 @@ packages/app/test/
   unit/
     attestation/      # App attestation and integrity
     channels/         # Channel service, crypto, sync, links
+    chat/             # Read receipts, typing indicators
     crypto/           # Crypto service, bootstrap verifier
     groups/           # Group service, crypto, sync, connections
     help/             # Help content
+    lint/             # Lint rules (snackbar durations, etc.)
     media/            # Media service
     models/           # Message and peer models
     network/          # Connection, signaling, relay, VoIP
     notifications/    # Notification service
+    platform/         # Platform-specific channels (notifications, privacy)
     protocol/         # Message protocol
     providers/        # Riverpod providers
+    services/         # App services (initialization, auto-delete, handlers, etc.)
+    storage/          # Message storage, privacy overlay, key rotation
+    utils/            # Identity utilities
   widget/
     call/             # Call screen, incoming call dialog
     chat/             # Chat screen focus
@@ -27,13 +33,12 @@ packages/app/test/
     home_screen_test.dart
     onboarding_screen_test.dart
   integration/
-    connection_test.dart
     reconnection_flow_test.dart
-    server_discovery_test.dart
     signaling_reconnect_test.dart
     signaling_rendezvous_test.dart
   e2e/
-    (Dart-based E2E -- see e2e-tests/ for the pytest-based E2E suite)
+    connection_test.dart
+    server_discovery_test.dart
 ```
 
 ## Unit Tests
@@ -104,6 +109,55 @@ packages/app/test/
 | `signaling_client_test.dart` | WebSocket signaling client |
 | `voip_service_test.dart` | VoIP call service |
 
+### Chat Tests
+
+| File | Tests |
+|------|-------|
+| `chat/read_receipt_service_test.dart` | Read receipt service |
+| `chat/typing_indicator_service_test.dart` | Typing indicator service |
+
+### Lint Tests
+
+| File | Tests |
+|------|-------|
+| `lint/snackbar_duration_test.dart` | SnackBar duration enforcement |
+
+### Platform Tests
+
+| File | Tests |
+|------|-------|
+| `platform/notification_channel_test.dart` | Platform notification channel |
+| `platform/privacy_channel_test.dart` | Platform privacy channel |
+
+### Services Tests
+
+| File | Tests |
+|------|-------|
+| `services/app_initialization_service_test.dart` | App initialization service |
+| `services/auto_delete_service_test.dart` | Auto-delete service |
+| `services/channel_storage_service_test.dart` | Channel storage service |
+| `services/file_transfer_listener_test.dart` | File transfer listener |
+| `services/group_invitation_service_test.dart` | Group invitation service |
+| `services/group_storage_service_test.dart` | Group storage service |
+| `services/link_request_handler_test.dart` | Link request handler |
+| `services/notification_listener_service_test.dart` | Notification listener service |
+| `services/pair_request_handler_test.dart` | Pair request handler |
+| `services/voip_call_handler_test.dart` | VoIP call handler |
+
+### Storage Tests
+
+| File | Tests |
+|------|-------|
+| `storage/message_storage_desktop_test.dart` | Desktop message storage |
+| `storage/privacy_overlay_test.dart` | Privacy overlay |
+| `storage/trusted_peers_key_rotation_test.dart` | Trusted peers key rotation |
+
+### Utils Tests
+
+| File | Tests |
+|------|-------|
+| `utils/identity_utils_test.dart` | Identity utilities |
+
 ### Other Unit Tests
 
 | File | Tests |
@@ -138,11 +192,18 @@ Integration tests at `packages/app/test/integration/` test multi-component flows
 
 | File | Tests |
 |------|-------|
-| `connection_test.dart` | Full connection lifecycle |
 | `reconnection_flow_test.dart` | Reconnection after disconnect |
-| `server_discovery_test.dart` | Server discovery via bootstrap |
 | `signaling_reconnect_test.dart` | Signaling WebSocket reconnection |
 | `signaling_rendezvous_test.dart` | Rendezvous-based peer reconnection |
+
+### E2E Tests (Dart)
+
+Located at `packages/app/test/e2e/`, these are Dart-based E2E tests (distinct from the pytest-based E2E suite in `e2e-tests/`):
+
+| File | Tests |
+|------|-------|
+| `connection_test.dart` | Full connection lifecycle |
+| `server_discovery_test.dart` | Server discovery via bootstrap |
 
 **CI Status**: Skipped in CI due to platform limitations. See `docs/testing/CI_LIMITATIONS.md`.
 

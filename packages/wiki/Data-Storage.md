@@ -8,7 +8,7 @@ Zajel uses three storage layers on the client device: SQLite for structured data
 
 | Layer | Technology | What it stores | Encryption |
 |-------|-----------|----------------|-----------|
-| SQLite | `sqflite` | Messages, channels, chunks, groups, vector clocks | Not encrypted at rest |
+| SQLite | `sqflite` (mobile), `sqflite_common_ffi` (desktop) | Messages, channels, chunks, groups, vector clocks | Not encrypted at rest |
 | Secure Storage | `flutter_secure_storage` | Private keys, session keys, sender keys | Platform keychain/keystore |
 | Preferences | `SharedPreferences` | Settings, display name, device selections | Not encrypted |
 | File System | Platform file system | Received files, log files | Not encrypted |
@@ -23,18 +23,18 @@ Stores per-peer message history.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| id | TEXT PK | UUID message identifier |
+| localId | TEXT PK | UUID message identifier |
 | peerId | TEXT | Peer this message belongs to |
 | type | TEXT | "text" or "file" |
 | content | TEXT | Message text or file metadata |
 | status | TEXT | pending, sending, sent, delivered, read, failed |
-| isFromMe | INTEGER | 1 if sent by local user, 0 if received |
-| timestamp | INTEGER | Unix timestamp (milliseconds) |
+| isOutgoing | INTEGER | 1 if sent by local user, 0 if received |
+| timestamp | TEXT | ISO 8601 timestamp string |
 | attachmentName | TEXT | File name (nullable) |
 | attachmentSize | INTEGER | File size in bytes (nullable) |
 | attachmentPath | TEXT | Local file path (nullable) |
 
-**Indexes**: `peerId`, `timestamp`
+**Indexes**: `peerId`, `(peerId, timestamp)`
 
 ### Channels Table
 
@@ -44,9 +44,9 @@ Stores channel metadata and role information.
 |--------|------|-------------|
 | id | TEXT PK | Channel ID (128-bit hex) |
 | role | TEXT | owner, admin, subscriber |
-| manifestJson | TEXT | Serialized channel manifest (JSON) |
-| createdAt | INTEGER | Creation timestamp |
-| updatedAt | INTEGER | Last update timestamp |
+| manifest | TEXT | Serialized channel manifest (JSON) |
+| encryption_key_public | TEXT | Channel encryption public key |
+| created_at | TEXT | Creation timestamp |
 
 ### Chunks Table
 
@@ -54,17 +54,20 @@ Stores channel content chunks indexed for efficient retrieval.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| id | TEXT PK | Chunk identifier |
-| channelId | TEXT FK | Parent channel |
+| chunk_id | TEXT | Chunk identifier |
+| channel_id | TEXT | Parent channel |
+| routing_hash | TEXT | Current routing hash for DHT |
 | sequence | INTEGER | Message sequence number |
-| chunkIndex | INTEGER | Index within multi-chunk message |
-| totalChunks | INTEGER | Total chunks for this message |
-| routingHash | TEXT | Current routing hash for DHT |
-| authorPubkey | TEXT | Author's Ed25519 public key |
+| chunk_index | INTEGER | Index within multi-chunk message |
+| total_chunks | INTEGER | Total chunks for this message |
+| size | INTEGER | Chunk payload size in bytes |
 | signature | TEXT | Ed25519 signature (base64) |
-| encryptedPayload | BLOB | Encrypted chunk data |
+| author_pubkey | TEXT | Author's Ed25519 public key |
+| encrypted_payload | BLOB | Encrypted chunk data |
 
-**Indexes**: `channelId`, `(channelId, sequence)`, `routingHash`
+**Primary key**: `(chunk_id, channel_id)`
+
+**Indexes**: `channel_id`, `(channel_id, sequence)`, `(routing_hash, channel_id)`
 
 ### Groups Table
 
@@ -74,10 +77,10 @@ Stores group metadata.
 |--------|------|-------------|
 | id | TEXT PK | UUID group identifier |
 | name | TEXT | Group display name |
-| membersJson | TEXT | Serialized members list (JSON) |
-| creatorDeviceId | TEXT | Creator's device ID |
-| createdAt | INTEGER | Creation timestamp |
-| updatedAt | INTEGER | Last update timestamp |
+| self_device_id | TEXT | Local device's ID within this group |
+| members | TEXT | Serialized members list (JSON) |
+| created_at | TEXT | Creation timestamp |
+| created_by | TEXT | Creator's device ID |
 
 ### Group Messages Table
 
@@ -85,27 +88,29 @@ Stores group chat messages with composite key for deduplication.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| id | TEXT PK | UUID message identifier |
-| groupId | TEXT FK | Parent group |
-| authorDeviceId | TEXT | Sender's device ID |
-| sequenceNumber | INTEGER | Per-device sequence number |
+| group_id | TEXT | Parent group |
+| author_device_id | TEXT | Sender's device ID |
+| sequence_number | INTEGER | Per-device sequence number |
 | type | TEXT | text, file, image, system |
 | content | TEXT | Message content |
-| metadata | TEXT | Additional metadata (JSON) |
-| status | TEXT | pending, sent, delivered, failed |
-| timestamp | INTEGER | Send timestamp |
+| metadata | TEXT | Additional metadata (JSON, default '{}') |
+| timestamp | TEXT | Send timestamp (ISO 8601) |
+| status | TEXT | pending, sent, delivered, failed (default 'delivered') |
+| is_outgoing | INTEGER | 1 if sent by local user, 0 if received (default 0) |
 
-**Unique constraint**: `(groupId, authorDeviceId, sequenceNumber)`
+**Primary key**: `(group_id, author_device_id, sequence_number)`
 
 ### Vector Clocks Table
 
-Stores causal ordering state per group.
+Stores causal ordering state per group. Each device's sequence number is stored as an individual row rather than a single JSON blob, enabling efficient per-device queries and atomic updates via batch operations.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| groupId | TEXT PK | Parent group |
-| clockJson | TEXT | Serialized vector clock `{deviceId: sequence}` |
-| updatedAt | INTEGER | Last update timestamp |
+| group_id | TEXT | Parent group |
+| device_id | TEXT | Device identifier |
+| sequence_number | INTEGER | Last known sequence number for this device (default 0) |
+
+**Primary key**: `(group_id, device_id)`
 
 ---
 
@@ -246,23 +251,19 @@ The logging service writes daily rotating log files:
 
 ## Security Hardening
 
-### Session Key Encryption at Rest
+### Session Key Storage
 
-Session keys stored in the peer storage database (SQLite) are now encrypted before being written:
+Session keys are stored directly in **FlutterSecureStorage** (platform keychain/keystore), not in SQLite. Each session key is written as a base64-encoded string under the key `zajel_session_{peerId}`.
 
-1. A **device-local master key** is generated on first launch and stored in platform secure storage (iOS Keychain, Android Keystore, etc.)
-2. Each session key is encrypted with **ChaCha20-Poly1305** using the master key before being written to the `zajel_session_{peerId}` field in SQLite
-3. On read, the session key is decrypted in memory and used for message encryption/decryption
-4. The master key never leaves secure storage and is never written to SQLite or logs
-
-This provides defense-in-depth: even if the SQLite database file is exfiltrated (e.g., via a backup or filesystem access), the session keys are not directly usable without the platform-specific master key.
+On read, the `CryptoService` first checks an in-memory cache (`_sessionKeys` map). If the key is not in memory, it attempts to load from secure storage. This avoids repeated platform channel calls while ensuring keys survive app restarts.
 
 | Component | Storage | Encryption |
 |-----------|---------|------------|
-| Master key | Platform secure storage | Platform keychain/keystore |
-| Session keys | SQLite (encrypted) | ChaCha20-Poly1305 with master key |
-| Identity private key | Platform secure storage | Platform keychain/keystore |
-| Sender keys | Platform secure storage | Platform keychain/keystore |
+| Identity private key | Platform secure storage (`zajel_key_private`) | Platform keychain/keystore |
+| Session keys | Platform secure storage (`zajel_session_{peerId}`) | Platform keychain/keystore |
+| Sender keys | Platform secure storage (`zajel_group_{groupId}_sender_{deviceId}`) | Platform keychain/keystore |
+| Channel signing keys | Platform secure storage (`zajel_channel_{channelId}_signing_private`) | Platform keychain/keystore |
+| Channel encryption keys | Platform secure storage (`zajel_channel_{channelId}_encryption_private`) | Platform keychain/keystore |
 
 ### Bounded Storage with Eviction
 
@@ -297,10 +298,10 @@ Eviction is performed within the same database transaction as the insert to prev
 BEGIN;
 INSERT INTO chunks (...) VALUES (...);
 DELETE FROM chunks
-  WHERE channelId = ?
-  AND id NOT IN (
-    SELECT id FROM chunks
-    WHERE channelId = ?
+  WHERE channel_id = ?
+  AND chunk_id NOT IN (
+    SELECT chunk_id FROM chunks
+    WHERE channel_id = ?
     ORDER BY sequence DESC
     LIMIT 1000
   );

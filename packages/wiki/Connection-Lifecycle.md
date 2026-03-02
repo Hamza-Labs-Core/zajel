@@ -43,10 +43,10 @@ sequenceDiagram
 
     Note over Alice,Bob: WebRTC P2P Data Channel Established
 
-    Alice->>Bob: Handshake: public key (X25519)
-    Bob->>Alice: Handshake: public key (X25519)
+    Alice->>Bob: Handshake: identity key + ephemeral key + stableId
+    Bob->>Alice: Handshake: identity key + ephemeral key + stableId
 
-    Note over Alice,Bob: ECDH shared secret derived<br/>HKDF session key established
+    Note over Alice,Bob: Dual ECDH (identity + ephemeral)<br/>HKDF session key derived (zajel_session_v2)
 
     Alice->>Bob: Encrypted messages (ChaCha20-Poly1305)
     Bob->>Alice: Encrypted messages (ChaCha20-Poly1305)
@@ -64,6 +64,98 @@ Pairing codes use a 32-character alphabet (`ABCDEFGHJKLMNPQRSTUVWXYZ23456789`) t
 3. Since 32 divides 256 evenly, every byte maps uniformly to a character
 
 This produces 32^6 = ~1 billion possible codes.
+
+---
+
+## Cryptographic Handshake
+
+Once the WebRTC data channel is open, both peers exchange a handshake message containing their cryptographic material. The handshake is the first message sent over the message data channel.
+
+### Handshake Message Structure
+
+```json
+{
+  "type": "handshake",
+  "publicKey": "<base64 X25519 identity public key>",
+  "ephemeralKey": "<base64 ephemeral X25519 public key>",
+  "ratchetVersion": 1,
+  "username": "<display name (optional)>",
+  "stableId": "<16 hex char persistent device identity (optional)>"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | string | Yes | Always `"handshake"` |
+| `publicKey` | string | Yes | Base64-encoded X25519 identity public key (32 bytes) |
+| `ephemeralKey` | string | No | Base64-encoded ephemeral X25519 public key for forward secrecy |
+| `ratchetVersion` | int | No | Key ratchet protocol version (currently `1`) |
+| `username` | string | No | Display name for the peer |
+| `stableId` | string | No | 16 hex-char persistent device identity that survives key rotation |
+
+### Ephemeral Key Exchange Flow (Dual ECDH)
+
+When both peers include an `ephemeralKey` in their handshake, the session uses the forward-secret dual ECDH protocol:
+
+```mermaid
+sequenceDiagram
+    participant Alice
+    participant Bob
+
+    Note over Alice: Generate ephemeral X25519 keypair
+    Note over Bob: Generate ephemeral X25519 keypair
+
+    Alice->>Bob: handshake { publicKey: IK_A, ephemeralKey: EK_A, stableId, ... }
+    Bob->>Alice: handshake { publicKey: IK_B, ephemeralKey: EK_B, stableId, ... }
+
+    Note over Alice: identity_secret = ECDH(IK_A_priv, IK_B_pub)
+    Note over Alice: ephemeral_secret = ECDH(EK_A_priv, EK_B_pub)
+    Note over Alice: combined = identity_secret || ephemeral_secret
+    Note over Alice: session_key = HKDF(combined, info="zajel_session_v2", salt=empty)
+    Note over Alice: Delete EK_A_priv
+
+    Note over Bob: identity_secret = ECDH(IK_B_priv, IK_A_pub)
+    Note over Bob: ephemeral_secret = ECDH(EK_B_priv, EK_A_pub)
+    Note over Bob: combined = identity_secret || ephemeral_secret
+    Note over Bob: session_key = HKDF(combined, info="zajel_session_v2", salt=empty)
+    Note over Bob: Delete EK_B_priv
+
+    Note over Alice,Bob: Both derive identical session key<br/>Ephemeral private keys are destroyed
+```
+
+**Fallback**: If the peer's handshake does not include `ephemeralKey` (older client), the session falls back to identity-only ECDH:
+- `session_key = HKDF(ECDH(our_identity_priv, peer_identity_pub), info="zajel_session", salt=empty)`
+
+### Key Ratcheting Protocol
+
+After the initial handshake, the session key is periodically ratcheted forward for in-session forward secrecy. Ratcheting is triggered after every 100 messages or 30 minutes, whichever comes first.
+
+```mermaid
+sequenceDiagram
+    participant Initiator
+    participant Responder
+
+    Note over Initiator: Threshold reached (100 msgs or 30 min)
+    Note over Initiator: Generate 32-byte random nonce
+    Note over Initiator: Prepare new_key = HKDF(current_key || nonce, "zajel_ratchet")<br/>Do NOT install yet (two-phase commit)
+
+    Initiator->>Responder: ratchet:{ type: "key_ratchet", nonce: base64, epoch: N, version: 1 }
+
+    Note over Responder: Derive new_key = HKDF(current_key || nonce, "zajel_ratchet")
+    Note over Responder: Install new_key immediately<br/>Keep old key for 30-second grace period
+
+    Responder->>Initiator: Next message encrypted with new_key
+
+    Note over Initiator: Decrypt succeeds with prepared new_key<br/>Commit ratchet: install new_key<br/>Keep old key for 30-second grace period
+
+    Note over Initiator,Responder: Both now using ratcheted session key
+```
+
+**Grace period**: After a ratchet, the old key is retained for 30 seconds. Messages encrypted with the old key (in-flight before the peer processed the ratchet) can still be decrypted during this window.
+
+**Two-phase commit**: The initiating peer does not install the new key until the responder proves they hold it (by sending a message that decrypts successfully with the new key). This prevents the race condition where the initiator switches keys before the peer has received and processed the ratchet control message.
+
+**Retry**: If the ratchet is not committed within 10 seconds, the control message is retransmitted.
 
 ---
 

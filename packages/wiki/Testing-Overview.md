@@ -78,7 +78,7 @@ graph TB
 
 | Category | Path | Runner | CI Workflow |
 |----------|------|--------|-------------|
-| CF Workers unit | `packages/server/src/__tests__/` | Vitest | `server-tests.yml` |
+| CF Workers unit | `packages/server/tests/` | Vitest | `server-tests.yml` |
 | CF Workers E2E | `packages/server/` | Vitest (test:e2e script) | `server-tests.yml` |
 | VPS unit (sharded) | `packages/server-vps/` | Vitest (2 shards) | `server-vps-tests.yml` |
 | VPS integration | `packages/server-vps/tests/integration/` | Vitest | `server-vps-tests.yml` |
@@ -172,24 +172,33 @@ The E2E test suite uses pytest markers defined in `e2e-tests/pytest.ini`:
 
 | Marker | Description |
 |--------|-------------|
-| `smoke` | Quick smoke tests (app launches successfully) |
+| `smoke` | Quick smoke tests |
 | `pairing` | Pairing/connection tests |
 | `messaging` | Message sending tests |
-| `channels` | Channel creation and management |
-| `groups` | Group creation and messaging |
+| `reconnection` | Meeting point reconnection tests |
+| `calls` | Voice and video call tests |
+| `settings` | Settings screen tests |
+| `peer_management` | Block/unblock tests |
+| `file_transfer` | File sharing tests |
+| `connection` | Connection state edge cases |
+| `notifications` | Notification settings tests |
+| `media_settings` | Media device settings tests |
+| `emoji` | Emoji picker tests |
+| `offline` | Offline peer visibility tests |
+| `contacts` | Contact management tests |
+| `blocked_enhanced` | Enhanced blocked list tests |
+| `channels` | Channel creation and management tests |
+| `groups` | Group creation and messaging tests |
+| `single_device` | Tests that only need one device (no P2P pairing) |
+| `slow` | Tests that take longer to run |
 | `headless` | Tests using the headless client as the peer |
 | `protocol` | Protocol-level tests (headless-to-headless, no emulator) |
-| `single_device` | Tests that only need one device (no P2P pairing) |
-| `calls` | Voice and video call tests |
-| `file_transfer` | File sharing tests |
-| `reconnection` | Meeting point reconnection tests |
-| `settings` | Settings screen tests |
-| `contacts` | Contact management tests |
-| `android` | Tests requiring Android-specific features |
-| `linux` | Tests requiring Linux-specific features |
-| `windows` | Tests requiring Windows-specific features |
-| `ios` | Tests requiring iOS Simulator |
-| `slow` | Tests that take longer to run |
+| `android` | Tests that require Android-specific features (terminate_app, etc.) |
+| `desktop` | Desktop E2E UI tests (real cursor via accessibility APIs) |
+| `linux` | Tests that require Linux-specific features |
+| `windows` | Tests that require Windows-specific features |
+| `macos` | Tests that require macOS-specific features |
+| `ios` | Tests that require iOS Simulator |
 
 ## Key Design Decisions
 

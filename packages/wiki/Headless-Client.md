@@ -35,7 +35,7 @@ Daemon + client CLI for driving the headless client from shell scripts and CI:
 
 See [CLI (Daemon + Client)](#cli-daemon--client) below for full usage.
 
-### `client.py` - ZajelHeadlessClient (1435 lines)
+### `client.py` - ZajelHeadlessClient (2768 lines)
 
 The main orchestrator. Provides the high-level async API:
 
@@ -86,7 +86,7 @@ Key data classes:
 - `ActiveCall` -- call_id, peer_id, with_video, is_outgoing, recorder
 - `ReceivedMessage` -- text content from a peer
 
-### `signaling.py` - SignalingClient (527 lines)
+### `signaling.py` - SignalingClient (870 lines)
 
 WebSocket client for the Zajel signaling protocol:
 
@@ -106,7 +106,7 @@ Key data classes:
 
 Pairing code format: 6 characters from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (same as the Dart app).
 
-### `crypto.py` - CryptoService
+### `crypto.py` - CryptoService (663 lines)
 
 Implements cryptographic operations compatible with the Flutter app:
 
@@ -114,6 +114,10 @@ Implements cryptographic operations compatible with the Flutter app:
 - **HKDF-SHA256 key derivation**: Derives 32-byte session keys with info `zajel_session`
 - **ChaCha20-Poly1305 AEAD**: Encrypts/decrypts messages with 12-byte nonces
 - **Meeting point derivation**: Computes daily and hourly meeting points from shared secrets (for trusted peer reconnection)
+- **Ephemeral X25519 key exchange**: Dual ECDH (identity + ephemeral) for forward secrecy, using `zajel_session_v2` info string
+- **Key ratcheting**: HKDF-based session key ratcheting with 30-second grace period for old keys
+- **Stable device ID**: Persistent 16-hex-char identity that survives key rotation, stored to file
+- **Nonce replay protection**: Bounded set of 10,000 seen nonces per peer
 
 Constants (matching the Dart app):
 
@@ -122,18 +126,37 @@ Constants (matching the Dart app):
 | `NONCE_SIZE` | 12 |
 | `MAC_SIZE` | 16 |
 | `HKDF_INFO` | `b"zajel_session"` |
+| `HKDF_INFO_V2` | `b"zajel_session_v2"` (ephemeral key exchange) |
+| `HKDF_RATCHET_INFO` | `b"zajel_ratchet"` (key ratcheting) |
+| `RATCHET_NONCE_SIZE` | 32 |
+| `GRACE_PERIOD_SECONDS` | 30 |
 | `DAILY_PREFIX` | `"day_"` |
 | `HOURLY_PREFIX` | `"hr_"` |
+| `DAILY_SALT` | `"zajel:daily:"` |
+| `HOURLY_SALT` | `"zajel:hourly:"` |
 
-### `protocol.py` - Message Protocol (138 lines)
+### `protocol.py` - Message Protocol (178 lines)
 
 Message framing for WebRTC data channel communication:
 
 - **Data channel labels**: `messages` (text), `files` (file transfer) -- matching `lib/core/constants.dart`
 - **Message types**: `handshake`, `text`, `file_start`, `file_chunk`, `file_complete`
 - **Parse logic**: JSON control messages vs. encrypted text (base64 ciphertext)
+- **FILE_CHUNK_SIZE**: 16384 bytes (16 KB)
 
-### `channels.py` - Channel Support (656 lines)
+`HandshakeMessage` fields:
+
+| Field | Type | JSON key | Description |
+|-------|------|----------|-------------|
+| `public_key` | `str` (base64) | `publicKey` | Identity public key |
+| `ephemeral_key` | `Optional[str]` (base64) | `ephemeralKey` | Ephemeral key for forward secrecy |
+| `ratchet_version` | `int` (default 1) | `ratchetVersion` | Current ratchet version |
+| `username` | `Optional[str]` | `username` | Display name |
+| `stable_id` | `Optional[str]` (16 hex chars) | `stableId` | Stable device identity |
+
+All fields are serialized as camelCase JSON (`ephemeralKey`, `ratchetVersion`, `stableId`).
+
+### `channels.py` - Channel Support (1253 lines)
 
 Full channel implementation:
 
@@ -156,39 +179,51 @@ Key classes:
 
 Channels use VPS relays (not direct P2P). Content is chunked, encrypted, signed, and relayed through the signaling server.
 
-### `groups.py` - Group Support (312 lines)
+### `groups.py` - Group Support (485 lines)
 
 Full-mesh P2P group implementation:
 
 - **Sender key encryption**: Each member has a ChaCha20-Poly1305 sender key shared with all other members
 - **Group model**: Up to 15 members (`MAX_GROUP_MEMBERS`)
-- **Invitation protocol**: `ginv:` prefix for invitations, `grp:` prefix for group messages
+- **Invitation protocol**: `ginv:` prefix for invitations, `grp:` prefix for group messages, `grm:` prefix for member removal notifications
 - **Message storage**: In-memory with author tracking
+- **GroupMessageStatus enum**: `PENDING`, `SENT`, `DELIVERED`, `FAILED`
+- **VectorClock integration**: Causal ordering of group messages via per-peer sequence numbers
 
 Key classes:
 
 - `Group` -- id, name, self_device_id, members, created_at
 - `GroupMember` -- device_id, display_name, public_key, joined_at
-- `GroupMessage` -- id, group_id, author_device_id, content, timestamp
+- `GroupMessage` -- id, group_id, author_device_id, sequence_number, content, message_type, metadata, timestamp, status
+- `GroupMessageStatus` -- PENDING, SENT, DELIVERED, FAILED
 - `GroupCryptoService` -- encrypt/decrypt with sender keys
-- `GroupStorage` -- in-memory group + message storage
+- `GroupStorage` -- in-memory group + message storage with VectorClock integration
+
+### `vector_clock.py` - Vector Clock (137 lines)
+
+Implements vector clocks for causal ordering in group messaging:
+
+- `VectorClock` class with increment, merge, compare, and compute_missing operations
+- Used by GroupStorage for message sequencing and sync detection
+- Detects concurrent vs causally-ordered messages
 
 ### `webrtc.py` - WebRTC Service
 
 Uses `aiortc` for peer connections:
 
 - STUN/TURN ICE server configuration
-- Data channel setup (`messages` + `files` channels)
+- Data channel setup (`messages` + `files` channels, both with `ordered=True` and `maxRetransmits=3`)
 - Audio/video track management for calls
 - ICE candidate exchange
+- `OPERATION_TIMEOUT = 30` seconds for connection establishment
 
-Default ICE servers: `stun:stun.l.google.com:19302`
+Default ICE servers: `stun:stun.l.google.com:19302` and `stun:stun1.l.google.com:19302`
 
 ### `file_transfer.py` - File Transfer Service
 
 Chunked file transfer over the `files` data channel:
 
-- 4096-byte chunks
+- 16384-byte chunks (16 KB)
 - File start/chunk/complete message protocol
 - Progress tracking via `FileTransferProgress`
 
@@ -404,6 +439,8 @@ The headless client relies on:
 - `websockets` -- WebSocket client for signaling
 - `cryptography` -- X25519, Ed25519, ChaCha20-Poly1305, HKDF
 - `aiosqlite` -- Async SQLite for peer storage
+- `av>=12.0` -- Audio/video codec library for media sources
+- `numpy>=1.26.0` -- Numerical arrays for media processing
 
 All dependencies are MIT/BSD/Apache-2.0 licensed (no GPL/AGPL).
 
@@ -475,6 +512,18 @@ Each encrypted message includes a monotonically increasing nonce. The receiver t
 
 When a member leaves a group, their sender key is overwritten with zeros in memory before being discarded. This limits the window during which a departed member's key persists in the process address space.
 
+### Ephemeral Key Exchange (Forward Secrecy)
+
+Per-session ephemeral X25519 key pairs provide forward secrecy. The session establishment performs dual ECDH: one exchange between identity keys (authenticating both parties) and one between ephemeral keys (providing forward secrecy). The combined secret is derived via HKDF with the `zajel_session_v2` info string. Ephemeral private keys are deleted immediately after the session key is derived, so even if an identity key is later compromised, past session keys cannot be recovered.
+
+### Key Ratcheting with Grace Period
+
+Session keys are ratcheted forward using HKDF with the `zajel_ratchet` info string and a 32-byte random nonce. After ratcheting, the old key is retained for a 30-second grace period (`GRACE_PERIOD_SECONDS = 30`) to decrypt in-flight messages sent before the peer processed the ratchet. The ratchet supports a two-phase commit: `prepare_ratchet()` derives the new key without installing it, and `commit_ratchet()` activates it once the peer proves they hold the new key by successfully decrypting with it. This avoids the race where one side switches keys before the other has received the ratchet control message.
+
+### Vector Clock Causal Ordering
+
+Group messaging uses vector clocks (`VectorClock` class) to track per-peer sequence numbers. Each group maintains a `VectorClock` in `GroupStorage` that is incremented on send and updated on receive. The vector clock enables detection of missing messages via `compute_missing()`, distinguishes concurrent from causally-ordered messages via `happened_before()` and `is_concurrent()`, and supports sync by returning the exact messages a remote peer is missing via `get_messages_for_sync()`.
+
 ### Operational Robustness
 
 #### Message Content Redaction in Logs
@@ -510,4 +559,4 @@ Messages received from the signaling server are validated against expected schem
 
 #### Reliable SCTP Delivery
 
-WebRTC data channels are configured with `ordered=True` and increased `maxRetransmits` to ensure reliable, in-order delivery of messages. This prevents message loss and reordering in degraded network conditions.
+WebRTC data channels are configured with `ordered=True` and `maxRetransmits=3` to ensure reliable, in-order delivery of messages. This prevents message loss and reordering in degraded network conditions.

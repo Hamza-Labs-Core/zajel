@@ -32,6 +32,20 @@ Groups form a full mesh of N*(N-1)/2 pairwise connections. Each edge is an exist
 
 ---
 
+## Protocol Prefixes
+
+All group-related data sent over 1:1 P2P channels uses short wire prefixes to distinguish message types from regular chat messages. The prefixes are stripped by the receiver before processing the payload.
+
+| Prefix | Purpose | Payload format | Used by |
+|--------|---------|---------------|---------|
+| `ginv:` | Group invitations | JSON object with groupId, groupName, members, senderKeys, inviteeSenderKey, inviterDeviceId | Dart app + Python headless client |
+| `grp:` | Group message data | Base64-encoded encrypted bytes (sender-key encrypted) | Dart app + Python headless client |
+| `grm:` | Group member removal notifications | JSON object with type, groupId, removedDeviceId, removedBy, newSenderKey | Python headless client only (Dart app sends removals as `grp:` system messages) |
+
+The `ginv:` prefix is defined in `group_invitation_service.dart` and matched in `connection_manager.dart` (Dart) and `client.py` (Python). The `grp:` prefix is defined in `webrtc_p2p_adapter.dart` (Dart) and used directly in `client.py` (Python). The `grm:` prefix is used only by the Python headless client for headless-to-headless removal notifications; the Flutter app handles removals as system messages inside the `grp:` channel instead.
+
+---
+
 ## Sender Key Encryption
 
 Groups use a sender key scheme for efficient encryption:
@@ -157,7 +171,7 @@ sequenceDiagram
     participant P2P as 1:1 E2E Channel
     participant Bob as Bob (Invitee)
 
-    Alice->>P2P: Send invitation message<br/>Prefix: "GROUP_INVITE:"<br/>Payload: JSON {<br/>  groupId, name, members,<br/>  senderKeys: {deviceId: key, ...}<br/>}
+    Alice->>P2P: Send invitation message<br/>Prefix: "ginv:"<br/>Payload: JSON {<br/>  groupId, name, members,<br/>  senderKeys: {deviceId: key, ...},<br/>  inviteeSenderKey: base64Key<br/>}
 
     P2P->>Bob: Receive invitation
 
@@ -173,11 +187,16 @@ sequenceDiagram
 ### Invitation Payload
 
 The invitation contains:
-- Group ID (UUID)
-- Group name
-- Members list (device IDs, display names, public keys)
-- All current sender keys `{deviceId: base64Key}`
-- Creator info
+- `groupId` — Group ID (UUID)
+- `groupName` — Display name
+- `createdBy` — Creator's device ID
+- `createdAt` — ISO 8601 creation timestamp
+- `members` — List of group members (device IDs, display names, public keys)
+- `senderKeys` — All existing members' sender keys `{deviceId: base64Key}`
+- `inviteeSenderKey` — The new member's pre-generated sender key (base64), stored separately from `senderKeys`
+- `inviterDeviceId` — The device ID of the member sending the invitation
+
+Note that `senderKeys` and `inviteeSenderKey` are separate fields. `senderKeys` contains keys for all existing members so the invitee can decrypt their messages. `inviteeSenderKey` is the new member's own key so they can start encrypting immediately.
 
 ---
 
@@ -292,7 +311,7 @@ All group messages (including invitations, sender key distributions, and chat me
 
 | Message type | Required fields | Validation rules |
 |-------------|----------------|-----------------|
-| `GROUP_INVITE:` | groupId, name, members, senderKeys | groupId must be UUID, members must be non-empty array, senderKeys must be object with base64 values |
+| `ginv:` | groupId, groupName, members, senderKeys, inviteeSenderKey | groupId must be UUID, members must be non-empty array, senderKeys must be object with base64 values, inviteeSenderKey must be base64 |
 | `grp:` (chat) | id, groupId, authorDeviceId, sequenceNumber, content | sequenceNumber must be positive integer, content must be string |
 | Sender key distribution | groupId, deviceId, senderKey | senderKey must be 32-byte base64-encoded value |
 
@@ -300,11 +319,11 @@ Messages that fail schema validation are rejected and logged (without content) f
 
 ### Bounded Message Storage
 
-In-memory and persistent group message storage is bounded to **5,000 messages per group**. When the limit is reached, the oldest messages (by timestamp) are evicted:
+The Python headless client enforces a hard limit of **5,000 messages per group** (`MAX_MESSAGES_PER_GROUP = 5000` in `groups.py`). When the limit is reached, the oldest messages are evicted from the in-memory store.
 
 | Storage layer | Bound | Eviction policy |
 |--------------|-------|-----------------|
-| In-memory (headless client) | 5,000 per group | Oldest-first |
-| SQLite (Flutter app) | Configurable | Oldest-first with vacuum |
+| In-memory (Python headless client) | 5,000 per group | Oldest-first (keeps most recent 5,000) |
+| SQLite (Flutter/Dart app) | **Unbounded** | No automatic eviction |
 
-This prevents unbounded storage growth for active groups with high message volume. The eviction threshold is intentionally generous to retain sufficient history for vector clock sync and gap-fill operations.
+**Note:** The Dart app's `GroupStorageService` does NOT enforce a per-group message limit. Messages are inserted into SQLite without eviction. This means the Flutter app's database can grow without bound for active groups. The 5,000 message limit applies only to the Python headless client's in-memory storage.

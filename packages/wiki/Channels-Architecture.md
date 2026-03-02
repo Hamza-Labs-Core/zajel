@@ -254,15 +254,21 @@ Background sync checks all subscribed channels and downloads new chunks even whe
 
 ### Invite Link Security
 
-Channel invite links no longer embed the channel's private encryption key directly. Previously, the invite link contained the full X25519 private key, which meant that anyone who obtained the link gained permanent decryption capability even after the link was revoked.
+The channel invite link contains the channel's **raw X25519 private encryption key** alongside the full signed manifest. This means anyone who obtains the link gains the ability to decrypt all channel content encrypted under that key epoch.
 
-The updated invite link format:
+The invite link format:
 
-1. Contains only the channel manifest (public keys, name, description) and a **derived decryption key** sufficient for subscribing
-2. Uses a strict `zajel://channel/` prefix requirement. Links with any other prefix or scheme are rejected during parsing
-3. The decryption key included in the link is derived from the channel's encryption keypair using HKDF, not the raw private key itself
+1. Uses a strict `zajel://channel/` prefix requirement. Links with any other prefix or scheme are rejected during parsing
+2. The payload is a base64url-encoded JSON object containing:
+   - `'m'`: The full channel manifest (public keys, name, description, rules, signature)
+   - `'k'`: The channel's raw X25519 private encryption key (base64-encoded)
+   - Python headless client also adds `'created_at'` (ISO 8601 timestamp) and `'version': 1`
+3. The Dart app (`ChannelLinkService.encode`) produces `{'m': manifest, 'k': encryptionKeyPrivate}`
+4. The Python client (`encode_channel_link`) produces `{'m': manifest, 'k': encryptionKeyPrivate, 'created_at': ..., 'version': 1}`
 
-This ensures that revoking a subscriber's access (via key epoch rotation) is effective -- the subscriber cannot derive future content keys from the invite link alone.
+Both clients can decode links from either format since the decoder only reads the `'m'` and `'k'` fields (additional fields are ignored by Dart; Python checks `'expires_at'` if present).
+
+Because the raw private key is embedded, revoking access requires rotating the encryption keypair (incrementing `keyEpoch`) and redistributing a new invite link. Old links remain valid for content encrypted under the old epoch but cannot decrypt content under the new epoch.
 
 ### Chunk Sequence Validation and Replay Detection
 
@@ -276,11 +282,12 @@ This prevents an attacker who has captured valid signed chunks from replaying ol
 
 ### Bounded Chunk Storage
 
-Local chunk storage is bounded to **1,000 chunks per channel**. When the limit is reached, the oldest chunks (by sequence number) are evicted to make room for new ones. This applies to both the client-side storage and the server-side chunk index cache.
+The Python headless client enforces a hard limit of **1,000 chunks per channel** (`MAX_CHUNKS_PER_CHANNEL = 1000` in `channels.py`). When the limit is reached, the oldest chunks (by sequence number) are evicted to make room for new ones.
 
-| Bound | Scope | Eviction policy |
-|-------|-------|-----------------|
-| 1,000 chunks | Per channel (client) | Oldest-sequence-first |
-| 1,000 entries | Server chunk cache | LRU with 30-minute TTL |
+| Storage layer | Bound | Eviction policy |
+|--------------|-------|-----------------|
+| In-memory (Python headless client) | 1,000 per channel | Oldest-sequence-first |
+| SQLite (Flutter/Dart app) | **Unbounded** | No automatic eviction |
+| Server chunk cache | Configurable | LRU with TTL |
 
-This prevents unbounded disk or memory growth for channels with high publishing volume or long subscription periods.
+**Note:** The Dart app's `ChannelStorageService.saveChunk` does NOT enforce a per-channel chunk limit. Chunks are inserted into SQLite without eviction. This means the Flutter app's database can grow without bound for channels with high publishing volume. The 1,000 chunk limit applies only to the Python headless client's in-memory storage.

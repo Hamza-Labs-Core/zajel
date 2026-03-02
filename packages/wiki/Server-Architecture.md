@@ -249,7 +249,7 @@ When a peer disconnects, the handler cleans up across all subsystems:
 | Environment | Domain | Purpose |
 |-------------|--------|---------|
 | Production | `signal.zajel.hamzalabs.dev` | Live deployment |
-| QA | `signal-qa.zajel.hamzalabs.dev` | Testing |
+| QA | `signal.zajel.qa.hamzalabs.dev` | Testing |
 
 ### Durable Object Migrations
 
@@ -281,7 +281,7 @@ The CF Worker enforces an origin allowlist rather than a wildcard `*` CORS polic
 
 #### Rate Limiting
 
-All endpoints are rate-limited to **100 requests per minute per IP address**. Rate limit state is tracked per Durable Object. Requests exceeding the limit receive a `429 Too Many Requests` response with a `Retry-After` header.
+All endpoints are rate-limited to **100 requests per minute per IP address** (`MAX_MESSAGES` within a 60-second `WINDOW_MS`). Additionally, pair requests have a stricter separate limit of **10 pair requests per minute per IP** (`MAX_PAIR_REQUESTS`) to protect against abuse of the expensive pairing operation. Rate limit state is tracked per Durable Object. Requests exceeding the limit receive a `429 Too Many Requests` response with a `Retry-After` header.
 
 #### Server Registration and Deletion Authentication
 
@@ -378,3 +378,68 @@ The `maxConnections` (capacity) value reported by relay peers is clamped to the 
 #### Authenticated Metrics Endpoints
 
 The `/stats` and `/metrics` endpoints require authentication. Unauthenticated requests receive a `401 Unauthorized` response. This prevents public enumeration of server state, connected peer counts, and capacity information.
+
+---
+
+## Federation
+
+VPS relay servers form a federated cluster for distributing rendezvous data and meeting points. Federation is built on two core subsystems: a SWIM gossip protocol for membership management and a DHT hash ring for consistent data routing.
+
+### SWIM Gossip Protocol
+
+The SWIM (Scalable Weakly-consistent Infection-style Membership) protocol handles server discovery, membership tracking, and failure detection across the federation.
+
+#### Message Types
+
+| Message Subtype | Purpose |
+|----------------|---------|
+| `ping` | Direct liveness probe |
+| `ping_ack` | Acknowledgment of a ping |
+| `ping_req` | Indirect ping request (via proxy peer) |
+| `join` | New server announcement (includes serverId, nodeId, endpoint, publicKey) |
+| `leave` | Graceful departure announcement |
+| `suspect` | Suspicion that a server may be down |
+| `confirm` | Confirmation that a suspected server has failed |
+| `state_sync` | Full membership state exchange between servers |
+
+All gossip messages are Ed25519-signed and verified by the receiver. Messages carry **piggybacked membership updates** -- recent state changes that are disseminated alongside regular protocol messages to speed convergence.
+
+#### Failure Detection
+
+The failure detector follows the SWIM protocol's three-phase approach:
+
+1. **Direct Ping**: A random alive peer is pinged each interval. If it responds with `ping_ack`, it is confirmed alive.
+2. **Indirect Ping**: If the direct ping times out, `ping_req` messages are sent to K random proxy peers (configurable `indirectPingCount`), asking them to ping the target on our behalf.
+3. **Suspicion**: If neither direct nor indirect pings succeed, the target is marked `suspect`. A suspicion timer begins.
+4. **Failure Confirmation**: If the suspicion timer expires without the target refuting (by broadcasting a higher incarnation number), the target is marked `failed` and a `confirm` message is broadcast.
+
+Servers can **refute suspicion** by incrementing their incarnation number. Higher incarnation numbers always override lower ones, and `alive` status takes priority over `suspect` at the same incarnation.
+
+#### State Synchronization
+
+Periodic state exchanges occur at a configurable interval. A random alive peer is selected and both sides exchange their full membership tables. Entries are merged using incarnation numbers for conflict resolution, ensuring eventual consistency across the federation.
+
+### DHT Hash Ring
+
+A consistent hashing ring distributes meeting points and rendezvous data across federated servers. This ensures that clients can find the correct server responsible for a given meeting point hash without centralized coordination.
+
+#### Design
+
+| Property | Value |
+|----------|-------|
+| Hash space | 160-bit (same as Kademlia) |
+| Hash function | SHA-256 (truncated to 160 bits) |
+| Virtual nodes per server | 150 (default) |
+| Replication factor | 3 (default, configurable) |
+
+Each server is represented on the ring by its primary position (derived from its `nodeId`) plus 150 virtual node positions (derived from `serverId:i` for i in 0..149). Virtual nodes ensure even distribution of hash space ownership even with a small number of physical servers.
+
+#### Routing
+
+The `RoutingTable` class provides three key operations:
+
+- **`shouldHandleLocally(hash)`**: Checks if the local server is among the N responsible nodes for a given hash.
+- **`routeHashes(hashes)`**: Given a batch of meeting point hashes, returns a map of `serverId -> hashes[]` indicating which server should handle each hash.
+- **`getRedirectTargets(hashes)`**: Returns the subset of routing destinations that are NOT the local server, with their endpoints, for generating redirect responses.
+
+When a client registers meeting points, the server checks which hashes it owns and redirects the rest to the appropriate federated peers. The replication factor ensures that each hash is stored on multiple servers for redundancy.

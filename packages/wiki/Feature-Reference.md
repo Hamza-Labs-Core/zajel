@@ -61,7 +61,8 @@ A comprehensive list of all features in the Zajel project, organized by package 
 - **Member Management** -- Add/remove members, accept invitations, rotate keys for forward secrecy
 - **Group Messaging** -- Send and receive encrypted messages with sender key encryption and deduplication
 - **Group Message Validation** -- Schema validation, per-sender monotonic sequence counters, and duplicate detection reject replayed or malformed messages
-- **Vector Clock** -- Causal ordering tracking per-device sequence numbers with merge, comparison, and gap detection
+- **Vector Clock** -- Causal ordering for group messages tracking per-device sequence numbers with merge, comparison, gap detection, and missing message identification. Enables causally consistent delivery so messages referencing earlier messages are never displayed out of order
+- **Group Message Status** -- Per-message delivery tracking with PENDING (queued locally), SENT (delivered to relay), and DELIVERED (acknowledged by recipient) states, visible in the group chat UI
 - **Group Sync** -- Vector clock-based sync (get clock, compute missing messages, apply batch)
 - **Sender Key Encryption** -- ChaCha20-Poly1305 AEAD with in-memory key cache and secure export/import
 - **Sender Key Zeroization** -- Sender key material explicitly wiped from memory and storage when a member leaves or group is dissolved
@@ -139,6 +140,9 @@ A comprehensive list of all features in the Zajel project, organized by package 
 ## App -- Core Infrastructure
 
 - **Crypto Service** -- X25519 ECDH + HKDF session keys (with peer public keys in salt for key binding) + ChaCha20-Poly1305 encryption
+- **Ephemeral Key Exchange** -- Forward secrecy via per-session ephemeral X25519 keys with dual ECDH (static-ephemeral + ephemeral-ephemeral) ensuring session keys are unique and cannot be derived from compromised long-term keys
+- **Key Ratcheting** -- In-session forward secrecy via HKDF-based key ratcheting after a configurable message threshold or time interval. New key = HKDF(current_key || nonce, "zajel_ratchet"). Old keys are retained for a 30-second grace period to allow out-of-order message decryption before being zeroized
+- **Stable Device Identity** -- Persistent 16 hex-char device identity derived from the public key, surviving across key rotations. Enables TOFU-based key rotation detection where a known stableId presenting a new publicKey triggers a recorded rotation event
 - **Replay Protection** -- Per-session monotonic nonce counters with sliding window validation for 1:1 messages
 - **Session Key Encryption at Rest** -- Session keys encrypted with ChaCha20-Poly1305 before persisting to secure storage (defense-in-depth)
 - **Public Key Fingerprinting** -- SHA-256 fingerprint for out-of-band MITM detection
@@ -150,14 +154,18 @@ A comprehensive list of all features in the Zajel project, organized by package 
 - **File Transfer Security** -- SHA-256 integrity verification, path traversal protection, size validation on incoming files
 - **SQLite Storage** -- Per-peer message storage with pagination, status tracking, cleanup, migration
 - **Secure Peer Storage** -- Platform Keychain/Keystore for trusted peer public keys
+- **Desktop Platform Support** -- sqflite_common_ffi backend for SQLite on Linux, Windows, and macOS, enabling the same storage layer across mobile and desktop platforms
 - **Input Validation** -- JSON message deserialization with schema validation; incoming data validated before processing
 - **Media Service** -- Cross-platform media permissions, device enumeration, audio processing
 - **Notification Service** -- Local notifications for messages, calls, peer status, files
 - **Logger Service** -- Daily rotating log files (5MB, 7-day retention) with real-time streaming; sensitive data (message content, keys) excluded from logs
+- **App Initialization Service** -- Orchestrates startup sequence: signaling connection, server discovery, peer reconnection, and listener registration
+- **Auto-Delete Service** -- Timed message cleanup with configurable durations (1h, 24h, 7d, 30d)
+- **Subscription Manager** -- Mixin for centralized stream subscription tracking and disposal, preventing resource leaks across services
 
 ---
 
-## Server
+## Server -- CF Workers (Bootstrap)
 
 - **Request Dispatcher** -- Routes HTTP/WebSocket to Durable Objects with strict CORS policy (no wildcard origins)
 - **Signaling Room** -- WebSocket SDP/ICE relay with pairing code routing and validated message formats
@@ -173,6 +181,33 @@ A comprehensive list of all features in the Zajel project, organized by package 
 - **Error Sanitization** -- Server error responses do not leak internal implementation details or stack traces
 - **WebSocket Connection Limits** -- Bounded simultaneous connections per server instance
 - **Cryptographic PRNG** -- All security-sensitive random values use cryptographically secure random number generators
+
+---
+
+## Server -- VPS (Federated Signaling)
+
+- **Client Handler** -- Thin facade that rate-limits, validates payloads, and delegates to sub-handlers (signaling, relay, channel, chunk, link, attestation)
+- **Signaling Handler** -- Pairing code registration, pair request/response flows, WebRTC offer/answer/ICE forwarding, and VoIP call signaling
+- **Relay Handler** -- Relay peer registration, load updates, heartbeats, relay listing, and rendezvous point registration with routing awareness
+- **Channel Handler** -- Channel ownership, subscriptions, upstream message queuing, and live stream frame relaying
+- **Chunk Relay** -- Source tracking, on-disk LRU cache (30min TTL, 1000 max), pull-from-source/fan-out-to-requesters with pending request deduplication
+- **Link Handler** -- Device linking flows (web-to-mobile) with pending link request management and expiry timers
+- **Attestation Handler** -- Client attestation challenge/response forwarding and grace period gating for unattested connections
+- **Server Federation** -- SWIM gossip protocol for membership dissemination and failure detection across multi-server clusters. Servers discover peers via bootstrap, exchange membership updates through gossip rounds, and detect failures through direct/indirect pings with configurable suspicion timeouts
+- **DHT Hash Ring** -- Consistent hashing with virtual nodes (160-bit ring) for distributing meeting points across federation servers. Both peers deterministically compute the same hash, ensuring they are routed to the same server(s) for rendezvous
+- **Federation Manager** -- Orchestrates gossip protocol and server-to-server WebSocket transport with bootstrapping, peer discovery, and automatic reconnection
+- **Membership Management** -- Tracks membership state of all known servers using incarnation numbers for consistency and conflict resolution (join, suspect, failed, leave)
+- **Failure Detector** -- SWIM-style failure detection with configurable ping interval, direct/indirect ping timeout, and suspicion-to-failed escalation
+- **Server-to-Server Transport** -- WebSocket connections between federation servers with Ed25519 signature-verified handshakes and automatic reconnection
+- **Bootstrap Client** -- Registration with CF Workers bootstrap server and discovery of peer VPS servers for federation bootstrapping
+- **Distributed Rendezvous** -- DHT-aware wrapper around RendezvousRegistry that routes meeting point operations to the correct server(s) based on hash ring ownership
+- **Relay Registry** -- Local peer relay registration with capacity tracking and load-balanced selection using cryptographically secure shuffle
+- **Rendezvous Registry** -- Meeting points and dead drops for peer discovery with SQLite persistence across server restarts
+- **Server Identity** -- Ed25519 keypair generation, persistent storage, and cryptographic operations (signing, verification) for server authentication
+- **Admin Dashboard** -- Web-based dashboard providing real-time server metrics, federation topology visualization, and admin controls. Authenticated via shared JWT with CF Workers. Includes REST API endpoints and WebSocket streaming for live metric updates
+- **Metrics Collector** -- Rolling window aggregation of server metrics (connected clients, relay count, federation status, message throughput) with historical data retention
+- **SQLite Storage** -- Persistent storage using better-sqlite3 for rendezvous data, relay entries, membership state, and chunk cache
+- **Secure Logger** -- Structured logging with automatic redaction of sensitive data (pairing codes, IP addresses, server IDs) in production per OWASP guidelines
 
 ---
 

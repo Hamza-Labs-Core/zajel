@@ -35,7 +35,7 @@ sequenceDiagram
     Server->>Server: Generate nonce (32 bytes)<br/>Select 3-5 critical regions
     Server-->>AT: { nonce, regions: [{offset, length}] }
 
-    AT->>AT: Read binary at each region<br/>Compute HMAC-SHA256(nonce, region_bytes)
+    AT->>AT: Read binary at each region<br/>Compute HMAC-SHA256(key=nonce, data=region_bytes)
 
     AT->>Server: POST /attest/verify<br/>{ nonce, responses: [hmac1, hmac2, ...] }
     Server->>Server: Compute expected HMACs<br/>from reference binary
@@ -117,10 +117,12 @@ Authorization: CI_UPLOAD_SECRET
 ### Challenge-Response
 
 1. **Server generates challenge**: Random 32-byte nonce + selects 3-5 critical regions
-2. **Client computes responses**: For each region, reads bytes from the binary and computes `HMAC-SHA256(nonce, region_bytes)`
-3. **Server verifies**: Computes the same HMACs using the reference binary data and compares
+2. **Client computes responses**: For each region, reads bytes from the binary and computes `HMAC-SHA256(key=nonce, data=region_bytes)`. The challenge nonce is used as the HMAC secret key, and the binary region bytes are the message data. In code: `Hmac.sha256().calculateMac(regionBytes, secretKey: SecretKey(utf8.encode(nonce)))`.
+3. **Server verifies**: Computes the same HMACs using the reference binary data and the same nonce, then compares the hex-encoded results.
 
 The nonce ensures each challenge is unique, preventing replay attacks. Nonces are one-time-use on the server side.
+
+> **Parameter order detail**: The HMAC computation uses `key=nonce_bytes` and `data=binary_region_bytes`. The nonce string is UTF-8 encoded to produce the key bytes. The response is hex-encoded (lowercase) for transmission.
 
 ### Desktop Binary Reading
 

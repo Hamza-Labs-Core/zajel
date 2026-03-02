@@ -8,9 +8,14 @@ Zajel uses modern, well-vetted cryptographic primitives for all security operati
 
 ```mermaid
 graph TD
-    IK["X25519 Identity Keypair<br/>Generated at first launch"] --> ECDH["X25519 ECDH<br/>Shared secret"]
-    ECDH --> HKDF1["HKDF-SHA256<br/>info: 'zajel_session'"]
+    IK["X25519 Identity Keypair<br/>Generated at first launch"] --> ECDH1["X25519 ECDH<br/>Identity shared secret"]
+    EK["X25519 Ephemeral Keypair<br/>Generated per session"] --> ECDH2["X25519 ECDH<br/>Ephemeral shared secret"]
+    ECDH1 --> CONCAT["identity_secret || ephemeral_secret"]
+    ECDH2 --> CONCAT
+    CONCAT --> HKDF1["HKDF-SHA256<br/>info: 'zajel_session_v2'"]
     HKDF1 --> SK["Session Key<br/>Per-peer symmetric"]
+    SK --> RATCHET["Key Ratchet<br/>HKDF(key || nonce, 'zajel_ratchet')"]
+    RATCHET --> SK
     SK --> CC1["ChaCha20-Poly1305<br/>1:1 Chat Encryption"]
 
     CSK["Ed25519 Signing Keypair<br/>Channel owner identity"] --> SIG["Ed25519 Signature<br/>Per-chunk authenticity"]
@@ -30,9 +35,9 @@ graph TD
 1. Each peer generates an X25519 keypair at app launch
 2. Public keys are exchanged over the WebRTC data channel after SDP establishment
 3. Both peers compute the same shared secret: `ECDH(my_private, their_public)`
-4. A session key is derived using HKDF: `HKDF-SHA256(shared_secret, info="zajel_session", salt=sorted(pk_a || pk_b), output=32 bytes)`
+4. A session key is derived using HKDF: `HKDF-SHA256(shared_secret, info="zajel_session", salt=empty, output=32 bytes)`
 
-> **Security hardening (v0.5)**: The HKDF salt now includes both peers' public keys in sorted order. This binds the derived session key to the specific peer pair, preventing man-in-the-middle key substitution attacks where an attacker relays different public keys to each peer.
+> **Note**: The HKDF salt is empty (`b""` in Python, `const []` in Dart). MITM prevention relies on fingerprint verification (out-of-band comparison of public key hashes) and the safety number mechanism, not on salt binding.
 
 ### Message Encryption (ChaCha20-Poly1305 AEAD)
 
@@ -46,11 +51,13 @@ The Poly1305 MAC provides authenticated encryption -- any tampering with the cip
 
 ### Replay Protection
 
-Each peer maintains a monotonically increasing nonce counter per session. Incoming messages are checked against a sliding nonce window:
+Each peer maintains a bounded set of previously seen nonces per session. Since nonces are cryptographically random (not sequential), replay detection works by set membership rather than monotonic counters:
 
-1. Messages with a nonce at or below the current high-water mark are rejected as replays
-2. The nonce window tracks the most recent seen values to handle out-of-order delivery
-3. This prevents an attacker from replaying captured ciphertext, even if the nonces are valid
+1. On decryption, the 12-byte random nonce is checked against the set of previously seen nonces for that peer
+2. If the nonce has been seen before, the message is rejected as a replay (`ValueError: Replay detected: duplicate nonce`)
+3. After successful decryption, the nonce is added to the seen set
+4. The seen set is bounded at 10,000 entries per peer. When the limit is exceeded, the oldest half of the entries are evicted to prevent unbounded memory growth
+5. The nonce set is reset when a new session is established (key exchange or ratchet)
 
 ### Session Key Storage
 
@@ -63,6 +70,46 @@ Identity keys can be regenerated each app session. When keys are regenerated:
 - Old session keys are invalidated
 - New ECDH exchange occurs on next connection
 - Compromising current keys does not expose past sessions
+
+### Ephemeral Key Exchange (zajel_session_v2)
+
+For connections where both peers support it, a dual ECDH scheme provides per-session forward secrecy without requiring identity key regeneration:
+
+1. During the handshake, each peer generates a fresh ephemeral X25519 keypair
+2. Both peers send their ephemeral public key alongside their identity public key
+3. Two independent ECDH computations are performed:
+   - **Identity ECDH**: `ECDH(our_identity_private, peer_identity_public)` -- authenticates both parties
+   - **Ephemeral ECDH**: `ECDH(our_ephemeral_private, peer_ephemeral_public)` -- provides forward secrecy
+4. The two shared secrets are concatenated: `combined = identity_secret || ephemeral_secret`
+5. The session key is derived: `HKDF-SHA256(combined, info="zajel_session_v2", salt=empty, output=32 bytes)`
+6. The ephemeral private key is deleted immediately after derivation
+
+If only one peer supports ephemeral keys, the session falls back to the identity-only exchange with info string `"zajel_session"`.
+
+Because the ephemeral private key is destroyed after use, even if an attacker later compromises the long-lived identity key, they cannot recover the ephemeral secret and therefore cannot reconstruct past session keys.
+
+### Key Ratcheting (zajel_ratchet)
+
+After a session is established, the session key is periodically ratcheted forward to limit the damage of a key compromise:
+
+1. **Trigger**: After every 100 messages sent or 30 minutes elapsed (whichever comes first)
+2. **Nonce generation**: The initiating peer generates a 32-byte cryptographically random nonce
+3. **Key derivation**: `new_key = HKDF-SHA256(current_key || nonce, info="zajel_ratchet", salt=empty, output=32 bytes)`
+4. **Two-phase commit**: The initiator prepares the new key but does NOT install it immediately. The new key is only committed when the peer proves they hold it (by successfully decrypting a message with it). This avoids the race condition where the initiator switches keys before the peer has received the ratchet control message.
+5. **Control message**: A `key_ratchet` message is sent to the peer containing `{nonce, epoch, version}`. The peer immediately ratchets and installs the new key.
+6. **Grace period**: The old key is retained for 30 seconds after a ratchet to decrypt in-flight messages that were encrypted before the peer processed the ratchet.
+7. **Retry**: If the initiator's prepared ratchet is not committed within 10 seconds, the control message is retransmitted.
+
+Each ratchet is tagged with an incrementing epoch number to detect missed or duplicate ratchet messages.
+
+### Stable Device Identity
+
+Each device has a persistent 16 hex-character stable ID that survives key rotation:
+
+- **Generation**: On first launch, derived from `SHA-256(public_key_bytes)[:16]` (uppercase hex) for backward compatibility. On fresh installs without prior key material, 16 random hex characters are generated using `Random.secure()`.
+- **Persistence**: Stored in `SharedPreferences` (Flutter app) or a text file (headless client). Unlike identity keys stored in secure storage, the stable ID uses resilient storage that survives keychain resets.
+- **Purpose**: Provides a stable identity anchor across key rotations. When a peer regenerates their identity keys, the stable ID allows the system to recognize them as the same device and maintain the peer relationship.
+- **Sent in handshake**: The stable ID is included in the WebRTC handshake message so that reconnecting peers can be matched to their existing peer record even if their public key has changed.
 
 ---
 
@@ -184,7 +231,7 @@ On the web platform, certificate pinning is not possible due to browser API limi
 | Threat | Mitigation |
 |--------|-----------|
 | MITM on signaling | Certificate pinning on native platforms |
-| MITM on key exchange | Fingerprint verification (out-of-band); HKDF salt includes both public keys |
+| MITM on key exchange | Fingerprint verification (out-of-band); safety number comparison |
 | Server compromise | E2E encryption; server never holds keys |
 | Device compromise | Keys in platform secure storage (Keychain/Keystore); session keys encrypted at rest |
 | Traffic analysis | Meeting point unlinkability; rotating hourly tokens |
@@ -305,7 +352,7 @@ All external inputs are validated before processing across every package:
 
 | Improvement | Details |
 |-------------|---------|
-| HKDF salt binding | Both peers' public keys included as salt in HKDF derivation, preventing key substitution attacks |
+| Dual ECDH forward secrecy | Ephemeral key exchange (zajel_session_v2) provides per-session forward secrecy; identity-only fallback for backward compatibility |
 | Constant-time comparison | All HMAC and token comparisons use constant-time algorithms to prevent timing side-channels |
 | Sender key zeroization | Sender key bytes are overwritten with zeros before removal from memory on group leave |
 | Session key encryption at rest | Session keys wrapped with ChaCha20-Poly1305 before persisting to secure storage |

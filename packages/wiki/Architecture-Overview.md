@@ -105,7 +105,7 @@ graph TD
 | State Management | Riverpod |
 | P2P Communication | `flutter_webrtc` (WebRTC) |
 | Cryptography | `cryptography` (X25519, Ed25519, ChaCha20-Poly1305, HKDF) |
-| Local Database | `sqflite` (SQLite) |
+| Local Database | `sqflite` (SQLite), `sqflite_common_ffi` (desktop platforms) |
 | Secure Storage | `flutter_secure_storage` (Keychain/Keystore) |
 | QR Codes | `mobile_scanner`, `qr_flutter` |
 | Notifications | `flutter_local_notifications` |
@@ -139,3 +139,35 @@ graph TD
 5. **Crypto Handshake**: Public key exchange over WebRTC, ECDH shared secret, HKDF session key
 6. **Messaging**: All messages encrypted with ChaCha20-Poly1305 using session key
 7. **Reconnection**: Trusted peers reconnect via meeting points and dead drops without new pairing
+
+---
+
+## Advanced Architecture Features
+
+### Forward Secrecy
+
+Sessions support **ephemeral key exchange** for perfect forward secrecy. During session establishment, two X25519 ECDH computations are performed:
+
+1. **Identity key x Peer identity key** -- authenticates both parties
+2. **Ephemeral key x Peer ephemeral key** -- provides forward secrecy
+
+The session key is derived via `HKDF(identitySecret || ephemeralSecret, "zajel_session_v2")`. The ephemeral private key is deleted immediately after use, so even if the long-lived identity key is later compromised, past session keys cannot be recovered.
+
+### In-Session Key Ratcheting
+
+Session keys are periodically ratcheted forward using `HKDF(currentKey || nonce, "zajel_ratchet")`. After a ratchet, the previous key is retained briefly (30-second grace period) to decrypt in-flight messages that were encrypted before the peer processed the ratchet. This provides in-session forward secrecy -- compromise of the current key does not expose messages encrypted under previous ratchet states.
+
+### Stable Device Identity
+
+Each device has a **stable ID** -- a persistent 16 hex-char identity anchor stored in SharedPreferences. Unlike the public-key-derived peer ID, the stable ID survives key rotation (e.g., identity key regeneration). It is generated once and used for the `#TAG` portion of the user's display identity (`Username#TAG`).
+
+### Vector Clocks for Group Message Ordering
+
+Group messaging uses **vector clocks** to establish causal ordering of messages across multiple participants. Each group member maintains a per-device sequence number. Vector clocks are stored in SQLite as individual `(group_id, device_id, sequence_number)` rows, enabling efficient per-device queries and atomic updates.
+
+### Server Federation
+
+VPS relay servers form a **federated cluster** using two mechanisms:
+
+- **SWIM Gossip Protocol**: Servers discover and monitor each other using the Scalable Weakly-consistent Infection-style Membership (SWIM) protocol. Failure detection uses direct pings, indirect pings via proxy peers, and suspicion timers with incarnation numbers for consistency.
+- **DHT Hash Ring**: A consistent hashing ring with virtual nodes (default 150 per server) distributes meeting points and rendezvous data across the federation. A `RoutingTable` determines which server is responsible for a given hash, with a configurable replication factor (default 3) for redundancy.

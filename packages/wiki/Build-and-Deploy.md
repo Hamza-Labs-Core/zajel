@@ -100,7 +100,7 @@ flutter run \
   --dart-define=BOOTSTRAP_URL=https://signal.zajel.hamzalabs.dev \
   --dart-define=SIGNALING_URL=wss://signal.zajel.hamzalabs.dev \
   --dart-define=BUILD_TOKEN=<signed-token> \
-  --dart-define=E2E_TEST_MODE=false
+  --dart-define=E2E_TEST=false
 ```
 
 | Variable | Description |
@@ -108,7 +108,7 @@ flutter run \
 | `BOOTSTRAP_URL` | URL for fetching the server list |
 | `SIGNALING_URL` | WebSocket URL for signaling server |
 | `BUILD_TOKEN` | Signed build token for attestation |
-| `E2E_TEST_MODE` | Enable auto-pairing behavior for E2E tests |
+| `E2E_TEST` | Enable auto-pairing behavior for E2E tests |
 
 ---
 
@@ -171,7 +171,7 @@ npx wrangler deploy --env qa
 | Environment | Domain | Config |
 |-------------|--------|--------|
 | Production | `signal.zajel.hamzalabs.dev` | Default bindings |
-| QA | `signal-qa.zajel.hamzalabs.dev` | Separate Durable Object namespaces |
+| QA | `signal.zajel.qa.hamzalabs.dev` | Separate Durable Object namespaces |
 
 ---
 
@@ -187,6 +187,12 @@ npm run build --workspace=@zajel/server-vps
 
 ```bash
 npm run dev --workspace=@zajel/server-vps
+```
+
+### Testing
+
+```bash
+npm run test --workspace=@zajel/server-vps
 ```
 
 The VPS relay server provides WebSocket relay connectivity for peers that cannot establish direct P2P connections. It registers with the bootstrap server and sends periodic heartbeats.
