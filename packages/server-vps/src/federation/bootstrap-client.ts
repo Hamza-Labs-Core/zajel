@@ -7,6 +7,7 @@
 
 import type { ServerConfig, ServerIdentity } from '../types.js';
 import { base64Encode } from '../identity/server-identity.js';
+import type { BuildManifest } from '../identity/build-manifest.js';
 
 export interface BootstrapServerEntry {
   serverId: string;
@@ -35,7 +36,8 @@ export interface BootstrapMetrics {
 export function createBootstrapClient(
   config: ServerConfig,
   identity: ServerIdentity,
-  getMetrics?: () => BootstrapMetrics
+  getMetrics?: () => BootstrapMetrics,
+  buildManifest?: BuildManifest | null,
 ): BootstrapClient {
   let heartbeatTimer: NodeJS.Timeout | null = null;
   const baseUrl = config.bootstrap.serverUrl;
@@ -44,7 +46,7 @@ export function createBootstrapClient(
     const url = `${baseUrl}/servers`;
 
     const metrics = getMetrics?.();
-    const body = {
+    const body: Record<string, unknown> = {
       serverId: identity.serverId,
       endpoint: config.network.publicEndpoint,
       publicKey: base64Encode(identity.publicKey),
@@ -54,6 +56,14 @@ export function createBootstrapClient(
       signalingConnections: metrics?.signalingConnections ?? 0,
       activeCodes: metrics?.activeCodes ?? 0,
     };
+
+    // Include build signing data if a signed manifest is available
+    if (buildManifest) {
+      body.buildHash = buildManifest.buildHash;
+      body.buildSignature = buildManifest.signature;
+      body.buildSigningKey = buildManifest.publicKey;
+      body.buildVersion = buildManifest.version;
+    }
 
     console.log(`[Bootstrap] Registering with ${baseUrl}...`);
 
@@ -118,16 +128,25 @@ export function createBootstrapClient(
 
     try {
       const metrics = getMetrics?.();
+      const heartbeatBody: Record<string, unknown> = {
+        serverId: identity.serverId,
+        connections: metrics?.connections ?? 0,
+        relayConnections: metrics?.relayConnections ?? 0,
+        signalingConnections: metrics?.signalingConnections ?? 0,
+        activeCodes: metrics?.activeCodes ?? 0,
+      };
+
+      // Include build signing data on heartbeat for ongoing verification
+      if (buildManifest) {
+        heartbeatBody.buildHash = buildManifest.buildHash;
+        heartbeatBody.buildSignature = buildManifest.signature;
+        heartbeatBody.buildSigningKey = buildManifest.publicKey;
+      }
+
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          serverId: identity.serverId,
-          connections: metrics?.connections ?? 0,
-          relayConnections: metrics?.relayConnections ?? 0,
-          signalingConnections: metrics?.signalingConnections ?? 0,
-          activeCodes: metrics?.activeCodes ?? 0,
-        }),
+        body: JSON.stringify(heartbeatBody),
       });
 
       if (!response.ok) {

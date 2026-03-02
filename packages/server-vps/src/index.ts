@@ -24,6 +24,7 @@ import { ClientHandler, type ClientHandlerConfig } from './client/handler.js';
 import { logger } from './utils/logger.js';
 import { createAdminModule, type AdminModule } from './admin/index.js';
 import { requireAuth } from './admin/auth.js';
+import { loadBuildManifest } from './identity/build-manifest.js';
 
 
 export interface ZajelServer {
@@ -63,13 +64,21 @@ export async function createZajelServer(
   logger.info(`[Zajel] Server ID: ${logger.serverId(identity.serverId)}`);
   logger.info(`[Zajel] Node ID: ${logger.serverId(identity.nodeId)}`);
 
+  // Load build manifest for build signing verification
+  const buildManifest = loadBuildManifest();
+  if (buildManifest) {
+    console.log(`[Zajel] Build manifest loaded: v${buildManifest.version} (${buildManifest.buildHash.slice(0, 12)}...)`);
+  } else {
+    console.log('[Zajel] No build manifest found (unsigned build)');
+  }
+
   // Create bootstrap client for CF Workers discovery
   const bootstrap = createBootstrapClient(config, identity, () => ({
     connections: (clientHandlerRef?.clientCount ?? 0) + (clientHandlerRef?.signalingClientCount ?? 0),
     relayConnections: clientHandlerRef?.clientCount ?? 0,
     signalingConnections: clientHandlerRef?.signalingClientCount ?? 0,
     activeCodes: clientHandlerRef?.getEntropyMetrics().activeCodes ?? 0,
-  }));
+  }), buildManifest);
 
   // Mutable reference for clientHandler (set after creation, used in HTTP handlers)
   let clientHandlerRef: ClientHandler | null = null;
