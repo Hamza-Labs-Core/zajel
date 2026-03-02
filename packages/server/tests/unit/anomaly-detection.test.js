@@ -369,35 +369,41 @@ describe('Anomaly Detection', () => {
     });
 
     it('should not flag when all servers have similar metrics', async () => {
-      const servers = ['a', 'b', 'c', 'd'];
-      for (const id of servers) {
+      // Use deterministic values close together (no randomness)
+      const serverData = [
+        { id: 'a', connections: 48 },
+        { id: 'b', connections: 50 },
+        { id: 'c', connections: 52 },
+        { id: 'd', connections: 51 },
+      ];
+      for (const { id, connections } of serverData) {
         await registerServer(registry, {
           serverId: `ed25519:${id}`,
           endpoint: `wss://${id}.example.com`,
-          connections: 50 + Math.floor(Math.random() * 10),
-          relayConnections: 25,
-          signalingConnections: 25,
+          connections,
+          relayConnections: Math.floor(connections / 2),
+          signalingConnections: Math.ceil(connections / 2),
         });
       }
 
-      // Heartbeat for one of them
+      // Heartbeat for one of them — values within normal fleet range
       await sendHeartbeat(registry, {
         serverId: 'ed25519:a',
-        connections: 55,
-        relayConnections: 28,
-        signalingConnections: 27,
+        connections: 50,
+        relayConnections: 25,
+        signalingConnections: 25,
       });
       await sendHeartbeat(registry, {
         serverId: 'ed25519:a',
-        connections: 55,
-        relayConnections: 28,
-        signalingConnections: 27,
-      });
-      await sendHeartbeat(registry, {
-        serverId: 'ed25519:a',
-        connections: 52,
+        connections: 51,
         relayConnections: 26,
-        signalingConnections: 26,
+        signalingConnections: 25,
+      });
+      await sendHeartbeat(registry, {
+        serverId: 'ed25519:a',
+        connections: 49,
+        relayConnections: 25,
+        signalingConnections: 24,
       });
 
       const scoreData = await mockState.storage.get('anomaly-score:ed25519:a');

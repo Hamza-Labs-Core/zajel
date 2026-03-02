@@ -128,24 +128,33 @@ const AnomalyDetector = {
   },
 };
 
+/** Maximum trusted build keys allowed */
+const MAX_TRUSTED_BUILD_KEYS = 50;
+
 /**
  * Build signature verification for federation server binaries.
  *
  * Verifies Ed25519 signatures on build hashes to ensure servers run
  * authentic, untampered builds from trusted operators.
  *
- * Trusted keys are configured via TRUSTED_BUILD_KEYS env var
- * (comma-separated base64-encoded Ed25519 public keys).
+ * Trusted keys are managed by CI via POST /servers/trusted-keys and
+ * persisted in DO storage. Falls back to TRUSTED_BUILD_KEYS env var.
  */
 const BuildVerifier = {
   /**
-   * Parse the TRUSTED_BUILD_KEYS environment variable.
-   * @param {string|undefined} envValue - Comma-separated base64 public keys
-   * @returns {string[]} Array of base64-encoded public keys
+   * Load trusted keys from DO storage, falling back to env var.
+   * @param {object} storage - Durable Object storage
+   * @param {string|undefined} envFallback - TRUSTED_BUILD_KEYS env var
+   * @returns {Promise<string[]>} Array of base64-encoded public keys
    */
-  parseTrustedKeys(envValue) {
-    if (!envValue) return [];
-    return envValue.split(',').map(k => k.trim()).filter(Boolean);
+  async loadTrustedKeys(storage, envFallback) {
+    const stored = await storage.get('trusted_build_keys');
+    if (stored && Array.isArray(stored.keys) && stored.keys.length > 0) {
+      return stored.keys;
+    }
+    // Fallback to env var for backward compatibility
+    if (!envFallback) return [];
+    return envFallback.split(',').map(k => k.trim()).filter(Boolean);
   },
 
   /**
@@ -265,6 +274,17 @@ export class ServerRegistryDO {
     return timingSafeEqual(authHeader, `Bearer ${this.env.SERVER_REGISTRY_SECRET}`);
   }
 
+  /**
+   * Verify CI authentication using CI_UPLOAD_SECRET.
+   * Same pattern as the attestation registry.
+   */
+  verifyCIAuth(request) {
+    const authHeader = request.headers.get('Authorization');
+    if (!this.env.CI_UPLOAD_SECRET) return false;
+    if (!authHeader) return false;
+    return timingSafeEqual(authHeader, `Bearer ${this.env.CI_UPLOAD_SECRET}`);
+  }
+
   async fetch(request) {
     const url = new URL(request.url);
 
@@ -337,6 +357,16 @@ export class ServerRegistryDO {
           );
         }
         return await this.listAnomalies(corsHeaders);
+      }
+
+      // POST /servers/trusted-keys - Update trusted build keys (CI_UPLOAD_SECRET)
+      if (request.method === 'POST' && url.pathname === '/servers/trusted-keys') {
+        return await this.setTrustedKeys(request, corsHeaders);
+      }
+
+      // GET /servers/trusted-keys - Read current trusted build keys (public)
+      if (request.method === 'GET' && url.pathname === '/servers/trusted-keys') {
+        return await this.getTrustedKeys(corsHeaders);
       }
 
       return new Response('Not Found', { status: 404, headers: corsHeaders });
@@ -475,8 +505,8 @@ export class ServerRegistryDO {
       // Verify the Ed25519 signature over the build hash
       const sigValid = await BuildVerifier.verifySignature(buildHash, buildSignature, buildSigningKey);
 
-      // Check if the signing key is trusted (if TRUSTED_BUILD_KEYS is configured)
-      const trustedKeys = BuildVerifier.parseTrustedKeys(this.env.TRUSTED_BUILD_KEYS);
+      // Check if the signing key is trusted (DO storage first, env var fallback)
+      const trustedKeys = await BuildVerifier.loadTrustedKeys(this.state.storage, this.env.TRUSTED_BUILD_KEYS);
       const keyTrusted = trustedKeys.length === 0 || BuildVerifier.isTrustedKey(buildSigningKey, trustedKeys);
 
       buildVerified = sigValid && keyTrusted;
@@ -641,7 +671,7 @@ export class ServerRegistryDO {
     // Re-verify build signature if provided in heartbeat
     if (typeof body.buildHash === 'string' && typeof body.buildSignature === 'string' && typeof body.buildSigningKey === 'string') {
       const sigValid = await BuildVerifier.verifySignature(body.buildHash, body.buildSignature, body.buildSigningKey);
-      const trustedKeys = BuildVerifier.parseTrustedKeys(this.env.TRUSTED_BUILD_KEYS);
+      const trustedKeys = await BuildVerifier.loadTrustedKeys(this.state.storage, this.env.TRUSTED_BUILD_KEYS);
       const keyTrusted = trustedKeys.length === 0 || BuildVerifier.isTrustedKey(body.buildSigningKey, trustedKeys);
       server.buildVerified = sigValid && keyTrusted;
       server.buildHash = body.buildHash;
@@ -771,6 +801,110 @@ export class ServerRegistryDO {
 
     return new Response(
       JSON.stringify({ servers: results }),
+      { status: 200, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+    );
+  }
+
+  /**
+   * POST /servers/trusted-keys
+   *
+   * Update the set of trusted build signing keys. Called by CI after a
+   * successful build to register the public key used for signing.
+   * Authenticated with CI_UPLOAD_SECRET (same as POST /attest/versions).
+   *
+   * Body: { keys: string[], addKeys?: string[], removeKeys?: string[] }
+   *   - keys: replace the entire set
+   *   - addKeys: append to the existing set
+   *   - removeKeys: remove from the existing set
+   * Only one mode per request. If `keys` is provided, it replaces all.
+   */
+  async setTrustedKeys(request, corsHeaders) {
+    if (!this.env.CI_UPLOAD_SECRET) {
+      return new Response(
+        JSON.stringify({ error: 'CI access not configured' }),
+        { status: 503, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+      );
+    }
+
+    if (!this.verifyCIAuth(request)) {
+      this.logger.warn('[audit] Unauthorized trusted-keys update attempt', {
+        action: 'trusted_keys_failed',
+        ip: request.headers.get('CF-Connecting-IP'),
+      });
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized' }),
+        { status: 401, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+      );
+    }
+
+    const body = await parseJsonBody(request, 4096);
+
+    // Validate base64 key format (32 bytes = 44 base64 chars with padding)
+    const isValidKey = (k) => typeof k === 'string' && k.length > 0 && k.length <= 100;
+
+    let finalKeys;
+    const current = (await this.state.storage.get('trusted_build_keys')) || { keys: [] };
+
+    if (Array.isArray(body.keys)) {
+      // Replace mode
+      if (!body.keys.every(isValidKey)) {
+        return new Response(
+          JSON.stringify({ error: 'Invalid key format in keys array' }),
+          { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+        );
+      }
+      finalKeys = [...new Set(body.keys)];
+    } else if (Array.isArray(body.addKeys)) {
+      // Append mode
+      if (!body.addKeys.every(isValidKey)) {
+        return new Response(
+          JSON.stringify({ error: 'Invalid key format in addKeys array' }),
+          { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+        );
+      }
+      finalKeys = [...new Set([...current.keys, ...body.addKeys])];
+    } else if (Array.isArray(body.removeKeys)) {
+      // Remove mode
+      const removeSet = new Set(body.removeKeys);
+      finalKeys = current.keys.filter(k => !removeSet.has(k));
+    } else {
+      return new Response(
+        JSON.stringify({ error: 'Must provide keys, addKeys, or removeKeys' }),
+        { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+      );
+    }
+
+    if (finalKeys.length > MAX_TRUSTED_BUILD_KEYS) {
+      return new Response(
+        JSON.stringify({ error: `Too many keys (max ${MAX_TRUSTED_BUILD_KEYS})` }),
+        { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+      );
+    }
+
+    const stored = { keys: finalKeys, updatedAt: Date.now() };
+    await this.state.storage.put('trusted_build_keys', stored);
+
+    this.logger.info('[audit] Trusted build keys updated', {
+      action: 'trusted_keys_updated',
+      keyCount: finalKeys.length,
+    });
+
+    return new Response(
+      JSON.stringify({ success: true, keys: finalKeys }),
+      { status: 200, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+    );
+  }
+
+  /**
+   * GET /servers/trusted-keys
+   *
+   * Returns the current set of trusted build signing public keys.
+   * Public endpoint — keys are public keys, not secrets.
+   */
+  async getTrustedKeys(corsHeaders) {
+    const stored = (await this.state.storage.get('trusted_build_keys')) || { keys: [], updatedAt: null };
+    return new Response(
+      JSON.stringify({ keys: stored.keys, updatedAt: stored.updatedAt }),
       { status: 200, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
     );
   }

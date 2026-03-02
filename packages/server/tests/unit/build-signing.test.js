@@ -389,6 +389,240 @@ describe('Build Signing Verification', () => {
     });
   });
 
+  describe('Trusted Keys via CI (POST /servers/trusted-keys)', () => {
+    it('should upload trusted keys with CI_UPLOAD_SECRET', async () => {
+      const registry = new ServerRegistryDO(mockState, {
+        CI_UPLOAD_SECRET: 'ci-secret-123',
+      });
+
+      const response = await registry.fetch(createRequest('POST', '/servers/trusted-keys', {
+        keys: [keypair.publicKeyBase64],
+      }, {
+        Authorization: 'Bearer ci-secret-123',
+      }));
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.success).toBe(true);
+      expect(data.keys).toHaveLength(1);
+      expect(data.keys[0]).toBe(keypair.publicKeyBase64);
+    });
+
+    it('should reject without CI_UPLOAD_SECRET', async () => {
+      const registry = new ServerRegistryDO(mockState, {
+        CI_UPLOAD_SECRET: 'ci-secret-123',
+      });
+
+      const response = await registry.fetch(createRequest('POST', '/servers/trusted-keys', {
+        keys: [keypair.publicKeyBase64],
+      }));
+
+      expect(response.status).toBe(401);
+    });
+
+    it('should reject with wrong secret', async () => {
+      const registry = new ServerRegistryDO(mockState, {
+        CI_UPLOAD_SECRET: 'ci-secret-123',
+      });
+
+      const response = await registry.fetch(createRequest('POST', '/servers/trusted-keys', {
+        keys: [keypair.publicKeyBase64],
+      }, {
+        Authorization: 'Bearer wrong-secret',
+      }));
+
+      expect(response.status).toBe(401);
+    });
+
+    it('should return 503 when CI_UPLOAD_SECRET is not configured', async () => {
+      const registry = new ServerRegistryDO(mockState, {});
+
+      const response = await registry.fetch(createRequest('POST', '/servers/trusted-keys', {
+        keys: [keypair.publicKeyBase64],
+      }, {
+        Authorization: 'Bearer anything',
+      }));
+
+      expect(response.status).toBe(503);
+    });
+
+    it('should support addKeys to append without replacing', async () => {
+      const key2 = await generateTestKeypair();
+      const registry = new ServerRegistryDO(mockState, {
+        CI_UPLOAD_SECRET: 'ci-secret-123',
+      });
+      const authHeaders = { Authorization: 'Bearer ci-secret-123' };
+
+      // First: set initial key
+      await registry.fetch(createRequest('POST', '/servers/trusted-keys', {
+        keys: [keypair.publicKeyBase64],
+      }, authHeaders));
+
+      // Then: addKeys to append
+      const response = await registry.fetch(createRequest('POST', '/servers/trusted-keys', {
+        addKeys: [key2.publicKeyBase64],
+      }, authHeaders));
+
+      const data = await response.json();
+      expect(data.keys).toHaveLength(2);
+      expect(data.keys).toContain(keypair.publicKeyBase64);
+      expect(data.keys).toContain(key2.publicKeyBase64);
+    });
+
+    it('should support removeKeys to revoke a key', async () => {
+      const key2 = await generateTestKeypair();
+      const registry = new ServerRegistryDO(mockState, {
+        CI_UPLOAD_SECRET: 'ci-secret-123',
+      });
+      const authHeaders = { Authorization: 'Bearer ci-secret-123' };
+
+      // Set two keys
+      await registry.fetch(createRequest('POST', '/servers/trusted-keys', {
+        keys: [keypair.publicKeyBase64, key2.publicKeyBase64],
+      }, authHeaders));
+
+      // Remove one
+      const response = await registry.fetch(createRequest('POST', '/servers/trusted-keys', {
+        removeKeys: [keypair.publicKeyBase64],
+      }, authHeaders));
+
+      const data = await response.json();
+      expect(data.keys).toHaveLength(1);
+      expect(data.keys[0]).toBe(key2.publicKeyBase64);
+    });
+
+    it('should deduplicate keys', async () => {
+      const registry = new ServerRegistryDO(mockState, {
+        CI_UPLOAD_SECRET: 'ci-secret-123',
+      });
+
+      const response = await registry.fetch(createRequest('POST', '/servers/trusted-keys', {
+        keys: [keypair.publicKeyBase64, keypair.publicKeyBase64, keypair.publicKeyBase64],
+      }, {
+        Authorization: 'Bearer ci-secret-123',
+      }));
+
+      const data = await response.json();
+      expect(data.keys).toHaveLength(1);
+    });
+
+    it('should return 400 if no keys/addKeys/removeKeys provided', async () => {
+      const registry = new ServerRegistryDO(mockState, {
+        CI_UPLOAD_SECRET: 'ci-secret-123',
+      });
+
+      const response = await registry.fetch(createRequest('POST', '/servers/trusted-keys', {
+        something: 'else',
+      }, {
+        Authorization: 'Bearer ci-secret-123',
+      }));
+
+      expect(response.status).toBe(400);
+    });
+  });
+
+  describe('GET /servers/trusted-keys', () => {
+    it('should return empty list when no keys configured', async () => {
+      const registry = new ServerRegistryDO(mockState, {});
+
+      const response = await registry.fetch(createRequest('GET', '/servers/trusted-keys'));
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.keys).toEqual([]);
+    });
+
+    it('should return keys uploaded by CI', async () => {
+      const registry = new ServerRegistryDO(mockState, {
+        CI_UPLOAD_SECRET: 'ci-secret-123',
+      });
+
+      // Upload keys
+      await registry.fetch(createRequest('POST', '/servers/trusted-keys', {
+        keys: [keypair.publicKeyBase64],
+      }, {
+        Authorization: 'Bearer ci-secret-123',
+      }));
+
+      // Read them back
+      const response = await registry.fetch(createRequest('GET', '/servers/trusted-keys'));
+      const data = await response.json();
+
+      expect(data.keys).toHaveLength(1);
+      expect(data.keys[0]).toBe(keypair.publicKeyBase64);
+      expect(data.updatedAt).toBeTypeOf('number');
+    });
+  });
+
+  describe('DO Storage Keys Override Env Var', () => {
+    it('should use DO-stored keys over env var when both exist', async () => {
+      const key2 = await generateTestKeypair();
+      const registry = new ServerRegistryDO(mockState, {
+        CI_UPLOAD_SECRET: 'ci-secret-123',
+        // Env var has key2
+        TRUSTED_BUILD_KEYS: key2.publicKeyBase64,
+      });
+
+      // CI uploads keypair (different from env var)
+      await registry.fetch(createRequest('POST', '/servers/trusted-keys', {
+        keys: [keypair.publicKeyBase64],
+      }, {
+        Authorization: 'Bearer ci-secret-123',
+      }));
+
+      const buildHash = 'a'.repeat(64);
+
+      // Sign with keypair (in DO storage, NOT in env var)
+      const signature = await signBuildHash(keypair.privateKey, buildHash);
+      const response = await registry.fetch(createRequest('POST', '/servers', {
+        serverId: 'ed25519:do-key-server',
+        endpoint: 'wss://do.example.com',
+        publicKey: 'test-key',
+        buildHash,
+        buildSignature: signature,
+        buildSigningKey: keypair.publicKeyBase64,
+      }));
+
+      const entry = await mockState.storage.get('server:ed25519:do-key-server');
+      expect(entry.buildVerified).toBe(true); // DO key is trusted
+
+      // Sign with key2 (in env var, NOT in DO storage)
+      const sig2 = await signBuildHash(key2.privateKey, buildHash);
+      await registry.fetch(createRequest('POST', '/servers', {
+        serverId: 'ed25519:env-key-server',
+        endpoint: 'wss://env.example.com',
+        publicKey: 'test-key',
+        buildHash,
+        buildSignature: sig2,
+        buildSigningKey: key2.publicKeyBase64,
+      }));
+
+      const entry2 = await mockState.storage.get('server:ed25519:env-key-server');
+      expect(entry2.buildVerified).toBe(false); // Env key is ignored when DO has keys
+    });
+
+    it('should fall back to env var when DO storage is empty', async () => {
+      const registry = new ServerRegistryDO(mockState, {
+        TRUSTED_BUILD_KEYS: keypair.publicKeyBase64,
+      });
+
+      const buildHash = 'b'.repeat(64);
+      const signature = await signBuildHash(keypair.privateKey, buildHash);
+
+      await registry.fetch(createRequest('POST', '/servers', {
+        serverId: 'ed25519:env-fallback-server',
+        endpoint: 'wss://envfb.example.com',
+        publicKey: 'test-key',
+        buildHash,
+        buildSignature: signature,
+        buildSigningKey: keypair.publicKeyBase64,
+      }));
+
+      const entry = await mockState.storage.get('server:ed25519:env-fallback-server');
+      expect(entry.buildVerified).toBe(true);
+    });
+  });
+
   describe('Edge Cases', () => {
     it('should handle malformed signature gracefully', async () => {
       const registry = new ServerRegistryDO(mockState, {});

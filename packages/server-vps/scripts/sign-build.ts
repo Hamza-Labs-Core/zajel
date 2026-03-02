@@ -136,6 +136,36 @@ async function main() {
     process.exit(1);
   }
   console.log('[sign-build] Signature verified successfully.');
+
+  // Upload public key to bootstrap registry if CI credentials are available
+  const bootstrapUrl = process.env['ZAJEL_BOOTSTRAP_URL'];
+  const ciSecret = process.env['CI_UPLOAD_SECRET'];
+
+  if (bootstrapUrl && ciSecret) {
+    console.log(`[sign-build] Uploading trusted key to ${bootstrapUrl}...`);
+    try {
+      const response = await fetch(`${bootstrapUrl}/servers/trusted-keys`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${ciSecret}`,
+        },
+        body: JSON.stringify({ addKeys: [manifest.publicKey] }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        console.error(`[sign-build] Warning: Failed to upload trusted key: ${response.status} ${text}`);
+      } else {
+        const result = await response.json() as { keys: string[] };
+        console.log(`[sign-build] Trusted key registered (${result.keys.length} total keys)`);
+      }
+    } catch (err) {
+      console.error('[sign-build] Warning: Could not reach bootstrap registry:', err);
+    }
+  } else {
+    console.log('[sign-build] Skipping trusted key upload (ZAJEL_BOOTSTRAP_URL or CI_UPLOAD_SECRET not set)');
+  }
 }
 
 main().catch((err) => {
