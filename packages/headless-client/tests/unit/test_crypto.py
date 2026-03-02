@@ -236,7 +236,8 @@ class TestStableId:
             crypto.initialize()
 
             assert os.path.exists(path)
-            stored = open(path).read().strip()
+            with open(path) as f:
+                stored = f.read().strip()
             assert stored == crypto.stable_id
 
     def test_stable_id_loaded_from_file(self):
