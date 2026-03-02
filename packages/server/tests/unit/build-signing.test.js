@@ -640,6 +640,128 @@ describe('Build Signing Verification', () => {
     });
   });
 
+  describe('Encrypted Storage', () => {
+    it('should store keys encrypted (not plaintext) in DO storage', async () => {
+      const registry = new ServerRegistryDO(mockState, {
+        CI_UPLOAD_SECRET: 'ci-secret-123',
+      });
+
+      await registry.fetch(createRequest('POST', '/servers/trusted-keys', {
+        keys: [keypair.publicKeyBase64],
+      }, {
+        Authorization: 'Bearer ci-secret-123',
+      }));
+
+      // Read raw storage — should be encrypted envelope, not plaintext
+      const raw = await mockState.storage.get('trusted_build_keys');
+      expect(raw.encrypted).toBe(true);
+      expect(raw.iv).toBeTypeOf('string');
+      expect(raw.data).toBeTypeOf('string');
+      // Should NOT have plaintext keys array
+      expect(raw.keys).toBeUndefined();
+      // The ciphertext should not contain the key in plaintext
+      expect(raw.data).not.toContain(keypair.publicKeyBase64);
+    });
+
+    it('should decrypt and return correct keys via GET', async () => {
+      const registry = new ServerRegistryDO(mockState, {
+        CI_UPLOAD_SECRET: 'ci-secret-123',
+      });
+      const authHeaders = { Authorization: 'Bearer ci-secret-123' };
+
+      // Upload
+      await registry.fetch(createRequest('POST', '/servers/trusted-keys', {
+        keys: [keypair.publicKeyBase64],
+      }, authHeaders));
+
+      // GET should decrypt and return plaintext keys
+      const response = await registry.fetch(createRequest('GET', '/servers/trusted-keys', null, authHeaders));
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.keys).toEqual([keypair.publicKeyBase64]);
+      expect(data.updatedAt).toBeTypeOf('number');
+    });
+
+    it('should read legacy plaintext keys (migration path)', async () => {
+      // Simulate legacy plaintext data in storage
+      await mockState.storage.put('trusted_build_keys', {
+        keys: [keypair.publicKeyBase64],
+        updatedAt: 1000000,
+      });
+
+      const registry = new ServerRegistryDO(mockState, {
+        CI_UPLOAD_SECRET: 'ci-secret-123',
+      });
+
+      // Should read legacy plaintext keys via build verification
+      const buildHash = 'a'.repeat(64);
+      const signature = await signBuildHash(keypair.privateKey, buildHash);
+
+      await registry.fetch(createRequest('POST', '/servers', {
+        serverId: 'ed25519:legacy-server',
+        endpoint: 'wss://legacy.example.com',
+        publicKey: 'test-key',
+        buildHash,
+        buildSignature: signature,
+        buildSigningKey: keypair.publicKeyBase64,
+      }));
+
+      const entry = await mockState.storage.get('server:ed25519:legacy-server');
+      expect(entry.buildVerified).toBe(true);
+    });
+
+    it('should read legacy plaintext keys via GET endpoint', async () => {
+      // Simulate legacy plaintext data in storage
+      await mockState.storage.put('trusted_build_keys', {
+        keys: [keypair.publicKeyBase64],
+        updatedAt: 1000000,
+      });
+
+      const registry = new ServerRegistryDO(mockState, {
+        CI_UPLOAD_SECRET: 'ci-secret-123',
+      });
+
+      const response = await registry.fetch(createRequest('GET', '/servers/trusted-keys', null, {
+        Authorization: 'Bearer ci-secret-123',
+      }));
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.keys).toEqual([keypair.publicKeyBase64]);
+      expect(data.updatedAt).toBe(1000000);
+    });
+
+    it('should use encrypted DO keys for build verification', async () => {
+      const registry = new ServerRegistryDO(mockState, {
+        CI_UPLOAD_SECRET: 'ci-secret-123',
+      });
+
+      // Upload key via CI (stored encrypted)
+      await registry.fetch(createRequest('POST', '/servers/trusted-keys', {
+        keys: [keypair.publicKeyBase64],
+      }, {
+        Authorization: 'Bearer ci-secret-123',
+      }));
+
+      // Register with matching key — should be verified
+      const buildHash = 'c'.repeat(64);
+      const signature = await signBuildHash(keypair.privateKey, buildHash);
+
+      await registry.fetch(createRequest('POST', '/servers', {
+        serverId: 'ed25519:enc-verify-server',
+        endpoint: 'wss://enc.example.com',
+        publicKey: 'test-key',
+        buildHash,
+        buildSignature: signature,
+        buildSigningKey: keypair.publicKeyBase64,
+      }));
+
+      const entry = await mockState.storage.get('server:ed25519:enc-verify-server');
+      expect(entry.buildVerified).toBe(true);
+    });
+  });
+
   describe('Edge Cases', () => {
     it('should handle malformed signature gracefully', async () => {
       const registry = new ServerRegistryDO(mockState, {});
