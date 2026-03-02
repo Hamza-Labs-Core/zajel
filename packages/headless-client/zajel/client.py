@@ -291,6 +291,8 @@ class ZajelHeadlessClient:
 
         # WebRTC peer tracking (issue-headless-05: bind handshake to specific peer)
         self._webrtc_peer_id: Optional[str] = None
+        # Ephemeral private keys for forward-secret handshake (keyed by peer code)
+        self._ephemeral_keys: dict = {}
 
         # Mapping of signaling peer code -> stableId from handshake
         # and reverse mapping for tracking peers across reconnections
@@ -2448,6 +2450,15 @@ class ZajelHeadlessClient:
 
         ice_task = None
         try:
+            # Generate ephemeral keypair BEFORE setting data channel handlers.
+            # This prevents a race condition where the peer's handshake arrives
+            # before our ephemeral key is stored, causing a fallback to
+            # identity-only key exchange while the peer uses ephemeral —
+            # resulting in mismatched session keys and decrypt failures.
+            eph_private, eph_public_bytes = self._crypto.generate_ephemeral_keypair()
+            eph_public_b64 = base64.b64encode(eph_public_bytes).decode()
+            self._ephemeral_keys[match.peer_code] = eph_private
+
             # Create WebRTC connection
             await self._webrtc.create_connection(match.is_initiator)
 
@@ -2489,15 +2500,6 @@ class ZajelHeadlessClient:
 
             # Wait for data channel
             await self._webrtc.wait_for_message_channel(timeout=30)
-
-            # Generate ephemeral keypair for forward secrecy
-            eph_private, eph_public_bytes = self._crypto.generate_ephemeral_keypair()
-            eph_public_b64 = base64.b64encode(eph_public_bytes).decode()
-
-            # Store ephemeral private key temporarily for key exchange completion
-            if not hasattr(self, "_ephemeral_keys"):
-                self._ephemeral_keys: dict = {}
-            self._ephemeral_keys[match.peer_code] = eph_private
 
             # Send handshake (key exchange + ephemeral + stableId for identity)
             handshake = HandshakeMessage(
@@ -2623,7 +2625,7 @@ class ZajelHeadlessClient:
                             )
                     # Try ephemeral key exchange (forward secrecy) if both sides
                     # provided ephemeral keys
-                    eph_keys = getattr(self, "_ephemeral_keys", {})
+                    eph_keys = self._ephemeral_keys
                     our_eph_private = eph_keys.pop(peer_id, None)
                     if peer_eph_key and our_eph_private:
                         self._crypto.establish_session_with_ephemeral(

@@ -422,6 +422,42 @@ class TestEphemeralKeyExchange:
                 eph_priv,
             )
 
+    def test_mixed_exchange_modes_cannot_decrypt(self):
+        """If one side uses ephemeral and the other identity-only, decryption fails.
+
+        This simulates the race condition where one side sends a handshake
+        with an ephemeral key but the other side hasn't generated its
+        ephemeral key yet and falls back to identity-only key exchange.
+        The resulting session keys differ, so messages can't be decrypted.
+        """
+        alice = CryptoService()
+        alice.initialize()
+        bob = CryptoService()
+        bob.initialize()
+
+        # Alice uses ephemeral key exchange (has both identity + ephemeral)
+        alice_eph_priv, alice_eph_pub = CryptoService.generate_ephemeral_keypair()
+        bob_eph_priv, bob_eph_pub = CryptoService.generate_ephemeral_keypair()
+
+        alice.establish_session_with_ephemeral(
+            "bob",
+            bob.public_key_base64,
+            base64.b64encode(bob_eph_pub).decode(),
+            alice_eph_priv,
+        )
+
+        # Bob falls back to identity-only (race: ephemeral key not ready)
+        bob.perform_key_exchange("alice", alice.public_key_base64)
+
+        # Alice encrypts with ephemeral-derived key
+        ciphertext = alice.encrypt("bob", "Hello from Alice")
+
+        # Bob cannot decrypt: his identity-only key differs from Alice's
+        # ephemeral-derived key.  This is the exact failure seen in CI:
+        # "Decrypt failed for peer ... (sessionHash=...)"
+        with pytest.raises(Exception):
+            bob.decrypt("alice", ciphertext)
+
 
 class TestKeyRatcheting:
     """Tests for key ratcheting (in-session forward secrecy)."""
