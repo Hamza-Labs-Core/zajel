@@ -522,32 +522,49 @@ describe('Build Signing Verification', () => {
   });
 
   describe('GET /servers/trusted-keys', () => {
-    it('should return empty list when no keys configured', async () => {
+    it('should return 503 when CI_UPLOAD_SECRET is not configured', async () => {
       const registry = new ServerRegistryDO(mockState, {});
 
       const response = await registry.fetch(createRequest('GET', '/servers/trusted-keys'));
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.keys).toEqual([]);
+      expect(response.status).toBe(503);
     });
 
-    it('should return keys uploaded by CI', async () => {
+    it('should return 401 without auth', async () => {
       const registry = new ServerRegistryDO(mockState, {
         CI_UPLOAD_SECRET: 'ci-secret-123',
       });
 
+      const response = await registry.fetch(createRequest('GET', '/servers/trusted-keys'));
+      expect(response.status).toBe(401);
+    });
+
+    it('should return 401 with wrong secret', async () => {
+      const registry = new ServerRegistryDO(mockState, {
+        CI_UPLOAD_SECRET: 'ci-secret-123',
+      });
+
+      const response = await registry.fetch(createRequest('GET', '/servers/trusted-keys', null, {
+        Authorization: 'Bearer wrong-secret',
+      }));
+      expect(response.status).toBe(401);
+    });
+
+    it('should return keys uploaded by CI when authenticated', async () => {
+      const registry = new ServerRegistryDO(mockState, {
+        CI_UPLOAD_SECRET: 'ci-secret-123',
+      });
+      const authHeaders = { Authorization: 'Bearer ci-secret-123' };
+
       // Upload keys
       await registry.fetch(createRequest('POST', '/servers/trusted-keys', {
         keys: [keypair.publicKeyBase64],
-      }, {
-        Authorization: 'Bearer ci-secret-123',
-      }));
+      }, authHeaders));
 
-      // Read them back
-      const response = await registry.fetch(createRequest('GET', '/servers/trusted-keys'));
+      // Read them back (with auth)
+      const response = await registry.fetch(createRequest('GET', '/servers/trusted-keys', null, authHeaders));
       const data = await response.json();
 
+      expect(response.status).toBe(200);
       expect(data.keys).toHaveLength(1);
       expect(data.keys[0]).toBe(keypair.publicKeyBase64);
       expect(data.updatedAt).toBeTypeOf('number');
