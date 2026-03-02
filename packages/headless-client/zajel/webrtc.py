@@ -28,13 +28,18 @@ from .protocol import MESSAGE_CHANNEL_LABEL, FILE_CHANNEL_LABEL
 
 logger = logging.getLogger("zajel.webrtc")
 
-# NOTE: This STUN URL is also defined in:
+# NOTE: These STUN URLs are also defined in:
 #   - e2e-tests/conftest.py (headless_bob fixture)
 #   - packages/app/lib/core/constants.dart (defaultIceServers)
 # Keep all three in sync when changing.
 DEFAULT_ICE_SERVERS = [
     RTCIceServer(urls=["stun:stun.l.google.com:19302"]),
+    RTCIceServer(urls=["stun:stun1.l.google.com:19302"]),
 ]
+
+# Timeout for WebRTC operations (connection establishment, etc.).
+# Matches WebRTCConstants.operationTimeout in the Flutter app.
+OPERATION_TIMEOUT = 30  # seconds
 
 EventHandler = Callable[..., Coroutine[Any, Any, None]]
 
@@ -145,10 +150,10 @@ class WebRTCService:
         # Initiator creates data channels
         if is_initiator:
             msg_ch = self._pc.createDataChannel(
-                MESSAGE_CHANNEL_LABEL, ordered=True
+                MESSAGE_CHANNEL_LABEL, ordered=True, maxRetransmits=3
             )
             file_ch = self._pc.createDataChannel(
-                FILE_CHANNEL_LABEL, ordered=True
+                FILE_CHANNEL_LABEL, ordered=True, maxRetransmits=3
             )
             self._setup_channel(msg_ch)
             self._setup_channel(file_ch)
@@ -209,11 +214,11 @@ class WebRTCService:
         if self._channels.file_channel:
             self._channels.file_channel.send(data)
 
-    async def wait_for_message_channel(self, timeout: float = 30) -> None:
+    async def wait_for_message_channel(self, timeout: float = OPERATION_TIMEOUT) -> None:
         """Wait for the message data channel to open."""
         await asyncio.wait_for(self._message_channel_open.wait(), timeout=timeout)
 
-    async def wait_for_connection(self, timeout: float = 30) -> None:
+    async def wait_for_connection(self, timeout: float = OPERATION_TIMEOUT) -> None:
         """Wait for the WebRTC connection to be established."""
         await asyncio.wait_for(self._connected.wait(), timeout=timeout)
 

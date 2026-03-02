@@ -111,6 +111,9 @@ class SignalingClient:
         self._pair_error_event = asyncio.Event()
         self._last_pair_error: str = ""
 
+        # Peer presence events (peer_joined / peer_left)
+        self._peer_events: asyncio.Queue[dict] = asyncio.Queue()
+
         # Channel event queues
         self._chunk_pulls: asyncio.Queue[dict] = asyncio.Queue()
         self._chunk_available: asyncio.Queue[dict] = asyncio.Queue()
@@ -129,6 +132,8 @@ class SignalingClient:
         self._on_call_signal: Optional[EventHandler] = None
         self._on_disconnect: Optional[EventHandler] = None
         self._on_rendezvous_result: Optional[EventHandler] = None
+        self._on_peer_joined: Optional[EventHandler] = None
+        self._on_peer_left: Optional[EventHandler] = None
         self._on_chunk_pull: Optional[EventHandler] = None
         self._on_chunk_available: Optional[EventHandler] = None
         self._on_chunk_data: Optional[EventHandler] = None
@@ -444,6 +449,7 @@ class SignalingClient:
         await self._send({
             "type": "register_rendezvous",
             "peerId": peer_id,
+            "relayId": self.pairing_code,
             "daily_points": daily_points,
             "hourly_tokens": hourly_tokens,
             "dead_drops": dead_drops or {},
@@ -505,6 +511,25 @@ class SignalingClient:
             "peerId": peer_id,
             "chunkId": chunk_id,
             "channelId": channel_id,
+        })
+
+    async def send_chunk_request_meta(
+        self, peer_id: str, routing_hash: str, sequence: int, chunk_index: int
+    ) -> None:
+        """Request a chunk by metadata when the chunk ID is unknown.
+
+        The server matches by routing metadata (routing_hash + sequence +
+        chunk_index) instead of chunk ID.  This is used for chunk recovery
+        when a chunk was never stored locally and its ID is not known.
+
+        Mirrors the Flutter app's ChannelSyncService.requestChunkByMeta.
+        """
+        await self._send({
+            "type": "chunk_request_meta",
+            "peerId": peer_id,
+            "routingHash": routing_hash,
+            "sequence": sequence,
+            "chunkIndex": chunk_index,
         })
 
     async def wait_for_chunk_pull(self, timeout: float = 30) -> dict:
@@ -625,6 +650,27 @@ class SignalingClient:
 
                 case "pong":
                     pass  # Heartbeat response
+
+                case "server_info":
+                    logger.info(
+                        "Server info: serverId=%s, region=%s",
+                        msg.get("serverId"),
+                        msg.get("region"),
+                    )
+
+                case "peer_joined":
+                    peer_code = msg.get("pairingCode", "")
+                    logger.info("Peer joined: %s", peer_code)
+                    await self._peer_events.put({"type": "peer_joined", "pairingCode": peer_code})
+                    if self._on_peer_joined:
+                        await self._on_peer_joined(peer_code)
+
+                case "peer_left":
+                    peer_code = msg.get("pairingCode", "")
+                    logger.info("Peer left: %s", peer_code)
+                    await self._peer_events.put({"type": "peer_left", "pairingCode": peer_code})
+                    if self._on_peer_left:
+                        await self._on_peer_left(peer_code)
 
                 case "pair_incoming":
                     if not all(k in msg for k in ("fromCode", "fromPublicKey")):
@@ -766,6 +812,47 @@ class SignalingClient:
 
                 case "chunk_error":
                     logger.warning("Chunk error for %s: %s", msg.get("chunkId"), msg.get("error"))
+
+                # ── Device Linking stubs ──────────────────────────
+                # The Flutter app supports web-client linking via these
+                # message types.  The headless client does not implement
+                # the full linking flow, but must not crash if these
+                # messages arrive.
+
+                case "link_request":
+                    logger.info(
+                        "Device link request received (linkCode=%s, deviceId=%s) "
+                        "— not implemented in headless client",
+                        msg.get("linkCode"), msg.get("deviceId"),
+                    )
+
+                case "link_response":
+                    logger.info(
+                        "Device link response received (linkCode=%s, accepted=%s) "
+                        "— not implemented in headless client",
+                        msg.get("linkCode"), msg.get("accepted"),
+                    )
+
+                case "link_matched":
+                    logger.info(
+                        "Device link matched (linkCode=%s, peerCode=%s) "
+                        "— not implemented in headless client",
+                        msg.get("linkCode"), msg.get("peerCode"),
+                    )
+
+                case "link_rejected":
+                    logger.info(
+                        "Device link rejected (linkCode=%s) "
+                        "— not implemented in headless client",
+                        msg.get("linkCode"),
+                    )
+
+                case "link_timeout":
+                    logger.info(
+                        "Device link timeout (linkCode=%s) "
+                        "— not implemented in headless client",
+                        msg.get("linkCode"),
+                    )
 
                 case "error":
                     logger.error("Server error: %s", msg.get("message"))

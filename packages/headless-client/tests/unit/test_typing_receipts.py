@@ -163,7 +163,14 @@ class TestSendReadReceipt:
         client = _make_client()
         _add_peer(client)
         await client.send_read_receipt("peer_abc")
-        client._crypto.encrypt.assert_called_once_with("peer_abc", "rcpt:r")
+        # Read receipt format: rcpt:<timestamp_ms> (matches Flutter app)
+        call_args = client._crypto.encrypt.call_args[0]
+        assert call_args[0] == "peer_abc"
+        assert call_args[1].startswith("rcpt:")
+        timestamp_str = call_args[1][5:]
+        # Verify it's a valid millisecond timestamp (13 digits)
+        assert timestamp_str.isdigit()
+        assert len(timestamp_str) == 13
         client._webrtc.send_message.assert_awaited_once_with("encrypted_data")
 
     async def test_send_read_receipt_not_connected(self):
@@ -204,13 +211,23 @@ class TestReceiveReceipt:
         assert peer_id == "peer_abc"
         assert receipt_type == "d"
 
-    async def test_receive_read_receipt(self):
+    async def test_receive_read_receipt_legacy(self):
+        """Legacy rcpt:r format should still be parsed."""
         client = _make_client()
         _add_peer(client)
         _simulate_encrypted_message(client, "rcpt:r")
         peer_id, receipt_type = client._receipt_queue.get_nowait()
         assert peer_id == "peer_abc"
         assert receipt_type == "r"
+
+    async def test_receive_read_receipt_timestamp(self):
+        """App-format rcpt:<timestamp_ms> should be parsed as the timestamp string."""
+        client = _make_client()
+        _add_peer(client)
+        _simulate_encrypted_message(client, "rcpt:1709300000000")
+        peer_id, receipt_type = client._receipt_queue.get_nowait()
+        assert peer_id == "peer_abc"
+        assert receipt_type == "1709300000000"
 
     async def test_receipt_prefix_not_queued_as_message(self):
         """rcpt: messages should NOT appear in the regular message queue."""
@@ -258,7 +275,7 @@ class TestReceiveReceipt:
 
 class TestAutoDeliveryReceipt:
     async def test_auto_delivery_receipt_on_message(self):
-        """When a regular text message is received, rcpt:d should be sent back."""
+        """When a regular text message is received, rcpt:<ts> should be sent back."""
         client = _make_client()
         _add_peer(client)
         _simulate_encrypted_message(client, "Hello, World!")
@@ -270,11 +287,18 @@ class TestAutoDeliveryReceipt:
         # The auto delivery receipt is fired as a task; let the event loop tick
         await asyncio.sleep(0)
 
-        # Verify encrypt was called with rcpt:d
+        # Verify encrypt was called with rcpt:<timestamp_ms>
         encrypt_calls = client._crypto.encrypt.call_args_list
-        rcpt_calls = [c for c in encrypt_calls if c[0][1] == "rcpt:d"]
+        rcpt_calls = [
+            c for c in encrypt_calls if c[0][1].startswith("rcpt:")
+        ]
         assert len(rcpt_calls) == 1
-        assert rcpt_calls[0][0] == ("peer_abc", "rcpt:d")
+        rcpt_payload = rcpt_calls[0][0][1]
+        assert rcpt_payload.startswith("rcpt:")
+        ts_str = rcpt_payload[5:]
+        # Should be a valid millisecond timestamp (13 digits)
+        assert ts_str.isdigit()
+        assert len(ts_str) == 13
 
     async def test_auto_delivery_receipt_does_not_affect_queue(self):
         """The auto delivery receipt should not add anything to the receipt queue."""
@@ -282,7 +306,7 @@ class TestAutoDeliveryReceipt:
         _add_peer(client)
         _simulate_encrypted_message(client, "Hello!")
         await asyncio.sleep(0)
-        # Receipt queue should be empty — auto rcpt:d goes OUT, not IN
+        # Receipt queue should be empty -- auto rcpt goes OUT, not IN
         assert client._receipt_queue.empty()
 
 

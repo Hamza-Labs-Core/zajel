@@ -12,6 +12,7 @@ from zajel.groups import (
     GroupCryptoService,
     GroupMember,
     GroupMessage,
+    GroupMessageStatus,
     GroupStorage,
     SENDER_KEY_SIZE,
 )
@@ -556,3 +557,94 @@ class TestMemberRemoval:
         assert retrieved is not None
         assert retrieved.member_count == 2
         assert not any(m.device_id == "dev_1" for m in retrieved.members)
+
+
+# ── GroupMessageStatus ─────────────────────────────────────────
+
+
+class TestGroupMessageStatus:
+    def test_enum_values(self):
+        """Status enum should match the Dart GroupMessageStatus values."""
+        assert GroupMessageStatus.PENDING.value == "pending"
+        assert GroupMessageStatus.SENT.value == "sent"
+        assert GroupMessageStatus.DELIVERED.value == "delivered"
+        assert GroupMessageStatus.FAILED.value == "failed"
+
+    def test_enum_members_count(self):
+        """There should be exactly 4 status values."""
+        assert len(GroupMessageStatus) == 4
+
+    def test_default_status_is_pending(self):
+        """New GroupMessage should default to PENDING status."""
+        msg = GroupMessage(
+            group_id="g1",
+            author_device_id="dev_1",
+            sequence_number=1,
+            content="test",
+        )
+        assert msg.status == GroupMessageStatus.PENDING
+
+    def test_outgoing_from_bytes_defaults_to_pending(self):
+        """from_bytes with is_outgoing=True should default to PENDING."""
+        msg = GroupMessage(
+            group_id="g1",
+            author_device_id="dev_1",
+            sequence_number=1,
+            content="test",
+        )
+        raw = msg.to_bytes()
+        restored = GroupMessage.from_bytes(raw, group_id="g1", is_outgoing=True)
+        assert restored.status == GroupMessageStatus.PENDING
+
+    def test_incoming_from_bytes_defaults_to_delivered(self):
+        """from_bytes with is_outgoing=False should default to DELIVERED."""
+        msg = GroupMessage(
+            group_id="g1",
+            author_device_id="dev_1",
+            sequence_number=1,
+            content="test",
+        )
+        raw = msg.to_bytes()
+        restored = GroupMessage.from_bytes(raw, group_id="g1", is_outgoing=False)
+        assert restored.status == GroupMessageStatus.DELIVERED
+
+    def test_explicit_status_from_bytes(self):
+        """from_bytes should respect explicit status parameter."""
+        msg = GroupMessage(
+            group_id="g1",
+            author_device_id="dev_1",
+            sequence_number=1,
+            content="test",
+        )
+        raw = msg.to_bytes()
+        restored = GroupMessage.from_bytes(
+            raw, group_id="g1", status=GroupMessageStatus.FAILED
+        )
+        assert restored.status == GroupMessageStatus.FAILED
+
+    def test_status_mutable(self):
+        """Status should be mutable for post-creation updates."""
+        msg = GroupMessage(
+            group_id="g1",
+            author_device_id="dev_1",
+            sequence_number=1,
+            content="test",
+            status=GroupMessageStatus.PENDING,
+        )
+        msg.status = GroupMessageStatus.SENT
+        assert msg.status == GroupMessageStatus.SENT
+        msg.status = GroupMessageStatus.DELIVERED
+        assert msg.status == GroupMessageStatus.DELIVERED
+
+    def test_is_outgoing_preserved_with_status(self):
+        """is_outgoing should be preserved alongside status."""
+        msg = GroupMessage(
+            group_id="g1",
+            author_device_id="dev_1",
+            sequence_number=1,
+            content="test",
+            is_outgoing=True,
+            status=GroupMessageStatus.SENT,
+        )
+        assert msg.is_outgoing is True
+        assert msg.status == GroupMessageStatus.SENT

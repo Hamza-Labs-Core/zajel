@@ -16,6 +16,7 @@ import base64
 import hashlib
 import json
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -54,6 +55,7 @@ from .groups import (
     GroupCryptoService,
     GroupMember,
     GroupMessage,
+    GroupMessageStatus,
     GroupStorage,
 )
 from .hooks import EventEmitter
@@ -291,7 +293,11 @@ class ZajelHeadlessClient:
         self._webrtc_peer_id: Optional[str] = None
 
         # Mapping of signaling peer code -> stableId from handshake
-        self._peer_stable_ids: dict[str, str] = {}
+        # and reverse mapping for tracking peers across reconnections
+        self._code_to_stable_id: dict[str, str] = {}
+        self._stable_id_to_code: dict[str, str] = {}
+        # Legacy alias (kept for backward compat with existing code)
+        self._peer_stable_ids = self._code_to_stable_id
 
         # Group invitation verification state (issue-headless-11)
         self.auto_accept_group_invitations: bool = True
@@ -329,9 +335,29 @@ class ZajelHeadlessClient:
         """
         return self._crypto
 
+    @property
+    def stable_id(self) -> str:
+        """Get our persistent stable device identity (16 hex chars)."""
+        return self._crypto.stable_id
+
     def has_session_key(self, peer_id: str) -> bool:
         """Check if we have a session key for a peer."""
         return self._crypto.has_session_key(peer_id)
+
+    def get_peer_stable_id(self, peer_code: str) -> Optional[str]:
+        """Get the stable ID for a peer by their pairing code.
+
+        Returns None if the peer has not sent a stableId in their handshake.
+        """
+        return self._code_to_stable_id.get(peer_code)
+
+    def get_peer_code_by_stable_id(self, stable_id: str) -> Optional[str]:
+        """Get the pairing code for a peer by their stable ID.
+
+        Useful for tracking peers across reconnections where the pairing
+        code may change but the stable ID persists.
+        """
+        return self._stable_id_to_code.get(stable_id)
 
     def on(self, event: str) -> Callable:
         """Decorator to register an event handler.
@@ -497,7 +523,10 @@ class ZajelHeadlessClient:
         if not self._crypto.has_session_key(peer_id):
             return
         try:
-            encrypted = self._crypto.encrypt(peer_id, "rcpt:r")
+            timestamp_ms = int(time.time() * 1000)
+            encrypted = self._crypto.encrypt(
+                peer_id, f"rcpt:{timestamp_ms}"
+            )
             await self._webrtc.send_message(encrypted)
             logger.debug("Sent read receipt to %s", peer_id)
         except Exception as e:
@@ -1627,6 +1656,7 @@ class ZajelHeadlessClient:
             sequence_number=seq,
             content=content,
             is_outgoing=True,
+            status=GroupMessageStatus.PENDING,
         )
 
         # Encrypt with our sender key
@@ -1669,9 +1699,16 @@ class ZajelHeadlessClient:
                         peer_id, e,
                     )
 
+        # Update message status based on broadcast result
+        if sent_count > 0:
+            message.status = GroupMessageStatus.SENT
+        elif len(group.other_members) > 0:
+            message.status = GroupMessageStatus.FAILED
+
         logger.info(
-            "Sent group message to '%s' (%d/%d peers, %d chars)",
+            "Sent group message to '%s' (%d/%d peers, %d chars, status=%s)",
             group.name, sent_count, len(group.other_members), len(content),
+            message.status.value,
         )
         return message
 
@@ -1809,8 +1846,13 @@ class ZajelHeadlessClient:
         new_sender_key = self._group_crypto.generate_sender_key()
         self._group_crypto.set_sender_key(group_id, device_id, new_sender_key)
 
-        # Send a system message notifying remaining members of the removal
-        # and distribute the new sender key
+        # Build a reverse lookup from stableId -> pairing code
+        stable_to_pairing: dict[str, str] = {}
+        for pid, sid in self._peer_stable_ids.items():
+            stable_to_pairing[sid] = pid
+
+        # Send removal notification via grm: (headless-to-headless)
+        # AND grp: system message (for Flutter app interop)
         removal_notification = json.dumps({
             "type": "member_removed",
             "groupId": group_id,
@@ -1819,14 +1861,40 @@ class ZajelHeadlessClient:
             "newSenderKey": new_sender_key,
         })
 
-        # Broadcast the notification to remaining connected peers
+        # Also create a grp: system message for app interop
+        seq = self._group_storage.get_next_sequence(group_id, device_id)
+        system_msg = GroupMessage(
+            group_id=group_id,
+            author_device_id=device_id,
+            sequence_number=seq,
+            content=f"{member_device_id} was removed from the group",
+            message_type="system",
+            metadata={
+                "action": "member_removed",
+                "removedDeviceId": member_device_id,
+                "newSenderKey": new_sender_key,
+            },
+            is_outgoing=True,
+            status=GroupMessageStatus.PENDING,
+        )
+        system_bytes = system_msg.to_bytes()
+        system_encrypted = self._group_crypto.encrypt(
+            system_bytes, group_id, device_id
+        )
+        system_payload = f"grp:{base64.b64encode(system_encrypted).decode('ascii')}"
+
+        # Broadcast both notifications to remaining connected peers
         for member in group.other_members:
-            peer_id = member.device_id
+            peer_id = stable_to_pairing.get(member.device_id, member.device_id)
             if peer_id in self._connected_peers and self._crypto.has_session_key(peer_id):
                 try:
-                    payload = f"grm:{removal_notification}"
-                    cipher = self._crypto.encrypt(peer_id, payload)
+                    # Send grm: for headless clients
+                    grm_payload = f"grm:{removal_notification}"
+                    cipher = self._crypto.encrypt(peer_id, grm_payload)
                     await self._webrtc.send_message(cipher)
+                    # Send grp: system message for Flutter app
+                    cipher2 = self._crypto.encrypt(peer_id, system_payload)
+                    await self._webrtc.send_message(cipher2)
                     logger.debug(
                         "Sent removal notification to %s in '%s'",
                         peer_id, group.name,
@@ -1864,11 +1932,17 @@ class ZajelHeadlessClient:
             removed_by = data["removedBy"]
             new_sender_key = data["newSenderKey"]
 
-            # Verify the notification came from the peer who claims to have done the removal
-            if removed_by != from_peer_id:
+            # Verify the notification came from the peer who claims to have done the removal.
+            # from_peer_id is the signaling pairing code; removed_by may be a stable ID.
+            peer_stable_id = self._peer_stable_ids.get(from_peer_id)
+            valid_ids = {from_peer_id}
+            if peer_stable_id:
+                valid_ids.add(peer_stable_id)
+            if removed_by not in valid_ids:
                 logger.warning(
-                    "Removal notification mismatch: removedBy=%s but from=%s. Ignoring.",
-                    removed_by, from_peer_id,
+                    "Removal notification mismatch: removedBy=%s but from=%s "
+                    "(stableId=%s). Ignoring.",
+                    removed_by, from_peer_id, peer_stable_id,
                 )
                 return
 
@@ -1902,6 +1976,55 @@ class ZajelHeadlessClient:
             logger.error(
                 "Failed to handle group member removal from %s: %s",
                 from_peer_id, e,
+            )
+
+    def _handle_grp_member_removal(
+        self, group: Group, from_device_id: str, metadata: dict[str, Any]
+    ) -> None:
+        """Handle member removal received as a grp: system message.
+
+        This handles interop with the Flutter app, which may send removal
+        notifications as system messages inside the grp: channel rather
+        than using the grm: prefix.
+
+        Args:
+            group: The group the message belongs to.
+            from_device_id: Device ID of the member who performed the removal.
+            metadata: Message metadata containing removal details.
+        """
+        try:
+            removed_device_id = metadata.get("removedDeviceId", "")
+            new_sender_key = metadata.get("newSenderKey")
+
+            if not removed_device_id:
+                logger.warning(
+                    "grp: member_removed system message missing removedDeviceId"
+                )
+                return
+
+            # Remove the member's sender key
+            self._group_crypto.remove_sender_key(group.id, removed_device_id)
+
+            # Remove from member list
+            group.members = [
+                m for m in group.members if m.device_id != removed_device_id
+            ]
+            self._group_storage.save_group(group)
+
+            # Update the remover's sender key if provided (they rotated)
+            if new_sender_key:
+                self._group_crypto.set_sender_key(
+                    group.id, from_device_id, new_sender_key
+                )
+
+            logger.info(
+                "Processed grp: member removal: %s removed from '%s' by %s",
+                removed_device_id, group.name, from_device_id,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to handle grp: member removal in %s: %s",
+                group.id[:8], e,
             )
 
     # ── Dead Drop Handling ──────────────────────────────────
@@ -2274,6 +2397,14 @@ class ZajelHeadlessClient:
                 f"but claims to be from {message.author_device_id}"
             )
 
+        # Handle system messages for member removal (grp:-channel interop)
+        if message.message_type == "system":
+            action = message.metadata.get("action")
+            if action == "member_removed":
+                self._handle_grp_member_removal(
+                    group, message.author_device_id, message.metadata
+                )
+
         # Store and emit
         self._group_storage.save_message(message)
         self._group_message_queue.put_nowait(message)
@@ -2359,9 +2490,21 @@ class ZajelHeadlessClient:
             # Wait for data channel
             await self._webrtc.wait_for_message_channel(timeout=30)
 
-            # Send handshake (key exchange + stableId for identity)
+            # Generate ephemeral keypair for forward secrecy
+            eph_private, eph_public_bytes = self._crypto.generate_ephemeral_keypair()
+            eph_public_b64 = base64.b64encode(eph_public_bytes).decode()
+
+            # Store ephemeral private key temporarily for key exchange completion
+            if not hasattr(self, "_ephemeral_keys"):
+                self._ephemeral_keys: dict = {}
+            self._ephemeral_keys[match.peer_code] = eph_private
+
+            # Send handshake (key exchange + ephemeral + stableId for identity)
             handshake = HandshakeMessage(
                 public_key=self._crypto.public_key_base64,
+                ephemeral_key=eph_public_b64,
+                ratchet_version=1,
+                username=self.name,
                 stable_id=self._crypto.stable_id,
             )
             await self._webrtc.send_message(handshake.to_json())
@@ -2439,11 +2582,13 @@ class ZajelHeadlessClient:
         if msg["type"] == "handshake":
             # Key exchange — use tracked WebRTC peer ID (issue-headless-05)
             peer_pub_key = msg["publicKey"]
+            peer_eph_key = msg.get("ephemeralKey")
             peer_id = self._webrtc_peer_id
             # Extract stableId if present (Flutter sends this for device identity)
             stable_id = msg.get("stableId")
             if peer_id and stable_id:
-                self._peer_stable_ids[peer_id] = stable_id
+                self._code_to_stable_id[peer_id] = stable_id
+                self._stable_id_to_code[stable_id] = peer_id
                 logger.info(
                     "Stored stableId=%s for peer_id=%s",
                     stable_id, peer_id,
@@ -2476,8 +2621,25 @@ class ZajelHeadlessClient:
                                     expected_pub, peer_pub_key,
                                 )
                             )
-                    self._crypto.perform_key_exchange(peer_id, peer_pub_key)
-                    logger.info("Key exchange completed with %s", peer_id)
+                    # Try ephemeral key exchange (forward secrecy) if both sides
+                    # provided ephemeral keys
+                    eph_keys = getattr(self, "_ephemeral_keys", {})
+                    our_eph_private = eph_keys.pop(peer_id, None)
+                    if peer_eph_key and our_eph_private:
+                        self._crypto.establish_session_with_ephemeral(
+                            peer_id,
+                            peer_identity_key_b64=peer_pub_key,
+                            peer_ephemeral_key_b64=peer_eph_key,
+                            our_ephemeral_private_key=our_eph_private,
+                        )
+                        logger.info(
+                            "Ephemeral key exchange completed with %s",
+                            peer_id,
+                        )
+                    else:
+                        # Fallback: identity-only key exchange
+                        self._crypto.perform_key_exchange(peer_id, peer_pub_key)
+                        logger.info("Key exchange completed with %s", peer_id)
                 else:
                     logger.warning("Already have session key for %s", peer_id)
             else:
@@ -2506,9 +2668,11 @@ class ZajelHeadlessClient:
                             )
                         return
 
-                    # Check for delivery receipt prefix
+                    # Check for delivery/read receipt prefix.
+                    # Payload is "d" (delivery), "r" (legacy read),
+                    # or a timestamp_ms string (app-format read receipt).
                     if plaintext.startswith("rcpt:"):
-                        receipt_type = plaintext[5:]  # "d" or "r"
+                        receipt_type = plaintext[5:]
                         self._receipt_queue.put_nowait((peer_id, receipt_type))
                         if self._loop and self._loop.is_running():
                             self._loop.create_task(
@@ -2550,14 +2714,16 @@ class ZajelHeadlessClient:
                             self._emit_logged("message", peer_id, plaintext, "text")
                         )
 
-                    # Send automatic delivery receipt (best-effort)
+                    # Send automatic delivery receipt (best-effort).
+                    # Uses rcpt:<timestamp_ms> format matching the Flutter app.
                     if self._loop and self._loop.is_running():
                         async def _send_delivery_receipt(
                             _peer_id=peer_id,
                         ):
                             try:
+                                ts = int(time.time() * 1000)
                                 encrypted = self._crypto.encrypt(
-                                    _peer_id, "rcpt:d"
+                                    _peer_id, f"rcpt:{ts}"
                                 )
                                 await self._webrtc.send_message(encrypted)
                             except Exception:

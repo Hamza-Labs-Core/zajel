@@ -271,3 +271,116 @@ class TestRedirectHandling:
 
         # Should only send to main (which accepted)
         assert len(sent_messages) == 1
+
+
+class TestChunkRequestMeta:
+    """Tests for chunk_request_meta signaling support."""
+
+    @pytest.mark.asyncio
+    async def test_send_chunk_request_meta(self):
+        """send_chunk_request_meta should send the correct message format."""
+        client = SignalingClient("ws://localhost:9999")
+
+        sent_messages = []
+
+        async def mock_send(msg, ws=None):
+            sent_messages.append(msg)
+
+        client._send = mock_send
+
+        await client.send_chunk_request_meta(
+            peer_id="PEER42",
+            routing_hash="abc123",
+            sequence=5,
+            chunk_index=2,
+        )
+
+        assert len(sent_messages) == 1
+        msg = sent_messages[0]
+        assert msg["type"] == "chunk_request_meta"
+        assert msg["peerId"] == "PEER42"
+        assert msg["routingHash"] == "abc123"
+        assert msg["sequence"] == 5
+        assert msg["chunkIndex"] == 2
+
+    @pytest.mark.asyncio
+    async def test_chunk_request_meta_response_arrives_as_chunk_data(self):
+        """Server responds to chunk_request_meta with chunk_data (same as chunk_request)."""
+        client = SignalingClient("ws://localhost:9999")
+
+        # The server sends back a chunk_data message
+        await client._handle_message({
+            "type": "chunk_data",
+            "chunkId": "chunk-abc",
+            "channelId": "chan-1",
+            "data": {"payload": "encrypted-data"},
+        })
+
+        # Should be available via wait_for_chunk_data (non-blocking since already queued)
+        result = await asyncio.wait_for(client._chunk_data.get(), timeout=1)
+        assert result["chunkId"] == "chunk-abc"
+        assert result["data"]["payload"] == "encrypted-data"
+
+
+class TestDeviceLinkingStubs:
+    """Tests for device linking stub message handlers."""
+
+    @pytest.mark.asyncio
+    async def test_link_request_does_not_crash(self):
+        """link_request message should be handled without error."""
+        client = SignalingClient("ws://localhost:9999")
+        await client._handle_message({
+            "type": "link_request",
+            "linkCode": "ABC123",
+            "deviceId": "device-uuid",
+        })
+        # No exception = success
+
+    @pytest.mark.asyncio
+    async def test_link_response_does_not_crash(self):
+        """link_response message should be handled without error."""
+        client = SignalingClient("ws://localhost:9999")
+        await client._handle_message({
+            "type": "link_response",
+            "linkCode": "ABC123",
+            "accepted": True,
+        })
+
+    @pytest.mark.asyncio
+    async def test_link_matched_does_not_crash(self):
+        """link_matched message should be handled without error."""
+        client = SignalingClient("ws://localhost:9999")
+        await client._handle_message({
+            "type": "link_matched",
+            "linkCode": "ABC123",
+            "peerCode": "XYZ789",
+        })
+
+    @pytest.mark.asyncio
+    async def test_link_rejected_does_not_crash(self):
+        """link_rejected message should be handled without error."""
+        client = SignalingClient("ws://localhost:9999")
+        await client._handle_message({
+            "type": "link_rejected",
+            "linkCode": "ABC123",
+        })
+
+    @pytest.mark.asyncio
+    async def test_link_timeout_does_not_crash(self):
+        """link_timeout message should be handled without error."""
+        client = SignalingClient("ws://localhost:9999")
+        await client._handle_message({
+            "type": "link_timeout",
+            "linkCode": "ABC123",
+        })
+
+    @pytest.mark.asyncio
+    async def test_link_messages_with_missing_fields(self):
+        """Device linking messages should not crash even with missing fields."""
+        client = SignalingClient("ws://localhost:9999")
+
+        # Each message type with minimal/empty fields
+        for msg_type in ["link_request", "link_response", "link_matched",
+                         "link_rejected", "link_timeout"]:
+            await client._handle_message({"type": msg_type})
+            # No exception = success

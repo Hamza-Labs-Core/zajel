@@ -19,7 +19,7 @@ MESSAGE_CHANNEL_LABEL = "messages"
 FILE_CHANNEL_LABEL = "files"
 
 # File transfer constants
-FILE_CHUNK_SIZE = 4096  # bytes
+FILE_CHUNK_SIZE = 16384  # 16KB — must match app (WebRTCConstants.fileChunkSize)
 CHUNK_SEND_DELAY_MS = 10
 
 
@@ -33,13 +33,32 @@ class MessageType(str, Enum):
 
 @dataclass
 class HandshakeMessage:
-    """Key exchange handshake sent on data channel open."""
+    """Key exchange handshake sent on data channel open.
+
+    Fields:
+        public_key: Identity public key (base64).
+        ephemeral_key: Ephemeral public key for forward secrecy (base64, optional).
+        ratchet_version: Current ratchet version (default 1).
+        username: Display name (optional).
+        stable_id: Stable device identity (optional).
+    """
 
     public_key: str  # base64
-    stable_id: str | None = None  # 16 hex chars, optional for backward compat
+    ephemeral_key: Optional[str] = None  # base64
+    ratchet_version: int = 1
+    username: Optional[str] = None
+    stable_id: Optional[str] = None  # 16 hex chars, optional for backward compat
 
     def to_json(self) -> str:
-        data: dict = {"type": "handshake", "publicKey": self.public_key}
+        data: dict[str, Any] = {
+            "type": "handshake",
+            "publicKey": self.public_key,
+            "ratchetVersion": self.ratchet_version,
+        }
+        if self.ephemeral_key is not None:
+            data["ephemeralKey"] = self.ephemeral_key
+        if self.username is not None:
+            data["username"] = self.username
         if self.stable_id is not None:
             data["stableId"] = self.stable_id
         return json.dumps(data)
@@ -49,6 +68,9 @@ class HandshakeMessage:
         msg = json.loads(data)
         return HandshakeMessage(
             public_key=msg["publicKey"],
+            ephemeral_key=msg.get("ephemeralKey"),
+            ratchet_version=msg.get("ratchetVersion", 1),
+            username=msg.get("username"),
             stable_id=msg.get("stableId"),
         )
 

@@ -17,9 +17,12 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Optional
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+
+from zajel.vector_clock import VectorClock
 
 logger = logging.getLogger("zajel.groups")
 
@@ -104,6 +107,22 @@ class Group:
         )
 
 
+class GroupMessageStatus(Enum):
+    """Delivery status of a group message (matches Dart GroupMessageStatus)."""
+
+    PENDING = "pending"
+    """Message created locally, not yet sent."""
+
+    SENT = "sent"
+    """Message sent (encrypted and broadcast to connected peers)."""
+
+    DELIVERED = "delivered"
+    """Message delivery confirmed by at least one peer."""
+
+    FAILED = "failed"
+    """Sending failed (no connected peers, encryption error, etc.)."""
+
+
 @dataclass
 class GroupMessage:
     """A message within a group conversation."""
@@ -116,6 +135,7 @@ class GroupMessage:
     metadata: dict[str, Any] = field(default_factory=dict)
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_outgoing: bool = False
+    status: GroupMessageStatus = GroupMessageStatus.PENDING
 
     @property
     def id(self) -> str:
@@ -138,8 +158,17 @@ class GroupMessage:
         raw: bytes,
         group_id: str,
         is_outgoing: bool = False,
+        status: "GroupMessageStatus | None" = None,
     ) -> "GroupMessage":
-        """Deserialize from decrypted bytes."""
+        """Deserialize from decrypted bytes.
+
+        Args:
+            raw: Decrypted JSON bytes.
+            group_id: The group this message belongs to.
+            is_outgoing: Whether this message was sent by us.
+            status: Delivery status. Defaults to DELIVERED for incoming,
+                PENDING for outgoing.
+        """
         data = json.loads(raw.decode("utf-8"))
 
         # Schema validation (issue-headless-30)
@@ -150,6 +179,12 @@ class GroupMessage:
         if not isinstance(data["sequence_number"], int):
             raise ValueError("sequence_number must be int")
 
+        if status is None:
+            status = (
+                GroupMessageStatus.PENDING if is_outgoing
+                else GroupMessageStatus.DELIVERED
+            )
+
         return GroupMessage(
             group_id=group_id,
             author_device_id=data["author_device_id"],
@@ -159,6 +194,7 @@ class GroupMessage:
             metadata=data.get("metadata", {}),
             timestamp=datetime.fromisoformat(data["timestamp"]),
             is_outgoing=is_outgoing,
+            status=status,
         )
 
 
@@ -278,6 +314,7 @@ class GroupStorage:
         self._sequence_counters: dict[str, dict[str, int]] = {}  # group_id -> {device_id -> seq}
         self._seen_message_ids: dict[str, set[str]] = {}  # group_id -> set of message IDs
         self._last_seen_sequence: dict[str, dict[str, int]] = {}  # group_id -> {device_id -> last_seq}
+        self._vector_clocks: dict[str, VectorClock] = {}  # group_id -> VectorClock
 
     def save_group(self, group: Group) -> None:
         """Save or update a group."""
@@ -290,6 +327,8 @@ class GroupStorage:
             self._seen_message_ids[group.id] = set()
         if group.id not in self._last_seen_sequence:
             self._last_seen_sequence[group.id] = {}
+        if group.id not in self._vector_clocks:
+            self._vector_clocks[group.id] = VectorClock()
 
     def get_group(self, group_id: str) -> Optional[Group]:
         """Get a group by ID."""
@@ -306,6 +345,7 @@ class GroupStorage:
         self._sequence_counters.pop(group_id, None)
         self._seen_message_ids.pop(group_id, None)
         self._last_seen_sequence.pop(group_id, None)
+        self._vector_clocks.pop(group_id, None)
 
     def save_message(self, message: GroupMessage) -> None:
         """Save a group message, evicting oldest if over limit."""
@@ -370,3 +410,76 @@ class GroupStorage:
             self._last_seen_sequence[group_id][author_device_id] = sequence_number
 
         return True
+
+    # ── Vector clock operations ────────────────────────────────
+
+    def get_vector_clock(self, group_id: str) -> VectorClock:
+        """Get the vector clock for a group.
+
+        Returns an empty VectorClock if the group has no clock yet.
+        """
+        return self._vector_clocks.get(group_id, VectorClock())
+
+    def save_vector_clock(self, group_id: str, clock: VectorClock) -> None:
+        """Persist a vector clock for a group (replaces any existing clock)."""
+        self._vector_clocks[group_id] = clock
+
+    def update_vector_clock_on_send(
+        self, group_id: str, device_id: str
+    ) -> int:
+        """Increment the vector clock for *device_id* and return the new sequence.
+
+        Should be called when the local device sends a message.
+        The returned value is the sequence number to embed in the message.
+        """
+        clock = self._vector_clocks.get(group_id)
+        if clock is None:
+            clock = VectorClock()
+            self._vector_clocks[group_id] = clock
+        clock.increment(device_id)
+        return clock.get(device_id)
+
+    def update_vector_clock_on_receive(
+        self, group_id: str, author_device_id: str, sequence_number: int
+    ) -> None:
+        """Update the vector clock when a message is received from a remote peer.
+
+        Sets the clock entry for *author_device_id* to the max of the
+        current value and *sequence_number*.
+        """
+        clock = self._vector_clocks.get(group_id)
+        if clock is None:
+            clock = VectorClock()
+            self._vector_clocks[group_id] = clock
+        current = clock.get(author_device_id)
+        if sequence_number > current:
+            clock.set(author_device_id, sequence_number)
+
+    def get_messages_for_sync(
+        self, group_id: str, remote_clock: VectorClock
+    ) -> list[GroupMessage]:
+        """Return messages the remote peer is missing, based on vector clock comparison.
+
+        Computes the gap between our local clock and *remote_clock*,
+        then returns the matching stored messages.
+        """
+        local_clock = self.get_vector_clock(group_id)
+        missing_map = local_clock.compute_missing(remote_clock)
+
+        if not missing_map:
+            return []
+
+        # Build a lookup set for fast matching: {(author_device_id, seq_num)}
+        needed: set[tuple[str, int]] = set()
+        for device_id, seq_list in missing_map.items():
+            for seq in seq_list:
+                needed.add((device_id, seq))
+
+        result: list[GroupMessage] = []
+        for msg in self._messages.get(group_id, []):
+            if (msg.author_device_id, msg.sequence_number) in needed:
+                result.append(msg)
+
+        # Return in timestamp order (consistent with get_messages)
+        result.sort(key=lambda m: m.timestamp)
+        return result
