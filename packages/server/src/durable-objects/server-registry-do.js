@@ -142,15 +142,91 @@ const MAX_TRUSTED_BUILD_KEYS = 50;
  */
 const BuildVerifier = {
   /**
+   * Derive an AES-256-GCM key from CI_UPLOAD_SECRET via HKDF.
+   * Used to encrypt trusted keys at rest in DO storage.
+   * @param {string} secret - The CI_UPLOAD_SECRET value
+   * @returns {Promise<CryptoKey>}
+   */
+  async deriveStorageKey(secret) {
+    const keyMaterial = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(secret),
+      'HKDF',
+      false,
+      ['deriveKey']
+    );
+    return crypto.subtle.deriveKey(
+      {
+        name: 'HKDF',
+        hash: 'SHA-256',
+        salt: new TextEncoder().encode('zajel-trusted-keys-v1'),
+        info: new Uint8Array(0),
+      },
+      keyMaterial,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+  },
+
+  /**
+   * Encrypt a keys payload before storing in DO storage.
+   * @param {{ keys: string[], updatedAt: number }} data - Plaintext key data
+   * @param {string} secret - CI_UPLOAD_SECRET for key derivation
+   * @returns {Promise<{ encrypted: true, iv: string, data: string }>}
+   */
+  async encryptKeys(data, secret) {
+    const key = await this.deriveStorageKey(secret);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const plaintext = new TextEncoder().encode(JSON.stringify(data));
+    const ciphertext = new Uint8Array(
+      await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext)
+    );
+    return {
+      encrypted: true,
+      iv: btoa(String.fromCharCode(...iv)),
+      data: btoa(String.fromCharCode(...ciphertext)),
+    };
+  },
+
+  /**
+   * Decrypt a keys payload read from DO storage.
+   * @param {{ encrypted: true, iv: string, data: string }} stored - Encrypted envelope
+   * @param {string} secret - CI_UPLOAD_SECRET for key derivation
+   * @returns {Promise<{ keys: string[], updatedAt: number }>}
+   */
+  async decryptKeys(stored, secret) {
+    const key = await this.deriveStorageKey(secret);
+    const iv = Uint8Array.from(atob(stored.iv), c => c.charCodeAt(0));
+    const ciphertext = Uint8Array.from(atob(stored.data), c => c.charCodeAt(0));
+    const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+    return JSON.parse(new TextDecoder().decode(plaintext));
+  },
+
+  /**
    * Load trusted keys from DO storage, falling back to env var.
+   * Handles both encrypted (new) and plaintext (legacy) storage formats.
    * @param {object} storage - Durable Object storage
    * @param {string|undefined} envFallback - TRUSTED_BUILD_KEYS env var
+   * @param {string|undefined} ciSecret - CI_UPLOAD_SECRET for decryption
    * @returns {Promise<string[]>} Array of base64-encoded public keys
    */
-  async loadTrustedKeys(storage, envFallback) {
+  async loadTrustedKeys(storage, envFallback, ciSecret) {
     const stored = await storage.get('trusted_build_keys');
-    if (stored && Array.isArray(stored.keys) && stored.keys.length > 0) {
-      return stored.keys;
+    if (stored) {
+      if (stored.encrypted && ciSecret) {
+        try {
+          const decrypted = await this.decryptKeys(stored, ciSecret);
+          if (Array.isArray(decrypted.keys) && decrypted.keys.length > 0) {
+            return decrypted.keys;
+          }
+        } catch {
+          // Decryption failed — secret may have changed, fall through to env var
+        }
+      } else if (Array.isArray(stored.keys) && stored.keys.length > 0) {
+        // Legacy plaintext format
+        return stored.keys;
+      }
     }
     // Fallback to env var for backward compatibility
     if (!envFallback) return [];
@@ -506,7 +582,7 @@ export class ServerRegistryDO {
       const sigValid = await BuildVerifier.verifySignature(buildHash, buildSignature, buildSigningKey);
 
       // Check if the signing key is trusted (DO storage first, env var fallback)
-      const trustedKeys = await BuildVerifier.loadTrustedKeys(this.state.storage, this.env.TRUSTED_BUILD_KEYS);
+      const trustedKeys = await BuildVerifier.loadTrustedKeys(this.state.storage, this.env.TRUSTED_BUILD_KEYS, this.env.CI_UPLOAD_SECRET);
       const keyTrusted = trustedKeys.length === 0 || BuildVerifier.isTrustedKey(buildSigningKey, trustedKeys);
 
       buildVerified = sigValid && keyTrusted;
@@ -671,7 +747,7 @@ export class ServerRegistryDO {
     // Re-verify build signature if provided in heartbeat
     if (typeof body.buildHash === 'string' && typeof body.buildSignature === 'string' && typeof body.buildSigningKey === 'string') {
       const sigValid = await BuildVerifier.verifySignature(body.buildHash, body.buildSignature, body.buildSigningKey);
-      const trustedKeys = await BuildVerifier.loadTrustedKeys(this.state.storage, this.env.TRUSTED_BUILD_KEYS);
+      const trustedKeys = await BuildVerifier.loadTrustedKeys(this.state.storage, this.env.TRUSTED_BUILD_KEYS, this.env.CI_UPLOAD_SECRET);
       const keyTrusted = trustedKeys.length === 0 || BuildVerifier.isTrustedKey(body.buildSigningKey, trustedKeys);
       server.buildVerified = sigValid && keyTrusted;
       server.buildHash = body.buildHash;
@@ -842,8 +918,12 @@ export class ServerRegistryDO {
     // Validate base64 key format (32 bytes = 44 base64 chars with padding)
     const isValidKey = (k) => typeof k === 'string' && k.length > 0 && k.length <= 100;
 
+    // Load current keys (handles encrypted and plaintext formats)
+    const currentKeys = await BuildVerifier.loadTrustedKeys(
+      this.state.storage, this.env.TRUSTED_BUILD_KEYS, this.env.CI_UPLOAD_SECRET
+    );
+
     let finalKeys;
-    const current = (await this.state.storage.get('trusted_build_keys')) || { keys: [] };
 
     if (Array.isArray(body.keys)) {
       // Replace mode
@@ -862,11 +942,11 @@ export class ServerRegistryDO {
           { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
         );
       }
-      finalKeys = [...new Set([...current.keys, ...body.addKeys])];
+      finalKeys = [...new Set([...currentKeys, ...body.addKeys])];
     } else if (Array.isArray(body.removeKeys)) {
       // Remove mode
       const removeSet = new Set(body.removeKeys);
-      finalKeys = current.keys.filter(k => !removeSet.has(k));
+      finalKeys = currentKeys.filter(k => !removeSet.has(k));
     } else {
       return new Response(
         JSON.stringify({ error: 'Must provide keys, addKeys, or removeKeys' }),
@@ -881,7 +961,9 @@ export class ServerRegistryDO {
       );
     }
 
-    const stored = { keys: finalKeys, updatedAt: Date.now() };
+    // Encrypt before storing
+    const plainData = { keys: finalKeys, updatedAt: Date.now() };
+    const stored = await BuildVerifier.encryptKeys(plainData, this.env.CI_UPLOAD_SECRET);
     await this.state.storage.put('trusted_build_keys', stored);
 
     this.logger.info('[audit] Trusted build keys updated', {
@@ -920,9 +1002,31 @@ export class ServerRegistryDO {
       );
     }
 
-    const stored = (await this.state.storage.get('trusted_build_keys')) || { keys: [], updatedAt: null };
+    const raw = await this.state.storage.get('trusted_build_keys');
+    let keys = [];
+    let updatedAt = null;
+
+    if (raw) {
+      if (raw.encrypted) {
+        try {
+          const decrypted = await BuildVerifier.decryptKeys(raw, this.env.CI_UPLOAD_SECRET);
+          keys = decrypted.keys || [];
+          updatedAt = decrypted.updatedAt || null;
+        } catch {
+          return new Response(
+            JSON.stringify({ error: 'Failed to decrypt stored keys' }),
+            { status: 500, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+          );
+        }
+      } else {
+        // Legacy plaintext format
+        keys = raw.keys || [];
+        updatedAt = raw.updatedAt || null;
+      }
+    }
+
     return new Response(
-      JSON.stringify({ keys: stored.keys, updatedAt: stored.updatedAt }),
+      JSON.stringify({ keys, updatedAt }),
       { status: 200, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
     );
   }
