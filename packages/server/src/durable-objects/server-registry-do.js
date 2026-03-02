@@ -3,6 +3,7 @@
  *
  * Simple registry for VPS servers to discover each other.
  * VPS servers register here on startup and query for peers.
+ * Includes anomaly detection to flag misbehaving servers.
  *
  * This is the ONLY functionality of the CF Workers server.
  */
@@ -14,6 +15,118 @@ import { createLogger } from '../logger.js';
 
 /** Maximum number of server entries allowed in the registry */
 const MAX_SERVER_ENTRIES = 1000;
+
+/** Number of heartbeat snapshots to retain per server for anomaly analysis */
+const ANOMALY_HISTORY_SIZE = 30;
+
+/** Anomaly score threshold to flag a server */
+const ANOMALY_FLAG_THRESHOLD = 5;
+
+/** Anomaly score threshold to quarantine (hide from public listing) */
+const ANOMALY_QUARANTINE_THRESHOLD = 10;
+
+/**
+ * Anomaly detection for federation server metrics.
+ *
+ * Detects:
+ * - metric_spike: connections jump >3x in one heartbeat
+ * - metric_drop: connections drop >80% in one heartbeat
+ * - metric_inconsistency: connections != relay + signaling
+ * - ghost_server: heartbeating but always 0 connections (>10 heartbeats)
+ * - fleet_outlier: metrics >3 standard deviations from fleet mean
+ */
+const AnomalyDetector = {
+  /**
+   * Analyze a server's latest metrics against its history and the fleet.
+   * Returns an array of detected anomalies.
+   *
+   * @param {object} current - Current metrics snapshot { connections, relayConnections, signalingConnections, activeCodes }
+   * @param {object[]} history - Array of previous snapshots for this server
+   * @param {object[]} fleetServers - All active server entries for fleet-wide comparison
+   * @returns {{ type: string, severity: 'low'|'medium'|'high', score: number, detail: string }[]}
+   */
+  analyze(current, history, fleetServers) {
+    const anomalies = [];
+
+    // --- Per-server anomalies (require history) ---
+    if (history.length >= 2) {
+      const prev = history[history.length - 1];
+
+      // Metric spike: connections jump >3x
+      if (prev.connections > 0 && current.connections > prev.connections * 3) {
+        anomalies.push({
+          type: 'metric_spike',
+          severity: 'medium',
+          score: 3,
+          detail: `Connections spiked from ${prev.connections} to ${current.connections}`,
+        });
+      }
+
+      // Metric drop: connections drop >80%
+      if (prev.connections >= 5 && current.connections < prev.connections * 0.2) {
+        anomalies.push({
+          type: 'metric_drop',
+          severity: 'medium',
+          score: 3,
+          detail: `Connections dropped from ${prev.connections} to ${current.connections}`,
+        });
+      }
+    }
+
+    // Metric inconsistency: connections should equal relay + signaling
+    const expectedTotal = current.relayConnections + current.signalingConnections;
+    if (current.connections > 0 && expectedTotal > 0 && Math.abs(current.connections - expectedTotal) > 1) {
+      anomalies.push({
+        type: 'metric_inconsistency',
+        severity: 'low',
+        score: 2,
+        detail: `Reported connections=${current.connections} but relay+signaling=${expectedTotal}`,
+      });
+    }
+
+    // Ghost server: heartbeating but always 0 connections for extended period
+    if (history.length >= 10) {
+      const recentZero = history.slice(-10).every(h => h.connections === 0) && current.connections === 0;
+      if (recentZero) {
+        anomalies.push({
+          type: 'ghost_server',
+          severity: 'low',
+          score: 1,
+          detail: `Server has reported 0 connections for ${history.length + 1} consecutive heartbeats`,
+        });
+      }
+    }
+
+    // --- Fleet-wide anomalies (require multiple servers) ---
+    if (fleetServers.length >= 3) {
+      const connValues = fleetServers.map(s => s.connections);
+      const mean = connValues.reduce((a, b) => a + b, 0) / connValues.length;
+      const variance = connValues.reduce((sum, v) => sum + (v - mean) ** 2, 0) / connValues.length;
+      const stddev = Math.sqrt(variance);
+
+      // Only flag if there's meaningful variation
+      if (stddev > 0 && Math.abs(current.connections - mean) > stddev * 3) {
+        anomalies.push({
+          type: 'fleet_outlier',
+          severity: 'high',
+          score: 4,
+          detail: `Connections ${current.connections} is >3σ from fleet mean ${Math.round(mean)} (σ=${Math.round(stddev)})`,
+        });
+      }
+    }
+
+    return anomalies;
+  },
+
+  /**
+   * Calculate total anomaly score from a list of anomalies.
+   * @param {{ score: number }[]} anomalies
+   * @returns {number}
+   */
+  totalScore(anomalies) {
+    return anomalies.reduce((sum, a) => sum + a.score, 0);
+  },
+};
 
 /**
  * Validate an ID string for use in storage keys.
@@ -46,7 +159,7 @@ export class ServerRegistryDO {
   }
 
   /**
-   * Periodic alarm for cleaning up stale server entries.
+   * Periodic alarm for cleaning up stale server entries and their anomaly data.
    */
   async alarm() {
     const now = Date.now();
@@ -55,6 +168,9 @@ export class ServerRegistryDO {
     for (const [key, server] of entries) {
       if (now - server.lastSeen >= this.serverTTL) {
         deleteKeys.push(key);
+        // Also clean up anomaly history and score for this server
+        deleteKeys.push(`anomaly-history:${server.serverId}`);
+        deleteKeys.push(`anomaly-score:${server.serverId}`);
       }
     }
     if (deleteKeys.length > 0) {
@@ -142,6 +258,17 @@ export class ServerRegistryDO {
           );
         }
         return await this.heartbeat(request, corsHeaders);
+      }
+
+      // GET /servers/anomalies - View anomaly scores for all servers (requires auth)
+      if (request.method === 'GET' && url.pathname === '/servers/anomalies') {
+        if (this.env.SERVER_REGISTRY_SECRET && !this.verifyServerAuth(request)) {
+          return new Response(
+            JSON.stringify({ error: 'Unauthorized' }),
+            { status: 401, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+          );
+        }
+        return await this.listAnomalies(corsHeaders);
       }
 
       return new Response('Not Found', { status: 404, headers: corsHeaders });
@@ -308,6 +435,11 @@ export class ServerRegistryDO {
     for (const [key, server] of entries) {
       // Filter out stale servers (not seen in TTL period)
       if (now - server.lastSeen < this.serverTTL) {
+        // Exclude quarantined servers from public listing
+        const scoreData = await this.state.storage.get(`anomaly-score:${server.serverId}`);
+        if (scoreData && scoreData.quarantined) {
+          continue;
+        }
         servers.push(server);
       } else {
         staleKeys.push(key);
@@ -407,19 +539,114 @@ export class ServerRegistryDO {
     }
     await this.state.storage.put(`server:${serverId}`, server);
 
-    // Return current peer list with heartbeat response
-    const peers = [];
+    // --- Anomaly detection ---
+    const currentMetrics = {
+      connections: server.connections,
+      relayConnections: server.relayConnections,
+      signalingConnections: server.signalingConnections,
+      activeCodes: server.activeCodes,
+      timestamp: server.lastSeen,
+    };
+
+    // Load history for this server
+    const historyKey = `anomaly-history:${serverId}`;
+    const history = (await this.state.storage.get(historyKey)) || [];
+
+    // Gather fleet data for cross-server analysis
     const entries = await this.state.storage.list({ prefix: 'server:' });
     const now = Date.now();
+    const fleetServers = [];
+    const peers = [];
 
     for (const [key, peer] of entries) {
-      if (peer.serverId !== serverId && now - peer.lastSeen < this.serverTTL) {
-        peers.push(peer);
+      if (now - peer.lastSeen < this.serverTTL) {
+        fleetServers.push(peer);
+        if (peer.serverId !== serverId) {
+          peers.push(peer);
+        }
       }
+    }
+
+    // Run anomaly detection (exclude self from fleet to avoid self-inflation of stats)
+    const fleetWithoutSelf = fleetServers.filter(s => s.serverId !== serverId);
+    const anomalies = AnomalyDetector.analyze(currentMetrics, history, fleetWithoutSelf);
+    const score = AnomalyDetector.totalScore(anomalies);
+
+    // Update rolling history
+    history.push(currentMetrics);
+    if (history.length > ANOMALY_HISTORY_SIZE) {
+      history.splice(0, history.length - ANOMALY_HISTORY_SIZE);
+    }
+    await this.state.storage.put(historyKey, history);
+
+    // Persist anomaly score and recent anomalies
+    const scoreKey = `anomaly-score:${serverId}`;
+    const existing = (await this.state.storage.get(scoreKey)) || { score: 0, anomalies: [], flagged: false, quarantined: false };
+
+    // Exponential decay: reduce old score by 20% each heartbeat, then add new
+    const decayedScore = Math.max(0, existing.score * 0.8);
+    const newScore = decayedScore + score;
+    const flagged = newScore >= ANOMALY_FLAG_THRESHOLD;
+    const quarantined = newScore >= ANOMALY_QUARANTINE_THRESHOLD;
+
+    await this.state.storage.put(scoreKey, {
+      score: newScore,
+      anomalies: anomalies.length > 0 ? anomalies : existing.anomalies,
+      flagged,
+      quarantined,
+      lastChecked: now,
+    });
+
+    if (anomalies.length > 0) {
+      this.logger.info('[anomaly] Anomalies detected', {
+        action: 'anomaly_detected',
+        serverId,
+        score: newScore,
+        flagged,
+        quarantined,
+        anomalies: anomalies.map(a => a.type),
+      });
     }
 
     return new Response(
       JSON.stringify({ success: true, peers }),
+      { status: 200, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+    );
+  }
+
+  /**
+   * List anomaly scores and flags for all registered servers.
+   * Admin-only endpoint.
+   */
+  async listAnomalies(corsHeaders) {
+    const now = Date.now();
+    const entries = await this.state.storage.list({ prefix: 'server:' });
+    const results = [];
+
+    for (const [key, server] of entries) {
+      if (now - server.lastSeen >= this.serverTTL) continue;
+
+      const scoreData = (await this.state.storage.get(`anomaly-score:${server.serverId}`)) || {
+        score: 0, anomalies: [], flagged: false, quarantined: false,
+      };
+
+      results.push({
+        serverId: server.serverId,
+        endpoint: server.endpoint,
+        region: server.region,
+        score: Math.round(scoreData.score * 100) / 100,
+        flagged: scoreData.flagged,
+        quarantined: scoreData.quarantined,
+        anomalies: scoreData.anomalies,
+        lastChecked: scoreData.lastChecked || null,
+      });
+    }
+
+    // Sort by score descending (most suspicious first)
+    results.sort((a, b) => b.score - a.score);
+
+    return new Response(
+      JSON.stringify({ servers: results }),
       { status: 200, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
     );
   }
