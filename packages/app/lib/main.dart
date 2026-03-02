@@ -337,6 +337,16 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     _pairRequestHandler.listen();
     _linkRequestHandler.listen();
     _notificationListener.listen();
+
+    // Eagerly start group invitation listener so incoming grp: messages
+    // are processed even before the user opens a group screen.
+    ref.read(groupInvitationServiceProvider);
+
+    // Eagerly start channel sync so chunk_announce/chunk_data messages
+    // are processed from app startup.
+    ref.read(channelSyncServiceProvider);
+    ref.read(backgroundSyncServiceProvider);
+
     _setupPeerStatusNotifications();
     _setupVoipCallListener();
     unawaited(_syncAndroidSecureFlag());

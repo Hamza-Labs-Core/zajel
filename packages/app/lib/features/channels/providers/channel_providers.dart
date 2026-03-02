@@ -120,6 +120,31 @@ final channelSyncServiceProvider = Provider<ChannelSyncService>((ref) {
 
       // Invalidate the messages provider so UI refreshes
       ref.invalidate(channelMessagesProvider(channelId));
+
+      // Show notification when a complete message sequence arrives
+      final sequenceChunks =
+          await storageService.getChunksBySequence(channelId, chunk.sequence);
+      if (sequenceChunks.length == chunk.totalChunks) {
+        final settings = ref.read(notificationSettingsProvider);
+        if (!settings.isDndActive && settings.messageNotifications) {
+          ref.read(channelByIdProvider(channelId).future).then((channel) {
+            final channelName = channel?.manifest.name ?? 'Channel';
+            ref.read(notificationServiceProvider).showMessageNotification(
+                  peerId: channelId,
+                  peerName: channelName,
+                  content: 'New channel post',
+                  settings: settings,
+                );
+          }).catchError((_) {
+            ref.read(notificationServiceProvider).showMessageNotification(
+                  peerId: channelId,
+                  peerName: 'Channel',
+                  content: 'New channel post',
+                  settings: settings,
+                );
+          });
+        }
+      }
     } catch (e, stack) {
       logger.error('ChannelSync', 'Failed to process received chunk', e, stack);
     }

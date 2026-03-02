@@ -92,9 +92,32 @@ final groupInvitationServiceProvider = Provider<GroupInvitationService>((ref) {
   };
 
   // Wire up the callback: when a group message arrives over a 1:1 channel,
-  // refresh that group's messages so the UI picks it up.
+  // refresh that group's messages so the UI picks it up, and show a notification.
   service.onGroupMessageReceived = (groupId, message) {
     ref.invalidate(groupMessagesProvider(groupId));
+
+    // Show OS notification for the incoming group message
+    final settings = ref.read(notificationSettingsProvider);
+    if (!settings.isDndActive && settings.messageNotifications) {
+      // Resolve group name for notification title
+      ref.read(groupByIdProvider(groupId).future).then((group) {
+        final groupName = group?.name ?? 'Group';
+        ref.read(notificationServiceProvider).showMessageNotification(
+              peerId: groupId,
+              peerName: groupName,
+              content: message.content,
+              settings: settings,
+            );
+      }).catchError((_) {
+        // Fallback: show notification with generic group name
+        ref.read(notificationServiceProvider).showMessageNotification(
+              peerId: groupId,
+              peerName: 'Group',
+              content: message.content,
+              settings: settings,
+            );
+      });
+    }
   };
 
   // Start listening for incoming invitations and group messages
