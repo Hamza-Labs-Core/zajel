@@ -129,6 +129,74 @@ const AnomalyDetector = {
 };
 
 /**
+ * Build signature verification for federation server binaries.
+ *
+ * Verifies Ed25519 signatures on build hashes to ensure servers run
+ * authentic, untampered builds from trusted operators.
+ *
+ * Trusted keys are configured via TRUSTED_BUILD_KEYS env var
+ * (comma-separated base64-encoded Ed25519 public keys).
+ */
+const BuildVerifier = {
+  /**
+   * Parse the TRUSTED_BUILD_KEYS environment variable.
+   * @param {string|undefined} envValue - Comma-separated base64 public keys
+   * @returns {string[]} Array of base64-encoded public keys
+   */
+  parseTrustedKeys(envValue) {
+    if (!envValue) return [];
+    return envValue.split(',').map(k => k.trim()).filter(Boolean);
+  },
+
+  /**
+   * Verify an Ed25519 build signature using Web Crypto API.
+   * @param {string} buildHash - The SHA-256 hash that was signed (hex string)
+   * @param {string} signatureBase64 - Base64-encoded Ed25519 signature
+   * @param {string} publicKeyBase64 - Base64-encoded Ed25519 public key
+   * @returns {Promise<boolean>}
+   */
+  async verifySignature(buildHash, signatureBase64, publicKeyBase64) {
+    try {
+      // Decode the public key
+      const keyBytes = Uint8Array.from(atob(publicKeyBase64), c => c.charCodeAt(0));
+      if (keyBytes.length !== 32) return false;
+
+      // SPKI wrapper for Ed25519 public key
+      const spkiPrefix = new Uint8Array([
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70,
+        0x03, 0x21, 0x00,
+      ]);
+      const spki = new Uint8Array(spkiPrefix.length + keyBytes.length);
+      spki.set(spkiPrefix);
+      spki.set(keyBytes, spkiPrefix.length);
+
+      const cryptoKey = await crypto.subtle.importKey('spki', spki, 'Ed25519', false, ['verify']);
+
+      // Decode the signature
+      const sigBytes = Uint8Array.from(atob(signatureBase64), c => c.charCodeAt(0));
+      if (sigBytes.length !== 64) return false;
+
+      // The signed message is the build hash as UTF-8 bytes
+      const data = new TextEncoder().encode(buildHash);
+
+      return await crypto.subtle.verify('Ed25519', cryptoKey, sigBytes, data);
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Check if a public key is in the trusted set.
+   * @param {string} publicKeyBase64 - Base64-encoded public key
+   * @param {string[]} trustedKeys - Array of trusted base64 public keys
+   * @returns {boolean}
+   */
+  isTrustedKey(publicKeyBase64, trustedKeys) {
+    return trustedKeys.includes(publicKeyBase64);
+  },
+};
+
+/**
  * Validate an ID string for use in storage keys.
  * Allows alphanumeric characters, dots, hyphens, underscores, colons,
  * plus, forward slash, and equals (for base64-encoded keys in serverIds).
@@ -396,6 +464,34 @@ export class ServerRegistryDO {
       ? Math.max(0, Math.floor(body.activeCodes))
       : 0;
 
+    // --- Build signature verification ---
+    let buildVerified = false;
+    const buildHash = typeof body.buildHash === 'string' ? body.buildHash : null;
+    const buildSignature = typeof body.buildSignature === 'string' ? body.buildSignature : null;
+    const buildSigningKey = typeof body.buildSigningKey === 'string' ? body.buildSigningKey : null;
+    const buildVersion = typeof body.buildVersion === 'string' ? body.buildVersion : null;
+
+    if (buildHash && buildSignature && buildSigningKey) {
+      // Verify the Ed25519 signature over the build hash
+      const sigValid = await BuildVerifier.verifySignature(buildHash, buildSignature, buildSigningKey);
+
+      // Check if the signing key is trusted (if TRUSTED_BUILD_KEYS is configured)
+      const trustedKeys = BuildVerifier.parseTrustedKeys(this.env.TRUSTED_BUILD_KEYS);
+      const keyTrusted = trustedKeys.length === 0 || BuildVerifier.isTrustedKey(buildSigningKey, trustedKeys);
+
+      buildVerified = sigValid && keyTrusted;
+
+      this.logger.info('[audit] Build signature checked', {
+        action: 'build_verify',
+        serverId,
+        buildHash: buildHash.slice(0, 12),
+        signatureValid: sigValid,
+        keyTrusted,
+        buildVerified,
+        buildVersion,
+      });
+    }
+
     const serverEntry = {
       serverId,
       endpoint,
@@ -405,6 +501,9 @@ export class ServerRegistryDO {
       relayConnections,
       signalingConnections,
       activeCodes,
+      buildVerified,
+      buildHash,
+      buildVersion,
       registeredAt: Date.now(),
       lastSeen: Date.now(),
     };
@@ -415,6 +514,7 @@ export class ServerRegistryDO {
       action: 'server_register',
       serverId,
       region: validRegion,
+      buildVerified,
       ip: request.headers.get('CF-Connecting-IP'),
     });
 
@@ -498,7 +598,7 @@ export class ServerRegistryDO {
   }
 
   async heartbeat(request, corsHeaders) {
-    const body = await parseJsonBody(request, 1024);
+    const body = await parseJsonBody(request, 2048);
     const { serverId } = body;
 
     if (!serverId) {
@@ -537,6 +637,27 @@ export class ServerRegistryDO {
     if (typeof body.activeCodes === 'number' && Number.isFinite(body.activeCodes)) {
       server.activeCodes = Math.max(0, Math.floor(body.activeCodes));
     }
+
+    // Re-verify build signature if provided in heartbeat
+    if (typeof body.buildHash === 'string' && typeof body.buildSignature === 'string' && typeof body.buildSigningKey === 'string') {
+      const sigValid = await BuildVerifier.verifySignature(body.buildHash, body.buildSignature, body.buildSigningKey);
+      const trustedKeys = BuildVerifier.parseTrustedKeys(this.env.TRUSTED_BUILD_KEYS);
+      const keyTrusted = trustedKeys.length === 0 || BuildVerifier.isTrustedKey(body.buildSigningKey, trustedKeys);
+      server.buildVerified = sigValid && keyTrusted;
+      server.buildHash = body.buildHash;
+
+      // Detect build hash change (possible hot-swap attack)
+      const prevHash = server.buildHash;
+      if (prevHash && prevHash !== body.buildHash) {
+        this.logger.info('[anomaly] Build hash changed between heartbeats', {
+          action: 'build_hash_changed',
+          serverId,
+          previousHash: prevHash.slice(0, 12),
+          newHash: body.buildHash.slice(0, 12),
+        });
+      }
+    }
+
     await this.state.storage.put(`server:${serverId}`, server);
 
     // --- Anomaly detection ---
@@ -639,6 +760,9 @@ export class ServerRegistryDO {
         quarantined: scoreData.quarantined,
         anomalies: scoreData.anomalies,
         lastChecked: scoreData.lastChecked || null,
+        buildVerified: server.buildVerified || false,
+        buildHash: server.buildHash || null,
+        buildVersion: server.buildVersion || null,
       });
     }
 
