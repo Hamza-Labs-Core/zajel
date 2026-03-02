@@ -1175,6 +1175,7 @@ class ConnectionManager {
     final rendezvousMsg = {
       'type': 'register_rendezvous',
       'peerId': state.pairingCode,
+      'relayId': state.pairingCode,
       'daily_points': allDailyPoints.toList(),
       'hourly_tokens': combinedHourlyTokens.toList(),
       'dead_drops': <String, String>{},
