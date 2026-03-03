@@ -121,28 +121,24 @@ final channelSyncServiceProvider = Provider<ChannelSyncService>((ref) {
       // Invalidate the messages provider so UI refreshes
       ref.invalidate(channelMessagesProvider(channelId));
 
-      // Show notification when a complete message sequence arrives
+      // Show notification when a complete message sequence arrives.
+      // DND / messageNotifications guards are inside showMessageNotification.
       final sequenceChunks =
           await storageService.getChunksBySequence(channelId, chunk.sequence);
       if (sequenceChunks.length == chunk.totalChunks) {
-        final settings = ref.read(notificationSettingsProvider);
-        if (!settings.isDndActive && settings.messageNotifications) {
-          ref.read(channelByIdProvider(channelId).future).then((channel) {
-            final channelName = channel?.manifest.name ?? 'Channel';
-            ref.read(notificationServiceProvider).showMessageNotification(
-                  peerId: channelId,
-                  peerName: channelName,
-                  content: 'New channel post',
-                  settings: settings,
-                );
-          }).catchError((_) {
-            ref.read(notificationServiceProvider).showMessageNotification(
-                  peerId: channelId,
-                  peerName: 'Channel',
-                  content: 'New channel post',
-                  settings: settings,
-                );
-          });
+        try {
+          final channel = await ref.read(channelByIdProvider(channelId).future);
+          final channelName = channel?.manifest.name ?? 'Channel';
+          final settings = ref.read(notificationSettingsProvider);
+          ref.read(notificationServiceProvider).showMessageNotification(
+                peerId: channelId,
+                peerName: channelName,
+                content: 'New channel post',
+                settings: settings,
+              );
+        } catch (e) {
+          logger.warning(
+              'ChannelSync', 'Failed to show channel notification: $e');
         }
       }
     } catch (e, stack) {

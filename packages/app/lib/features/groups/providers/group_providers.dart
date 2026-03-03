@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/logging/logger_service.dart';
 import '../../../core/providers/app_providers.dart';
 import '../models/group.dart';
 import '../models/group_message.dart';
@@ -93,30 +94,23 @@ final groupInvitationServiceProvider = Provider<GroupInvitationService>((ref) {
 
   // Wire up the callback: when a group message arrives over a 1:1 channel,
   // refresh that group's messages so the UI picks it up, and show a notification.
-  service.onGroupMessageReceived = (groupId, message) {
+  service.onGroupMessageReceived = (groupId, message) async {
     ref.invalidate(groupMessagesProvider(groupId));
 
-    // Show OS notification for the incoming group message
-    final settings = ref.read(notificationSettingsProvider);
-    if (!settings.isDndActive && settings.messageNotifications) {
-      // Resolve group name for notification title
-      ref.read(groupByIdProvider(groupId).future).then((group) {
-        final groupName = group?.name ?? 'Group';
-        ref.read(notificationServiceProvider).showMessageNotification(
-              peerId: groupId,
-              peerName: groupName,
-              content: message.content,
-              settings: settings,
-            );
-      }).catchError((_) {
-        // Fallback: show notification with generic group name
-        ref.read(notificationServiceProvider).showMessageNotification(
-              peerId: groupId,
-              peerName: 'Group',
-              content: message.content,
-              settings: settings,
-            );
-      });
+    // Show OS notification for the incoming group message.
+    // DND / messageNotifications guards are inside showMessageNotification.
+    try {
+      final group = await ref.read(groupByIdProvider(groupId).future);
+      final groupName = group?.name ?? 'Group';
+      final settings = ref.read(notificationSettingsProvider);
+      ref.read(notificationServiceProvider).showMessageNotification(
+            peerId: groupId,
+            peerName: groupName,
+            content: message.content,
+            settings: settings,
+          );
+    } catch (e) {
+      logger.warning('GroupProviders', 'Failed to show group notification: $e');
     }
   };
 
