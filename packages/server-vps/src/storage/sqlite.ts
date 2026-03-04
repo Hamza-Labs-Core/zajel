@@ -7,7 +7,7 @@
 import Database from 'better-sqlite3';
 import { readFileSync, existsSync, mkdirSync, statSync } from 'fs';
 import { dirname, join } from 'path';
-import type { Storage, StorageStats } from './interface.js';
+import type { Storage, StorageStats, IPReputationEntry } from './interface.js';
 import type {
   DailyPointEntry,
   HourlyTokenEntry,
@@ -42,6 +42,7 @@ export class SQLiteStorage implements Storage {
     const migrations = [
       '001_initial.sql',
       '002_chunk_index.sql',
+      '003_ip_reputation.sql',
     ];
 
     for (const migration of migrations) {
@@ -705,6 +706,179 @@ export class SQLiteStorage implements Storage {
     const stmt = this.db.prepare(`DELETE FROM chunk_sources WHERE announced_at < ?`);
     const result = stmt.run(cutoff);
     return result.changes;
+  }
+
+  // IP Reputation
+  async incrementReputation(
+    ip: string,
+    points: number,
+    eventType: string,
+    metadata?: Record<string, unknown>
+  ): Promise<number> {
+    const now = Date.now();
+
+    // Upsert the reputation row
+    const upsertStmt = this.db.prepare(`
+      INSERT INTO ip_reputation (
+        ip_address, reputation_score, last_updated, total_events,
+        rate_limit_hits, connection_rejects, invalid_requests, successful_attestations,
+        created_at
+      ) VALUES (?, ?, ?, 1,
+        CASE WHEN ? = 'rate_limit_hit' THEN 1 ELSE 0 END,
+        CASE WHEN ? = 'connection_rejected' THEN 1 ELSE 0 END,
+        CASE WHEN ? = 'invalid_request' THEN 1 ELSE 0 END,
+        CASE WHEN ? = 'successful_attestation' THEN 1 ELSE 0 END,
+        ?
+      )
+      ON CONFLICT(ip_address) DO UPDATE SET
+        reputation_score = MAX(0, reputation_score + ?),
+        last_updated = ?,
+        total_events = total_events + 1,
+        rate_limit_hits = rate_limit_hits + CASE WHEN ? = 'rate_limit_hit' THEN 1 ELSE 0 END,
+        connection_rejects = connection_rejects + CASE WHEN ? = 'connection_rejected' THEN 1 ELSE 0 END,
+        invalid_requests = invalid_requests + CASE WHEN ? = 'invalid_request' THEN 1 ELSE 0 END,
+        successful_attestations = successful_attestations + CASE WHEN ? = 'successful_attestation' THEN 1 ELSE 0 END
+    `);
+
+    const initialScore = Math.max(0, points);
+    upsertStmt.run(
+      ip, initialScore, now,
+      eventType, eventType, eventType, eventType,
+      now,
+      // UPDATE SET clause bindings
+      points, now,
+      eventType, eventType, eventType, eventType
+    );
+
+    // Fetch the updated score
+    const row = this.db.prepare(`SELECT reputation_score, total_events FROM ip_reputation WHERE ip_address = ?`).get(ip) as {
+      reputation_score: number;
+      total_events: number;
+    };
+
+    // Log the event (use ip_hash for privacy in the audit log)
+    const scoreBefore = row.reputation_score - (row.total_events > 1 ? points : 0);
+    const scoreAfter = row.reputation_score;
+    const { createHash } = await import('crypto');
+    const ipHash = createHash('sha256').update(`zajel-rep:${ip}`).digest('hex');
+
+    const logStmt = this.db.prepare(`
+      INSERT INTO ip_reputation_events (ip_hash, event_type, points_delta, score_before, score_after, metadata, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    logStmt.run(
+      ipHash,
+      eventType,
+      points,
+      Math.max(0, scoreBefore),
+      scoreAfter,
+      metadata ? JSON.stringify(metadata) : null,
+      now
+    );
+
+    return scoreAfter;
+  }
+
+  async getReputation(ip: string): Promise<IPReputationEntry | null> {
+    const stmt = this.db.prepare(`SELECT * FROM ip_reputation WHERE ip_address = ?`);
+    const row = stmt.get(ip) as {
+      ip_address: string;
+      reputation_score: number;
+      last_updated: number;
+      total_events: number;
+      rate_limit_hits: number;
+      connection_rejects: number;
+      invalid_requests: number;
+      successful_attestations: number;
+      created_at: number;
+    } | undefined;
+
+    if (!row) return null;
+
+    return {
+      ipAddress: row.ip_address,
+      reputationScore: row.reputation_score,
+      lastUpdated: row.last_updated,
+      totalEvents: row.total_events,
+      rateLimitHits: row.rate_limit_hits,
+      connectionRejects: row.connection_rejects,
+      invalidRequests: row.invalid_requests,
+      successfulAttestations: row.successful_attestations,
+      createdAt: row.created_at,
+    };
+  }
+
+  async getTopOffenders(limit: number): Promise<IPReputationEntry[]> {
+    const stmt = this.db.prepare(`
+      SELECT * FROM ip_reputation
+      ORDER BY reputation_score DESC
+      LIMIT ?
+    `);
+    const rows = stmt.all(limit) as Array<{
+      ip_address: string;
+      reputation_score: number;
+      last_updated: number;
+      total_events: number;
+      rate_limit_hits: number;
+      connection_rejects: number;
+      invalid_requests: number;
+      successful_attestations: number;
+      created_at: number;
+    }>;
+
+    return rows.map(row => ({
+      ipAddress: row.ip_address,
+      reputationScore: row.reputation_score,
+      lastUpdated: row.last_updated,
+      totalEvents: row.total_events,
+      rateLimitHits: row.rate_limit_hits,
+      connectionRejects: row.connection_rejects,
+      invalidRequests: row.invalid_requests,
+      successfulAttestations: row.successful_attestations,
+      createdAt: row.created_at,
+    }));
+  }
+
+  async cleanupOldReputationEvents(maxAgeMs: number): Promise<number> {
+    const cutoff = Date.now() - maxAgeMs;
+    const stmt = this.db.prepare(`DELETE FROM ip_reputation_events WHERE created_at < ?`);
+    const result = stmt.run(cutoff);
+    return result.changes;
+  }
+
+  async setReputation(ip: string, score: number): Promise<void> {
+    const now = Date.now();
+    const safeScore = Math.max(0, score);
+
+    // Get score before for audit log
+    const before = this.db.prepare(`SELECT reputation_score FROM ip_reputation WHERE ip_address = ?`).get(ip) as
+      | { reputation_score: number }
+      | undefined;
+    const scoreBefore = before?.reputation_score ?? 0;
+
+    // Upsert with new score
+    // Placeholders: ip, safeScore, now, now (created_at), safeScore, now = 6 total
+    const stmt = this.db.prepare(`
+      INSERT INTO ip_reputation (
+        ip_address, reputation_score, last_updated, total_events,
+        rate_limit_hits, connection_rejects, invalid_requests, successful_attestations,
+        created_at
+      ) VALUES (?, ?, ?, 0, 0, 0, 0, 0, ?)
+      ON CONFLICT(ip_address) DO UPDATE SET
+        reputation_score = ?,
+        last_updated = ?
+    `);
+    stmt.run(ip, safeScore, now, now, safeScore, now);
+
+    // Log admin override event
+    const { createHash } = await import('crypto');
+    const ipHash = createHash('sha256').update(`zajel-rep:${ip}`).digest('hex');
+
+    const logStmt = this.db.prepare(`
+      INSERT INTO ip_reputation_events (ip_hash, event_type, points_delta, score_before, score_after, metadata, created_at)
+      VALUES (?, 'admin_override', ?, ?, ?, NULL, ?)
+    `);
+    logStmt.run(ipHash, safeScore - scoreBefore, scoreBefore, safeScore, now);
   }
 
   // Statistics
