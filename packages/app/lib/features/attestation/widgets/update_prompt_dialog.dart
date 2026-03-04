@@ -83,7 +83,9 @@ class UpdatePromptDialog extends StatelessWidget {
               if (uri == null) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Invalid update URL.')),
+                    const SnackBar(
+                        duration: Duration(seconds: 3),
+                        content: Text('Invalid update URL.')),
                   );
                 }
                 return;
@@ -95,7 +97,9 @@ class UpdatePromptDialog extends StatelessWidget {
               } catch (e) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Failed to open URL: $e')),
+                    SnackBar(
+                        duration: const Duration(seconds: 3),
+                        content: Text('Failed to open URL: $e')),
                   );
                 }
               }
@@ -128,6 +132,7 @@ class UpdatePromptDialog extends StatelessWidget {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
+          duration: const Duration(seconds: 3),
           content: Text(
             'Could not open store. Please update manually from '
             '${storeName ?? "the store"}.',
