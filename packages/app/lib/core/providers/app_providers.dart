@@ -12,3 +12,4 @@ export 'notification_providers.dart';
 export 'peer_providers.dart';
 export 'preferences_providers.dart';
 export 'settings_providers.dart';
+export '../../features/updater/providers/update_providers.dart';
