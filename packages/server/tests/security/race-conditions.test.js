@@ -75,11 +75,13 @@ describe('Race Condition Security Tests', () => {
       const results = await Promise.all(heartbeats);
       const statuses = results.map(r => r.status);
 
-      // First heartbeat should succeed, rest should be rate-limited
-      expect(statuses[0]).toBe(200);
-      for (let i = 1; i < statuses.length; i++) {
-        expect(statuses[i]).toBe(429);
-      }
+      // Exactly one heartbeat should succeed, rest should be rate-limited.
+      // The mock doesn't serialize requests like a real DO (blockConcurrencyWhile),
+      // so we can't assume which array index gets processed first.
+      const successCount = statuses.filter(s => s === 200).length;
+      const rateLimitedCount = statuses.filter(s => s === 429).length;
+      expect(successCount).toBe(1);
+      expect(rateLimitedCount).toBe(2);
 
       // Server entry should exist and have consistent data from the accepted heartbeat
       const entry = await mockState.storage.get('server:ed25519:concurrent-server');
