@@ -71,7 +71,7 @@ class FileTransferListener {
               peerId: peerId,
               content: 'Received file: ${transfer.fileName}',
               type: MessageType.file,
-              timestamp: DateTime.now(),
+              timestamp: DateTime.now().toUtc(),
               isOutgoing: false,
               status: MessageStatus.delivered,
               attachmentPath: savedPath,

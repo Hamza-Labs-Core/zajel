@@ -16,6 +16,7 @@ import '../../core/network/voip_service.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/utils/identity_utils.dart';
 import '../../shared/widgets/compose_bar.dart';
+import '../../shared/widgets/message_list_view.dart';
 import '../call/call_screen.dart';
 import '../call/incoming_call_dialog.dart';
 import 'services/typing_indicator_service.dart';
@@ -37,11 +38,10 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen>
     with WidgetsBindingObserver {
   final _messageController = TextEditingController();
-  final _scrollController = ScrollController();
   final _messageFocusNode = FocusNode();
   bool _isSending = false;
-  bool _isLoadingMore = false;
   bool _isIncomingCallDialogOpen = false;
+  int _newMessageSignal = 0;
   StreamSubscription<CallState>? _voipStateSubscription;
 
   /// Check if running on desktop platform
@@ -60,7 +60,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _scrollController.addListener(_onScroll);
     _listenToMessages();
     _setupVoipListener();
     // Mark this chat as the active screen so notifications are suppressed,
@@ -101,21 +100,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     });
   }
 
-  /// Load older messages when user scrolls near the top.
-  void _onScroll() {
-    if (_isLoadingMore) return;
-    if (!_scrollController.hasClients) return;
-    if (_scrollController.position.pixels <
-        _scrollController.position.minScrollExtent + 100) {
-      final notifier = ref.read(chatMessagesProvider(widget.peerId).notifier);
-      if (!notifier.hasMore) return;
-      _isLoadingMore = true;
-      notifier.loadMore().then((_) {
-        _isLoadingMore = false;
-      });
-    }
-  }
-
   void _listenToMessages() {
     // Messages are persisted by the global listener in main.dart.
     // Here we just reload from DB when a new message arrives for this peer.
@@ -124,7 +108,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         final (peerId, _) = value;
         if (peerId == widget.peerId) {
           ref.read(chatMessagesProvider(widget.peerId).notifier).reload();
-          _scrollToBottom();
+          setState(() => _newMessageSignal++);
           // Send read receipt when a new message arrives while viewing this chat
           _sendReadReceipt();
         }
@@ -148,9 +132,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     }
     WidgetsBinding.instance.removeObserver(this);
     _voipStateSubscription?.cancel();
-    _scrollController.removeListener(_onScroll);
     _messageController.dispose();
-    _scrollController.dispose();
     _messageFocusNode.dispose();
     super.dispose();
   }
@@ -199,9 +181,32 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
             onDismiss: () => _acknowledgeKeyChange(widget.peerId),
           ),
         Expanded(
-          child: messages.isEmpty
-              ? _buildEmptyState()
-              : _buildMessageList(messages),
+          child: MessageListView<Message>(
+            messages: messages,
+            messageBuilder: (context, message) {
+              if (message.type == MessageType.system) {
+                return _SystemMessageBubble(
+                  message: message,
+                  onTap: () => _showSafetyNumberScreen(context, widget.peerId),
+                );
+              }
+              return _MessageBubble(
+                message: message,
+                onOpenFile: message.attachmentPath != null
+                    ? () => _openFile(message.attachmentPath!)
+                    : null,
+              );
+            },
+            timestampExtractor: (msg) => msg.timestamp,
+            onLoadMore: () => ref
+                .read(chatMessagesProvider(widget.peerId).notifier)
+                .loadMore(),
+            hasMore:
+                ref.read(chatMessagesProvider(widget.peerId).notifier).hasMore,
+            newMessageSignal: _newMessageSignal,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            emptyState: _buildEmptyState(),
+          ),
         ),
         _TypingIndicator(peerId: widget.peerId),
         ComposeBar(
@@ -420,37 +425,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     );
   }
 
-  Widget _buildMessageList(List<Message> messages) {
-    return ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      itemCount: messages.length,
-      itemBuilder: (context, index) {
-        final message = messages[index];
-        final showDate = index == 0 ||
-            !_isSameDay(messages[index - 1].timestamp, message.timestamp);
-
-        return Column(
-          children: [
-            if (showDate) _buildDateDivider(message.timestamp),
-            if (message.type == MessageType.system)
-              _SystemMessageBubble(
-                message: message,
-                onTap: () => _showSafetyNumberScreen(context, widget.peerId),
-              )
-            else
-              _MessageBubble(
-                message: message,
-                onOpenFile: message.attachmentPath != null
-                    ? () => _openFile(message.attachmentPath!)
-                    : null,
-              ),
-          ],
-        );
-      },
-    );
-  }
-
   Future<void> _openFile(String filePath) async {
     try {
       if (_isDesktop) {
@@ -498,28 +472,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     }
   }
 
-  Widget _buildDateDivider(DateTime date) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 16),
-      child: Row(
-        children: [
-          Expanded(child: Divider(color: Colors.grey.shade300)),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              _formatDate(date),
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey.shade600,
-              ),
-            ),
-          ),
-          Expanded(child: Divider(color: Colors.grey.shade300)),
-        ],
-      ),
-    );
-  }
-
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
@@ -530,14 +482,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       localId: const Uuid().v4(),
       peerId: widget.peerId,
       content: text,
-      timestamp: DateTime.now(),
+      timestamp: DateTime.now().toUtc(),
       isOutgoing: true,
       status: MessageStatus.sending,
     );
 
     ref.read(chatMessagesProvider(widget.peerId).notifier).addMessage(message);
     _messageController.clear();
-    _scrollToBottom();
+    setState(() => _newMessageSignal++);
 
     // Check if the actual peer (not selectedPeerProvider) is connected
     bool isConnected = false;
@@ -589,7 +541,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       peerId: widget.peerId,
       content: 'Sending file: $fileName',
       type: MessageType.file,
-      timestamp: DateTime.now(),
+      timestamp: DateTime.now().toUtc(),
       isOutgoing: true,
       status: MessageStatus.sending,
       attachmentName: fileName,
@@ -597,7 +549,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     );
 
     ref.read(chatMessagesProvider(widget.peerId).notifier).addMessage(message);
-    _scrollToBottom();
+    setState(() => _newMessageSignal++);
 
     try {
       final connectionManager = ref.read(connectionManagerProvider);
@@ -613,18 +565,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     } finally {
       setState(() => _isSending = false);
     }
-  }
-
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
-    });
   }
 
   /// Start a VoIP call to the current peer.
@@ -927,21 +867,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     );
   }
 
-  bool _isSameDay(DateTime a, DateTime b) {
-    return a.year == b.year && a.month == b.month && a.day == b.day;
-  }
-
-  String _formatDate(DateTime date) {
-    final now = DateTime.now();
-    if (_isSameDay(date, now)) return 'Today';
-    if (_isSameDay(date, now.subtract(const Duration(days: 1)))) {
-      return 'Yesterday';
-    }
-    return '${date.day}/${date.month}/${date.year}';
-  }
-
   String _formatDateTime(DateTime date) {
-    return '${date.day}/${date.month}/${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+    final local = date.toLocal();
+    return '${local.day}/${local.month}/${local.year} ${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
   }
 }
 
@@ -1085,7 +1013,8 @@ class _MessageBubble extends StatelessWidget {
   }
 
   String _formatTime(DateTime time) {
-    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    final local = time.toLocal();
+    return '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
   }
 
   String _formatFileSize(int bytes) {

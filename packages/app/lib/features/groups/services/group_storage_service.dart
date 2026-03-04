@@ -208,9 +208,13 @@ class GroupStorageService {
   }
 
   /// Get the latest N messages for a group.
+  ///
+  /// When [offset] is provided, skips the most recent [offset] messages
+  /// (useful for pagination — pass `state.length` to load the next page).
   Future<List<GroupMessage>> getLatestMessages(
     String groupId, {
     int limit = 50,
+    int offset = 0,
   }) async {
     final db = _requireDb();
     final rows = await db.query(
@@ -219,6 +223,7 @@ class GroupStorageService {
       whereArgs: [groupId],
       orderBy: 'timestamp DESC',
       limit: limit,
+      offset: offset,
     );
     return rows.map((r) => GroupMessage.fromJson(r)).toList().reversed.toList();
   }

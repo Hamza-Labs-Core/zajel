@@ -112,20 +112,36 @@ void main() {
       expect(future1, equals(future2));
     });
 
-    test('groupMessagesProvider returns different futures for different IDs',
+    test('groupMessagesProvider returns List<GroupMessage> for different IDs',
         () {
-      final future1 = container.read(groupMessagesProvider('group_1'));
-      final future2 = container.read(groupMessagesProvider('group_2'));
+      // StateNotifierProvider eagerly creates the notifier which calls
+      // _loadMessages, so override with the test-only constructor.
+      final c = ProviderContainer(overrides: [
+        groupMessagesProvider('group_1')
+            .overrideWith((ref) => GroupMessagesNotifier.withMessages([])),
+        groupMessagesProvider('group_2')
+            .overrideWith((ref) => GroupMessagesNotifier.withMessages([])),
+      ]);
+      addTearDown(c.dispose);
 
-      expect(future1, isA<AsyncValue>());
-      expect(future2, isA<AsyncValue>());
+      final list1 = c.read(groupMessagesProvider('group_1'));
+      final list2 = c.read(groupMessagesProvider('group_2'));
+
+      expect(list1, isA<List>());
+      expect(list2, isA<List>());
     });
 
-    test('groupMessagesProvider returns same future for same ID', () {
-      final future1 = container.read(groupMessagesProvider('group_1'));
-      final future2 = container.read(groupMessagesProvider('group_1'));
+    test('groupMessagesProvider returns same list for same ID', () {
+      final c = ProviderContainer(overrides: [
+        groupMessagesProvider('group_1')
+            .overrideWith((ref) => GroupMessagesNotifier.withMessages([])),
+      ]);
+      addTearDown(c.dispose);
 
-      expect(future1, equals(future2));
+      final list1 = c.read(groupMessagesProvider('group_1'));
+      final list2 = c.read(groupMessagesProvider('group_1'));
+
+      expect(list1, equals(list2));
     });
   });
 

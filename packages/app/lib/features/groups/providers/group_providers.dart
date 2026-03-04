@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/logging/logger_service.dart';
@@ -95,7 +96,7 @@ final groupInvitationServiceProvider = Provider<GroupInvitationService>((ref) {
   // Wire up the callback: when a group message arrives over a 1:1 channel,
   // refresh that group's messages so the UI picks it up, and show a notification.
   service.onGroupMessageReceived = (groupId, message) async {
-    ref.invalidate(groupMessagesProvider(groupId));
+    ref.read(groupMessagesProvider(groupId).notifier).reload();
 
     // Show OS notification for the incoming group message.
     // DND / messageNotifications guards are inside showMessageNotification.
@@ -137,11 +138,78 @@ final groupByIdProvider =
   return service.getGroup(groupId);
 });
 
-/// Provider for messages in a group.
+/// Provider for managing group messages per group with pagination.
+final groupMessagesProvider = StateNotifierProvider.family<
+    GroupMessagesNotifier, List<GroupMessage>, String>(
+  (ref, groupId) {
+    final service = ref.watch(groupServiceProvider);
+    return GroupMessagesNotifier(groupId, service);
+  },
+);
+
+/// StateNotifier for group messages with pagination support.
 ///
-/// Returns the latest 50 messages by default.
-final groupMessagesProvider =
-    FutureProvider.family<List<GroupMessage>, String>((ref, groupId) async {
-  final service = ref.watch(groupServiceProvider);
-  return service.getLatestMessages(groupId);
-});
+/// Modeled after [ChatMessagesNotifier] in chat_providers.dart.
+class GroupMessagesNotifier extends StateNotifier<List<GroupMessage>> {
+  final String groupId;
+  final GroupService? _service;
+  bool _loaded = false;
+  bool _hasMore = true;
+  static const _pageSize = 100;
+
+  GroupMessagesNotifier(this.groupId, GroupService service)
+      : _service = service,
+        super([]) {
+    _loadMessages();
+  }
+
+  /// Test-only constructor that pre-seeds state without requiring a real service.
+  @visibleForTesting
+  GroupMessagesNotifier.withMessages(super.messages)
+      : groupId = '',
+        _service = null {
+    _loaded = true;
+    _hasMore = false;
+  }
+
+  /// Whether there are more older messages to load.
+  bool get hasMore => _hasMore;
+
+  Future<void> _loadMessages() async {
+    if (_loaded) return;
+    final messages =
+        await _service!.getLatestMessages(groupId, limit: _pageSize);
+    if (mounted) {
+      state = messages;
+      _loaded = true;
+      _hasMore = messages.length >= _pageSize;
+    }
+  }
+
+  /// Load older messages (pagination). Prepends to current state.
+  Future<void> loadMore() async {
+    if (!_hasMore || !_loaded || _service == null) return;
+    final older = await _service.getLatestMessages(
+      groupId,
+      limit: _pageSize,
+      offset: state.length,
+    );
+    if (mounted && older.isNotEmpty) {
+      state = [...older, ...state];
+      _hasMore = older.length >= _pageSize;
+    } else {
+      _hasMore = false;
+    }
+  }
+
+  /// Reload messages from DB. Called when a new message arrives.
+  Future<void> reload() async {
+    if (_service == null) return;
+    final messages =
+        await _service.getLatestMessages(groupId, limit: _pageSize);
+    if (mounted) {
+      state = messages;
+      _hasMore = messages.length >= _pageSize;
+    }
+  }
+}

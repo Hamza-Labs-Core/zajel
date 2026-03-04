@@ -304,6 +304,52 @@ class ChannelStorageService {
     return rows.map(_rowToChunk).toList();
   }
 
+  /// Get chunks for the latest N sequences of a channel.
+  ///
+  /// When [beforeSequence] is provided, only returns chunks with
+  /// sequence numbers strictly less than it (for pagination).
+  Future<List<Chunk>> getChunksForLatestSequences(
+    String channelId, {
+    int limit = 50,
+    int? beforeSequence,
+  }) async {
+    final db = _db;
+    if (db == null) return [];
+
+    // First, get the distinct sequence numbers (paginated)
+    String seqWhere = 'channel_id = ?';
+    final seqArgs = <dynamic>[channelId];
+    if (beforeSequence != null) {
+      seqWhere += ' AND sequence < ?';
+      seqArgs.add(beforeSequence);
+    }
+
+    final seqRows = await db.query(
+      _chunksTable,
+      distinct: true,
+      columns: ['sequence'],
+      where: seqWhere,
+      whereArgs: seqArgs,
+      orderBy: 'sequence DESC',
+      limit: limit,
+    );
+
+    if (seqRows.isEmpty) return [];
+
+    final sequences = seqRows.map((r) => r['sequence'] as int).toList();
+
+    // Now get all chunks for those sequences
+    final placeholders = sequences.map((_) => '?').join(',');
+    final rows = await db.query(
+      _chunksTable,
+      where: 'channel_id = ? AND sequence IN ($placeholders)',
+      whereArgs: [channelId, ...sequences],
+      orderBy: 'sequence ASC, chunk_index ASC',
+    );
+
+    return rows.map(_rowToChunk).toList();
+  }
+
   /// Delete all chunks for a specific sequence.
   Future<void> deleteChunksBySequence(String channelId, int sequence) async {
     final db = _db;

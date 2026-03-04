@@ -123,8 +123,8 @@ Widget _buildTestWidget({
       if (groupById != null)
         groupByIdProvider(groupById.id).overrideWith((ref) async => groupById),
       if (groupById != null)
-        groupMessagesProvider(groupById.id)
-            .overrideWith((ref) async => messages),
+        groupMessagesProvider(groupById.id).overrideWith(
+            (ref) => GroupMessagesNotifier.withMessages(messages)),
     ],
     child: MaterialApp(home: child),
   );
@@ -391,7 +391,7 @@ void main() {
           sharedPreferencesProvider.overrideWithValue(prefs),
           groupByIdProvider('nonexistent').overrideWith((ref) async => null),
           groupMessagesProvider('nonexistent')
-              .overrideWith((ref) async => <GroupMessage>[]),
+              .overrideWith((ref) => GroupMessagesNotifier.withMessages([])),
         ],
         child: MaterialApp(
           home: GroupDetailScreen(groupId: 'nonexistent'),

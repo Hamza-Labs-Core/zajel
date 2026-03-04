@@ -106,11 +106,14 @@ class FakeGroupStorageService extends GroupStorageService {
   Future<List<GroupMessage>> getLatestMessages(
     String groupId, {
     int limit = 50,
+    int offset = 0,
   }) async {
     final list = (_messages[groupId] ?? []).toList()
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
-    if (list.length <= limit) return list;
-    return list.sublist(list.length - limit);
+    if (list.length <= offset) return [];
+    final end = list.length;
+    final start = (end - limit - offset).clamp(0, end);
+    return list.sublist(start, end - offset);
   }
 
   @override

@@ -8,7 +8,9 @@ import '../../core/logging/logger_service.dart';
 import '../../core/models/peer.dart';
 import '../../core/providers/app_providers.dart';
 import '../../shared/widgets/compose_bar.dart';
+import '../../shared/widgets/message_list_view.dart';
 import 'models/group.dart';
+import 'models/group_message.dart';
 import 'providers/group_providers.dart';
 import 'services/group_connection_service.dart';
 
@@ -27,6 +29,8 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
   final _messageFocusNode = FocusNode();
   bool _sending = false;
   bool _groupActivated = false;
+  int _newMessageSignal = 0;
+  int _lastMessageCount = 0;
 
   // Cache the connection service reference before dispose, since
   // ref.read() throws after the widget is disposed.
@@ -81,7 +85,18 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final groupAsync = ref.watch(groupByIdProvider(widget.groupId));
-    final messagesAsync = ref.watch(groupMessagesProvider(widget.groupId));
+    final messages = ref.watch(groupMessagesProvider(widget.groupId));
+    final notifier = ref.watch(groupMessagesProvider(widget.groupId).notifier);
+
+    // Detect new incoming messages and bump the signal
+    if (messages.length > _lastMessageCount && _lastMessageCount > 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          setState(() => _newMessageSignal++);
+        }
+      });
+    }
+    _lastMessageCount = messages.length;
 
     return Scaffold(
       appBar: AppBar(
@@ -130,93 +145,21 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
           return Column(
             children: [
               Expanded(
-                child: messagesAsync.when(
-                  loading: () =>
-                      const Center(child: CircularProgressIndicator()),
-                  error: (error, stack) => Center(
-                    child: Text('Error loading messages: $error'),
+                child: MessageListView<GroupMessage>(
+                  messages: messages,
+                  messageBuilder: (context, msg) =>
+                      _buildGroupMessageBubble(context, group, msg),
+                  timestampExtractor: (msg) => msg.timestamp,
+                  onLoadMore: () => notifier.loadMore(),
+                  hasMore: notifier.hasMore,
+                  newMessageSignal: _newMessageSignal,
+                  emptyState: const Center(
+                    child: Text(
+                      'No messages yet.\nSend the first message!',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.grey),
+                    ),
                   ),
-                  data: (messages) {
-                    if (messages.isEmpty) {
-                      return const Center(
-                        child: Text(
-                          'No messages yet.\nSend the first message!',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: Colors.grey),
-                        ),
-                      );
-                    }
-
-                    return ListView.builder(
-                      reverse: true,
-                      itemCount: messages.length,
-                      padding: const EdgeInsets.all(8),
-                      itemBuilder: (context, index) {
-                        final msg = messages[messages.length - 1 - index];
-                        final isOutgoing = msg.isOutgoing;
-                        return Align(
-                          alignment: isOutgoing
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: GestureDetector(
-                            onLongPressStart: (details) {
-                              _showMessageCopyMenu(
-                                context,
-                                details.globalPosition,
-                                msg.content,
-                              );
-                            },
-                            onSecondaryTapDown: (details) {
-                              _showMessageCopyMenu(
-                                context,
-                                details.globalPosition,
-                                msg.content,
-                              );
-                            },
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(vertical: 4),
-                              padding: const EdgeInsets.all(12),
-                              constraints: BoxConstraints(
-                                maxWidth:
-                                    MediaQuery.of(context).size.width * 0.75,
-                              ),
-                              decoration: BoxDecoration(
-                                color: isOutgoing
-                                    ? Theme.of(context)
-                                        .colorScheme
-                                        .primaryContainer
-                                    : Theme.of(context)
-                                        .colorScheme
-                                        .surfaceContainerHighest,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (!isOutgoing)
-                                    Padding(
-                                      padding: const EdgeInsets.only(bottom: 4),
-                                      child: Text(
-                                        _resolveAuthorName(
-                                            group, msg.authorDeviceId),
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.bold,
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .primary,
-                                        ),
-                                      ),
-                                    ),
-                                  Text(msg.content),
-                                ],
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    );
-                  },
                 ),
               ),
               ComposeBar(
@@ -228,6 +171,53 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
             ],
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildGroupMessageBubble(
+      BuildContext context, Group group, GroupMessage msg) {
+    final isOutgoing = msg.isOutgoing;
+    return Align(
+      alignment: isOutgoing ? Alignment.centerRight : Alignment.centerLeft,
+      child: GestureDetector(
+        onLongPressStart: (details) {
+          _showMessageCopyMenu(context, details.globalPosition, msg.content);
+        },
+        onSecondaryTapDown: (details) {
+          _showMessageCopyMenu(context, details.globalPosition, msg.content);
+        },
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: 4),
+          padding: const EdgeInsets.all(12),
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.75,
+          ),
+          decoration: BoxDecoration(
+            color: isOutgoing
+                ? Theme.of(context).colorScheme.primaryContainer
+                : Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (!isOutgoing)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    _resolveAuthorName(group, msg.authorDeviceId),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                ),
+              Text(msg.content),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -302,7 +292,8 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
       }
 
       // Refresh messages
-      ref.invalidate(groupMessagesProvider(widget.groupId));
+      await ref.read(groupMessagesProvider(widget.groupId).notifier).reload();
+      if (mounted) setState(() => _newMessageSignal++);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 
 import '../../core/providers/app_providers.dart';
 import '../../shared/widgets/compose_bar.dart';
+import '../../shared/widgets/message_list_view.dart';
 import 'models/channel.dart';
 import 'models/chunk.dart';
 import 'providers/channel_providers.dart';
@@ -36,8 +37,9 @@ class ChannelDetailScreen extends ConsumerStatefulWidget {
 class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
   final _messageController = TextEditingController();
   final _messageFocusNode = FocusNode();
-  final _scrollController = ScrollController();
   bool _publishing = false;
+  int _newMessageSignal = 0;
+  int _lastMessageCount = 0;
 
   @override
   void initState() {
@@ -58,14 +60,25 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
     }
     _messageController.dispose();
     _messageFocusNode.dispose();
-    _scrollController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final channelAsync = ref.watch(channelByIdProvider(widget.channelId));
-    final messagesAsync = ref.watch(channelMessagesProvider(widget.channelId));
+    final messages = ref.watch(channelMessagesProvider(widget.channelId));
+    final notifier =
+        ref.watch(channelMessagesProvider(widget.channelId).notifier);
+
+    // Detect new incoming messages and bump the signal
+    if (messages.length > _lastMessageCount && _lastMessageCount > 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          setState(() => _newMessageSignal++);
+        }
+      });
+    }
+    _lastMessageCount = messages.length;
 
     Widget body = channelAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -91,16 +104,17 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
                 channel.role != ChannelRole.subscriber)
               _buildChannelBanner(context, channel),
             Expanded(
-              child: messagesAsync.when(
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (error, _) =>
-                    Center(child: Text('Error loading messages: $error')),
-                data: (messages) {
-                  if (messages.isEmpty) {
-                    return _buildEmptyState(context, channel, canPublish);
-                  }
-                  return _buildMessageList(context, messages);
-                },
+              child: MessageListView<ChannelMessage>(
+                messages: messages,
+                messageBuilder: (context, msg) =>
+                    _buildMessageBubble(context, msg),
+                timestampExtractor: (msg) => msg.timestamp,
+                onLoadMore: () => notifier.loadMore(),
+                hasMore: notifier.hasMore,
+                newMessageSignal: _newMessageSignal,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                emptyState: _buildEmptyState(context, channel, canPublish),
               ),
             ),
             if (canPublish)
@@ -282,19 +296,6 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
     );
   }
 
-  Widget _buildMessageList(
-      BuildContext context, List<ChannelMessage> messages) {
-    return ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      itemCount: messages.length,
-      itemBuilder: (context, index) {
-        final message = messages[index];
-        return _buildMessageBubble(context, message);
-      },
-    );
-  }
-
   Widget _buildMessageBubble(BuildContext context, ChannelMessage message) {
     final timeFormat = DateFormat('MMM d, h:mm a');
     final theme = Theme.of(context);
@@ -317,7 +318,7 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
                 const SizedBox(width: 8),
               ],
               Text(
-                timeFormat.format(message.timestamp),
+                timeFormat.format(message.timestamp.toLocal()),
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
@@ -380,7 +381,7 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
       final payload = ChunkPayload(
         type: ContentType.text,
         payload: Uint8List.fromList(utf8.encode(text)),
-        timestamp: DateTime.now(),
+        timestamp: DateTime.now().toUtc(),
       );
 
       // Split into chunks (encrypt + sign)
@@ -400,7 +401,10 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
       }
 
       // Refresh the message list
-      ref.invalidate(channelMessagesProvider(widget.channelId));
+      await ref
+          .read(channelMessagesProvider(widget.channelId).notifier)
+          .reload();
+      if (mounted) setState(() => _newMessageSignal++);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -410,17 +414,6 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
           ),
         );
       }
-
-      // Scroll to bottom after a frame to show the new message
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scrollController.hasClients) {
-          _scrollController.animateTo(
-            _scrollController.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOut,
-          );
-        }
-      });
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

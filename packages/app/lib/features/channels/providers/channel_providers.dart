@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/logging/logger_service.dart';
@@ -119,7 +120,7 @@ final channelSyncServiceProvider = Provider<ChannelSyncService>((ref) {
       service.announceChunk(chunk, channelId: channelId);
 
       // Invalidate the messages provider so UI refreshes
-      ref.invalidate(channelMessagesProvider(channelId));
+      ref.read(channelMessagesProvider(channelId).notifier).reload();
 
       // Show notification when a complete message sequence arrives.
       // DND / messageNotifications guards are inside showMessageNotification.
@@ -269,64 +270,154 @@ class ChannelMessage {
   });
 }
 
-/// Provider for channel messages (decrypted chunks) for a specific channel.
-///
-/// Fetches all chunks from storage, groups by sequence, reassembles and
-/// decrypts each group into a displayable [ChannelMessage].
-/// Invalidate this provider after publishing to refresh the list.
-final channelMessagesProvider =
-    FutureProvider.family<List<ChannelMessage>, String>((ref, channelId) async {
-  final storageService = ref.watch(channelStorageServiceProvider);
-  final channelService = ref.watch(channelServiceProvider);
-  final cryptoService = ref.watch(channelCryptoServiceProvider);
+/// Provider for channel messages (decrypted chunks) with pagination.
+final channelMessagesProvider = StateNotifierProvider.family<
+    ChannelMessagesNotifier, List<ChannelMessage>, String>(
+  (ref, channelId) {
+    final storageService = ref.watch(channelStorageServiceProvider);
+    final channelService = ref.watch(channelServiceProvider);
+    final cryptoService = ref.watch(channelCryptoServiceProvider);
+    return ChannelMessagesNotifier(
+      channelId,
+      storageService: storageService,
+      channelService: channelService,
+      cryptoService: cryptoService,
+    );
+  },
+);
 
-  // Get the channel to access the encryption key
-  final channel = await channelService.getChannel(channelId);
-  if (channel == null) return [];
+/// StateNotifier for channel messages with sequence-based pagination.
+class ChannelMessagesNotifier extends StateNotifier<List<ChannelMessage>> {
+  final String channelId;
+  final ChannelStorageService? _storageService;
+  final ChannelService? _channelService;
+  final ChannelCryptoService? _cryptoService;
+  bool _loaded = false;
+  bool _hasMore = true;
+  int? _oldestSequence;
+  static const _pageSize = 50;
 
-  final encryptionKey = channel.encryptionKeyPrivate;
-  if (encryptionKey == null) return [];
-
-  // Fetch all chunks for this channel
-  final allChunks = await storageService.getAllChunksForChannel(channelId);
-  if (allChunks.isEmpty) return [];
-
-  // Group by sequence number
-  final grouped = <int, List<Chunk>>{};
-  for (final chunk in allChunks) {
-    grouped.putIfAbsent(chunk.sequence, () => []).add(chunk);
+  ChannelMessagesNotifier(
+    this.channelId, {
+    required ChannelStorageService storageService,
+    required ChannelService channelService,
+    required ChannelCryptoService cryptoService,
+  })  : _storageService = storageService,
+        _channelService = channelService,
+        _cryptoService = cryptoService,
+        super([]) {
+    _loadMessages();
   }
 
-  // Decrypt each sequence group
-  final messages = <ChannelMessage>[];
-  for (final entry in grouped.entries.toList()
-    ..sort((a, b) => a.key.compareTo(b.key))) {
-    try {
-      final chunks = entry.value;
-      // Skip incomplete sequences
-      if (chunks.length != chunks.first.totalChunks) continue;
-
-      final encryptedBytes = channelService.reassembleChunks(chunks);
-      final payload = await cryptoService.decryptPayload(
-        encryptedBytes,
-        encryptionKey,
-        channel.manifest.keyEpoch,
-      );
-
-      messages.add(ChannelMessage(
-        sequence: entry.key,
-        type: payload.type,
-        text: payload.type == ContentType.text
-            ? utf8.decode(payload.payload)
-            : '[${payload.type.name}]',
-        timestamp: payload.timestamp,
-        author: payload.author,
-      ));
-    } catch (e) {
-      logger.warning('ChannelMessages',
-          'Failed to decrypt/reassemble sequence ${entry.key}: $e');
+  /// Test-only constructor that pre-seeds state without requiring real services.
+  @visibleForTesting
+  ChannelMessagesNotifier.withMessages(List<ChannelMessage> messages)
+      : channelId = '',
+        _storageService = null,
+        _channelService = null,
+        _cryptoService = null,
+        super(messages) {
+    _loaded = true;
+    _hasMore = false;
+    if (messages.isNotEmpty) {
+      _oldestSequence = messages.first.sequence;
     }
   }
 
-  return messages;
-});
+  /// Whether there are more older messages to load.
+  bool get hasMore => _hasMore;
+
+  Future<void> _loadMessages() async {
+    if (_loaded) return;
+    final messages = await _decryptChunks();
+    if (mounted) {
+      state = messages;
+      _loaded = true;
+      _hasMore = messages.length >= _pageSize;
+      if (messages.isNotEmpty) {
+        _oldestSequence = messages.first.sequence;
+      }
+    }
+  }
+
+  /// Load older messages (pagination).
+  Future<void> loadMore() async {
+    if (!_hasMore || !_loaded || _oldestSequence == null) return;
+    if (_channelService == null) return;
+    final older = await _decryptChunks(beforeSequence: _oldestSequence);
+    if (mounted && older.isNotEmpty) {
+      state = [...older, ...state];
+      _hasMore = older.length >= _pageSize;
+      _oldestSequence = older.first.sequence;
+    } else {
+      _hasMore = false;
+    }
+  }
+
+  /// Reload messages from DB. Called when new chunks arrive.
+  Future<void> reload() async {
+    if (_channelService == null) return;
+    final messages = await _decryptChunks();
+    if (mounted) {
+      state = messages;
+      _hasMore = messages.length >= _pageSize;
+      if (messages.isNotEmpty) {
+        _oldestSequence = messages.first.sequence;
+      }
+    }
+  }
+
+  /// Fetch chunks, group by sequence, decrypt and return messages.
+  Future<List<ChannelMessage>> _decryptChunks({int? beforeSequence}) async {
+    final channel = await _channelService!.getChannel(channelId);
+    if (channel == null) return [];
+
+    final encryptionKey = channel.encryptionKeyPrivate;
+    if (encryptionKey == null) return [];
+
+    final chunks = await _storageService!.getChunksForLatestSequences(
+      channelId,
+      limit: _pageSize,
+      beforeSequence: beforeSequence,
+    );
+    if (chunks.isEmpty) return [];
+
+    // Group by sequence number
+    final grouped = <int, List<Chunk>>{};
+    for (final chunk in chunks) {
+      grouped.putIfAbsent(chunk.sequence, () => []).add(chunk);
+    }
+
+    // Decrypt each sequence group
+    final messages = <ChannelMessage>[];
+    for (final entry in grouped.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key))) {
+      try {
+        final seqChunks = entry.value;
+        if (seqChunks.length != seqChunks.first.totalChunks) continue;
+
+        final encryptedBytes = _channelService.reassembleChunks(seqChunks);
+        final payload = await _cryptoService!.decryptPayload(
+          encryptedBytes,
+          encryptionKey,
+          channel.manifest.keyEpoch,
+        );
+
+        messages.add(ChannelMessage(
+          sequence: entry.key,
+          type: payload.type,
+          text: payload.type == ContentType.text
+              ? utf8.decode(payload.payload)
+              : '[${payload.type.name}]',
+          timestamp: payload.timestamp,
+          author: payload.author,
+        ));
+      } catch (e) {
+        logger.warning('ChannelMessages',
+            'Failed to decrypt/reassemble sequence ${entry.key}: $e');
+      }
+    }
+
+    return messages;
+  }
+}

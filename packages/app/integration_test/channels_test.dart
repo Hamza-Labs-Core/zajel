@@ -99,8 +99,8 @@ Widget _buildTestWidget({
         channelByIdProvider(channelById.id)
             .overrideWith((ref) async => channelById),
       if (channelById != null)
-        channelMessagesProvider(channelById.id)
-            .overrideWith((ref) async => messages),
+        channelMessagesProvider(channelById.id).overrideWith(
+            (ref) => ChannelMessagesNotifier.withMessages(messages)),
     ],
     child: MaterialApp(home: child),
   );

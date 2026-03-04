@@ -263,7 +263,7 @@ class GroupService {
       type: type,
       content: content,
       metadata: metadata,
-      timestamp: DateTime.now(),
+      timestamp: DateTime.now().toUtc(),
       status: GroupMessageStatus.sent,
       isOutgoing: true,
     );
@@ -368,8 +368,9 @@ class GroupService {
   Future<List<GroupMessage>> getLatestMessages(
     String groupId, {
     int limit = 50,
+    int offset = 0,
   }) =>
-      _storageService.getLatestMessages(groupId, limit: limit);
+      _storageService.getLatestMessages(groupId, limit: limit, offset: offset);
 
   /// Leave a group (self-removal).
   ///

@@ -54,7 +54,7 @@ class NotificationListenerService {
         localId: const Uuid().v4(),
         peerId: peerId,
         content: message,
-        timestamp: DateTime.now(),
+        timestamp: DateTime.now().toUtc(),
         isOutgoing: false,
         status: MessageStatus.delivered,
       );
