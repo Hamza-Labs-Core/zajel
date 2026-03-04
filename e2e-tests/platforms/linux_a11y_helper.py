@@ -177,9 +177,9 @@ class LinuxDesktopHelper(LinuxAppHelper):
             field.click()
             time.sleep(0.3)
 
-        # Type via real keyboard
-        for char in text:
-            pyautogui.press(char.lower())
+        # Type via real keyboard — use write() which handles spaces,
+        # punctuation, and case correctly (press() only accepts key names).
+        pyautogui.write(text, interval=0.02)
         time.sleep(0.3)
 
     def press_key(self, key: str):
