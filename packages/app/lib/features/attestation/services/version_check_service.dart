@@ -32,9 +32,9 @@ class VersionCheckService {
   Future<VersionStatus> checkVersion() async {
     final policy = await _client.fetchVersionPolicy();
     if (policy == null) {
-      logger.warning(
+      logger.error(
         _tag,
-        'Failed to fetch version policy, assuming up to date',
+        'Failed to fetch version policy — skipping version check (fail-open)',
       );
       return VersionStatus.upToDate;
     }
@@ -62,7 +62,7 @@ class VersionCheckService {
     }
 
     // Check minimum version
-    if (_compareVersions(currentVersion, policy.minimumVersion) < 0) {
+    if (compareVersions(currentVersion, policy.minimumVersion) < 0) {
       logger.info(
         _tag,
         'Version $currentVersion below minimum ${policy.minimumVersion}',
@@ -71,7 +71,7 @@ class VersionCheckService {
     }
 
     // Check recommended version
-    if (_compareVersions(currentVersion, policy.recommendedVersion) < 0) {
+    if (compareVersions(currentVersion, policy.recommendedVersion) < 0) {
       logger.info(
         _tag,
         'Version $currentVersion below recommended ${policy.recommendedVersion}',
@@ -91,9 +91,9 @@ class VersionCheckService {
   /// - positive if a > b
   ///
   /// Handles versions with or without patch numbers (e.g., "1.2" == "1.2.0").
-  static int _compareVersions(String a, String b) {
-    final aParts = _parseVersion(a);
-    final bParts = _parseVersion(b);
+  static int compareVersions(String a, String b) {
+    final aParts = parseVersion(a);
+    final bParts = parseVersion(b);
 
     for (var i = 0; i < 3; i++) {
       final diff = aParts[i] - bParts[i];
@@ -112,7 +112,7 @@ class VersionCheckService {
   /// "1.2.0-beta" while allowing "1.2.0"), add the full version string including the
   /// suffix to the [VersionPolicy.blockedVersions] list. The blockedVersions check
   /// happens first and compares the exact string before numeric comparison.
-  static List<int> _parseVersion(String version) {
+  static List<int> parseVersion(String version) {
     // Strip any pre-release or build metadata (e.g., "1.2.0-beta" -> "1.2.0")
     final cleanVersion = version.split('-').first.split('+').first;
     final parts = cleanVersion.split('.');

@@ -22,6 +22,8 @@ import 'core/services/pair_request_handler.dart';
 import 'core/services/voip_call_handler.dart';
 import 'features/channels/providers/channel_providers.dart';
 import 'features/groups/providers/group_providers.dart';
+import 'features/updater/services/update_rollback_service.dart';
+import 'features/updater/services/updater_launcher.dart';
 import 'shared/theme/app_theme.dart';
 
 const bool _isE2eTest = bool.fromEnvironment('E2E_TEST');
@@ -59,6 +61,32 @@ void main() async {
   }
 
   final prefs = await SharedPreferences.getInstance();
+
+  // Desktop auto-updater: check for pending rollback before starting UI
+  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    try {
+      final launcher = UpdaterLauncher();
+      final rollbackAction = await UpdateRollbackService.checkOnStartup(
+        prefs: prefs,
+        launcher: launcher,
+      );
+
+      if (rollbackAction == RollbackAction.rollback ||
+          rollbackAction == RollbackAction.powerLossRecovery) {
+        logger.warning('Main', 'Triggering rollback: $rollbackAction');
+        final launched = await launcher.launchRollback();
+        if (launched) {
+          exit(0);
+        }
+        // If rollback launch failed, fall through to normal startup
+        logger.error(
+            'Main', 'Rollback launch failed — continuing normal startup');
+      }
+    } catch (e, stack) {
+      logger.error('Main', 'Rollback check failed — continuing normal startup',
+          e, stack);
+    }
+  }
 
   runApp(
     ProviderScope(
@@ -331,6 +359,20 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
             'Please restart or reinstall.');
       }
       return;
+    }
+
+    // Desktop auto-updater: mark update as verified after successful core init
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      try {
+        final prefs = ref.read(sharedPreferencesProvider);
+        final launcher = UpdaterLauncher();
+        await UpdateRollbackService.markVerified(
+          prefs: prefs,
+          launcher: launcher,
+        );
+      } catch (e) {
+        logger.warning('ZajelApp', 'Update verification check failed: $e');
+      }
     }
 
     _fileTransferListener.listen();
