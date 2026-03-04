@@ -801,5 +801,265 @@ void main() {
         cryptoService.removePeerPublicKey('nonexistent');
       });
     });
+
+    group('SDP Signing', () {
+      test('signSDP returns valid base64 signature', () async {
+        await cryptoService.initialize();
+
+        final sdp = 'v=0\r\no=- 12345 2 IN IP4 0.0.0.0\r\n...';
+        final signature = await cryptoService.signSDP(sdp);
+
+        expect(signature, isNotEmpty);
+        expect(() => base64Decode(signature), returnsNormally);
+      });
+
+      test('verifySDP accepts valid signature', () async {
+        await cryptoService.initialize();
+
+        final sdp = 'v=0\r\no=- 12345 2 IN IP4 0.0.0.0\r\n...';
+        final signature = await cryptoService.signSDP(sdp);
+        final publicKey = cryptoService.signingPublicKeyBase64;
+
+        final isValid = await cryptoService.verifySDP(
+          sdp: sdp,
+          signature: signature,
+          peerSigningPublicKey: publicKey,
+        );
+
+        expect(isValid, isTrue);
+      });
+
+      test('verifySDP rejects modified SDP', () async {
+        await cryptoService.initialize();
+
+        final sdp = 'v=0\r\no=- 12345 2 IN IP4 0.0.0.0\r\n...';
+        final signature = await cryptoService.signSDP(sdp);
+        final publicKey = cryptoService.signingPublicKeyBase64;
+
+        // Modify SDP (simulate MITM tampering)
+        final tamperedSdp = sdp.replaceFirst('12345', '99999');
+
+        final isValid = await cryptoService.verifySDP(
+          sdp: tamperedSdp,
+          signature: signature,
+          peerSigningPublicKey: publicKey,
+        );
+
+        expect(isValid, isFalse);
+      });
+
+      test('verifySDP rejects wrong signing key', () async {
+        final crypto1 = CryptoService(secureStorage: FakeSecureStorage());
+        final crypto2 = CryptoService(secureStorage: FakeSecureStorage());
+        await crypto1.initialize();
+        await crypto2.initialize();
+
+        final sdp = 'v=0\r\no=- 12345 2 IN IP4 0.0.0.0\r\n...';
+        final signature = await crypto1.signSDP(sdp);
+        final wrongKey = crypto2.signingPublicKeyBase64;
+
+        final isValid = await crypto1.verifySDP(
+          sdp: sdp,
+          signature: signature,
+          peerSigningPublicKey: wrongKey,
+        );
+
+        expect(isValid, isFalse);
+      });
+
+      test('signData and verifyData roundtrip', () async {
+        await cryptoService.initialize();
+
+        final data = Uint8List.fromList(utf8.encode('test data'));
+        final signature = await cryptoService.signData(data);
+
+        final isValid = await cryptoService.verifyData(
+          data: data,
+          signatureBase64: signature,
+          peerSigningPublicKeyBase64: cryptoService.signingPublicKeyBase64,
+        );
+
+        expect(isValid, isTrue);
+      });
+
+      test('signData rejects tampered data', () async {
+        await cryptoService.initialize();
+
+        final data = Uint8List.fromList(utf8.encode('original data'));
+        final signature = await cryptoService.signData(data);
+
+        final tamperedData = Uint8List.fromList(utf8.encode('tampered data'));
+
+        final isValid = await cryptoService.verifyData(
+          data: tamperedData,
+          signatureBase64: signature,
+          peerSigningPublicKeyBase64: cryptoService.signingPublicKeyBase64,
+        );
+
+        expect(isValid, isFalse);
+      });
+
+      test('signingPublicKeyBase64 throws before initialization', () {
+        expect(
+          () => cryptoService.signingPublicKeyBase64,
+          throwsA(isA<CryptoException>().having(
+            (e) => e.message,
+            'message',
+            contains('not initialized'),
+          )),
+        );
+      });
+
+      test('signingPublicKeyBase64 returns valid base64 after initialization',
+          () async {
+        await cryptoService.initialize();
+
+        final signingKey = cryptoService.signingPublicKeyBase64;
+        expect(signingKey, isNotEmpty);
+        expect(() => base64Decode(signingKey), returnsNormally);
+        // Ed25519 public key is 32 bytes
+        expect(base64Decode(signingKey).length, 32);
+      });
+
+      test('signing keys persist across instances', () async {
+        await cryptoService.initialize();
+        final firstSigningKey = cryptoService.signingPublicKeyBase64;
+
+        // Create new service with same storage
+        final newService = CryptoService(secureStorage: fakeStorage);
+        await newService.initialize();
+        final secondSigningKey = newService.signingPublicKeyBase64;
+
+        expect(secondSigningKey, firstSigningKey);
+      });
+
+      test('regenerateIdentityKeys also regenerates signing keys', () async {
+        await cryptoService.initialize();
+        final firstSigningKey = cryptoService.signingPublicKeyBase64;
+
+        await cryptoService.regenerateIdentityKeys();
+        final secondSigningKey = cryptoService.signingPublicKeyBase64;
+
+        expect(secondSigningKey, isNot(firstSigningKey));
+      });
+
+      test('verifyData returns false for invalid base64 signature', () async {
+        await cryptoService.initialize();
+
+        final data = Uint8List.fromList(utf8.encode('test'));
+        final isValid = await cryptoService.verifyData(
+          data: data,
+          signatureBase64: 'not-valid-base64!!!',
+          peerSigningPublicKeyBase64: cryptoService.signingPublicKeyBase64,
+        );
+
+        expect(isValid, isFalse);
+      });
+
+      test('two peers can cross-verify SDP signatures', () async {
+        final aliceCrypto = CryptoService(secureStorage: FakeSecureStorage());
+        final bobCrypto = CryptoService(secureStorage: FakeSecureStorage());
+        await aliceCrypto.initialize();
+        await bobCrypto.initialize();
+
+        // Alice creates and signs an offer
+        final aliceOffer = 'v=0\r\no=- 12345 2 IN IP4 0.0.0.0\r\n...';
+        final aliceSignature = await aliceCrypto.signSDP(aliceOffer);
+
+        // Bob verifies Alice's offer
+        final aliceOfferValid = await bobCrypto.verifySDP(
+          sdp: aliceOffer,
+          signature: aliceSignature,
+          peerSigningPublicKey: aliceCrypto.signingPublicKeyBase64,
+        );
+        expect(aliceOfferValid, isTrue);
+
+        // Bob creates and signs an answer
+        final bobAnswer = 'v=0\r\no=- 67890 2 IN IP4 0.0.0.0\r\n...';
+        final bobSignature = await bobCrypto.signSDP(bobAnswer);
+
+        // Alice verifies Bob's answer
+        final bobAnswerValid = await aliceCrypto.verifySDP(
+          sdp: bobAnswer,
+          signature: bobSignature,
+          peerSigningPublicKey: bobCrypto.signingPublicKeyBase64,
+        );
+        expect(bobAnswerValid, isTrue);
+      });
+
+      test('MITM SDP tampering is detected', () async {
+        final aliceCrypto = CryptoService(secureStorage: FakeSecureStorage());
+        final bobCrypto = CryptoService(secureStorage: FakeSecureStorage());
+        await aliceCrypto.initialize();
+        await bobCrypto.initialize();
+
+        // Alice creates and signs an offer
+        final aliceOffer = 'v=0\r\na=fingerprint:sha-256 AA:BB:CC:DD\r\n';
+        final aliceSignature = await aliceCrypto.signSDP(aliceOffer);
+
+        // Attacker modifies the SDP (changes fingerprint)
+        final tamperedOffer = aliceOffer.replaceFirst('AA:BB:CC', 'XX:YY:ZZ');
+
+        // Bob tries to verify tampered SDP
+        final isValid = await bobCrypto.verifySDP(
+          sdp: tamperedOffer,
+          signature: aliceSignature,
+          peerSigningPublicKey: aliceCrypto.signingPublicKeyBase64,
+        );
+
+        expect(isValid, isFalse); // Attack detected
+      });
+
+      test('MITM key substitution is detected via trusted key binding',
+          () async {
+        final aliceCrypto = CryptoService(secureStorage: FakeSecureStorage());
+        final attackerCrypto =
+            CryptoService(secureStorage: FakeSecureStorage());
+        await aliceCrypto.initialize();
+        await attackerCrypto.initialize();
+
+        // Alice creates and signs an offer
+        final aliceOffer = 'v=0\r\na=fingerprint:sha-256 AA:BB:CC:DD\r\n';
+        await aliceCrypto.signSDP(aliceOffer);
+
+        // Attacker re-signs with their own key
+        final tamperedOffer = aliceOffer.replaceFirst('AA:BB:CC', 'XX:YY:ZZ');
+        final attackerSignature = await attackerCrypto.signSDP(tamperedOffer);
+
+        // Attacker's signature is valid against attacker's key
+        final validAgainstAttacker = await aliceCrypto.verifySDP(
+          sdp: tamperedOffer,
+          signature: attackerSignature,
+          peerSigningPublicKey: attackerCrypto.signingPublicKeyBase64,
+        );
+        expect(validAgainstAttacker, isTrue);
+
+        // But verification against Alice's TRUSTED key fails
+        final validAgainstTrusted = await aliceCrypto.verifySDP(
+          sdp: tamperedOffer,
+          signature: attackerSignature,
+          peerSigningPublicKey: aliceCrypto.signingPublicKeyBase64,
+        );
+        expect(validAgainstTrusted, isFalse); // MITM detected
+      });
+
+      test('ICE candidate signing roundtrip', () async {
+        await cryptoService.initialize();
+
+        final candidate =
+            'candidate:1 1 UDP 2130706431 192.168.1.1 12345 typ host';
+        final candidateBytes = Uint8List.fromList(utf8.encode(candidate));
+
+        final signature = await cryptoService.signData(candidateBytes);
+
+        final isValid = await cryptoService.verifyData(
+          data: candidateBytes,
+          signatureBase64: signature,
+          peerSigningPublicKeyBase64: cryptoService.signingPublicKeyBase64,
+        );
+
+        expect(isValid, isTrue);
+      });
+    });
   });
 }

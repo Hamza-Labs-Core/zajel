@@ -16,7 +16,7 @@
  * - CORS headers on all endpoints
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { AttestationRegistryDO } from '../../src/durable-objects/attestation-registry-do.js';
 import {
   importAttestationSigningKey,
@@ -39,8 +39,12 @@ class MockStorage {
   async get(key) {
     return this.data.get(key);
   }
-  async put(key, value) {
-    this.data.set(key, value);
+  async put(keyOrMap, value) {
+    if (keyOrMap instanceof Map) {
+      for (const [k, v] of keyOrMap) { this.data.set(k, v); }
+    } else {
+      this.data.set(keyOrMap, value);
+    }
   }
   async delete(key) {
     if (Array.isArray(key)) {
@@ -49,12 +53,14 @@ class MockStorage {
       this.data.delete(key);
     }
   }
-  async list({ prefix, limit }) {
+  async list({ prefix, start, limit }) {
     const results = new Map();
-    for (const [key, value] of this.data) {
-      if (key.startsWith(prefix)) {
-        results.set(key, value);
-        if (limit && results.size >= limit) break;
+    const sortedKeys = [...this.data.keys()].sort();
+    for (const key of sortedKeys) {
+      if (typeof key !== 'string') continue;
+      if (start && key < start) continue;
+      if (key.startsWith(prefix) && results.size < (limit || Infinity)) {
+        results.set(key, this.data.get(key));
       }
     }
     return results;
@@ -537,7 +543,7 @@ describe('Attestation Service E2E Tests', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toContain('offset and length');
+      expect(data.error).toContain('non-negative integer offset');
     });
 
     it('should return 503 when CI_UPLOAD_SECRET not configured', async () => {
@@ -1150,7 +1156,9 @@ describe('Attestation Service E2E Tests', () => {
       };
 
       // Test that /attest/versions routes correctly
-      const request = new Request('https://test.workers.dev/attest/versions');
+      const request = new Request('https://test.workers.dev/attest/versions', {
+        headers: { 'CF-Connecting-IP': '127.0.0.1' },
+      });
       const response = await worker.fetch(request, env);
       const data = await response.json();
 
@@ -1170,7 +1178,9 @@ describe('Attestation Service E2E Tests', () => {
         },
       };
 
-      const request = new Request('https://test.workers.dev/');
+      const request = new Request('https://test.workers.dev/', {
+        headers: { 'CF-Connecting-IP': '127.0.0.1' },
+      });
       const response = await worker.fetch(request, env);
       const data = await response.json();
 
@@ -1195,6 +1205,7 @@ describe('Attestation Service E2E Tests', () => {
 
       const request = new Request('https://test.workers.dev/attest/register', {
         method: 'OPTIONS',
+        headers: { 'CF-Connecting-IP': '127.0.0.1' },
       });
       const response = await worker.fetch(request, env);
 
@@ -1706,6 +1717,784 @@ describe('Attestation Service E2E Tests', () => {
 
       expect(data.status).toBe('registered');
       expect(data.device.build_version).toBe('1.1.0');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // NaN and Type Coercion Input Validation
+  // -----------------------------------------------------------------------
+
+  describe('NaN and Type Coercion Input Validation', () => {
+    let mockEnvNan;
+    let mockStateNan;
+    let attestationDONan;
+    let seedHexNan;
+
+    beforeEach(async () => {
+      mockStateNan = new MockState();
+      seedHexNan = await generateTestSeed();
+      const signingKey = await importAttestationSigningKey(seedHexNan);
+      const publicKeyBase64Nan = await exportPublicKeyBase64(signingKey);
+
+      mockEnvNan = {
+        ATTESTATION_SIGNING_KEY: seedHexNan,
+        BUILD_SIGNING_PUBKEY: publicKeyBase64Nan,
+        AUDIT_LOG_KEY: 'test-audit-key',
+      };
+
+      attestationDONan = new AttestationRegistryDO(mockStateNan, mockEnvNan);
+
+      // Upload reference binary
+      const uploadRequest = createRequest(
+        'POST',
+        '/attest/upload-reference',
+        {
+          version: '1.0.0',
+          platform: 'android',
+          build_hash: 'abc123',
+          critical_regions: [
+            { offset: 0, length: 100, data_hex: 'deadbeef' },
+            { offset: 200, length: 50, data_hex: 'cafebabe' },
+            { offset: 500, length: 75, data_hex: 'baadf00d' },
+          ],
+        },
+        { Authorization: 'Bearer test-ci-secret' }
+      );
+
+      mockEnvNan.CI_UPLOAD_SECRET = 'test-ci-secret';
+      await attestationDONan.fetch(uploadRequest);
+
+      // Register device
+      const buildToken = await createBuildToken(seedHexNan, {
+        version: '1.0.0',
+        platform: 'android',
+        build_hash: 'abc123',
+        timestamp: Date.now(),
+      });
+
+      const registerRequest = createRequest('POST', '/attest/register', {
+        device_id: 'device-nan-test',
+        build_token: buildToken,
+      });
+
+      await attestationDONan.fetch(registerRequest);
+    });
+
+    afterEach(async () => {
+      await mockStateNan.storage.clear();
+    });
+
+    describe('region_index validation', () => {
+      it('should reject region_index as string "abc" (NaN coercion)', async () => {
+        const challengeReq = createRequest('POST', '/attest/challenge', {
+          device_id: 'device-nan-test',
+          build_version: '1.0.0',
+        });
+        const challengeRes = await attestationDONan.fetch(challengeReq);
+        const { nonce, regions } = await challengeRes.json();
+
+        const verifyReq = createRequest('POST', '/attest/verify', {
+          device_id: 'device-nan-test',
+          nonce,
+          responses: regions.map(() => ({
+            region_index: 'abc',
+            hmac: 'deadbeef',
+          })),
+        });
+
+        const verifyRes = await attestationDONan.fetch(verifyReq);
+        const data = await verifyRes.json();
+
+        expect(verifyRes.status).toBe(200);
+        expect(data.valid).toBe(false);
+        expect(data.error).toBe('Verification failed');
+
+        // Verify nonce was NOT consumed (should still exist)
+        const retryVerifyReq = createRequest('POST', '/attest/verify', {
+          device_id: 'device-nan-test',
+          nonce,
+          responses: regions.map((r) => ({
+            region_index: r.index,
+            hmac: 'wrong-but-valid-format',
+          })),
+        });
+
+        const retryRes = await attestationDONan.fetch(retryVerifyReq);
+        expect(retryRes.status).toBe(200);
+      });
+
+      it('should reject region_index as null (coerces to 0)', async () => {
+        const challengeReq = createRequest('POST', '/attest/challenge', {
+          device_id: 'device-nan-test',
+          build_version: '1.0.0',
+        });
+        const challengeRes = await attestationDONan.fetch(challengeReq);
+        const { nonce, regions } = await challengeRes.json();
+
+        const verifyReq = createRequest('POST', '/attest/verify', {
+          device_id: 'device-nan-test',
+          nonce,
+          responses: regions.map(() => ({
+            region_index: null,
+            hmac: 'deadbeef',
+          })),
+        });
+
+        const verifyRes = await attestationDONan.fetch(verifyReq);
+        const data = await verifyRes.json();
+
+        expect(verifyRes.status).toBe(200);
+        expect(data.valid).toBe(false);
+        expect(data.error).toBe('Verification failed');
+      });
+
+      it('should reject region_index as undefined (missing field)', async () => {
+        const challengeReq = createRequest('POST', '/attest/challenge', {
+          device_id: 'device-nan-test',
+          build_version: '1.0.0',
+        });
+        const challengeRes = await attestationDONan.fetch(challengeReq);
+        const { nonce, regions } = await challengeRes.json();
+
+        const verifyReq = createRequest('POST', '/attest/verify', {
+          device_id: 'device-nan-test',
+          nonce,
+          responses: regions.map(() => ({
+            hmac: 'deadbeef',
+          })),
+        });
+
+        const verifyRes = await attestationDONan.fetch(verifyReq);
+        const data = await verifyRes.json();
+
+        expect(verifyRes.status).toBe(200);
+        expect(data.valid).toBe(false);
+      });
+
+      it('should reject region_index as negative integer', async () => {
+        const challengeReq = createRequest('POST', '/attest/challenge', {
+          device_id: 'device-nan-test',
+          build_version: '1.0.0',
+        });
+        const challengeRes = await attestationDONan.fetch(challengeReq);
+        const { nonce, regions } = await challengeRes.json();
+
+        const verifyReq = createRequest('POST', '/attest/verify', {
+          device_id: 'device-nan-test',
+          nonce,
+          responses: regions.map(() => ({
+            region_index: -1,
+            hmac: 'deadbeef',
+          })),
+        });
+
+        const verifyRes = await attestationDONan.fetch(verifyReq);
+        const data = await verifyRes.json();
+
+        expect(verifyRes.status).toBe(200);
+        expect(data.valid).toBe(false);
+      });
+
+      it('should reject region_index as fractional number', async () => {
+        const challengeReq = createRequest('POST', '/attest/challenge', {
+          device_id: 'device-nan-test',
+          build_version: '1.0.0',
+        });
+        const challengeRes = await attestationDONan.fetch(challengeReq);
+        const { nonce, regions } = await challengeRes.json();
+
+        const verifyReq = createRequest('POST', '/attest/verify', {
+          device_id: 'device-nan-test',
+          nonce,
+          responses: regions.map(() => ({
+            region_index: 1.5,
+            hmac: 'deadbeef',
+          })),
+        });
+
+        const verifyRes = await attestationDONan.fetch(verifyReq);
+        const data = await verifyRes.json();
+
+        expect(verifyRes.status).toBe(200);
+        expect(data.valid).toBe(false);
+      });
+
+      it('should reject region_index as null (JSON-serialized form of Infinity)', async () => {
+        const challengeReq = createRequest('POST', '/attest/challenge', {
+          device_id: 'device-nan-test',
+          build_version: '1.0.0',
+        });
+        const challengeRes = await attestationDONan.fetch(challengeReq);
+        const { nonce, regions } = await challengeRes.json();
+
+        const verifyReq = createRequest('POST', '/attest/verify', {
+          device_id: 'device-nan-test',
+          nonce,
+          responses: regions.map(() => ({
+            region_index: null,
+            hmac: 'deadbeef',
+          })),
+        });
+
+        const verifyRes = await attestationDONan.fetch(verifyReq);
+        const data = await verifyRes.json();
+
+        expect(verifyRes.status).toBe(200);
+        expect(data.valid).toBe(false);
+        expect(data.error).toBe('Verification failed');
+      });
+
+      it('should reject region_index as out-of-bounds large integer', async () => {
+        const challengeReq = createRequest('POST', '/attest/challenge', {
+          device_id: 'device-nan-test',
+          build_version: '1.0.0',
+        });
+        const challengeRes = await attestationDONan.fetch(challengeReq);
+        const { nonce, regions } = await challengeRes.json();
+
+        const verifyReq = createRequest('POST', '/attest/verify', {
+          device_id: 'device-nan-test',
+          nonce,
+          responses: regions.map(() => ({
+            region_index: Number.MAX_SAFE_INTEGER,
+            hmac: 'deadbeef',
+          })),
+        });
+
+        const verifyRes = await attestationDONan.fetch(verifyReq);
+        const data = await verifyRes.json();
+
+        expect(verifyRes.status).toBe(200);
+        expect(data.valid).toBe(false);
+        expect(data.error).toBe('Verification failed');
+      });
+
+      it('should accept valid region_index values', async () => {
+        const challengeReq = createRequest('POST', '/attest/challenge', {
+          device_id: 'device-nan-test',
+          build_version: '1.0.0',
+        });
+        const challengeRes = await attestationDONan.fetch(challengeReq);
+        const { nonce, regions } = await challengeRes.json();
+
+        const responses = [];
+        for (const region of regions) {
+          const refRegion = await mockStateNan.storage.get('reference:1.0.0:android');
+          const matchingRegion = refRegion.critical_regions.find(
+            (r) => r.offset === region.offset && r.length === region.length
+          );
+          const regionBytes = hexToBytes2(matchingRegion.data_hex);
+          const hmac = await computeHmac(regionBytes, nonce);
+          responses.push({ region_index: region.index, hmac });
+        }
+
+        const verifyReq = createRequest('POST', '/attest/verify', {
+          device_id: 'device-nan-test',
+          nonce,
+          responses,
+        });
+
+        const verifyRes = await attestationDONan.fetch(verifyReq);
+        const data = await verifyRes.json();
+
+        expect(verifyRes.status).toBe(200);
+        expect(data.valid).toBe(true);
+        expect(data.session_token).toBeDefined();
+      });
+    });
+
+    describe('critical_regions validation in upload-reference', () => {
+      it('should reject critical_region with NaN offset', async () => {
+        const uploadRequest = createRequest(
+          'POST',
+          '/attest/upload-reference',
+          {
+            version: '2.0.0',
+            platform: 'android',
+            build_hash: 'xyz789',
+            critical_regions: [
+              { offset: NaN, length: 100, data_hex: 'deadbeef' },
+            ],
+          },
+          { Authorization: 'Bearer test-ci-secret' }
+        );
+
+        const response = await attestationDONan.fetch(uploadRequest);
+        const data = await response.json();
+
+        expect(response.status).toBe(400);
+        expect(data.error).toContain('non-negative integer offset');
+      });
+
+      it('should reject critical_region with negative offset', async () => {
+        const uploadRequest = createRequest(
+          'POST',
+          '/attest/upload-reference',
+          {
+            version: '2.0.0',
+            platform: 'android',
+            build_hash: 'xyz789',
+            critical_regions: [
+              { offset: -100, length: 100, data_hex: 'deadbeef' },
+            ],
+          },
+          { Authorization: 'Bearer test-ci-secret' }
+        );
+
+        const response = await attestationDONan.fetch(uploadRequest);
+        const data = await response.json();
+
+        expect(response.status).toBe(400);
+        expect(data.error).toContain('non-negative integer offset');
+      });
+
+      it('should reject critical_region with zero length', async () => {
+        const uploadRequest = createRequest(
+          'POST',
+          '/attest/upload-reference',
+          {
+            version: '2.0.0',
+            platform: 'android',
+            build_hash: 'xyz789',
+            critical_regions: [
+              { offset: 0, length: 0, data_hex: 'deadbeef' },
+            ],
+          },
+          { Authorization: 'Bearer test-ci-secret' }
+        );
+
+        const response = await attestationDONan.fetch(uploadRequest);
+        const data = await response.json();
+
+        expect(response.status).toBe(400);
+        expect(data.error).toContain('positive integer length');
+      });
+
+      it('should reject critical_region with fractional length', async () => {
+        const uploadRequest = createRequest(
+          'POST',
+          '/attest/upload-reference',
+          {
+            version: '2.0.0',
+            platform: 'android',
+            build_hash: 'xyz789',
+            critical_regions: [
+              { offset: 0, length: 100.5, data_hex: 'deadbeef' },
+            ],
+          },
+          { Authorization: 'Bearer test-ci-secret' }
+        );
+
+        const response = await attestationDONan.fetch(uploadRequest);
+        const data = await response.json();
+
+        expect(response.status).toBe(400);
+        expect(data.error).toContain('positive integer length');
+      });
+
+      it('should reject critical_region with null offset', async () => {
+        const uploadRequest = createRequest(
+          'POST',
+          '/attest/upload-reference',
+          {
+            version: '2.0.0',
+            platform: 'android',
+            build_hash: 'xyz789',
+            critical_regions: [
+              { offset: null, length: 100, data_hex: 'deadbeef' },
+            ],
+          },
+          { Authorization: 'Bearer test-ci-secret' }
+        );
+
+        const response = await attestationDONan.fetch(uploadRequest);
+        const data = await response.json();
+
+        expect(response.status).toBe(400);
+        expect(data.error).toContain('non-negative integer offset');
+      });
+
+      it('should reject critical_region with invalid hex data', async () => {
+        const uploadRequest = createRequest(
+          'POST',
+          '/attest/upload-reference',
+          {
+            version: '2.0.0',
+            platform: 'android',
+            build_hash: 'xyz789',
+            critical_regions: [
+              { offset: 0, length: 100, data_hex: 'not-hex-data!' },
+            ],
+          },
+          { Authorization: 'Bearer test-ci-secret' }
+        );
+
+        const response = await attestationDONan.fetch(uploadRequest);
+        const data = await response.json();
+
+        expect(response.status).toBe(400);
+        expect(data.error).toContain('valid hex encoding');
+      });
+
+      it('should reject critical_region with odd-length hex data', async () => {
+        const uploadRequest = createRequest(
+          'POST',
+          '/attest/upload-reference',
+          {
+            version: '2.0.0',
+            platform: 'android',
+            build_hash: 'xyz789',
+            critical_regions: [
+              { offset: 0, length: 100, data_hex: 'abc' },
+            ],
+          },
+          { Authorization: 'Bearer test-ci-secret' }
+        );
+
+        const response = await attestationDONan.fetch(uploadRequest);
+        const data = await response.json();
+
+        expect(response.status).toBe(400);
+        expect(data.error).toContain('valid hex encoding');
+      });
+
+      it('should accept valid critical_regions', async () => {
+        const uploadRequest = createRequest(
+          'POST',
+          '/attest/upload-reference',
+          {
+            version: '2.0.0',
+            platform: 'android',
+            build_hash: 'xyz789',
+            critical_regions: [
+              { offset: 0, length: 100, data_hex: 'deadbeef' },
+              { offset: 200, length: 50, data_hex: 'cafebabe' },
+            ],
+          },
+          { Authorization: 'Bearer test-ci-secret' }
+        );
+
+        const response = await attestationDONan.fetch(uploadRequest);
+        const data = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(data.success).toBe(true);
+      });
+    });
+
+    describe('Nonce consumption DoS prevention', () => {
+      it('should NOT consume nonce when region_index validation fails', async () => {
+        const challengeReq = createRequest('POST', '/attest/challenge', {
+          device_id: 'device-nan-test',
+          build_version: '1.0.0',
+        });
+        const challengeRes = await attestationDONan.fetch(challengeReq);
+        const { nonce, regions } = await challengeRes.json();
+
+        const invalidVerifyReq = createRequest('POST', '/attest/verify', {
+          device_id: 'device-nan-test',
+          nonce,
+          responses: regions.map(() => ({
+            region_index: 'invalid',
+            hmac: 'deadbeef',
+          })),
+        });
+
+        const invalidRes = await attestationDONan.fetch(invalidVerifyReq);
+        expect(invalidRes.status).toBe(200);
+        const invalidData = await invalidRes.json();
+        expect(invalidData.valid).toBe(false);
+
+        const validFormatReq = createRequest('POST', '/attest/verify', {
+          device_id: 'device-nan-test',
+          nonce,
+          responses: regions.map((r) => ({
+            region_index: r.index,
+            hmac: 'wrong-hmac-but-valid-format',
+          })),
+        });
+
+        const validFormatRes = await attestationDONan.fetch(validFormatReq);
+        expect(validFormatRes.status).toBe(200);
+
+        const thirdAttemptReq = createRequest('POST', '/attest/verify', {
+          device_id: 'device-nan-test',
+          nonce,
+          responses: regions.map((r) => ({
+            region_index: r.index,
+            hmac: 'any-value',
+          })),
+        });
+
+        const thirdAttemptRes = await attestationDONan.fetch(thirdAttemptReq);
+        const thirdAttemptData = await thirdAttemptRes.json();
+        expect(thirdAttemptRes.status).toBe(403);
+        expect(thirdAttemptData.error).toContain('Invalid or expired nonce');
+      });
+
+      it('should NOT consume nonce when response count validation fails', async () => {
+        const challengeReq = createRequest('POST', '/attest/challenge', {
+          device_id: 'device-nan-test',
+          build_version: '1.0.0',
+        });
+        const challengeRes = await attestationDONan.fetch(challengeReq);
+        const { nonce, regions } = await challengeRes.json();
+
+        const wrongCountReq = createRequest('POST', '/attest/verify', {
+          device_id: 'device-nan-test',
+          nonce,
+          responses: [
+            { region_index: 0, hmac: 'deadbeef' },
+          ],
+        });
+
+        const wrongCountRes = await attestationDONan.fetch(wrongCountReq);
+        expect(wrongCountRes.status).toBe(200);
+        const wrongCountData = await wrongCountRes.json();
+        expect(wrongCountData.valid).toBe(false);
+        expect(wrongCountData.error).toContain('Wrong number of responses');
+
+        const validFormatReq = createRequest('POST', '/attest/verify', {
+          device_id: 'device-nan-test',
+          nonce,
+          responses: regions.map((r) => ({
+            region_index: r.index,
+            hmac: 'wrong-hmac-but-valid-format',
+          })),
+        });
+
+        const validFormatRes = await attestationDONan.fetch(validFormatReq);
+        expect(validFormatRes.status).toBe(200);
+
+        const thirdAttemptReq = createRequest('POST', '/attest/verify', {
+          device_id: 'device-nan-test',
+          nonce,
+          responses: regions.map((r) => ({
+            region_index: r.index,
+            hmac: 'any-value',
+          })),
+        });
+
+        const thirdAttemptRes = await attestationDONan.fetch(thirdAttemptReq);
+        const thirdAttemptData = await thirdAttemptRes.json();
+        expect(thirdAttemptRes.status).toBe(403);
+        expect(thirdAttemptData.error).toContain('Invalid or expired nonce');
+      });
+    });
+
+    describe('selectRandomRegions defensive guard', () => {
+      it('should throw when count is NaN', () => {
+        const regions = [
+          { offset: 0, length: 100, data_hex: 'deadbeef' },
+          { offset: 200, length: 50, data_hex: 'cafebabe' },
+        ];
+
+        expect(() => attestationDONan.selectRandomRegions(regions, NaN)).toThrow(
+          'selectRandomRegions: count must be a non-negative integer'
+        );
+      });
+
+      it('should throw when count is undefined', () => {
+        const regions = [
+          { offset: 0, length: 100, data_hex: 'deadbeef' },
+        ];
+
+        expect(() => attestationDONan.selectRandomRegions(regions, undefined)).toThrow(
+          'selectRandomRegions: count must be a non-negative integer'
+        );
+      });
+
+      it('should throw when count is a negative number', () => {
+        const regions = [
+          { offset: 0, length: 100, data_hex: 'deadbeef' },
+        ];
+
+        expect(() => attestationDONan.selectRandomRegions(regions, -1)).toThrow(
+          'selectRandomRegions: count must be a non-negative integer'
+        );
+      });
+
+      it('should work correctly with valid count', () => {
+        const regions = [
+          { offset: 0, length: 100, data_hex: 'deadbeef' },
+          { offset: 200, length: 50, data_hex: 'cafebabe' },
+          { offset: 500, length: 75, data_hex: 'baadf00d' },
+        ];
+
+        const selected = attestationDONan.selectRandomRegions(regions, 2);
+        expect(selected).toHaveLength(2);
+      });
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Logging Security - No console.error in handleVerify (Story 003)
+  // -----------------------------------------------------------------------
+
+  describe('Logging Security - No console.error in handleVerify', () => {
+    let consoleErrorSpy;
+
+    beforeEach(() => {
+      consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      consoleErrorSpy.mockRestore();
+    });
+
+    it('should not call console.error for verification failures (wrong HMAC)', async () => {
+      const challenge = await (async () => {
+        // Register device
+        const buildToken = await createBuildToken(seedHex, {
+          version: '1.0.0',
+          platform: 'android',
+          build_hash: 'abc123',
+          timestamp: Date.now(),
+        });
+
+        await attestationDO.fetch(
+          createRequest('POST', '/attest/register', {
+            build_token: buildToken,
+            device_id: 'device-001',
+          })
+        );
+
+        // Upload reference
+        await attestationDO.fetch(
+          createRequest(
+            'POST',
+            '/attest/upload-reference',
+            {
+              version: '1.0.0',
+              platform: 'android',
+              build_hash: 'abc123',
+              size: 1000000,
+              critical_regions: createTestCriticalRegions(),
+            },
+            { Authorization: `Bearer ${CI_SECRET}` }
+          )
+        );
+
+        // Get challenge
+        const challengeResponse = await attestationDO.fetch(
+          createRequest('POST', '/attest/challenge', {
+            device_id: 'device-001',
+            build_version: '1.0.0',
+          })
+        );
+
+        return challengeResponse.json();
+      })();
+
+      // Submit wrong HMAC responses
+      const wrongResponses = challenge.regions.map((r) => ({
+        region_index: r.index,
+        hmac: 'ff'.repeat(32),
+      }));
+
+      await attestationDO.fetch(
+        createRequest('POST', '/attest/verify', {
+          device_id: 'device-001',
+          nonce: challenge.nonce,
+          responses: wrongResponses,
+        })
+      );
+
+      // console.error should NOT have been called with [verify] prefix
+      const errorCalls = consoleErrorSpy.mock.calls;
+      const verifyErrorCalls = errorCalls.filter(([msg]) =>
+        typeof msg === 'string' && msg.includes('[verify]')
+      );
+
+      expect(verifyErrorCalls).toHaveLength(0);
+    });
+
+    it('should not call console.error for invalid nonce', async () => {
+      await attestationDO.fetch(
+        createRequest('POST', '/attest/verify', {
+          device_id: 'any-device',
+          nonce: 'invalid-nonce',
+          responses: [],
+        })
+      );
+
+      const errorCalls = consoleErrorSpy.mock.calls;
+      const verifyErrorCalls = errorCalls.filter(([msg]) =>
+        typeof msg === 'string' && msg.includes('[verify]')
+      );
+
+      expect(verifyErrorCalls).toHaveLength(0);
+    });
+
+    it('should not call console.error for device ID mismatch', async () => {
+      // Set up a valid challenge with one device, then verify with another
+      await mockState.storage.put('nonce:mismatch-nonce', {
+        device_id: 'real-device',
+        created_at: Date.now(),
+        regions: [],
+        build_version: '1.0.0',
+        platform: 'android',
+      });
+
+      await attestationDO.fetch(
+        createRequest('POST', '/attest/verify', {
+          device_id: 'wrong-device',
+          nonce: 'mismatch-nonce',
+          responses: [],
+        })
+      );
+
+      const errorCalls = consoleErrorSpy.mock.calls;
+      const verifyErrorCalls = errorCalls.filter(([msg]) =>
+        typeof msg === 'string' && msg.includes('[verify]')
+      );
+
+      expect(verifyErrorCalls).toHaveLength(0);
+    });
+
+    it('should not call console.error for expired challenge', async () => {
+      await mockState.storage.put('nonce:expired-nonce', {
+        device_id: 'device-expired',
+        created_at: Date.now() - 6 * 60 * 1000, // 6 minutes ago
+        regions: [],
+        build_version: '1.0.0',
+        platform: 'android',
+      });
+
+      await attestationDO.fetch(
+        createRequest('POST', '/attest/verify', {
+          device_id: 'device-expired',
+          nonce: 'expired-nonce',
+          responses: [],
+        })
+      );
+
+      const errorCalls = consoleErrorSpy.mock.calls;
+      const verifyErrorCalls = errorCalls.filter(([msg]) =>
+        typeof msg === 'string' && msg.includes('[verify]')
+      );
+
+      expect(verifyErrorCalls).toHaveLength(0);
+    });
+
+    it('should not leak sensitive data (device_id, nonce) in any console output', async () => {
+      const sensitiveDeviceId = 'ultra-secret-device-42';
+      const sensitiveNonce = 'secret-nonce-xyz-789';
+
+      await attestationDO.fetch(
+        createRequest('POST', '/attest/verify', {
+          device_id: sensitiveDeviceId,
+          nonce: sensitiveNonce,
+          responses: [],
+        })
+      );
+
+      // Check all console.error calls for leaked sensitive data
+      for (const call of consoleErrorSpy.mock.calls) {
+        const callStr = JSON.stringify(call);
+        expect(callStr).not.toContain(sensitiveDeviceId);
+        expect(callStr).not.toContain(sensitiveNonce);
+      }
     });
   });
 });

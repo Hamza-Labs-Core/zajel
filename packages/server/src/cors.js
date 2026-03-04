@@ -24,13 +24,16 @@ export function getCorsHeaders(request, env) {
   const allowedOrigins = parseAllowedOrigins(env);
 
   const headers = {
-    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Access-Control-Expose-Headers': 'X-Bootstrap-Signature, X-Attestation-Token',
+    'Access-Control-Expose-Headers': 'X-Bootstrap-Signature, X-Attestation-Token, X-TUF-Timestamp-Version',
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
     'Cache-Control': 'no-store',
     'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+    'Referrer-Policy': 'no-referrer',
+    'Content-Security-Policy': "default-src 'none'",
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
   };
 
   if (origin && isOriginAllowed(origin, allowedOrigins)) {

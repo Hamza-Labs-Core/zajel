@@ -17,6 +17,7 @@
 - [Security Architecture](Security-Architecture)
 - [Privacy Model](Privacy-Model)
 - [App Attestation](App-Attestation)
+- [Security Hardening: DDoS Risk Analysis](Security-Hardening-DDoS)
 
 **Testing & CI**
 - [Testing Overview](Testing-Overview)

@@ -34,7 +34,9 @@ The server is configured via environment variables. Create a `.env` file in the 
 
 ```bash
 # --- Network ---
-# Host to bind to (0.0.0.0 for all interfaces)
+# Host to bind to.
+# Use 0.0.0.0 when NOT behind a reverse proxy (binds to all interfaces).
+# Use 127.0.0.1 when behind a reverse proxy like nginx (localhost only).
 ZAJEL_HOST=0.0.0.0
 
 # Port to listen on

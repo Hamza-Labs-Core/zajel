@@ -1152,4 +1152,210 @@ describe('DHT Redirect in Pairing Registration', () => {
     expect(error.type).toBe('pair_error');
     expect(error.error).toBe('Pair request could not be processed');
   });
+
+  // ==========================================================================
+  // Signing Key Exchange Tests
+  // ==========================================================================
+
+  describe('Signing Key Exchange', () => {
+    it('should store signingPublicKey during registration and include in pair_matched', async () => {
+      // Register Alice with signing key
+      const aliceWs = new MockWebSocket();
+      handler.handleConnection(aliceWs as any);
+      aliceWs.clearMessages();
+
+      await handler.handleMessage(aliceWs as any, JSON.stringify({
+        type: 'register',
+        pairingCode: VALID_CODE_REQ,
+        publicKey: VALID_PUBKEY_1,
+        signingPublicKey: 'alice_ed25519_signing_key_base64',
+      }));
+      aliceWs.clearMessages();
+
+      // Register Bob with signing key
+      const bobWs = new MockWebSocket();
+      handler.handleConnection(bobWs as any);
+      bobWs.clearMessages();
+
+      await handler.handleMessage(bobWs as any, JSON.stringify({
+        type: 'register',
+        pairingCode: VALID_CODE_TGT,
+        publicKey: VALID_PUBKEY_2,
+        signingPublicKey: 'bob_ed25519_signing_key_base64',
+      }));
+      bobWs.clearMessages();
+
+      // Alice requests pairing with Bob
+      await handler.handleMessage(aliceWs as any, JSON.stringify({
+        type: 'pair_request',
+        targetCode: VALID_CODE_TGT,
+      }));
+
+      // Bob accepts
+      await handler.handleMessage(bobWs as any, JSON.stringify({
+        type: 'pair_response',
+        targetCode: VALID_CODE_REQ,
+        accepted: true,
+      }));
+
+      // Verify Alice received Bob's signing key in pair_matched
+      const aliceMatched = aliceWs.sentMessages.find((m: any) => m.type === 'pair_matched');
+      expect(aliceMatched).toBeDefined();
+      expect(aliceMatched.peerSigningPublicKey).toBe('bob_ed25519_signing_key_base64');
+      expect(aliceMatched.isInitiator).toBe(true);
+
+      // Verify Bob received Alice's signing key in pair_matched
+      const bobMatched = bobWs.sentMessages.find((m: any) => m.type === 'pair_matched');
+      expect(bobMatched).toBeDefined();
+      expect(bobMatched.peerSigningPublicKey).toBe('alice_ed25519_signing_key_base64');
+      expect(bobMatched.isInitiator).toBe(false);
+    });
+
+    it('should include fromSigningPublicKey in pair_incoming', async () => {
+      // Register Alice with signing key
+      const aliceWs = new MockWebSocket();
+      handler.handleConnection(aliceWs as any);
+      aliceWs.clearMessages();
+
+      await handler.handleMessage(aliceWs as any, JSON.stringify({
+        type: 'register',
+        pairingCode: VALID_CODE_REQ,
+        publicKey: VALID_PUBKEY_1,
+        signingPublicKey: 'alice_ed25519_key',
+      }));
+      aliceWs.clearMessages();
+
+      // Register Bob without signing key (old client)
+      const bobWs = new MockWebSocket();
+      handler.handleConnection(bobWs as any);
+      bobWs.clearMessages();
+
+      await handler.handleMessage(bobWs as any, JSON.stringify({
+        type: 'register',
+        pairingCode: VALID_CODE_TGT,
+        publicKey: VALID_PUBKEY_2,
+      }));
+      bobWs.clearMessages();
+
+      // Alice requests pairing with Bob
+      await handler.handleMessage(aliceWs as any, JSON.stringify({
+        type: 'pair_request',
+        targetCode: VALID_CODE_TGT,
+      }));
+
+      // Bob should receive pair_incoming with Alice's signing key
+      const pairIncoming = bobWs.getLastMessage();
+      expect(pairIncoming.type).toBe('pair_incoming');
+      expect(pairIncoming.fromSigningPublicKey).toBe('alice_ed25519_key');
+    });
+
+    it('should omit peerSigningPublicKey when peer did not provide one (backward compat)', async () => {
+      // Register Alice without signing key (old client)
+      const aliceWs = new MockWebSocket();
+      handler.handleConnection(aliceWs as any);
+      aliceWs.clearMessages();
+
+      await handler.handleMessage(aliceWs as any, JSON.stringify({
+        type: 'register',
+        pairingCode: VALID_CODE_REQ,
+        publicKey: VALID_PUBKEY_1,
+        // No signingPublicKey
+      }));
+      aliceWs.clearMessages();
+
+      // Register Bob with signing key
+      const bobWs = new MockWebSocket();
+      handler.handleConnection(bobWs as any);
+      bobWs.clearMessages();
+
+      await handler.handleMessage(bobWs as any, JSON.stringify({
+        type: 'register',
+        pairingCode: VALID_CODE_TGT,
+        publicKey: VALID_PUBKEY_2,
+        signingPublicKey: 'bob_ed25519_key',
+      }));
+      bobWs.clearMessages();
+
+      // Alice requests pairing with Bob
+      await handler.handleMessage(aliceWs as any, JSON.stringify({
+        type: 'pair_request',
+        targetCode: VALID_CODE_TGT,
+      }));
+
+      // Bob accepts
+      await handler.handleMessage(bobWs as any, JSON.stringify({
+        type: 'pair_response',
+        targetCode: VALID_CODE_REQ,
+        accepted: true,
+      }));
+
+      // Verify Bob received pair_matched WITHOUT Alice's signing key
+      const bobMatched = bobWs.sentMessages.find((m: any) => m.type === 'pair_matched');
+      expect(bobMatched).toBeDefined();
+      expect(bobMatched.peerSigningPublicKey).toBeUndefined();
+
+      // Verify Alice received pair_matched WITH Bob's signing key
+      const aliceMatched = aliceWs.sentMessages.find((m: any) => m.type === 'pair_matched');
+      expect(aliceMatched).toBeDefined();
+      expect(aliceMatched.peerSigningPublicKey).toBe('bob_ed25519_key');
+    });
+
+    it('should clean up signing key on disconnect', async () => {
+      // Register Alice with signing key
+      const aliceWs = new MockWebSocket();
+      handler.handleConnection(aliceWs as any);
+      aliceWs.clearMessages();
+
+      await handler.handleMessage(aliceWs as any, JSON.stringify({
+        type: 'register',
+        pairingCode: VALID_CODE_REQ,
+        publicKey: VALID_PUBKEY_1,
+        signingPublicKey: 'alice_signing_key',
+      }));
+
+      // Disconnect Alice
+      handler.handleDisconnect(aliceWs as any);
+
+      // Re-register Alice without signing key
+      const aliceWs2 = new MockWebSocket();
+      handler.handleConnection(aliceWs2 as any);
+      aliceWs2.clearMessages();
+
+      await handler.handleMessage(aliceWs2 as any, JSON.stringify({
+        type: 'register',
+        pairingCode: VALID_CODE_REQ,
+        publicKey: VALID_PUBKEY_1,
+        // No signingPublicKey this time
+      }));
+      aliceWs2.clearMessages();
+
+      // Register Bob
+      const bobWs = new MockWebSocket();
+      handler.handleConnection(bobWs as any);
+      bobWs.clearMessages();
+
+      await handler.handleMessage(bobWs as any, JSON.stringify({
+        type: 'register',
+        pairingCode: VALID_CODE_TGT,
+        publicKey: VALID_PUBKEY_2,
+      }));
+      bobWs.clearMessages();
+
+      // Pair Alice and Bob
+      await handler.handleMessage(aliceWs2 as any, JSON.stringify({
+        type: 'pair_request',
+        targetCode: VALID_CODE_TGT,
+      }));
+      await handler.handleMessage(bobWs as any, JSON.stringify({
+        type: 'pair_response',
+        targetCode: VALID_CODE_REQ,
+        accepted: true,
+      }));
+
+      // Bob should NOT receive Alice's old signing key
+      const bobMatched = bobWs.sentMessages.find((m: any) => m.type === 'pair_matched');
+      expect(bobMatched).toBeDefined();
+      expect(bobMatched.peerSigningPublicKey).toBeUndefined();
+    });
+  });
 });

@@ -7,6 +7,7 @@
 
 import type { ServerConfig, ServerIdentity } from '../types.js';
 import { base64Encode } from '../identity/server-identity.js';
+import type { BuildManifest } from '../identity/build-manifest.js';
 
 export interface BootstrapServerEntry {
   serverId: string;
@@ -35,17 +36,21 @@ export interface BootstrapMetrics {
 export function createBootstrapClient(
   config: ServerConfig,
   identity: ServerIdentity,
-  getMetrics?: () => BootstrapMetrics
+  getMetrics?: () => BootstrapMetrics,
+  buildManifest?: BuildManifest | null,
 ): BootstrapClient {
   let heartbeatTimer: NodeJS.Timeout | null = null;
+  let heartbeatSeq = 0;
   const baseUrl = config.bootstrap.serverUrl;
 
   async function register(): Promise<void> {
     const url = `${baseUrl}/servers`;
 
     const metrics = getMetrics?.();
-    const body = {
+    const body: Record<string, unknown> = {
       serverId: identity.serverId,
+      timestamp: Date.now(),
+      nonce: crypto.randomUUID(),
       endpoint: config.network.publicEndpoint,
       publicKey: base64Encode(identity.publicKey),
       region: config.network.region || 'unknown',
@@ -55,12 +60,25 @@ export function createBootstrapClient(
       activeCodes: metrics?.activeCodes ?? 0,
     };
 
+    // Include build signing data if a signed manifest is available
+    if (buildManifest) {
+      body['buildHash'] = buildManifest.buildHash;
+      body['buildSignature'] = buildManifest.signature;
+      body['buildSigningKey'] = buildManifest.publicKey;
+      body['buildVersion'] = buildManifest.version;
+    }
+
     console.log(`[Bootstrap] Registering with ${baseUrl}...`);
 
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (config.bootstrap.registrySecret) {
+        headers['Authorization'] = `Bearer ${config.bootstrap.registrySecret}`;
+      }
+
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(body),
       });
 
@@ -83,7 +101,15 @@ export function createBootstrapClient(
     console.log(`[Bootstrap] Unregistering from ${baseUrl}...`);
 
     try {
-      const response = await fetch(url, { method: 'DELETE' });
+      const deleteHeaders: Record<string, string> = {};
+      if (config.bootstrap.registrySecret) {
+        deleteHeaders['Authorization'] = `Bearer ${config.bootstrap.registrySecret}`;
+      }
+
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: Object.keys(deleteHeaders).length > 0 ? deleteHeaders : undefined,
+      });
 
       if (!response.ok && response.status !== 404) {
         console.warn(`[Bootstrap] Unregister returned ${response.status}`);
@@ -117,17 +143,36 @@ export function createBootstrapClient(
     const url = `${baseUrl}/servers/heartbeat`;
 
     try {
+      heartbeatSeq++;
+
       const metrics = getMetrics?.();
+      const heartbeatBody: Record<string, unknown> = {
+        serverId: identity.serverId,
+        timestamp: Date.now(),
+        nonce: crypto.randomUUID(),
+        sequenceNumber: heartbeatSeq,
+        connections: metrics?.connections ?? 0,
+        relayConnections: metrics?.relayConnections ?? 0,
+        signalingConnections: metrics?.signalingConnections ?? 0,
+        activeCodes: metrics?.activeCodes ?? 0,
+      };
+
+      // Include build signing data on heartbeat for ongoing verification
+      if (buildManifest) {
+        heartbeatBody['buildHash'] = buildManifest.buildHash;
+        heartbeatBody['buildSignature'] = buildManifest.signature;
+        heartbeatBody['buildSigningKey'] = buildManifest.publicKey;
+      }
+
+      const hbHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (config.bootstrap.registrySecret) {
+        hbHeaders['Authorization'] = `Bearer ${config.bootstrap.registrySecret}`;
+      }
+
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          serverId: identity.serverId,
-          connections: metrics?.connections ?? 0,
-          relayConnections: metrics?.relayConnections ?? 0,
-          signalingConnections: metrics?.signalingConnections ?? 0,
-          activeCodes: metrics?.activeCodes ?? 0,
-        }),
+        headers: hbHeaders,
+        body: JSON.stringify(heartbeatBody),
       });
 
       if (!response.ok) {

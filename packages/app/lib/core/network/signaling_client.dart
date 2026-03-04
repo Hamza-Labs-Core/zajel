@@ -5,6 +5,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../constants.dart';
+import '../crypto/crypto_service.dart';
 import '../logging/logger_service.dart';
 import 'pinned_websocket.dart';
 
@@ -121,13 +122,17 @@ class SignalingClient {
   bool _isConnected = false;
   Timer? _heartbeatTimer;
 
+  final CryptoService? _cryptoService;
+
   SignalingClient({
     required this.serverUrl,
     required String pairingCode,
     required String publicKey,
+    CryptoService? cryptoService,
     bool? usePinnedWebSocket,
   })  : _pairingCode = pairingCode,
         _publicKey = publicKey,
+        _cryptoService = cryptoService,
         // Use pinned WebSocket only on platforms with native implementations.
         // Disabled in test environments (FLUTTER_TEST or E2E_TEST) where
         // native TLS dependencies (OpenSSL) may not be available.
@@ -226,6 +231,14 @@ class SignalingClient {
         'type': 'register',
         'pairingCode': _pairingCode,
         'publicKey': _publicKey,
+        if (_cryptoService != null)
+          'signingPublicKey': _cryptoService.signingPublicKeyBase64,
+        'protocolVersion': CryptoConstants.protocolVersionCurrent,
+        'supportedKEMs': CryptoConstants.supportedKEMs,
+        if (_cryptoService != null &&
+            _cryptoService.isMlKemAvailable &&
+            _cryptoService.mlKemPublicKeyBase64 != null)
+          'pqPublicKey': _cryptoService.mlKemPublicKeyBase64,
       });
 
       // Start heartbeat
@@ -352,6 +365,19 @@ class SignalingClient {
   }
 
   /// Send an offer to a peer via the signaling server.
+  /// Send a hybrid_key_exchange message containing ML-KEM ciphertext.
+  ///
+  /// Called by the initiator after pair_match when both peers support hybrid mode.
+  /// The ciphertext is sent to the responder who decapsulates it to derive
+  /// the same ML-KEM shared secret.
+  void sendHybridKeyExchange(String targetPeerId, String pqCiphertextBase64) {
+    _send({
+      'type': 'hybrid_key_exchange',
+      'targetPeerId': targetPeerId,
+      'pqCiphertext': pqCiphertextBase64,
+    });
+  }
+
   void sendOffer(String targetPairingCode, Map<String, dynamic> offer) {
     _send({
       'type': 'offer',
@@ -421,14 +447,24 @@ class SignalingClient {
   /// [targetId] - The pairing code of the peer to call
   /// [sdp] - The SDP offer string
   /// [withVideo] - Whether this is a video call
-  void sendCallOffer(
-      String callId, String targetId, String sdp, bool withVideo) {
-    _send(CallOfferMessage(
+  Future<void> sendCallOffer(
+      String callId, String targetId, String sdp, bool withVideo) async {
+    final message = CallOfferMessage(
       callId: callId,
       targetId: targetId,
       sdp: sdp,
       withVideo: withVideo,
-    ).toJson());
+    ).toJson();
+
+    // Add SDP signature fields to the payload
+    if (_cryptoService != null) {
+      final signature = await _cryptoService.signSDP(sdp);
+      (message['payload'] as Map<String, dynamic>)['sdpSignature'] = signature;
+      (message['payload'] as Map<String, dynamic>)['signingPublicKey'] =
+          _cryptoService.signingPublicKeyBase64;
+    }
+
+    _send(message);
   }
 
   /// Send a call answer to accept an incoming call.
@@ -436,12 +472,23 @@ class SignalingClient {
   /// [callId] - The call ID from the offer
   /// [targetId] - The pairing code of the caller
   /// [sdp] - The SDP answer string
-  void sendCallAnswer(String callId, String targetId, String sdp) {
-    _send(CallAnswerMessage(
+  Future<void> sendCallAnswer(
+      String callId, String targetId, String sdp) async {
+    final message = CallAnswerMessage(
       callId: callId,
       targetId: targetId,
       sdp: sdp,
-    ).toJson());
+    ).toJson();
+
+    // Add SDP signature fields to the payload
+    if (_cryptoService != null) {
+      final signature = await _cryptoService.signSDP(sdp);
+      (message['payload'] as Map<String, dynamic>)['sdpSignature'] = signature;
+      (message['payload'] as Map<String, dynamic>)['signingPublicKey'] =
+          _cryptoService.signingPublicKeyBase64;
+    }
+
+    _send(message);
   }
 
   /// Send a call rejection to decline an incoming call.
@@ -590,6 +637,16 @@ class SignalingClient {
             peerCode: json['peerCode'] as String,
             peerPublicKey: json['peerPublicKey'] as String,
             isInitiator: json['isInitiator'] as bool,
+            peerSigningPublicKey: json['peerSigningPublicKey'] as String?,
+            peerPqPublicKey: json['peerPqPublicKey'] as String?,
+            peerProtocolVersion: json['peerProtocolVersion'] as int?,
+          ));
+          break;
+
+        case 'hybrid_key_exchange':
+          _messageController.add(SignalingMessage.hybridKeyExchange(
+            senderPeerId: json['senderPeerId'] as String,
+            pqCiphertext: json['pqCiphertext'] as String,
           ));
           break;
 
@@ -903,7 +960,15 @@ sealed class SignalingMessage {
     required String peerCode,
     required String peerPublicKey,
     required bool isInitiator,
+    String? peerSigningPublicKey,
+    String? peerPqPublicKey,
+    int? peerProtocolVersion,
   }) = SignalingPairMatched;
+
+  factory SignalingMessage.hybridKeyExchange({
+    required String senderPeerId,
+    required String pqCiphertext,
+  }) = SignalingHybridKeyExchange;
 
   factory SignalingMessage.pairRejected({required String peerCode}) =
       SignalingPairRejected;
@@ -996,11 +1061,31 @@ class SignalingPairMatched extends SignalingMessage {
   final String peerCode;
   final String peerPublicKey;
   final bool isInitiator;
+  final String? peerSigningPublicKey;
+  final String? peerPqPublicKey;
+  final int? peerProtocolVersion;
 
   const SignalingPairMatched({
     required this.peerCode,
     required this.peerPublicKey,
     required this.isInitiator,
+    this.peerSigningPublicKey,
+    this.peerPqPublicKey,
+    this.peerProtocolVersion,
+  });
+}
+
+/// ML-KEM ciphertext exchange message for hybrid key exchange.
+///
+/// Sent by the initiator after pair_match when both peers support hybrid mode.
+/// The responder uses this ciphertext to decapsulate the ML-KEM shared secret.
+class SignalingHybridKeyExchange extends SignalingMessage {
+  final String senderPeerId;
+  final String pqCiphertext;
+
+  const SignalingHybridKeyExchange({
+    required this.senderPeerId,
+    required this.pqCiphertext,
   });
 }
 
@@ -1101,12 +1186,16 @@ class CallOfferMessage {
   final String targetId;
   final String sdp;
   final bool withVideo;
+  final String? sdpSignature;
+  final String? signingPublicKey;
 
   const CallOfferMessage({
     required this.callId,
     required this.targetId,
     required this.sdp,
     required this.withVideo,
+    this.sdpSignature,
+    this.signingPublicKey,
   });
 
   Map<String, dynamic> toJson() => {
@@ -1128,6 +1217,8 @@ class CallOfferMessage {
           payload['targetId'] as String,
       sdp: payload['sdp'] as String,
       withVideo: payload['withVideo'] as bool,
+      sdpSignature: payload['sdpSignature'] as String?,
+      signingPublicKey: payload['signingPublicKey'] as String?,
     );
   }
 }
@@ -1137,11 +1228,15 @@ class CallAnswerMessage {
   final String callId;
   final String targetId;
   final String sdp;
+  final String? sdpSignature;
+  final String? signingPublicKey;
 
   const CallAnswerMessage({
     required this.callId,
     required this.targetId,
     required this.sdp,
+    this.sdpSignature,
+    this.signingPublicKey,
   });
 
   Map<String, dynamic> toJson() => {
@@ -1161,6 +1256,8 @@ class CallAnswerMessage {
           json['target'] as String? ??
           payload['targetId'] as String,
       sdp: payload['sdp'] as String,
+      sdpSignature: payload['sdpSignature'] as String?,
+      signingPublicKey: payload['signingPublicKey'] as String?,
     );
   }
 }

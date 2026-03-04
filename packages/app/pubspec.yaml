@@ -22,6 +22,7 @@ dependencies:
   # Cryptography
   cryptography: ^2.7.0
   crypto: ^3.0.5
+  ffi: ^2.1.0
 
   # Local storage
   sqflite: ^2.4.1
@@ -67,6 +68,7 @@ flutter:
   assets:
     - assets/icons/
     - assets/images/
+    - lib/core/crypto/tuf/root_metadata.json
 
 flutter_launcher_icons:
   android: true

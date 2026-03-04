@@ -3,12 +3,14 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../constants.dart';
 import '../logging/logger_service.dart';
+import 'ml_kem_service.dart' if (dart.library.html) 'ml_kem_service_stub.dart';
 
 /// Cryptographic service implementing X25519 key exchange and ChaCha20-Poly1305 encryption.
 ///
@@ -30,16 +32,27 @@ class CryptoService {
   final SharedPreferences? _prefs;
   final X25519 _x25519 = X25519();
   final Chacha20 _chacha20 = Chacha20.poly1305Aead();
+  final Ed25519 _ed25519 = Ed25519();
   late final Hkdf _hkdf;
 
   SimpleKeyPair? _identityKeyPair;
+  SimpleKeyPair? _signingKeyPair;
   String? _publicKeyBase64Cache;
+  String? _signingPublicKeyBase64Cache;
   String? _stableId;
   bool _keysWereRegenerated = false;
   final Map<String, SecretKey> _sessionKeys = {};
   final Map<String, ({SecretKey newKey, SecretKey oldKey, Uint8List nonce})>
       _pendingRatchets = {};
   final Map<String, String> _peerPublicKeys = {};
+
+  // ML-KEM-768 post-quantum key exchange fields
+  MlKemService? _mlKem;
+  Uint8List? _mlKemPublicKey;
+  Uint8List? _mlKemSecretKey;
+  bool _mlKemAvailable = false;
+  final Map<String, Uint8List> _peerMlKemPublicKeys = {};
+  final Map<String, int> _peerProtocolVersions = {};
 
   CryptoService({FlutterSecureStorage? secureStorage, SharedPreferences? prefs})
       : _secureStorage = secureStorage ??
@@ -65,6 +78,14 @@ class CryptoService {
       _publicKeyBase64Cache = base64Encode(Uint8List.fromList(publicKey.bytes));
     }
     await _loadOrGenerateStableId();
+    await _loadOrGenerateMlKemKeys();
+    await _loadOrGenerateSigningKeys();
+    // Cache signing public key for synchronous access
+    if (_signingKeyPair != null) {
+      final signingPublicKey = await _signingKeyPair!.extractPublicKey();
+      _signingPublicKeyBase64Cache =
+          base64Encode(Uint8List.fromList(signingPublicKey.bytes));
+    }
   }
 
   /// Get our public key as a base64 string (synchronous, requires initialize() first).
@@ -95,6 +116,27 @@ class CryptoService {
   /// existing peer trust relationships are broken. The UI should
   /// warn the user that their identity changed.
   bool get keysWereRegenerated => _keysWereRegenerated;
+
+  /// Whether ML-KEM hybrid key exchange is available.
+  bool get isMlKemAvailable => _mlKemAvailable;
+
+  /// Get our ML-KEM-768 public key as base64, or null if unavailable.
+  String? get mlKemPublicKeyBase64 {
+    if (_mlKemPublicKey == null) return null;
+    return base64Encode(_mlKemPublicKey!);
+  }
+
+  /// Get the protocol version for a specific peer's session.
+  int? getPeerProtocolVersion(String peerId) {
+    return _peerProtocolVersions[peerId];
+  }
+
+  /// Store a peer's ML-KEM public key and protocol version.
+  void setPeerMlKemPublicKey(
+      String peerId, Uint8List pqPublicKey, int protocolVersion) {
+    _peerMlKemPublicKeys[peerId] = pqPublicKey;
+    _peerProtocolVersions[peerId] = protocolVersion;
+  }
 
   /// Derive a stable peer ID from a public key (like a phone number).
   ///
@@ -274,6 +316,71 @@ class CryptoService {
     final publicKey = await _identityKeyPair!.extractPublicKey();
     final bytes = Uint8List.fromList(publicKey.bytes);
     return base64Encode(bytes);
+  }
+
+  /// Get our Ed25519 signing public key as base64 (synchronous, requires initialize() first).
+  String get signingPublicKeyBase64 {
+    if (_signingPublicKeyBase64Cache == null) {
+      throw CryptoException(
+          'CryptoService not initialized. Call initialize() first.');
+    }
+    return _signingPublicKeyBase64Cache!;
+  }
+
+  /// Sign arbitrary data with our Ed25519 signing key.
+  ///
+  /// Returns the signature as a base64-encoded string.
+  Future<String> signData(Uint8List data) async {
+    if (_signingKeyPair == null) {
+      throw CryptoException('Signing keys not initialized');
+    }
+    final signature = await _ed25519.sign(data, keyPair: _signingKeyPair!);
+    return base64Encode(signature.bytes);
+  }
+
+  /// Verify a signature against data using a peer's Ed25519 signing public key.
+  ///
+  /// Returns true if the signature is valid, false otherwise.
+  Future<bool> verifyData({
+    required Uint8List data,
+    required String signatureBase64,
+    required String peerSigningPublicKeyBase64,
+  }) async {
+    try {
+      final signatureBytes = base64Decode(signatureBase64);
+      final peerPublicKeyBytes = base64Decode(peerSigningPublicKeyBase64);
+      final peerPublicKey =
+          SimplePublicKey(peerPublicKeyBytes, type: KeyPairType.ed25519);
+      final signature = Signature(signatureBytes, publicKey: peerPublicKey);
+      return await _ed25519.verify(data, signature: signature);
+    } catch (e) {
+      logger.warning('CryptoService',
+          'Signature verification threw an exception (returning false): $e');
+      return false;
+    }
+  }
+
+  /// Sign an SDP string with our Ed25519 signing key.
+  ///
+  /// Signs the raw SDP bytes (UTF-8 encoded). The SDP must NOT be reformatted
+  /// after signing, as even whitespace changes will invalidate the signature.
+  Future<String> signSDP(String sdp) async {
+    final sdpBytes = Uint8List.fromList(utf8.encode(sdp));
+    return await signData(sdpBytes);
+  }
+
+  /// Verify an SDP signature using a peer's Ed25519 signing public key.
+  Future<bool> verifySDP({
+    required String sdp,
+    required String signature,
+    required String peerSigningPublicKey,
+  }) async {
+    final sdpBytes = Uint8List.fromList(utf8.encode(sdp));
+    return await verifyData(
+      data: sdpBytes,
+      signatureBase64: signature,
+      peerSigningPublicKeyBase64: peerSigningPublicKey,
+    );
   }
 
   /// Get our public key as raw bytes.
@@ -485,6 +592,92 @@ class CryptoService {
     );
   }
 
+  /// Establish a hybrid X25519 + ML-KEM-768 session with a peer.
+  ///
+  /// Combines a classical X25519 ECDH shared secret with an ML-KEM-768
+  /// shared secret for quantum-resistant key exchange:
+  ///
+  /// session_key = HKDF-SHA256(x25519_secret || mlkem_secret, "zajel_hybrid_session")
+  ///
+  /// The [role] determines the ML-KEM operation:
+  /// - "initiator": encapsulates to peer's ML-KEM public key, returns ciphertext
+  /// - "responder": decapsulates using our ML-KEM secret key
+  ///
+  /// Returns a record with the session ID and optional ML-KEM ciphertext
+  /// (non-null for initiator, null for responder).
+  Future<({String sessionId, Uint8List? mlKemCiphertext})>
+      establishHybridSession({
+    required String peerId,
+    required String peerX25519PublicKeyBase64,
+    required String peerMlKemPublicKeyBase64,
+    required String role,
+    String? mlKemCiphertextBase64,
+  }) async {
+    if (!_mlKemAvailable || _mlKem == null) {
+      throw CryptoException('ML-KEM not available for hybrid key exchange');
+    }
+
+    if (role != 'initiator' && role != 'responder') {
+      throw CryptoException('Invalid role: $role');
+    }
+
+    // 1. X25519 ECDH
+    final x25519SharedSecretBase64 =
+        await performKeyExchange(peerX25519PublicKeyBase64);
+    final x25519SharedSecret = base64Decode(x25519SharedSecretBase64);
+
+    // 2. ML-KEM encapsulation or decapsulation
+    final peerMlKemPublicKey = base64Decode(peerMlKemPublicKeyBase64);
+    Uint8List mlKemSharedSecret;
+    Uint8List? mlKemCiphertext;
+
+    if (role == 'initiator') {
+      final result = _mlKem!.encapsulate(peerMlKemPublicKey);
+      mlKemCiphertext = result.ciphertext;
+      mlKemSharedSecret = result.sharedSecret;
+    } else {
+      if (mlKemCiphertextBase64 == null) {
+        throw CryptoException(
+            'mlKemCiphertextBase64 required for responder role');
+      }
+      final ciphertext = base64Decode(mlKemCiphertextBase64);
+      mlKemSharedSecret = _mlKem!.decapsulate(ciphertext, _mlKemSecretKey!);
+    }
+
+    // 3. Combine secrets: X25519 || ML-KEM
+    final combinedSecret = Uint8List(
+      x25519SharedSecret.length + mlKemSharedSecret.length,
+    );
+    combinedSecret.setAll(0, x25519SharedSecret);
+    combinedSecret.setAll(x25519SharedSecret.length, mlKemSharedSecret);
+
+    // 4. Derive session key via HKDF with hybrid info string
+    final sessionKey = await _hkdf.deriveKey(
+      secretKey: SecretKey(combinedSecret),
+      info: utf8.encode('zajel_hybrid_session'),
+      nonce: const [],
+    );
+
+    // Diagnostic logging
+    final sessionKeyBytes = await sessionKey.extractBytes();
+    final sessionKeyHash = crypto.sha256.convert(sessionKeyBytes).toString();
+    final x25519Hash = crypto.sha256.convert(x25519SharedSecret).toString();
+    final mlKemHash = crypto.sha256.convert(mlKemSharedSecret).toString();
+    logger.info(
+        'CryptoService',
+        'establishHybridSession($peerId, role=$role): '
+            'x25519Hash=${x25519Hash.substring(0, 16)} '
+            'mlKemHash=${mlKemHash.substring(0, 16)} '
+            'sessionHash=${sessionKeyHash.substring(0, 16)}');
+
+    // Store session key
+    _sessionKeys[peerId] = sessionKey;
+    _peerProtocolVersions[peerId] = CryptoConstants.protocolVersionHybrid;
+    await _storeSessionKey(peerId, sessionKey);
+
+    return (sessionId: peerId, mlKemCiphertext: mlKemCiphertext);
+  }
+
   /// Establish a session using both identity and ephemeral key exchange.
   ///
   /// Performs two X25519 ECDH computations:
@@ -673,6 +866,13 @@ class CryptoService {
     // Update the cache with the new public key
     final publicKey = await _identityKeyPair!.extractPublicKey();
     _publicKeyBase64Cache = base64Encode(Uint8List.fromList(publicKey.bytes));
+
+    // Also regenerate signing keys
+    _signingKeyPair = await _ed25519.newKeyPair();
+    await _persistSigningKeys();
+    final signingPublicKey = await _signingKeyPair!.extractPublicKey();
+    _signingPublicKeyBase64Cache =
+        base64Encode(Uint8List.fromList(signingPublicKey.bytes));
   }
 
   // Private methods
@@ -708,6 +908,75 @@ class CryptoService {
       // gnome-keyring). Keys stay in memory only for this session.
       logger.warning('CryptoService',
           'Failed to persist identity keys to secure storage: $e');
+    }
+  }
+
+  /// Load or generate ML-KEM-768 identity keys for hybrid key exchange.
+  ///
+  /// On native platforms, attempts to load persisted ML-KEM keys from secure
+  /// storage. If no keys are found, generates a new key pair.
+  /// On Flutter Web, ML-KEM is not available (dart:ffi unsupported).
+  Future<void> _loadOrGenerateMlKemKeys() async {
+    if (kIsWeb) {
+      _mlKemAvailable = false;
+      return;
+    }
+
+    try {
+      _mlKem = MlKemService();
+    } catch (e) {
+      logger.warning('CryptoService',
+          'ML-KEM service not available (liboqs not found?): $e');
+      _mlKemAvailable = false;
+      return;
+    }
+
+    // Try to load persisted keys
+    try {
+      final pubB64 = await _secureStorage
+          .read(key: '${_keyPrefix}mlkem_public')
+          .timeout(const Duration(seconds: 5));
+      final secB64 = await _secureStorage
+          .read(key: '${_keyPrefix}mlkem_secret')
+          .timeout(const Duration(seconds: 5));
+
+      if (pubB64 != null && secB64 != null) {
+        _mlKemPublicKey = Uint8List.fromList(base64Decode(pubB64));
+        _mlKemSecretKey = Uint8List.fromList(base64Decode(secB64));
+        _mlKemAvailable = true;
+        logger.info('CryptoService', 'Loaded persisted ML-KEM keys');
+        return;
+      }
+    } catch (e) {
+      logger.warning(
+          'CryptoService', 'Failed to load ML-KEM keys from storage: $e');
+    }
+
+    // Generate new key pair
+    try {
+      final keyPair = _mlKem!.generateKeyPair();
+      _mlKemPublicKey = keyPair.publicKey;
+      _mlKemSecretKey = keyPair.secretKey;
+      _mlKemAvailable = true;
+
+      // Persist keys
+      try {
+        await _secureStorage.write(
+          key: '${_keyPrefix}mlkem_public',
+          value: base64Encode(_mlKemPublicKey!),
+        );
+        await _secureStorage.write(
+          key: '${_keyPrefix}mlkem_secret',
+          value: base64Encode(_mlKemSecretKey!),
+        );
+      } catch (e) {
+        logger.warning('CryptoService', 'Failed to persist ML-KEM keys: $e');
+      }
+
+      logger.info('CryptoService', 'Generated new ML-KEM-768 key pair');
+    } catch (e) {
+      logger.warning('CryptoService', 'Failed to generate ML-KEM keys: $e');
+      _mlKemAvailable = false;
     }
   }
 
@@ -755,6 +1024,49 @@ class CryptoService {
         List<int>.generate((length / 2).ceil(), (_) => random.nextInt(256));
     final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
     return hex.substring(0, length).toUpperCase();
+  }
+
+  /// Load or generate Ed25519 signing keys.
+  ///
+  /// These keys are separate from the X25519 identity keys and are used
+  /// exclusively for signing SDP offers/answers and ICE candidates to
+  /// prevent MITM attacks during WebRTC signaling.
+  Future<void> _loadOrGenerateSigningKeys() async {
+    try {
+      final signingKeyBase64 = await _secureStorage
+          .read(key: '${_keyPrefix}signing_private')
+          .timeout(const Duration(seconds: 10));
+      if (signingKeyBase64 != null) {
+        final signingKeyBytes = base64Decode(signingKeyBase64);
+        _signingKeyPair = await _ed25519.newKeyPairFromSeed(signingKeyBytes);
+        return;
+      }
+    } catch (e) {
+      logger.warning('CryptoService',
+          'Failed to load signing keys from storage, generating new keys: $e');
+    }
+
+    // Generate new signing keys
+    _signingKeyPair = await _ed25519.newKeyPair();
+    try {
+      await _persistSigningKeys();
+    } catch (e) {
+      logger.warning('CryptoService',
+          'Failed to persist signing keys to secure storage: $e');
+    }
+  }
+
+  /// Persist Ed25519 signing keys to secure storage.
+  Future<void> _persistSigningKeys() async {
+    if (_signingKeyPair == null) return;
+
+    final privateKeyBytes = await _signingKeyPair!.extractPrivateKeyBytes();
+    await _secureStorage
+        .write(
+          key: '${_keyPrefix}signing_private',
+          value: base64Encode(privateKeyBytes),
+        )
+        .timeout(const Duration(seconds: 10));
   }
 
   Future<void> _persistIdentityKeys() async {

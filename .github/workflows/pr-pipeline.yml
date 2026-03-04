@@ -1492,6 +1492,7 @@ jobs:
             # Create QA startup script with env vars
             cat > start-qa.sh << EOF
             #!/bin/bash
+            export ZAJEL_HOST=0.0.0.0
             export ZAJEL_PORT=8443
             export ZAJEL_KEY_PATH=./data-qa/server.key
             export ZAJEL_DB_PATH=./data-qa/zajel.db

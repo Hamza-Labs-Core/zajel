@@ -145,6 +145,7 @@ jobs:
 
             cat > start-$ENV.sh << EOF
             #!/bin/bash
+            export ZAJEL_HOST=0.0.0.0
             export ZAJEL_PORT=$PORT
             export ZAJEL_KEY_PATH=./data-$ENV/server.key
             export ZAJEL_DB_PATH=./data-$ENV/zajel.db

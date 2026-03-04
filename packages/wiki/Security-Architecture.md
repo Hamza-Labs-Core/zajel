@@ -259,6 +259,10 @@ On the web platform, certificate pinning is not possible due to browser API limi
 
 ---
 
+## Security Hardening (94-Issue Audit + DDoS Risk Analysis)
+
+For the 24 security plans from the DDoS risk analysis audit (stories, implementation plans, and peer reviews), see [Security Hardening: DDoS Risk Analysis](Security-Hardening-DDoS).
+
 ## Security Hardening (94-Issue Audit)
 
 The following sections document the comprehensive security hardening applied across three waves, covering all four packages: headless client, CF Worker server, VPS server, and website. A total of 94 issues were identified and resolved across CRITICAL, HIGH, MEDIUM, and LOW severity tiers.
