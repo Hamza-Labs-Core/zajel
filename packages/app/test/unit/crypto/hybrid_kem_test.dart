@@ -549,10 +549,10 @@ void main() {
       );
     });
 
-    test('current protocol version is classical (PQ not yet enabled)', () {
+    test('current protocol version is hybrid', () {
       expect(
         CryptoConstants.protocolVersionCurrent,
-        CryptoConstants.protocolVersionClassical,
+        CryptoConstants.protocolVersionHybrid,
       );
     });
 
