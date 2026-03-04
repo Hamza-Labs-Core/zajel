@@ -1,0 +1,62 @@
+name: Auto Release
+
+# Creates a production release tag when a PR is merged to main
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+
+jobs:
+  create-release-tag:
+    name: Create Release Tag
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine release version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Get latest production release tag
+          LATEST=$(gh release view --repo ${{ github.repository }} --json tagName -q '.tagName' 2>/dev/null || echo "v0.0.0")
+          echo "Latest release: $LATEST"
+
+          # Strip 'v' prefix
+          LATEST_VERSION="${LATEST#v}"
+
+          # Parse version components
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_VERSION"
+          MAJOR=${MAJOR:-0}
+          MINOR=${MINOR:-0}
+          PATCH=${PATCH:-0}
+
+          # Increment patch
+          NEXT_PATCH=$((PATCH + 1))
+          VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}"
+          TAG="v${VERSION}"
+
+          echo "Release version: $TAG"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Create and push production tag
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          # Delete existing tag if present (failed previous attempt)
+          git push origin :refs/tags/$TAG 2>/dev/null || true
+          git tag -d $TAG 2>/dev/null || true
+
+          # Create production tag on merge commit
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a $TAG -m "Release $TAG — PR #${{ github.event.pull_request.number }}"
+          git push origin $TAG
+
+          echo "✅ Pushed $TAG — release.yml will now trigger"
