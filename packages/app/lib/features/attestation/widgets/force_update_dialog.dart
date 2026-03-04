@@ -311,6 +311,7 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
+        duration: const Duration(seconds: 3),
         content: Text(
           'Could not open store. Please update manually from '
           '${widget.storeName ?? "the store"}.',
@@ -325,7 +326,9 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
     if (uri == null) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Invalid update URL.')),
+        const SnackBar(
+            duration: Duration(seconds: 3),
+            content: Text('Invalid update URL.')),
       );
       return;
     }
@@ -336,6 +339,7 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
         if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
+            duration: Duration(seconds: 3),
             content: Text('Could not open update URL. Please update manually.'),
           ),
         );
@@ -343,7 +347,9 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to open URL: $e')),
+        SnackBar(
+            duration: const Duration(seconds: 3),
+            content: Text('Failed to open URL: $e')),
       );
     }
   }
@@ -354,7 +360,9 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
     if (uri == null) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Invalid download URL.')),
+        const SnackBar(
+            duration: Duration(seconds: 3),
+            content: Text('Invalid download URL.')),
       );
       return;
     }
@@ -365,6 +373,7 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
         if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
+            duration: Duration(seconds: 3),
             content:
                 Text('Could not open download URL. Please download manually.'),
           ),
@@ -373,7 +382,9 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to open URL: $e')),
+        SnackBar(
+            duration: const Duration(seconds: 3),
+            content: Text('Failed to open URL: $e')),
       );
     }
   }
