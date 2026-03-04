@@ -132,24 +132,43 @@ class WindowsAppHelper:
     # ── App lifecycle ──────────────────────────────────────────────
 
     def wait_for_app_ready(self, timeout: int = APP_LAUNCH_TIMEOUT):
-        """Wait for the home screen to be visible, dismissing onboarding if needed."""
-        try:
-            self.find_by_name("Zajel", timeout=15)
+        """Wait for the home screen to be visible, dismissing onboarding if needed.
+
+        Checks for layout-agnostic elements first (Settings tooltip exists in
+        both narrow and wide desktop layouts), then falls back to the "Zajel"
+        title which only appears in narrow/mobile layout.
+        """
+        if self._detect_home_screen(timeout=15):
             print("[wait_for_app_ready] Home screen detected directly")
             return
-        except TimeoutError:
-            pass
 
         # Try dismissing onboarding screen (first launch)
         self._dismiss_onboarding()
 
         # Now wait for the actual home screen
-        try:
-            self.find_by_name("Zajel", timeout=timeout)
+        if self._detect_home_screen(timeout=timeout):
             print("[wait_for_app_ready] Home screen confirmed after onboarding dismissal")
+            return
+
+        print("[wait_for_app_ready] FAILED to reach home screen after onboarding dismissal")
+        raise TimeoutError("Home screen not detected after onboarding dismissal")
+
+    def _detect_home_screen(self, timeout: int = 15) -> bool:
+        """Detect whether the home screen is visible.
+
+        Tries the Settings button first (present in both narrow and wide
+        layouts), then the 'Zajel' title (narrow layout only).
+        """
+        try:
+            self.find_by_name("Settings", timeout=timeout)
+            return True
         except TimeoutError:
-            print("[wait_for_app_ready] FAILED to reach home screen after onboarding dismissal")
-            raise
+            pass
+        try:
+            self.find_by_name("Zajel", timeout=5)
+            return True
+        except TimeoutError:
+            return False
 
     def _dismiss_onboarding(self):
         """Dismiss the onboarding screen if present (first launch).
