@@ -37,6 +37,14 @@
   <img src="docs/images/screenshot-android-settings.png" alt="Settings" width="200">
 </p>
 
+### Screenshots (Linux Desktop)
+
+<p align="center">
+  <img src="docs/images/screenshot-linux-home.png" alt="Home Screen" width="420">
+  &nbsp;&nbsp;
+  <img src="docs/images/screenshot-linux-settings.png" alt="Settings" width="420">
+</p>
+
 ## Packages
 
 This is a monorepo containing:
