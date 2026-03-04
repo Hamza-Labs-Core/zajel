@@ -41,12 +41,30 @@ export class VPSReputationManager {
   }
 
   /**
-   * Get reputation score for an IP address.
+   * Get reputation score for an IP address with time-based decay.
+   *
+   * Decay schedule based on hours since last update:
+   * - < 24h: no decay
+   * - >= 24h: score * 0.5 (halved)
+   * - >= 48h: score * 0.25 (quartered)
+   *
    * Returns 0 if no record exists.
    */
   async getScore(ip: string): Promise<number> {
     const entry = await this.storage.getReputation(ip);
-    return entry?.reputationScore || 0;
+    if (!entry) return 0;
+
+    const rawScore = entry.reputationScore;
+    const ageMs = Date.now() - entry.lastUpdated;
+    const hours = ageMs / (60 * 60 * 1000);
+
+    if (hours >= 48) {
+      return Math.floor(rawScore * 0.25);
+    }
+    if (hours >= 24) {
+      return Math.floor(rawScore * 0.5);
+    }
+    return rawScore;
   }
 
   /**

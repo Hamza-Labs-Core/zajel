@@ -62,10 +62,10 @@ export function createBootstrapClient(
 
     // Include build signing data if a signed manifest is available
     if (buildManifest) {
-      body.buildHash = buildManifest.buildHash;
-      body.buildSignature = buildManifest.signature;
-      body.buildSigningKey = buildManifest.publicKey;
-      body.buildVersion = buildManifest.version;
+      body['buildHash'] = buildManifest.buildHash;
+      body['buildSignature'] = buildManifest.signature;
+      body['buildSigningKey'] = buildManifest.publicKey;
+      body['buildVersion'] = buildManifest.version;
     }
 
     console.log(`[Bootstrap] Registering with ${baseUrl}...`);
@@ -159,9 +159,9 @@ export function createBootstrapClient(
 
       // Include build signing data on heartbeat for ongoing verification
       if (buildManifest) {
-        heartbeatBody.buildHash = buildManifest.buildHash;
-        heartbeatBody.buildSignature = buildManifest.signature;
-        heartbeatBody.buildSigningKey = buildManifest.publicKey;
+        heartbeatBody['buildHash'] = buildManifest.buildHash;
+        heartbeatBody['buildSignature'] = buildManifest.signature;
+        heartbeatBody['buildSigningKey'] = buildManifest.publicKey;
       }
 
       const hbHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
