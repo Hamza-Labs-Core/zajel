@@ -266,11 +266,22 @@ When sending a group message:
 | type | Enum | text, file, image, system |
 | content | String | Message text or file path |
 | status | Enum | pending, sent, delivered, failed |
-| timestamp | DateTime | Send timestamp |
+| timestamp | DateTime | Send timestamp (UTC; converted to local for display) |
 
 ### Storage
 
 Messages are stored in SQLite with a composite key of `(group_id, author_device_id, sequence_number)` for deduplication. Vector clocks are persisted per group. Sender keys are stored in FlutterSecureStorage with `group_{groupId}_device_{deviceId}` namespacing.
+
+### Message Display and Pagination
+
+The Flutter app uses a `GroupMessagesNotifier` (Riverpod `StateNotifierProvider`) to load and paginate group messages:
+
+- **Page size**: 100 messages per page
+- **Initial load**: Fetches the 100 most recent messages via `getLatestMessages(groupId, limit: 100)`
+- **Load more**: Fetches older messages via `getLatestMessages(groupId, limit: 100, offset: currentCount)`
+- **Reload**: Called when new messages arrive (via `onGroupMessageReceived` callback), refreshes the latest 100
+
+All timestamps are stored in UTC (`DateTime.now().toUtc()`) and converted to local time only at display time via the shared `MessageListView<T>` widget, which provides reversed ListView, smart auto-scroll, date dividers, and a "New messages" indicator.
 
 ---
 
