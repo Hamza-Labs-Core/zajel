@@ -7,7 +7,6 @@ import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
-import '../../core/config/environment.dart';
 import '../../core/logging/logger_service.dart';
 import '../../core/models/linked_device.dart';
 import '../../core/providers/app_providers.dart';
@@ -210,30 +209,23 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
         SignalingDisplayState.connecting;
 
     try {
+      // First, discover and select a VPS server
       final discoveryService = ref.read(serverDiscoveryServiceProvider);
-      String serverUrl;
+      final selectedServer = await discoveryService.selectServer();
 
-      if (Environment.hasDirectSignalingUrl) {
-        // Use direct signaling URL (bypasses discovery)
-        serverUrl = Environment.signalingUrl;
-      } else {
-        // Discover and select a VPS server
-        final selectedServer = await discoveryService.selectServer();
-
-        if (selectedServer == null) {
-          setState(
-              () => _error = 'No servers available. Please try again later.');
-          ref.read(signalingDisplayStateProvider.notifier).state =
-              SignalingDisplayState.disconnected;
-          return;
-        }
-
-        // Store the selected server
-        ref.read(selectedServerProvider.notifier).state = selectedServer;
-
-        // Get the WebSocket URL for the selected server
-        serverUrl = discoveryService.getWebSocketUrl(selectedServer);
+      if (selectedServer == null) {
+        setState(
+            () => _error = 'No servers available. Please try again later.');
+        ref.read(signalingDisplayStateProvider.notifier).state =
+            SignalingDisplayState.disconnected;
+        return;
       }
+
+      // Store the selected server
+      ref.read(selectedServerProvider.notifier).state = selectedServer;
+
+      // Get the WebSocket URL for the selected server
+      final serverUrl = discoveryService.getWebSocketUrl(selectedServer);
 
       // Now connect to the VPS server
       final connectionManager = ref.read(connectionManagerProvider);
