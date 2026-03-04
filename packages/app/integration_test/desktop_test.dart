@@ -367,13 +367,13 @@ void main() {
       await tester.tap(find.text('Next'));
       await _pumpFrames(tester);
 
-      // Page 4: How to Connect
-      expect(find.text('How to Connect'), findsOneWidget);
+      // Page 4: Direct P2P Connection
+      expect(find.text('Direct P2P Connection'), findsOneWidget);
       await tester.tap(find.text('Next'));
       await _pumpFrames(tester);
 
-      // Page 5: Get Started
-      expect(find.text("You're Ready"), findsOneWidget);
+      // Page 5: No Account Required
+      expect(find.text('No Account Required'), findsOneWidget);
       await tester.tap(find.text('Get Started'));
       await _pumpFrames(tester, count: 30);
 
