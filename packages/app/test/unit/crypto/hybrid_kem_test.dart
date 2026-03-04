@@ -497,11 +497,11 @@ void main() {
     });
   });
 
-  group('MlKemServiceStub', () {
-    late MlKemServiceStub stub;
+  group('MlKemService', () {
+    late MlKemService stub;
 
     setUp(() {
-      stub = MlKemServiceStub();
+      stub = MlKemService();
     });
 
     test('all operations throw UnsupportedError', () {
@@ -518,7 +518,7 @@ void main() {
 
     test('encapsulate throws UnsupportedError', () {
       expect(
-        () => stub.encapsulate(Uint8List(MlKemServiceStub.publicKeySize)),
+        () => stub.encapsulate(Uint8List(MlKemService.publicKeySize)),
         throwsA(isA<UnsupportedError>()),
       );
     });
@@ -526,8 +526,8 @@ void main() {
     test('decapsulate throws UnsupportedError', () {
       expect(
         () => stub.decapsulate(
-          Uint8List(MlKemServiceStub.ciphertextSize),
-          Uint8List(MlKemServiceStub.secretKeySize),
+          Uint8List(MlKemService.ciphertextSize),
+          Uint8List(MlKemService.secretKeySize),
         ),
         throwsA(isA<UnsupportedError>()),
       );
