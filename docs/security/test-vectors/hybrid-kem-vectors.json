@@ -1,0 +1,81 @@
+{
+  "description": "Cross-platform test vectors for hybrid X25519 + ML-KEM-768 session key derivation",
+  "algorithm": "HKDF-SHA256(X25519_secret || ML-KEM_secret, salt=empty, info=info_string, L=32)",
+  "reference_implementation": "Python cryptography library (pyca/cryptography)",
+  "generated_date": "2026-03-03",
+  "vectors": [
+    {
+      "name": "hybrid_session_derivation_vector_1",
+      "description": "Known non-zero secrets, representative of real key exchange",
+      "x25519_secret_hex": "73b8ab88d1b50f58eadcef6b4c51ee5063b8d192785d46be71bb727168331a4d",
+      "mlkem_secret_hex": "a1a2a3a4a5a6a7a8b1b2b3b4b5b6b7b8c1c2c3c4c5c6c7c8d1d2d3d4d5d6d7d8",
+      "hkdf_info": "zajel_hybrid_session",
+      "hkdf_salt": "",
+      "expected_session_key_hex": "3d69badd53949f348c0f1771167d4a0733e555942bc35a9873512743d70628a0"
+    },
+    {
+      "name": "classical_session_derivation_vector_1",
+      "description": "Classical X25519-only derivation with same X25519 secret as vector 1",
+      "x25519_secret_hex": "73b8ab88d1b50f58eadcef6b4c51ee5063b8d192785d46be71bb727168331a4d",
+      "mlkem_secret_hex": null,
+      "hkdf_info": "zajel_session",
+      "hkdf_salt": "",
+      "expected_session_key_hex": "29948114a67ab050cb523528a5b042dc5f138df9f6c0d75a96115f8025f83236"
+    },
+    {
+      "name": "hybrid_all_zero_secrets",
+      "description": "Edge case: all-zero shared secrets (degenerate but valid HKDF input)",
+      "x25519_secret_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "mlkem_secret_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "hkdf_info": "zajel_hybrid_session",
+      "hkdf_salt": "",
+      "expected_session_key_hex": "de04e898e05e6014f0749178da9a6120976f134cec5ab67082eb4ef9a98115e3"
+    },
+    {
+      "name": "hybrid_all_ff_secrets",
+      "description": "Edge case: all-0xFF shared secrets",
+      "x25519_secret_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "mlkem_secret_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "hkdf_info": "zajel_hybrid_session",
+      "hkdf_salt": "",
+      "expected_session_key_hex": "ca8d6733c59edff4256491da10760cb1743ac43c55d7bb9d1a3c5a9fb543deaf"
+    }
+  ],
+  "protocol_version_negotiation": [
+    {
+      "name": "both_hybrid",
+      "our_version": 2,
+      "peer_version": 2,
+      "peer_has_pq_key": true,
+      "expected_negotiated_version": 2
+    },
+    {
+      "name": "we_hybrid_peer_classical",
+      "our_version": 2,
+      "peer_version": 1,
+      "peer_has_pq_key": false,
+      "expected_negotiated_version": 1
+    },
+    {
+      "name": "we_classical_peer_hybrid",
+      "our_version": 1,
+      "peer_version": 2,
+      "peer_has_pq_key": true,
+      "expected_negotiated_version": 1
+    },
+    {
+      "name": "both_classical",
+      "our_version": 1,
+      "peer_version": 1,
+      "peer_has_pq_key": false,
+      "expected_negotiated_version": 1
+    },
+    {
+      "name": "both_hybrid_but_no_pq_key",
+      "our_version": 2,
+      "peer_version": 2,
+      "peer_has_pq_key": false,
+      "expected_negotiated_version": 1
+    }
+  ]
+}

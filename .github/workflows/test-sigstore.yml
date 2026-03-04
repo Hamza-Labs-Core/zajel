@@ -1,0 +1,93 @@
+name: Test Sigstore Integration
+
+# Runs on pre-release tags to test Sigstore attestation and signing
+# without triggering the full release workflow (which skips non-production tags).
+on:
+  push:
+    tags:
+      - 'v*-test.*'
+      - 'v*-rc.*'
+
+jobs:
+  test-sigstore:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write  # Required for Sigstore keyless signing
+      attestations: write  # Required for artifact attestations
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Create dummy test artifacts
+        run: |
+          mkdir -p release-files
+          echo "test-artifact-android-${{ steps.version.outputs.version }}" > "release-files/zajel-${{ steps.version.outputs.version }}-android.apk"
+          echo "test-artifact-linux-${{ steps.version.outputs.version }}" > "release-files/zajel-${{ steps.version.outputs.version }}-linux.tar.gz"
+          echo "test-artifact-windows-${{ steps.version.outputs.version }}" > "release-files/zajel-${{ steps.version.outputs.version }}-windows.zip"
+          echo "test-artifact-macos-${{ steps.version.outputs.version }}" > "release-files/zajel-${{ steps.version.outputs.version }}-macos.dmg"
+
+      - name: Generate SLSA provenance attestations
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            release-files/zajel-*.apk
+            release-files/zajel-*.tar.gz
+            release-files/zajel-*.zip
+            release-files/zajel-*.dmg
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.2.3'
+
+      - name: Sign artifacts with Cosign
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -e
+          for artifact in release-files/zajel-*; do
+            if [[ "$artifact" == *.sigstore.json ]]; then
+              continue
+            fi
+            echo "Signing $artifact..."
+            cosign sign-blob "$artifact" \
+              --bundle "${artifact}.sigstore.json" \
+              --yes
+          done
+
+      - name: Verify signatures
+        run: |
+          for artifact in release-files/zajel-*; do
+            if [[ "$artifact" == *.sigstore.json ]]; then
+              continue
+            fi
+            if [ -f "${artifact}.sigstore.json" ]; then
+              echo "Verifying $artifact..."
+              cosign verify-blob "$artifact" \
+                --bundle "${artifact}.sigstore.json" \
+                --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+                --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+            fi
+          done
+
+      - name: List generated files
+        run: ls -la release-files/
+
+      - name: Create test release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: "Sigstore Test ${{ github.ref_name }}"
+          body: |
+            Sigstore integration test release.
+            This is a test release - do not use in production.
+          files: |
+            release-files/*
+            release-files/*.sigstore.json
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

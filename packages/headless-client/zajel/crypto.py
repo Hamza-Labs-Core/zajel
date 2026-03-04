@@ -43,8 +43,15 @@ logger = logging.getLogger(__name__)
 NONCE_SIZE = 12
 MAC_SIZE = 16
 HKDF_INFO = b"zajel_session"
+HKDF_INFO_CLASSICAL = b"zajel_session"  # alias for cross-platform test compat
 HKDF_INFO_V2 = b"zajel_session_v2"
 HKDF_INFO_HYBRID = b"zajel_hybrid_session"
+
+# ML-KEM-768 sizes (NIST FIPS 203)
+MLKEM768_PUBLIC_KEY_SIZE = 1184
+MLKEM768_SECRET_KEY_SIZE = 2400
+MLKEM768_CIPHERTEXT_SIZE = 1088
+MLKEM768_SHARED_SECRET_SIZE = 32
 HKDF_RATCHET_INFO = b"zajel_ratchet"
 RATCHET_NONCE_SIZE = 32
 GRACE_PERIOD_SECONDS = 30
@@ -52,6 +59,54 @@ DAILY_PREFIX = "day_"
 HOURLY_PREFIX = "hr_"
 DAILY_SALT = "zajel:daily:"
 HOURLY_SALT = "zajel:hourly:"
+
+
+def derive_hybrid_session_key(
+    x25519_shared_secret: bytes,
+    mlkem_shared_secret: bytes,
+) -> bytes:
+    """Derive a hybrid session key from X25519 + ML-KEM shared secrets.
+
+    Implements: session_key = HKDF-SHA256(
+        IKM = x25519_shared_secret || mlkem_shared_secret,
+        salt = b"",
+        info = "zajel_hybrid_session",
+        L = 32 bytes
+    )
+    """
+    if len(x25519_shared_secret) != 32:
+        raise ValueError("X25519 shared secret must be 32 bytes")
+    if len(mlkem_shared_secret) != MLKEM768_SHARED_SECRET_SIZE:
+        raise ValueError(
+            f"ML-KEM shared secret must be {MLKEM768_SHARED_SECRET_SIZE} bytes"
+        )
+    combined = x25519_shared_secret + mlkem_shared_secret
+    hkdf = HKDF(
+        algorithm=SHA256(),
+        length=32,
+        salt=b"",
+        info=HKDF_INFO_HYBRID,
+    )
+    return hkdf.derive(combined)
+
+
+def negotiate_protocol_version(
+    our_version: int,
+    peer_version: int,
+    peer_has_pq_key: bool,
+) -> int:
+    """Negotiate the protocol version between two peers.
+
+    Returns the highest common version, falling back to classical
+    if either peer doesn't support hybrid or no PQ key is available.
+    """
+    if (
+        our_version >= PROTOCOL_VERSION_HYBRID
+        and peer_version >= PROTOCOL_VERSION_HYBRID
+        and peer_has_pq_key
+    ):
+        return PROTOCOL_VERSION_HYBRID
+    return PROTOCOL_VERSION_CLASSICAL
 
 
 class CryptoService:
