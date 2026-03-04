@@ -31,6 +31,7 @@ import { getCorsHeaders } from '../cors.js';
 import { timingSafeEqual } from '../crypto/timing-safe.js';
 import { parseJsonBody, BodyTooLargeError } from '../utils/request-validation.js';
 import { createLogger } from '../logger.js';
+import { isNonNegativeInteger, isPositiveInteger } from '../utils/numeric-validation.js';
 
 /** Session token TTL: 1 hour */
 const SESSION_TOKEN_TTL = 60 * 60 * 1000;
@@ -452,7 +453,7 @@ export class AttestationRegistryDO {
     }
 
     const expected = `Bearer ${this.env.CI_UPLOAD_SECRET}`;
-    if (!authHeader || !timingSafeEqual(authHeader, expected)) {
+    if (!authHeader || !(await timingSafeEqual(authHeader, expected))) {
       this.logger.warn('[audit] Unauthorized reference upload attempt', {
         action: 'reference_upload_failed',
         ip: request.headers.get('CF-Connecting-IP'),
@@ -493,12 +494,40 @@ export class AttestationRegistryDO {
 
     // Validate each critical region
     for (const region of critical_regions) {
-      if (typeof region.offset !== 'number' || typeof region.length !== 'number') {
+      if (!isNonNegativeInteger(region.offset)) {
         return this.jsonResponse(
-          { error: 'Each critical_region must have numeric offset and length' },
+          { error: 'Each critical_region must have a non-negative integer offset' },
           400,
           corsHeaders
         );
+      }
+
+      if (!isPositiveInteger(region.length)) {
+        return this.jsonResponse(
+          { error: 'Each critical_region must have a positive integer length' },
+          400,
+          corsHeaders
+        );
+      }
+
+      // Validate data_hex if present
+      if (region.data_hex !== undefined) {
+        if (typeof region.data_hex !== 'string' || region.data_hex.length === 0) {
+          return this.jsonResponse(
+            { error: 'critical_region data_hex must be a non-empty string' },
+            400,
+            corsHeaders
+          );
+        }
+
+        // Validate hex encoding (must be even length and only hex chars)
+        if (region.data_hex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(region.data_hex)) {
+          return this.jsonResponse(
+            { error: 'critical_region data_hex must be valid hex encoding' },
+            400,
+            corsHeaders
+          );
+        }
       }
     }
 
@@ -687,7 +716,8 @@ export class AttestationRegistryDO {
     // Look up the challenge
     const challenge = await this.state.storage.get(`nonce:${nonce}`);
     if (!challenge) {
-      console.error('[verify] Invalid or expired nonce', { device_id });
+      this.logger.debug('[verify] Invalid or expired nonce', { device_id, nonce, timestamp: Date.now() });
+      this.logger.warn('[audit] Verification failed: invalid or expired nonce', { action: 'attest_verify_failed', reason: 'invalid_nonce' });
       return this.jsonResponse(
         { error: 'Invalid or expired nonce' },
         403,
@@ -698,7 +728,8 @@ export class AttestationRegistryDO {
     // Verify nonce hasn't expired
     if (Date.now() - challenge.created_at > NONCE_TTL) {
       await this.state.storage.delete(`nonce:${nonce}`);
-      console.error('[verify] Challenge expired', { device_id, nonce });
+      this.logger.debug('[verify] Challenge expired', { device_id, nonce, timestamp: Date.now() });
+      this.logger.warn('[audit] Verification failed: challenge expired', { action: 'attest_verify_failed', reason: 'challenge_expired' });
       return this.jsonResponse(
         { error: 'Challenge expired' },
         403,
@@ -708,7 +739,8 @@ export class AttestationRegistryDO {
 
     // Verify device_id matches
     if (challenge.device_id !== device_id) {
-      console.error('[verify] Device ID mismatch', { device_id, expected: challenge.device_id });
+      this.logger.debug('[verify] Device ID mismatch', { device_id, expected: challenge.device_id });
+      this.logger.warn('[audit] Verification failed: device ID mismatch', { action: 'attest_verify_failed', reason: 'device_mismatch' });
       return this.jsonResponse(
         { error: 'Device ID mismatch' },
         403,
@@ -716,15 +748,13 @@ export class AttestationRegistryDO {
       );
     }
 
-    // Delete the nonce to prevent replay
-    await this.state.storage.delete(`nonce:${nonce}`);
-
-    // Look up reference binary to get expected HMACs
+    // --- STEP 1: Look up reference binary (before deleting nonce) ---
     const reference = await this.state.storage.get(
       `reference:${challenge.build_version}:${challenge.platform}`
     );
     if (!reference) {
-      console.error('[verify] Reference binary not found', { version: challenge.build_version, platform: challenge.platform });
+      this.logger.debug('[verify] Reference binary not found', { version: challenge.build_version, platform: challenge.platform });
+      this.logger.warn('[audit] Verification failed: reference binary not found', { action: 'attest_verify_failed', reason: 'reference_not_found', version: challenge.build_version, platform: challenge.platform });
       return this.jsonResponse(
         { valid: false, error: 'Reference binary no longer available' },
         200,
@@ -732,13 +762,10 @@ export class AttestationRegistryDO {
       );
     }
 
-    // Verify each response
-    // The reference critical_regions should have pre-computed HMACs for the nonce
-    // In practice, the server stores reference binary data and computes HMAC on the fly.
-    // For this implementation, critical_regions store pre-computed region_data (hex)
-    // and we compute HMAC(region_data, nonce) to compare with the client's response.
+    // --- STEP 2: Validate response count (before deleting nonce) ---
     if (responses.length !== challenge.regions.length) {
-      console.error('[verify] Wrong response count', { expected: challenge.regions.length, got: responses.length });
+      this.logger.debug('[verify] Wrong response count', { expected: challenge.regions.length, got: responses.length });
+      this.logger.warn('[audit] Verification failed: wrong response count', { action: 'attest_verify_failed', reason: 'invalid_response_count', expected: challenge.regions.length, got: responses.length });
       return this.jsonResponse(
         { valid: false, error: 'Wrong number of responses' },
         200,
@@ -746,11 +773,16 @@ export class AttestationRegistryDO {
       );
     }
 
+    // --- STEP 3: Validate ALL response inputs (before deleting nonce) ---
+    // This prevents nonce consumption DoS: an attacker who knows a valid nonce
+    // cannot invalidate it by submitting malformed responses.
     for (const response of responses) {
       const { region_index, hmac } = response;
 
-      if (region_index < 0 || region_index >= challenge.regions.length) {
-        console.error('[verify] Invalid region_index', { region_index });
+      // Validate region_index is a non-negative integer
+      if (!isNonNegativeInteger(region_index)) {
+        this.logger.debug('[verify] Invalid region_index (not a non-negative integer)', { region_index, type: typeof region_index });
+        this.logger.warn('[audit] Verification failed: invalid region index', { action: 'attest_verify_failed', reason: 'invalid_region_index', region_index });
         return this.jsonResponse(
           { valid: false, error: VERIFY_FAILED_MSG },
           200,
@@ -758,6 +790,38 @@ export class AttestationRegistryDO {
         );
       }
 
+      // Validate region_index is within bounds
+      if (region_index >= challenge.regions.length) {
+        this.logger.debug('[verify] region_index out of bounds', { region_index, max: challenge.regions.length - 1 });
+        this.logger.warn('[audit] Verification failed: invalid region index', { action: 'attest_verify_failed', reason: 'invalid_region_index', region_index });
+        return this.jsonResponse(
+          { valid: false, error: VERIFY_FAILED_MSG },
+          200,
+          corsHeaders
+        );
+      }
+
+      // Validate hmac is a non-empty string
+      if (typeof hmac !== 'string' || hmac.length === 0) {
+        this.logger.debug('[verify] Invalid hmac format', { region_index });
+        this.logger.warn('[audit] Verification failed: invalid hmac format', { action: 'attest_verify_failed', reason: 'invalid_hmac_format', region_index });
+        return this.jsonResponse(
+          { valid: false, error: VERIFY_FAILED_MSG },
+          200,
+          corsHeaders
+        );
+      }
+    }
+
+    // --- STEP 4: Delete nonce AFTER all validation passes ---
+    // Now that we know the input is well-formed, consume the nonce to prevent replay
+    await this.state.storage.delete(`nonce:${nonce}`);
+
+    // --- STEP 5: Perform HMAC verification ---
+    // At this point, all inputs are validated and the nonce is consumed.
+    // Any failures here are legitimate attestation failures, not input errors.
+    for (const response of responses) {
+      const { region_index, hmac } = response;
       const challengeRegion = challenge.regions[region_index];
 
       // Find the matching critical region in reference data
@@ -766,7 +830,8 @@ export class AttestationRegistryDO {
       );
 
       if (!refRegion || !refRegion.data_hex) {
-        console.error('[verify] Reference data not available for region', { region_index });
+        this.logger.debug('[verify] Reference data not available for region', { region_index });
+        this.logger.warn('[audit] Verification failed: reference data not available', { action: 'attest_verify_failed', reason: 'reference_data_missing', region_index });
         return this.jsonResponse(
           { valid: false, error: VERIFY_FAILED_MSG },
           200,
@@ -778,8 +843,9 @@ export class AttestationRegistryDO {
       const regionBytes = hexToBytes(refRegion.data_hex);
       const expectedHmac = await computeHmac(regionBytes, nonce);
 
-      if (!timingSafeEqual(hmac, expectedHmac)) {
-        console.error('[verify] HMAC mismatch', { region_index });
+      if (!(await timingSafeEqual(hmac, expectedHmac))) {
+        this.logger.debug('[verify] HMAC mismatch', { region_index });
+        this.logger.warn('[audit] Verification failed: HMAC mismatch', { action: 'attest_verify_failed', reason: 'hmac_mismatch', region_index });
         return this.jsonResponse(
           { valid: false, error: 'HMAC mismatch' },
           200,
@@ -809,6 +875,11 @@ export class AttestationRegistryDO {
 
     const sessionToken = await createSessionToken(signingKey, tokenData);
 
+    // NOTE: device_id is intentionally logged in the success path for audit purposes.
+    // This is acceptable because: (1) successful attestation is a legitimate audit event,
+    // (2) success logs are low-volume and controlled via the structured logger,
+    // (3) this is distinct from error paths where device_id could enable tracking of
+    // failed/rejected devices. See Story 003 for the rationale.
     this.logger.info('[audit] Attestation verified', {
       action: 'attest_verify_success',
       device_id,
@@ -846,7 +917,7 @@ export class AttestationRegistryDO {
     }
 
     const expected = `Bearer ${this.env.CI_UPLOAD_SECRET}`;
-    if (!authHeader || !timingSafeEqual(authHeader, expected)) {
+    if (!authHeader || !(await timingSafeEqual(authHeader, expected))) {
       this.logger.warn('[audit] Unauthorized version policy update attempt', {
         action: 'version_policy_failed',
         ip: request.headers.get('CF-Connecting-IP'),
@@ -975,6 +1046,12 @@ export class AttestationRegistryDO {
    * higher chance of selection.
    */
   selectRandomRegions(criticalRegions, count) {
+    // Defensive guard: count should always be a valid integer from the caller,
+    // but guard against NaN/Infinity which would make Math.min return NaN
+    if (!isNonNegativeInteger(count)) {
+      throw new Error(`selectRandomRegions: count must be a non-negative integer, got ${count}`);
+    }
+
     const selectCount = Math.min(count, criticalRegions.length);
     const selected = [];
     const usedIndices = new Set();

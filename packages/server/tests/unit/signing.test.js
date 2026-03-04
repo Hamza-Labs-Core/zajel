@@ -95,8 +95,12 @@ class MockStorage {
   async get(key) {
     return this.data.get(key);
   }
-  async put(key, value) {
-    this.data.set(key, value);
+  async put(keyOrMap, value) {
+    if (keyOrMap instanceof Map) {
+      for (const [k, v] of keyOrMap) { this.data.set(k, v); }
+    } else {
+      this.data.set(keyOrMap, value);
+    }
   }
   async delete(key) {
     if (Array.isArray(key)) {
@@ -105,12 +109,14 @@ class MockStorage {
       this.data.delete(key);
     }
   }
-  async list({ prefix, limit }) {
+  async list({ prefix, start, limit }) {
     const results = new Map();
-    for (const [key, value] of this.data) {
-      if (key.startsWith(prefix)) {
-        results.set(key, value);
-        if (limit && results.size >= limit) break;
+    const sortedKeys = [...this.data.keys()].sort();
+    for (const key of sortedKeys) {
+      if (typeof key !== 'string') continue;
+      if (start && key < start) continue;
+      if (key.startsWith(prefix) && results.size < (limit || Infinity)) {
+        results.set(key, this.data.get(key));
       }
     }
     return results;
@@ -153,7 +159,10 @@ describe('GET /servers signing integration', () => {
 
   beforeEach(async () => {
     mockState = new MockState();
-    serverRegistry = new ServerRegistryDO(mockState, {});
+    serverRegistry = new ServerRegistryDO(mockState, {
+      SERVER_REGISTRY_SECRET: 'test-signing-secret',
+      REPLAY_GRACE_MODE: 'true',
+    });
 
     // Generate test keypair
     keyPair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);
@@ -161,7 +170,7 @@ describe('GET /servers signing integration', () => {
     const seed = pkcs8.slice(-32);
     seedHex = Array.from(seed, (b) => b.toString(16).padStart(2, '0')).join('');
 
-    vi.useFakeTimers();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
   });
 
   afterEach(() => {
@@ -170,10 +179,30 @@ describe('GET /servers signing integration', () => {
   });
 
   function createEnv(signingKey = null) {
+    // Empty stub for non-default regional shards (returns empty server list)
+    const emptyStub = {
+      fetch: (r) => {
+        const url = new URL(r.url);
+        if (url.pathname === '/servers/lookup') {
+          return Promise.resolve(new Response(JSON.stringify({ found: false }), {
+            status: 200, headers: { 'Content-Type': 'application/json' },
+          }));
+        }
+        return Promise.resolve(new Response(JSON.stringify({ servers: [] }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        }));
+      },
+    };
     return {
       SERVER_REGISTRY: {
-        idFromName: () => 'mock-id',
-        get: () => new MockDurableObjectStub(serverRegistry),
+        idFromName: (name) => name,
+        get: (id) => {
+          // Only route default shard and admin to the real DO
+          if (id === 'region:default' || id === 'admin') {
+            return new MockDurableObjectStub(serverRegistry);
+          }
+          return emptyStub;
+        },
       },
       ...(signingKey ? { BOOTSTRAP_SIGNING_KEY: signingKey } : {}),
     };
@@ -181,7 +210,9 @@ describe('GET /servers signing integration', () => {
 
   it('should include X-Bootstrap-Signature header when key is set', async () => {
     const env = createEnv(seedHex);
-    const request = new Request('https://test.workers.dev/servers');
+    const request = new Request('https://test.workers.dev/servers', {
+      headers: { 'CF-Connecting-IP': '127.0.0.1' },
+    });
     const response = await worker.fetch(request, env);
 
     expect(response.headers.get('X-Bootstrap-Signature')).not.toBeNull();
@@ -189,7 +220,9 @@ describe('GET /servers signing integration', () => {
 
   it('should include Access-Control-Expose-Headers', async () => {
     const env = createEnv(seedHex);
-    const request = new Request('https://test.workers.dev/servers');
+    const request = new Request('https://test.workers.dev/servers', {
+      headers: { 'CF-Connecting-IP': '127.0.0.1' },
+    });
     const response = await worker.fetch(request, env);
 
     expect(response.headers.get('Access-Control-Expose-Headers')).toContain(
@@ -199,7 +232,9 @@ describe('GET /servers signing integration', () => {
 
   it('should include timestamp in response body', async () => {
     const env = createEnv(seedHex);
-    const request = new Request('https://test.workers.dev/servers');
+    const request = new Request('https://test.workers.dev/servers', {
+      headers: { 'CF-Connecting-IP': '127.0.0.1' },
+    });
     const response = await worker.fetch(request, env);
     const data = await response.json();
 
@@ -209,7 +244,9 @@ describe('GET /servers signing integration', () => {
 
   it('should produce a valid signature over the response body', async () => {
     const env = createEnv(seedHex);
-    const request = new Request('https://test.workers.dev/servers');
+    const request = new Request('https://test.workers.dev/servers', {
+      headers: { 'CF-Connecting-IP': '127.0.0.1' },
+    });
     const response = await worker.fetch(request, env);
 
     const body = await response.text();
@@ -224,7 +261,9 @@ describe('GET /servers signing integration', () => {
 
   it('should work without signing key (graceful degradation)', async () => {
     const env = createEnv(); // no signing key
-    const request = new Request('https://test.workers.dev/servers');
+    const request = new Request('https://test.workers.dev/servers', {
+      headers: { 'CF-Connecting-IP': '127.0.0.1' },
+    });
     const response = await worker.fetch(request, env);
     const data = await response.json();
 
@@ -238,7 +277,11 @@ describe('GET /servers signing integration', () => {
     const env = createEnv(seedHex);
     const request = new Request('https://test.workers.dev/servers', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'CF-Connecting-IP': '127.0.0.1',
+        'Authorization': 'Bearer test-signing-secret',
+      },
       body: JSON.stringify({
         serverId: 'ed25519:test',
         endpoint: 'wss://test.example.com',
@@ -259,7 +302,10 @@ describe('GET /servers signing integration', () => {
     await serverRegistry.fetch(
       new Request('https://test.workers.dev/servers', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer test-signing-secret',
+        },
         body: JSON.stringify({
           serverId: 'ed25519:srv1',
           endpoint: 'wss://srv1.example.com',
@@ -269,7 +315,9 @@ describe('GET /servers signing integration', () => {
       })
     );
 
-    const request = new Request('https://test.workers.dev/servers');
+    const request = new Request('https://test.workers.dev/servers', {
+      headers: { 'CF-Connecting-IP': '127.0.0.1' },
+    });
     const response = await worker.fetch(request, env);
     const body = await response.text();
     const data = JSON.parse(body);

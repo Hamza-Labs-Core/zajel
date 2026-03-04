@@ -11,6 +11,8 @@ import type { Env } from './types.js';
 import { handleLogin, handleLogout, handleVerify, handleInit } from './routes/auth.js';
 import { handleListUsers, handleCreateUser, handleDeleteUser } from './routes/users.js';
 import { handleListServers } from './routes/servers.js';
+import { handleGenerateCode, handleExchangeCode } from './routes/auth-code.js';
+import { getCorsHeaders, SECURITY_HEADERS } from './cors.js';
 
 // Re-export Durable Object
 export { AdminUsersDO } from './admin-users-do.js';
@@ -26,13 +28,8 @@ export default {
     const path = url.pathname;
     const method = request.method;
 
-    // CORS headers for dashboard
-    const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'Access-Control-Max-Age': '86400',
-    };
+    // CORS headers for dashboard (origin-validated, no wildcard)
+    const corsHeaders = getCorsHeaders(request, env);
 
     // Handle CORS preflight
     if (method === 'OPTIONS') {
@@ -91,6 +88,10 @@ export default {
         response = await handleDeleteUser(request, env, userId);
       } else if (path === '/admin/api/servers' && method === 'GET') {
         response = await handleListServers(request, env);
+      } else if (path === '/admin/api/auth/code' && method === 'POST') {
+        response = await handleGenerateCode(request, env);
+      } else if (path === '/admin/api/auth/exchange' && method === 'POST') {
+        response = await handleExchangeCode(request, env);
       } else if (path.startsWith('/admin/api/')) {
         return jsonResponse({ success: false, error: 'Not found' }, 404, corsHeaders);
       } else if (path === '/admin' || path === '/admin/') {
@@ -549,9 +550,23 @@ function serveDashboard(): Response {
                   const url = new URL(redirectUrl);
                   // Only allow redirects to HTTPS URLs with /admin/ path
                   if (url.protocol === 'https:' && url.pathname.startsWith('/admin')) {
-                    url.searchParams.set('token', state.token);
-                    window.location.href = url.toString();
-                    return; // Stop init — we're redirecting
+                    // Generate authorization code for redirect
+                    const codeRes = await fetch('/admin/api/auth/code', {
+                      method: 'POST',
+                      headers: { 'Authorization': 'Bearer ' + state.token },
+                    });
+
+                    if (codeRes.ok) {
+                      const codeData = await codeRes.json();
+                      if (codeData.success && codeData.data?.code) {
+                        url.searchParams.set('code', codeData.data.code);
+                        window.location.href = url.toString();
+                        return; // Stop init — we're redirecting
+                      }
+                    }
+
+                    // If code generation failed, fall through to normal load
+                    console.warn('Failed to generate auth code for redirect');
                   }
                 } catch { /* invalid URL, ignore */ }
               }
@@ -630,9 +645,23 @@ function serveDashboard(): Response {
               const url = new URL(redirectUrl);
               // Only allow redirects to HTTPS URLs with /admin/ path
               if (url.protocol === 'https:' && url.pathname.startsWith('/admin')) {
-                url.searchParams.set('token', state.token);
-                window.location.href = url.toString();
-                return;
+                // Generate authorization code for redirect
+                const codeRes = await fetch('/admin/api/auth/code', {
+                  method: 'POST',
+                  headers: { 'Authorization': 'Bearer ' + state.token },
+                });
+
+                if (codeRes.ok) {
+                  const codeData = await codeRes.json();
+                  if (codeData.success && codeData.data?.code) {
+                    url.searchParams.set('code', codeData.data.code);
+                    window.location.href = url.toString();
+                    return;
+                  }
+                }
+
+                // If code generation failed, fall through to normal render
+                console.warn('Failed to generate auth code for redirect');
               }
             } catch { /* invalid URL, ignore */ }
           }
@@ -707,12 +736,42 @@ function serveDashboard(): Response {
     }
 
     // Navigate to VPS dashboard
-    function openVpsDashboard(server) {
-      // Convert WS endpoint to HTTP base URL (strip any path component)
-      const wsUrl = new URL(server.endpoint.replace('wss://', 'https://').replace('ws://', 'http://'));
-      const baseUrl = wsUrl.protocol + '//' + wsUrl.host;
-      // Pass token in URL for initial auth
-      window.open(baseUrl + '/admin/?token=' + encodeURIComponent(state.token), '_blank');
+    async function openVpsDashboard(server) {
+      // Generate a short-lived authorization code
+      try {
+        const res = await fetch('/admin/api/auth/code', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + state.token,
+          },
+        });
+
+        if (!res.ok) {
+          console.error('Failed to generate auth code:', await res.text());
+          state.error = 'Failed to authenticate with VPS dashboard. Please try again.';
+          render();
+          return;
+        }
+
+        const data = await res.json();
+        if (!data.success || !data.data?.code) {
+          console.error('Invalid auth code response:', data);
+          state.error = 'Failed to authenticate with VPS dashboard. Please try again.';
+          render();
+          return;
+        }
+
+        // Convert WS endpoint to HTTP base URL (strip any path component)
+        const wsUrl = new URL(server.endpoint.replace('wss://', 'https://').replace('ws://', 'http://'));
+        const baseUrl = wsUrl.protocol + '//' + wsUrl.host;
+
+        // Pass the short-lived CODE (not the JWT) in the URL
+        window.open(baseUrl + '/admin/?code=' + encodeURIComponent(data.data.code), '_blank');
+      } catch (error) {
+        console.error('Error opening VPS dashboard:', error);
+        state.error = 'Failed to authenticate with VPS dashboard. Please try again.';
+        render();
+      }
     }
 
     // Render
@@ -957,6 +1016,7 @@ function serveDashboard(): Response {
     headers: {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-cache',
+      ...SECURITY_HEADERS,
     },
   });
 }

@@ -71,6 +71,20 @@ class Environment {
     defaultValue: '',
   );
 
+  /// Whether to use TUF metadata verification instead of legacy single-key signing.
+  /// Set via --dart-define=USE_TUF_METADATA=true
+  static const bool useTufMetadata = bool.fromEnvironment(
+    'USE_TUF_METADATA',
+    defaultValue: false,
+  );
+
+  /// Base URL for fetching TUF metadata (e.g., 'https://bootstrap.zajel.example.com').
+  /// Defaults to the same base URL used for bootstrap.
+  static const String tufMetadataBaseUrl = String.fromEnvironment(
+    'TUF_METADATA_BASE_URL',
+    defaultValue: '',
+  );
+
   /// Whether running in E2E test mode.
   ///
   /// Override with `--dart-define=E2E_TEST=true`

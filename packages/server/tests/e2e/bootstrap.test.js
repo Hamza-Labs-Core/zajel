@@ -16,6 +16,14 @@ import { ServerRegistryDO } from '../../src/durable-objects/server-registry-do.j
 import worker from '../../src/index.js';
 
 /**
+ * Test helper: generate unique nonces for replay protection
+ */
+let testNonceCounter = 0;
+function testNonce() {
+  return `test-nonce-${++testNonceCounter}-${Date.now()}`;
+}
+
+/**
  * Mock Durable Object Storage for testing
  */
 class MockStorage {
@@ -28,8 +36,12 @@ class MockStorage {
     return this.data.get(key);
   }
 
-  async put(key, value) {
-    this.data.set(key, value);
+  async put(keyOrMap, value) {
+    if (keyOrMap instanceof Map) {
+      for (const [k, v] of keyOrMap) { this.data.set(k, v); }
+    } else {
+      this.data.set(keyOrMap, value);
+    }
   }
 
   async delete(key) {
@@ -40,12 +52,14 @@ class MockStorage {
     }
   }
 
-  async list({ prefix, limit }) {
+  async list({ prefix, start, limit }) {
     const results = new Map();
-    for (const [key, value] of this.data) {
-      if (key.startsWith(prefix)) {
-        results.set(key, value);
-        if (limit && results.size >= limit) break;
+    const sortedKeys = [...this.data.keys()].sort();
+    for (const key of sortedKeys) {
+      if (typeof key !== 'string') continue;
+      if (start && key < start) continue;
+      if (key.startsWith(prefix) && results.size < (limit || Infinity)) {
+        results.set(key, this.data.get(key));
       }
     }
     return results;
@@ -95,13 +109,35 @@ class MockDurableObjectStub {
  * Create a mock environment for CF Workers
  */
 function createMockEnv(doInstance) {
+  const emptyStub = {
+    fetch: (r) => {
+      const url = new URL(r.url);
+      if (url.pathname === '/servers/lookup') {
+        return Promise.resolve(new Response(JSON.stringify({ found: false }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ servers: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+    },
+  };
   return {
     SERVER_REGISTRY: {
-      idFromName: () => 'mock-id',
-      get: () => new MockDurableObjectStub(doInstance),
+      idFromName: (name) => name,
+      get: (id) => {
+        if (id === 'region:default' || id === 'admin') {
+          return new MockDurableObjectStub(doInstance);
+        }
+        return emptyStub;
+      },
     },
   };
 }
+
+const TEST_BOOTSTRAP_SECRET = 'test-bootstrap-secret';
 
 /**
  * Helper to create a JSON request
@@ -110,7 +146,11 @@ function createRequest(method, path, body = null, baseUrl = 'https://test.worker
   const url = `${baseUrl}${path}`;
   const options = {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${TEST_BOOTSTRAP_SECRET}`,
+      'CF-Connecting-IP': '127.0.0.1',
+    },
   };
   if (body) {
     options.body = JSON.stringify(body);
@@ -125,9 +165,12 @@ describe('Bootstrap Service E2E Tests', () => {
 
   beforeEach(() => {
     mockState = new MockState();
-    serverRegistry = new ServerRegistryDO(mockState, {});
+    serverRegistry = new ServerRegistryDO(mockState, {
+      SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET,
+      REPLAY_GRACE_MODE: 'true',
+    });
     env = createMockEnv(serverRegistry);
-    vi.useFakeTimers();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
   });
 
   afterEach(() => {
@@ -791,6 +834,821 @@ describe('Bootstrap Service E2E Tests', () => {
       for (const response of heartbeatResponses) {
         expect(response.status).toBe(200);
       }
+    });
+  });
+
+
+  describe('Heartbeat Replay Protection', () => {
+    /**
+     * Helper to register a test server with a strict (non-grace) registry.
+     * Returns the registry instance.
+     */
+    async function registerOnStrict(strictRegistry) {
+      const regData = {
+        serverId: 'ed25519:replay-test-server',
+        endpoint: 'wss://replay.example.com',
+        publicKey: 'replay-test-key',
+        timestamp: Date.now(),
+        nonce: testNonce(),
+      };
+      const resp = await strictRegistry.fetch(createRequest('POST', '/servers', regData));
+      expect(resp.status).toBe(200);
+      return strictRegistry;
+    }
+
+    it('should accept heartbeat with timestamp at 2-minute boundary', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+      await registerOnStrict(strictRegistry);
+
+      // Set timestamp slightly under 2 minutes ago (within window, with buffer for processing time)
+      const ts = Date.now() - (2 * 60 * 1000 - 1000);
+      const resp = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:replay-test-server',
+        timestamp: ts,
+        nonce: testNonce(),
+        sequenceNumber: 1,
+      }));
+      expect(resp.status).toBe(200);
+    });
+
+    it('should reject heartbeat with timestamp older than 2 minutes', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+      await registerOnStrict(strictRegistry);
+
+      // Set timestamp 2 minutes + 1 second ago
+      const ts = Date.now() - (2 * 60 * 1000 + 1000);
+      const resp = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:replay-test-server',
+        timestamp: ts,
+        nonce: testNonce(),
+        sequenceNumber: 1,
+      }));
+      const data = await resp.json();
+      expect(resp.status).toBe(400);
+      expect(data.error).toContain('timestamp too old');
+    });
+
+    it('should accept heartbeat with timestamp 30 seconds in future', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+      await registerOnStrict(strictRegistry);
+
+      // Slightly under 30 seconds in the future to allow for processing time
+      const ts = Date.now() + (29 * 1000);
+      const resp = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:replay-test-server',
+        timestamp: ts,
+        nonce: testNonce(),
+        sequenceNumber: 1,
+      }));
+      expect(resp.status).toBe(200);
+    });
+
+    it('should reject heartbeat with timestamp more than 30 seconds in future', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+      await registerOnStrict(strictRegistry);
+
+      const ts = Date.now() + (31 * 1000);
+      const resp = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:replay-test-server',
+        timestamp: ts,
+        nonce: testNonce(),
+        sequenceNumber: 1,
+      }));
+      const data = await resp.json();
+      expect(resp.status).toBe(400);
+      expect(data.error).toContain('timestamp too far in future');
+    });
+
+    it('should reject heartbeat with duplicate nonce', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+      await registerOnStrict(strictRegistry);
+
+      const sharedNonce = testNonce();
+      // First heartbeat with nonce - should succeed
+      const resp1 = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:replay-test-server',
+        timestamp: Date.now(),
+        nonce: sharedNonce,
+        sequenceNumber: 1,
+      }));
+      expect(resp1.status).toBe(200);
+
+      // Second heartbeat with same nonce - should be rejected
+      const resp2 = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:replay-test-server',
+        timestamp: Date.now(),
+        nonce: sharedNonce,
+        sequenceNumber: 2,
+      }));
+      const data = await resp2.json();
+      expect(resp2.status).toBe(409);
+      expect(data.error).toContain('duplicate nonce');
+    });
+
+    it('should accept heartbeats with different nonces', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+      await registerOnStrict(strictRegistry);
+
+      const resp1 = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:replay-test-server',
+        timestamp: Date.now(),
+        nonce: testNonce(),
+        sequenceNumber: 1,
+      }));
+      expect(resp1.status).toBe(200);
+
+      // Advance past 30s min heartbeat interval
+      vi.advanceTimersByTime(31000);
+
+      const resp2 = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:replay-test-server',
+        timestamp: Date.now(),
+        nonce: testNonce(),
+        sequenceNumber: 2,
+      }));
+      expect(resp2.status).toBe(200);
+    });
+
+    it('should enforce monotonic sequence numbers', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+      await registerOnStrict(strictRegistry);
+
+      // Sequence 1
+      const resp1 = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:replay-test-server',
+        timestamp: Date.now(),
+        nonce: testNonce(),
+        sequenceNumber: 1,
+      }));
+      expect(resp1.status).toBe(200);
+
+      // Advance past 30s min heartbeat interval
+      vi.advanceTimersByTime(31000);
+
+      // Sequence 5 (jump allowed)
+      const resp2 = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:replay-test-server',
+        timestamp: Date.now(),
+        nonce: testNonce(),
+        sequenceNumber: 5,
+      }));
+      expect(resp2.status).toBe(200);
+
+      // Advance time to reset per-serverId heartbeat rate limit window
+      vi.advanceTimersByTime(61000);
+
+      // Sequence 3 (less than 5 - rejected)
+      const resp3 = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:replay-test-server',
+        timestamp: Date.now(),
+        nonce: testNonce(),
+        sequenceNumber: 3,
+      }));
+      const data = await resp3.json();
+      expect(resp3.status).toBe(409);
+      expect(data.error).toContain('sequence number');
+    });
+
+    it('should reject equal sequence numbers', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+      await registerOnStrict(strictRegistry);
+
+      const resp1 = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:replay-test-server',
+        timestamp: Date.now(),
+        nonce: testNonce(),
+        sequenceNumber: 10,
+      }));
+      expect(resp1.status).toBe(200);
+
+      // Advance past 30s min heartbeat interval so the rate limiter doesn't block this
+      vi.advanceTimersByTime(31000);
+
+      const resp2 = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:replay-test-server',
+        timestamp: Date.now(),
+        nonce: testNonce(),
+        sequenceNumber: 10,
+      }));
+      const data = await resp2.json();
+      expect(resp2.status).toBe(409);
+      expect(data.error).toContain('sequence number');
+    });
+
+    it('should reject heartbeat without timestamp field', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+      await registerOnStrict(strictRegistry);
+
+      const resp = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:replay-test-server',
+        nonce: testNonce(),
+        sequenceNumber: 1,
+      }));
+      const data = await resp.json();
+      expect(resp.status).toBe(400);
+      expect(data.error).toContain('Missing or invalid timestamp');
+    });
+
+    it('should reject heartbeat with non-numeric timestamp', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+      await registerOnStrict(strictRegistry);
+
+      const resp = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:replay-test-server',
+        timestamp: 'not-a-number',
+        nonce: testNonce(),
+        sequenceNumber: 1,
+      }));
+      const data = await resp.json();
+      expect(resp.status).toBe(400);
+      expect(data.error).toContain('Missing or invalid timestamp');
+    });
+
+    it('should reject heartbeat without nonce field', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+      await registerOnStrict(strictRegistry);
+
+      const resp = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:replay-test-server',
+        timestamp: Date.now(),
+        sequenceNumber: 1,
+      }));
+      const data = await resp.json();
+      expect(resp.status).toBe(400);
+      expect(data.error).toContain('Missing or invalid nonce');
+    });
+
+    it('should reject heartbeat with short nonce', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+      await registerOnStrict(strictRegistry);
+
+      const resp = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:replay-test-server',
+        timestamp: Date.now(),
+        nonce: 'short',
+        sequenceNumber: 1,
+      }));
+      const data = await resp.json();
+      expect(resp.status).toBe(400);
+      expect(data.error).toContain('Missing or invalid nonce');
+    });
+
+    it('should reject registration with duplicate nonce (replay)', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+
+      const sharedNonce = testNonce();
+      const regData = {
+        serverId: 'ed25519:replay-reg-server',
+        endpoint: 'wss://replay-reg.example.com',
+        publicKey: 'replay-reg-key',
+        timestamp: Date.now(),
+        nonce: sharedNonce,
+      };
+
+      // First registration
+      const resp1 = await strictRegistry.fetch(createRequest('POST', '/servers', regData));
+      expect(resp1.status).toBe(200);
+
+      // Replay same registration
+      const resp2 = await strictRegistry.fetch(createRequest('POST', '/servers', {
+        ...regData,
+        timestamp: Date.now(),
+      }));
+      const data = await resp2.json();
+      expect(resp2.status).toBe(409);
+      expect(data.error).toContain('duplicate nonce');
+    });
+
+    it('should not store nonce for non-existent server heartbeat', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+
+      const nonceValue = testNonce();
+      const resp = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:nonexistent-server',
+        timestamp: Date.now(),
+        nonce: nonceValue,
+        sequenceNumber: 1,
+      }));
+      expect(resp.status).toBe(404);
+
+      // Nonce should NOT have been persisted (storage pollution prevention)
+      // The nonce key is scoped per serverId
+      const storedNonce = await strictState.storage.get('nonce:ed25519:nonexistent-server:' + nonceValue);
+      expect(storedNonce).toBeUndefined();
+    });
+
+    it('should reset lastSequenceNumber on re-registration', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+
+      // Register
+      await strictRegistry.fetch(createRequest('POST', '/servers', {
+        serverId: 'ed25519:seq-reset-server',
+        endpoint: 'wss://seq-reset.example.com',
+        publicKey: 'seq-reset-key',
+        timestamp: Date.now(),
+        nonce: testNonce(),
+      }));
+
+      // Send heartbeat with high sequence
+      await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:seq-reset-server',
+        timestamp: Date.now(),
+        nonce: testNonce(),
+        sequenceNumber: 100,
+      }));
+
+      // Re-register (simulates VPS restart) - also resets heartbeat rate limit
+      await strictRegistry.fetch(createRequest('POST', '/servers', {
+        serverId: 'ed25519:seq-reset-server',
+        endpoint: 'wss://seq-reset.example.com',
+        publicKey: 'seq-reset-key-new',
+        timestamp: Date.now(),
+        nonce: testNonce(),
+      }));
+
+      // Advance past 30s min heartbeat interval
+      vi.advanceTimersByTime(31000);
+
+      // Heartbeat with sequence 1 should now work (was reset)
+      const resp = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:seq-reset-server',
+        timestamp: Date.now(),
+        nonce: testNonce(),
+        sequenceNumber: 1,
+      }));
+      expect(resp.status).toBe(200);
+    });
+
+    it('should clean up expired nonces via alarm', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+
+      // Register with a known nonce
+      const knownNonce = testNonce();
+      await strictRegistry.fetch(createRequest('POST', '/servers', {
+        serverId: 'ed25519:nonce-expiry-server',
+        endpoint: 'wss://nonce-expiry.example.com',
+        publicKey: 'nonce-expiry-key',
+        timestamp: Date.now(),
+        nonce: knownNonce,
+      }));
+
+      // Verify nonce is stored
+      const storedNonce = await strictState.storage.get('nonce:' + knownNonce);
+      expect(storedNonce).toBeDefined();
+
+      // Advance time by 6 minutes (past 5 minute expiry)
+      vi.advanceTimersByTime(6 * 60 * 1000);
+
+      // Trigger alarm cleanup
+      await strictRegistry.alarm();
+
+      // Nonce should be cleaned up
+      const expiredNonce = await strictState.storage.get('nonce:' + knownNonce);
+      expect(expiredNonce).toBeUndefined();
+    });
+
+    it('should preserve fresh nonces during alarm cleanup', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+
+      // Register with a known nonce
+      const knownNonce = testNonce();
+      await strictRegistry.fetch(createRequest('POST', '/servers', {
+        serverId: 'ed25519:fresh-nonce-server',
+        endpoint: 'wss://fresh-nonce.example.com',
+        publicKey: 'fresh-nonce-key',
+        timestamp: Date.now(),
+        nonce: knownNonce,
+      }));
+
+      // Advance time by only 4 minutes (within 5 minute window)
+      vi.advanceTimersByTime(4 * 60 * 1000);
+
+      // Trigger alarm cleanup
+      await strictRegistry.alarm();
+
+      // Nonce should still exist
+      const freshNonce = await strictState.storage.get('nonce:' + knownNonce);
+      expect(freshNonce).toBeDefined();
+    });
+  });
+
+  describe('Grace Period / Migration', () => {
+    it('should accept heartbeats without replay fields when REPLAY_GRACE_MODE=true', async () => {
+      // The default serverRegistry has REPLAY_GRACE_MODE: 'true'
+      const regData = {
+        serverId: 'ed25519:grace-test-server',
+        endpoint: 'wss://grace.example.com',
+        publicKey: 'grace-key',
+      };
+      await serverRegistry.fetch(createRequest('POST', '/servers', regData));
+
+      // Heartbeat without timestamp/nonce/sequenceNumber
+      const resp = await serverRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:grace-test-server',
+      }));
+      expect(resp.status).toBe(200);
+    });
+
+    it('should reject heartbeats without replay fields when REPLAY_GRACE_MODE is not set', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+
+      // Register with replay fields
+      await strictRegistry.fetch(createRequest('POST', '/servers', {
+        serverId: 'ed25519:strict-test-server',
+        endpoint: 'wss://strict.example.com',
+        publicKey: 'strict-key',
+        timestamp: Date.now(),
+        nonce: testNonce(),
+      }));
+
+      // Heartbeat WITHOUT replay fields should be rejected
+      const resp = await strictRegistry.fetch(createRequest('POST', '/servers/heartbeat', {
+        serverId: 'ed25519:strict-test-server',
+      }));
+      const data = await resp.json();
+      expect(resp.status).toBe(400);
+      expect(data.error).toContain('Missing or invalid timestamp');
+    });
+
+    it('should accept registrations without replay fields when REPLAY_GRACE_MODE=true', async () => {
+      // The default serverRegistry has REPLAY_GRACE_MODE: 'true'
+      const resp = await serverRegistry.fetch(createRequest('POST', '/servers', {
+        serverId: 'ed25519:grace-reg-server',
+        endpoint: 'wss://grace-reg.example.com',
+        publicKey: 'grace-reg-key',
+      }));
+      expect(resp.status).toBe(200);
+    });
+
+    it('should reject registrations without replay fields when REPLAY_GRACE_MODE is not set', async () => {
+      const strictState = new MockState();
+      const strictRegistry = new ServerRegistryDO(strictState, { SERVER_REGISTRY_SECRET: TEST_BOOTSTRAP_SECRET });
+
+      const resp = await strictRegistry.fetch(createRequest('POST', '/servers', {
+        serverId: 'ed25519:strict-reg-server',
+        endpoint: 'wss://strict-reg.example.com',
+        publicKey: 'strict-reg-key',
+      }));
+      const data = await resp.json();
+      expect(resp.status).toBe(400);
+      expect(data.error).toContain('Missing or invalid timestamp');
+    });
+  });
+
+  describe('Per-serverId Heartbeat Rate Limiting', () => {
+    it('should enforce minimum 30s interval between heartbeats', async () => {
+      const server1 = {
+        serverId: 'ed25519:rl-server-1',
+        endpoint: 'wss://rl1.example.com',
+        publicKey: 'rl-key-1',
+      };
+
+      await serverRegistry.fetch(createRequest('POST', '/servers', server1));
+
+      // First heartbeat: allowed
+      const hb1 = await serverRegistry.fetch(
+        createRequest('POST', '/servers/heartbeat', { serverId: server1.serverId })
+      );
+      expect(hb1.status).toBe(200);
+
+      // Immediate second heartbeat: rejected (< 30s interval)
+      const hb2 = await serverRegistry.fetch(
+        createRequest('POST', '/servers/heartbeat', { serverId: server1.serverId })
+      );
+      expect(hb2.status).toBe(429);
+      const data = await hb2.json();
+      expect(data.error).toContain('min 30s interval');
+      expect(hb2.headers.get('Retry-After')).toBeTruthy();
+    });
+
+    it('should rate limit 3rd heartbeat within 1 minute (max 2/min)', async () => {
+      const server1 = {
+        serverId: 'ed25519:rl-server-3min',
+        endpoint: 'wss://rl3.example.com',
+        publicKey: 'rl-key-3',
+      };
+
+      await serverRegistry.fetch(createRequest('POST', '/servers', server1));
+
+      // First heartbeat
+      const hb1 = await serverRegistry.fetch(
+        createRequest('POST', '/servers/heartbeat', { serverId: server1.serverId })
+      );
+      expect(hb1.status).toBe(200);
+
+      // Advance 31s, second heartbeat
+      vi.advanceTimersByTime(31000);
+      const hb2 = await serverRegistry.fetch(
+        createRequest('POST', '/servers/heartbeat', { serverId: server1.serverId })
+      );
+      expect(hb2.status).toBe(200);
+
+      // Simulate that we're still within the window but past the 30s interval
+      // by directly setting the rate limit entry (count=2, lastRequest 31s ago,
+      // but window still active)
+      const hbKey = 'heartbeat-rl:ed25519:rl-server-3min';
+      const entry = await mockState.storage.get(hbKey);
+      await mockState.storage.put(hbKey, {
+        count: entry.count,
+        windowStart: entry.windowStart,
+        lastRequestAt: Date.now() - 31000, // 31s ago (past min interval)
+      });
+
+      // Third heartbeat: rate limited (count >= 2 within window)
+      const hb3 = await serverRegistry.fetch(
+        createRequest('POST', '/servers/heartbeat', { serverId: server1.serverId })
+      );
+      expect(hb3.status).toBe(429);
+      const data = await hb3.json();
+      expect(data.error).toContain('Heartbeat rate limit exceeded');
+    });
+
+    it('should have independent heartbeat limits per serverId', async () => {
+      const server1 = {
+        serverId: 'ed25519:indep-server-1',
+        endpoint: 'wss://indep1.example.com',
+        publicKey: 'indep-key-1',
+      };
+      const server2 = {
+        serverId: 'ed25519:indep-server-2',
+        endpoint: 'wss://indep2.example.com',
+        publicKey: 'indep-key-2',
+      };
+
+      await serverRegistry.fetch(createRequest('POST', '/servers', server1));
+      await serverRegistry.fetch(createRequest('POST', '/servers', server2));
+
+      // Server1: first heartbeat
+      const hb1_1 = await serverRegistry.fetch(
+        createRequest('POST', '/servers/heartbeat', { serverId: server1.serverId })
+      );
+      expect(hb1_1.status).toBe(200);
+
+      // Server1: immediate second is rate limited (< 30s)
+      const hb1_2 = await serverRegistry.fetch(
+        createRequest('POST', '/servers/heartbeat', { serverId: server1.serverId })
+      );
+      expect(hb1_2.status).toBe(429);
+
+      // Server2 first heartbeat: should succeed (independent limit)
+      const hb2_1 = await serverRegistry.fetch(
+        createRequest('POST', '/servers/heartbeat', { serverId: server2.serverId })
+      );
+      expect(hb2_1.status).toBe(200);
+    });
+
+    it('should reset heartbeat rate limit after 1 minute', async () => {
+      const serverData = {
+        serverId: 'ed25519:reset-test',
+        endpoint: 'wss://reset.example.com',
+        publicKey: 'reset-key',
+      };
+
+      await serverRegistry.fetch(createRequest('POST', '/servers', serverData));
+
+      // Send first heartbeat
+      await serverRegistry.fetch(
+        createRequest('POST', '/servers/heartbeat', { serverId: serverData.serverId })
+      );
+
+      // Advance 31s, send second heartbeat
+      vi.advanceTimersByTime(31000);
+      await serverRegistry.fetch(
+        createRequest('POST', '/servers/heartbeat', { serverId: serverData.serverId })
+      );
+
+      // Simulate rate limit hit by setting count to 2 within a recent window
+      // and lastRequestAt > 30s ago (so the 30s interval check passes)
+      const hbKey = `heartbeat-rl:${serverData.serverId}`;
+      const entry = await mockState.storage.get(hbKey);
+      await mockState.storage.put(hbKey, {
+        count: entry.count,
+        windowStart: entry.windowStart,
+        lastRequestAt: Date.now() - 31000,
+      });
+
+      // Third heartbeat: rate limited (count >= 2 within window)
+      const hb3 = await serverRegistry.fetch(
+        createRequest('POST', '/servers/heartbeat', { serverId: serverData.serverId })
+      );
+      expect(hb3.status).toBe(429);
+
+      // Advance enough time to pass the 60s window entirely
+      vi.advanceTimersByTime(61000);
+
+      // Should now succeed (new window)
+      const hb4 = await serverRegistry.fetch(
+        createRequest('POST', '/servers/heartbeat', { serverId: serverData.serverId })
+      );
+      expect(hb4.status).toBe(200);
+    });
+
+    it('should clean up rate limit counters when server expires', async () => {
+      const serverData = {
+        serverId: 'ed25519:cleanup-test',
+        endpoint: 'wss://cleanup.example.com',
+        publicKey: 'cleanup-key',
+      };
+
+      await serverRegistry.fetch(createRequest('POST', '/servers', serverData));
+
+      // Send heartbeat to create rate limit entry
+      await serverRegistry.fetch(
+        createRequest('POST', '/servers/heartbeat', { serverId: serverData.serverId })
+      );
+
+      // Verify rate limit entry exists in storage
+      const rlKey = `heartbeat-rl:${serverData.serverId}`;
+      const rlEntry = await mockState.storage.get(rlKey);
+      expect(rlEntry).toBeTruthy();
+
+      // Advance time past server TTL (5 minutes)
+      vi.advanceTimersByTime(6 * 60 * 1000);
+
+      // Trigger cleanup (call alarm handler)
+      await serverRegistry.alarm();
+
+      // Verify rate limit entry was cleaned up
+      const rlEntryAfter = await mockState.storage.get(rlKey);
+      expect(rlEntryAfter).toBeUndefined();
+    });
+  });
+
+  describe('Security Headers', () => {
+    it('should include Referrer-Policy on health check response', async () => {
+      const request = createRequest('GET', '/health');
+      const response = await worker.fetch(request, env);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+    });
+
+    it('should include Content-Security-Policy on API responses', async () => {
+      const request = createRequest('GET', '/health');
+      const response = await worker.fetch(request, env);
+
+      expect(response.headers.get('Content-Security-Policy')).toBe("default-src 'none'");
+    });
+
+    it('should include Permissions-Policy on API responses', async () => {
+      const request = createRequest('GET', '/health');
+      const response = await worker.fetch(request, env);
+
+      const permissionsPolicy = response.headers.get('Permissions-Policy');
+      expect(permissionsPolicy).toBeTruthy();
+      expect(permissionsPolicy).toContain('camera=()');
+      expect(permissionsPolicy).toContain('microphone=()');
+      expect(permissionsPolicy).toContain('geolocation=()');
+      expect(permissionsPolicy).toContain('payment=()');
+    });
+
+    it('should include X-Content-Type-Options on API responses', async () => {
+      const request = createRequest('GET', '/health');
+      const response = await worker.fetch(request, env);
+
+      expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+    });
+
+    it('should include X-Frame-Options on API responses', async () => {
+      const request = createRequest('GET', '/health');
+      const response = await worker.fetch(request, env);
+
+      expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+    });
+
+    it('should include Strict-Transport-Security on API responses', async () => {
+      const request = createRequest('GET', '/health');
+      const response = await worker.fetch(request, env);
+
+      expect(response.headers.get('Strict-Transport-Security')).toContain('max-age=31536000');
+      expect(response.headers.get('Strict-Transport-Security')).toContain('includeSubDomains');
+    });
+
+    it('should include Cache-Control no-store on API responses', async () => {
+      const request = createRequest('GET', '/health');
+      const response = await worker.fetch(request, env);
+
+      expect(response.headers.get('Cache-Control')).toBe('no-store');
+    });
+
+    it('should include all security headers on CORS preflight response', async () => {
+      const request = new Request('https://test.workers.dev/servers', {
+        method: 'OPTIONS',
+        headers: {
+          'Origin': 'https://zajel.hamzalabs.dev',
+          'Access-Control-Request-Method': 'POST',
+          'CF-Connecting-IP': '127.0.0.1',
+        },
+      });
+      const response = await worker.fetch(request, env);
+
+      expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+      expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+      expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+      expect(response.headers.get('Strict-Transport-Security')).toContain('max-age=31536000');
+      expect(response.headers.get('Content-Security-Policy')).toBe("default-src 'none'");
+      expect(response.headers.get('Permissions-Policy')).toContain('camera=()');
+    });
+
+    it('should include all security headers on server registration response', async () => {
+      const serverData = {
+        serverId: 'ed25519:test-server-headers',
+        endpoint: 'wss://test-headers.example.com',
+        publicKey: 'base64-public-key-data',
+        region: 'us-east',
+        nonce: testNonce(),
+      };
+
+      const request = createRequest('POST', '/servers', serverData);
+      const response = await worker.fetch(request, env);
+
+      expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+      expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+      expect(response.headers.get('Strict-Transport-Security')).toContain('max-age=31536000');
+      expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+      expect(response.headers.get('Content-Security-Policy')).toBe("default-src 'none'");
+      expect(response.headers.get('Permissions-Policy')).toBeTruthy();
+    });
+
+    it('should include all security headers on GET /servers response', async () => {
+      const request = createRequest('GET', '/servers');
+      const response = await worker.fetch(request, env);
+
+      expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+      expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+      expect(response.headers.get('Strict-Transport-Security')).toContain('max-age=31536000');
+      expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+      expect(response.headers.get('Content-Security-Policy')).toBe("default-src 'none'");
+      expect(response.headers.get('Permissions-Policy')).toBeTruthy();
+      expect(response.headers.get('Cache-Control')).toBe('no-store');
+    });
+
+    it('should include all security headers on 404 response', async () => {
+      const request = createRequest('GET', '/nonexistent');
+      const response = await worker.fetch(request, env);
+
+      expect(response.status).toBe(404);
+      expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+      expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+      expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+      expect(response.headers.get('Strict-Transport-Security')).toContain('max-age=31536000');
+      expect(response.headers.get('Content-Security-Policy')).toBe("default-src 'none'");
+      expect(response.headers.get('Permissions-Policy')).toBeTruthy();
+    });
+
+    it('should include all security headers on rate-limited response', async () => {
+      // Create requests with unique IPs to avoid affecting other tests
+      const rateLimitIp = '10.99.99.99';
+
+      // Exhaust the rate limit (read tier: 200/min)
+      // Use admin tier which has lower limit (10/min)
+      for (let i = 0; i <= 10; i++) {
+        const request = new Request('https://test.workers.dev/servers/trusted-keys', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'CF-Connecting-IP': rateLimitIp,
+          },
+          body: JSON.stringify({}),
+        });
+        await worker.fetch(request, env);
+      }
+
+      // Next request should be rate-limited
+      const request = new Request('https://test.workers.dev/servers/trusted-keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'CF-Connecting-IP': rateLimitIp,
+        },
+        body: JSON.stringify({}),
+      });
+      const response = await worker.fetch(request, env);
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+      expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+      expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+      expect(response.headers.get('Strict-Transport-Security')).toContain('max-age=31536000');
+      expect(response.headers.get('Content-Security-Policy')).toBe("default-src 'none'");
     });
   });
 });

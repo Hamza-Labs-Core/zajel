@@ -28,8 +28,12 @@ class MockStorage {
     return this.data.get(key);
   }
 
-  async put(key, value) {
-    this.data.set(key, value);
+  async put(keyOrMap, value) {
+    if (keyOrMap instanceof Map) {
+      for (const [k, v] of keyOrMap) { this.data.set(k, v); }
+    } else {
+      this.data.set(keyOrMap, value);
+    }
   }
 
   async delete(key) {
@@ -40,12 +44,14 @@ class MockStorage {
     }
   }
 
-  async list({ prefix, limit }) {
+  async list({ prefix, start, limit }) {
     const results = new Map();
-    for (const [key, value] of this.data) {
-      if (key.startsWith(prefix)) {
-        results.set(key, value);
-        if (limit && results.size >= limit) break;
+    const sortedKeys = [...this.data.keys()].sort();
+    for (const key of sortedKeys) {
+      if (typeof key !== 'string') continue;
+      if (start && key < start) continue;
+      if (key.startsWith(prefix) && results.size < (limit || Infinity)) {
+        results.set(key, this.data.get(key));
       }
     }
     return results;
@@ -92,16 +98,42 @@ class MockDurableObjectStub {
 }
 
 /**
- * Create a mock environment for CF Workers
+ * Create a mock environment for CF Workers.
+ * With sharding, GET /servers fans out across all regional shards.
+ * Route 'region:default' to the real DO and all others to empty stubs
+ * so that servers registered directly on the DO are found by the fan-out.
+ * Also route 'admin' to the real DO for trusted-keys operations.
  */
 function createMockEnv(doInstance) {
+  const emptyStub = {
+    fetch: (r) => {
+      const url = new URL(r.url);
+      if (url.pathname === '/servers/lookup') {
+        return Promise.resolve(new Response(JSON.stringify({ found: false }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ servers: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+    },
+  };
   return {
     SERVER_REGISTRY: {
-      idFromName: () => 'mock-id',
-      get: () => new MockDurableObjectStub(doInstance),
+      idFromName: (name) => name,
+      get: (id) => {
+        if (id === 'region:default' || id === 'admin') {
+          return new MockDurableObjectStub(doInstance);
+        }
+        return emptyStub;
+      },
     },
   };
 }
+
+const TEST_INTEGRATION_SECRET = 'test-integration-secret';
 
 /**
  * Helper to create a JSON request
@@ -110,7 +142,11 @@ function createRequest(method, path, body = null, baseUrl = 'https://test.worker
   const url = `${baseUrl}${path}`;
   const options = {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${TEST_INTEGRATION_SECRET}`,
+      'CF-Connecting-IP': '127.0.0.1',
+    },
   };
   if (body) {
     options.body = JSON.stringify(body);
@@ -159,9 +195,12 @@ describe('Bootstrap Service Integration Tests', () => {
 
   beforeEach(() => {
     mockState = new MockState();
-    serverRegistry = new ServerRegistryDO(mockState, {});
+    serverRegistry = new ServerRegistryDO(mockState, {
+      SERVER_REGISTRY_SECRET: TEST_INTEGRATION_SECRET,
+      REPLAY_GRACE_MODE: 'true',
+    });
     env = createMockEnv(serverRegistry);
-    vi.useFakeTimers();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
   });
 
   afterEach(() => {
@@ -416,8 +455,13 @@ describe('Bootstrap Service Integration Tests', () => {
         region: 'eu-west',
       });
 
+      // Advance 31s to satisfy min heartbeat interval
+      vi.advanceTimersByTime(31000);
       heartbeatResult = await sendHeartbeat(serverRegistry, 'ed25519:observer-server');
       expect(heartbeatResult.peers).toHaveLength(1);
+
+      // Advance time to reset per-serverId heartbeat rate limit window
+      vi.advanceTimersByTime(61000);
 
       // Add another peer
       await registerServer(serverRegistry, {
@@ -433,6 +477,8 @@ describe('Bootstrap Service Integration Tests', () => {
       // Remove a peer
       await unregisterServer(serverRegistry, 'ed25519:peer-1');
 
+      // Advance 31s to satisfy min heartbeat interval
+      vi.advanceTimersByTime(31000);
       heartbeatResult = await sendHeartbeat(serverRegistry, 'ed25519:observer-server');
       expect(heartbeatResult.peers).toHaveLength(1);
       expect(heartbeatResult.peers[0].serverId).toBe('ed25519:peer-2');
@@ -497,7 +543,10 @@ describe('Bootstrap Service Integration Tests', () => {
       // Graceful server shuts down and unregisters
       await unregisterServer(serverRegistry, 'ed25519:graceful-server');
 
-      // Observer immediately sees the server is gone
+      // Advance 31s to satisfy min heartbeat interval
+      vi.advanceTimersByTime(31000);
+
+      // Observer sees the server is gone
       heartbeatResult = await sendHeartbeat(serverRegistry, 'ed25519:observer');
       expect(heartbeatResult.peers).toHaveLength(0);
     });
@@ -617,6 +666,9 @@ describe('Bootstrap Service Integration Tests', () => {
       expect(peersB.peers[0].serverId).toBe('ed25519:federation-server-a');
       expect(peersB.peers[0].publicKey).toBe('fed-a-pubkey');
 
+      // Advance 31s to satisfy min heartbeat interval for Server A
+      vi.advanceTimersByTime(31000);
+
       // Server A discovers Server B on next heartbeat
       peersA = await sendHeartbeat(serverRegistry, 'ed25519:federation-server-a');
       expect(peersA.peers).toHaveLength(1);
@@ -650,6 +702,9 @@ describe('Bootstrap Service Integration Tests', () => {
         await sendHeartbeat(serverRegistry, 'ed25519:stable-server');
       }
 
+      // Advance 31s to satisfy min heartbeat interval
+      vi.advanceTimersByTime(31000);
+
       // Unstable server is now stale
       stablePeers = await sendHeartbeat(serverRegistry, 'ed25519:stable-server');
       expect(stablePeers.peers).toHaveLength(0);
@@ -662,6 +717,9 @@ describe('Bootstrap Service Integration Tests', () => {
         region: 'eu-west',
       });
 
+      // Advance time to reset heartbeat rate limit window before checking federation
+      vi.advanceTimersByTime(61 * 1000);
+
       // Federation restored
       stablePeers = await sendHeartbeat(serverRegistry, 'ed25519:stable-server');
       expect(stablePeers.peers).toHaveLength(1);
@@ -673,7 +731,10 @@ describe('Bootstrap Service Integration Tests', () => {
     it('should handle malformed JSON gracefully', async () => {
       const request = new Request('https://test.workers.dev/servers', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${TEST_INTEGRATION_SECRET}`,
+        },
         body: 'not valid json',
       });
 
@@ -684,7 +745,10 @@ describe('Bootstrap Service Integration Tests', () => {
     it('should handle empty request body', async () => {
       const request = new Request('https://test.workers.dev/servers', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${TEST_INTEGRATION_SECRET}`,
+        },
         body: '',
       });
 

@@ -24,8 +24,29 @@ export const CRYPTO = {
   /** X25519 public key size in bytes */
   X25519_KEY_SIZE: 32,
 
+  /** ML-KEM-768 public key size in bytes */
+  MLKEM768_PUBLIC_KEY_SIZE: 1184,
+
+  /** ML-KEM-768 ciphertext size in bytes */
+  MLKEM768_CIPHERTEXT_SIZE: 1088,
+
+  /** ML-KEM-768 shared secret size in bytes */
+  MLKEM768_SHARED_SECRET_SIZE: 32,
+
   /** Session key expiration time (24 hours) for forward secrecy */
   SESSION_KEY_EXPIRY_MS: 24 * 60 * 60 * 1000,
+
+  /** Protocol version for classical X25519-only key exchange */
+  PROTOCOL_VERSION_CLASSICAL: 1,
+
+  /** Protocol version for hybrid X25519 + ML-KEM-768 key exchange */
+  PROTOCOL_VERSION_HYBRID: 2,
+
+  /** Current protocol version (what we advertise in signaling) */
+  PROTOCOL_VERSION_CURRENT: 2,
+
+  /** Supported key exchange methods */
+  SUPPORTED_KEMS: ['x25519', 'x25519-mlkem768'] as readonly string[],
 } as const;
 
 // =============================================================================

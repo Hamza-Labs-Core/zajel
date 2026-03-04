@@ -369,7 +369,9 @@ describe('SignalingClient', () => {
       expect(events.onPairMatched).toHaveBeenCalledWith(
         VALID_PEER_CODE,
         VALID_PEER_PUBLIC_KEY,
-        true
+        true,
+        undefined,
+        undefined
       );
     });
 

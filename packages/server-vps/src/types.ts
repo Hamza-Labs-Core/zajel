@@ -251,6 +251,7 @@ export interface ServerConfig {
   };
   bootstrap: {
     serverUrl: string;          // CF Workers bootstrap server URL
+    registrySecret: string;     // SERVER_REGISTRY_SECRET for authentication
     heartbeatInterval: number;  // How often to ping CF
     nodes: string[];            // Legacy: direct peer nodes
     retryInterval: number;

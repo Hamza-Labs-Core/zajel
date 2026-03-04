@@ -26,8 +26,12 @@ class MockStorage {
     return this.data.get(key);
   }
 
-  async put(key, value) {
-    this.data.set(key, value);
+  async put(keyOrMap, value) {
+    if (keyOrMap instanceof Map) {
+      for (const [k, v] of keyOrMap) { this.data.set(k, v); }
+    } else {
+      this.data.set(keyOrMap, value);
+    }
   }
 
   async delete(key) {
@@ -38,12 +42,14 @@ class MockStorage {
     }
   }
 
-  async list({ prefix, limit }) {
+  async list({ prefix, start, limit }) {
     const results = new Map();
-    for (const [key, value] of this.data) {
-      if (key.startsWith(prefix)) {
-        results.set(key, value);
-        if (limit && results.size >= limit) break;
+    const sortedKeys = [...this.data.keys()].sort();
+    for (const key of sortedKeys) {
+      if (typeof key !== 'string') continue;
+      if (start && key < start) continue;
+      if (key.startsWith(prefix) && results.size < (limit || Infinity)) {
+        results.set(key, this.data.get(key));
       }
     }
     return results;
@@ -73,11 +79,18 @@ class MockState {
   }
 }
 
+const TEST_ANOMALY_SECRET = 'test-anomaly-secret';
+
 function createRequest(method, path, body = null, headers = {}) {
   const url = `https://test.workers.dev${path}`;
   const options = {
     method,
-    headers: { 'Content-Type': 'application/json', ...headers },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${TEST_ANOMALY_SECRET}`,
+      'CF-Connecting-IP': '127.0.0.1',
+      ...headers,
+    },
   };
   if (body) {
     options.body = JSON.stringify(body);
@@ -110,8 +123,11 @@ describe('Anomaly Detection', () => {
 
   beforeEach(() => {
     mockState = new MockState();
-    registry = new ServerRegistryDO(mockState, {});
-    vi.useFakeTimers();
+    registry = new ServerRegistryDO(mockState, {
+      SERVER_REGISTRY_SECRET: TEST_ANOMALY_SECRET,
+      REPLAY_GRACE_MODE: 'true',
+    });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
   });
 
   afterEach(() => {
@@ -129,18 +145,24 @@ describe('Anomaly Detection', () => {
       });
 
       // Build up history with normal values (need >= 2 entries)
+      // Must advance 31s between heartbeats to satisfy 30s minimum interval
       await sendHeartbeat(registry, {
         serverId: 'ed25519:spike-server',
         connections: 10,
         relayConnections: 5,
         signalingConnections: 5,
       });
+
+      vi.advanceTimersByTime(31000);
+
       await sendHeartbeat(registry, {
         serverId: 'ed25519:spike-server',
         connections: 12,
         relayConnections: 6,
         signalingConnections: 6,
       });
+
+      vi.advanceTimersByTime(31000);
 
       // Now spike to >3x the previous value
       await sendHeartbeat(registry, {
@@ -170,12 +192,17 @@ describe('Anomaly Detection', () => {
         relayConnections: 5,
         signalingConnections: 5,
       });
+
+      vi.advanceTimersByTime(31000);
+
       await sendHeartbeat(registry, {
         serverId: 'ed25519:normal-server',
         connections: 12,
         relayConnections: 6,
         signalingConnections: 6,
       });
+
+      vi.advanceTimersByTime(31000);
 
       // Modest increase (< 3x)
       await sendHeartbeat(registry, {
@@ -201,19 +228,24 @@ describe('Anomaly Detection', () => {
         signalingConnections: 50,
       });
 
-      // Build history
+      // Build history (advance 31s between heartbeats to satisfy 30s min interval)
       await sendHeartbeat(registry, {
         serverId: 'ed25519:drop-server',
         connections: 100,
         relayConnections: 50,
         signalingConnections: 50,
       });
+
+      vi.advanceTimersByTime(31000);
+
       await sendHeartbeat(registry, {
         serverId: 'ed25519:drop-server',
         connections: 95,
         relayConnections: 47,
         signalingConnections: 48,
       });
+
+      vi.advanceTimersByTime(31000);
 
       // Sudden drop to <20% of previous
       await sendHeartbeat(registry, {
@@ -278,7 +310,11 @@ describe('Anomaly Detection', () => {
       });
 
       // Send 12 heartbeats with 0 connections (need 10 in history + current)
+      // Advance 31s before each heartbeat to satisfy 30s minimum interval
       for (let i = 0; i < 12; i++) {
+        if (i > 0) {
+          vi.advanceTimersByTime(31000);
+        }
         await sendHeartbeat(registry, {
           serverId: 'ed25519:ghost-server',
           connections: 0,
@@ -298,7 +334,11 @@ describe('Anomaly Detection', () => {
       });
 
       // Most heartbeats have 0, but a few have connections
+      // Advance 31s before each heartbeat to satisfy 30s minimum interval
       for (let i = 0; i < 11; i++) {
+        if (i > 0) {
+          vi.advanceTimersByTime(31000);
+        }
         await sendHeartbeat(registry, {
           serverId: 'ed25519:active-server',
           connections: i === 5 ? 3 : 0,
@@ -342,19 +382,24 @@ describe('Anomaly Detection', () => {
         signalingConnections: 250,
       });
 
-      // Build history for outlier
+      // Build history for outlier (advance 31s between heartbeats)
       await sendHeartbeat(registry, {
         serverId: 'ed25519:outlier',
         connections: 400,
         relayConnections: 200,
         signalingConnections: 200,
       });
+
+      vi.advanceTimersByTime(31000);
+
       await sendHeartbeat(registry, {
         serverId: 'ed25519:outlier',
         connections: 450,
         relayConnections: 225,
         signalingConnections: 225,
       });
+
+      vi.advanceTimersByTime(31000);
 
       // Send heartbeat with value far from fleet norm
       await sendHeartbeat(registry, {
@@ -387,18 +432,25 @@ describe('Anomaly Detection', () => {
       }
 
       // Heartbeat for one of them — values within normal fleet range
+      // Advance 31s between heartbeats to satisfy 30s minimum interval
       await sendHeartbeat(registry, {
         serverId: 'ed25519:a',
         connections: 50,
         relayConnections: 25,
         signalingConnections: 25,
       });
+
+      vi.advanceTimersByTime(31000);
+
       await sendHeartbeat(registry, {
         serverId: 'ed25519:a',
         connections: 51,
         relayConnections: 26,
         signalingConnections: 25,
       });
+
+      vi.advanceTimersByTime(31000);
+
       await sendHeartbeat(registry, {
         serverId: 'ed25519:a',
         connections: 49,
@@ -430,6 +482,8 @@ describe('Anomaly Detection', () => {
       });
 
       const score1 = (await mockState.storage.get('anomaly-score:ed25519:accumulate-server')).score;
+
+      vi.advanceTimersByTime(31000);
 
       await sendHeartbeat(registry, {
         serverId: 'ed25519:accumulate-server',
@@ -464,7 +518,9 @@ describe('Anomaly Detection', () => {
       expect(initialScore).toBeGreaterThan(0);
 
       // Following heartbeats: consistent metrics — score should decay
+      // Advance 31s before each heartbeat to satisfy 30s minimum interval
       for (let i = 0; i < 10; i++) {
+        vi.advanceTimersByTime(31000);
         await sendHeartbeat(registry, {
           serverId: 'ed25519:decay-server',
           connections: 20,
@@ -629,7 +685,11 @@ describe('Anomaly Detection', () => {
       });
 
       // Send 35 heartbeats (exceeds ANOMALY_HISTORY_SIZE of 30)
+      // Advance 31s before each heartbeat to satisfy 30s minimum interval
       for (let i = 0; i < 35; i++) {
+        if (i > 0) {
+          vi.advanceTimersByTime(31000);
+        }
         await sendHeartbeat(registry, {
           serverId: 'ed25519:history-server',
           connections: i,

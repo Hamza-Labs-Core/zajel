@@ -478,6 +478,9 @@ jobs:
     needs: [check-changes, test, changelog, build-android, build-ios, build-macos, build-windows, build-linux]
     if: ${{ always() && needs.check-changes.outputs.app_changed == 'true' && needs.test.result == 'success' && needs.changelog.result == 'success' }}
     runs-on: ubuntu-latest
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+      version: ${{ needs.changelog.outputs.version }}
     permissions:
       contents: write
     steps:
@@ -508,11 +511,53 @@ jobs:
           # Linux
           cp artifacts/linux-build/zajel-linux.tar.gz "release-files/zajel-${VERSION}-linux.tar.gz"
 
+      - name: Compute SHA256 hashes for all artifacts
+        id: hash
+        run: |
+          cd release-files
+          # Compute SHA256 hashes for all release artifacts
+          sha256sum * > SHA256SUMS
+          echo "=== SHA256SUMS ==="
+          cat SHA256SUMS
+
+          # Create base64-encoded subjects for SLSA provenance generator
+          # The generator expects decoded output in sha256sum format: "HASH  FILENAME"
+          HASHES=$(cat SHA256SUMS | base64 -w0)
+          echo "hashes=$HASHES" >> $GITHUB_OUTPUT
+
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: Zajel v${{ needs.changelog.outputs.version }}
-          body: ${{ needs.changelog.outputs.changelog }}
+          body: |
+            ${{ needs.changelog.outputs.changelog }}
+
+            ## Verification
+
+            This release includes SLSA L2 build provenance attestation. To verify:
+
+            ```bash
+            # Download artifacts and verification files
+            VERSION="${{ needs.changelog.outputs.version }}"
+            ARTIFACT="zajel-${VERSION}-android.apk"  # or any other artifact
+
+            # 1. Verify hash integrity
+            sha256sum -c SHA256SUMS --ignore-missing
+
+            # 2. Verify SLSA provenance (requires slsa-verifier: go install github.com/slsa-framework/slsa-verifier/v2/cli/slsa-verifier@latest)
+            slsa-verifier verify-artifact "$ARTIFACT" \
+              --provenance-path multiple.intoto.jsonl \
+              --source-uri github.com/${{ github.repository }} \
+              --source-tag ${{ github.ref_name }}
+
+            # 3. Verify Sigstore signature (requires cosign: go install github.com/sigstore/cosign/v2/cmd/cosign@latest)
+            cosign verify-blob SHA256SUMS \
+              --bundle SHA256SUMS.sigstore.json \
+              --certificate-identity-regexp="^https://github.com/${{ github.repository }}/" \
+              --certificate-oidc-issuer=https://token.actions.githubusercontent.com
+            ```
+
+            All artifacts are built from commit `${{ github.sha }}` using Flutter ${{ env.FLUTTER_VERSION }}.
           files: release-files/*
           draft: false
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
@@ -538,6 +583,124 @@ jobs:
             gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG" 2>/dev/null || true
           done
           echo "All pre-releases deleted"
+
+  # Generate SLSA L2 provenance attestation
+  # Uses the SLSA framework's reusable workflow for keyless provenance generation
+  # signed via Sigstore. This runs in an isolated environment controlled by the
+  # slsa-github-generator, satisfying SLSA L2 "service generated" requirement.
+  provenance:
+    needs: [release]
+    if: needs.release.result == 'success'
+    permissions:
+      actions: read      # Required to read workflow path
+      id-token: write    # Required for Sigstore keyless signing
+      contents: write    # Required to upload attestation to release
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: "${{ needs.release.outputs.hashes }}"
+      upload-assets: true
+      upload-tag-name: ${{ github.ref_name }}
+      provenance-name: "multiple.intoto.jsonl"
+
+  # Sign SHA256SUMS with Sigstore cosign (keyless OIDC)
+  # Downloads SHA256SUMS from the just-created GitHub release to ensure the
+  # signed file exactly matches what was published. Identity is bound to the
+  # GitHub Actions OIDC token (repository + workflow path).
+  sign-hashes:
+    needs: [release]
+    if: needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write    # Required for Sigstore OIDC keyless signing
+      contents: write    # Required to upload signature to release
+    steps:
+      - name: Download SHA256SUMS from GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --pattern "SHA256SUMS" \
+            --dir .
+          echo "=== Downloaded SHA256SUMS ==="
+          cat SHA256SUMS
+
+      - name: Install Sigstore cosign
+        uses: sigstore/cosign-installer@v4
+
+      - name: Sign SHA256SUMS with Sigstore
+        run: |
+          # Keyless signing using GitHub Actions OIDC token
+          # The --yes flag bypasses interactive prompts
+          cosign sign-blob --yes SHA256SUMS \
+            --bundle SHA256SUMS.sigstore.json
+
+      - name: Upload signature to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: SHA256SUMS.sigstore.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Verify provenance and signatures after generation (automated gate)
+  verify-provenance:
+    needs: [release, provenance, sign-hashes]
+    if: needs.provenance.result == 'success' && needs.sign-hashes.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release artifacts for verification
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p verify
+          cd verify
+          gh release download "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --pattern "SHA256SUMS" \
+            --pattern "SHA256SUMS.sigstore.json" \
+            --pattern "multiple.intoto.jsonl" \
+            --pattern "zajel-*" \
+            --dir .
+          echo "=== Downloaded files ==="
+          ls -la
+
+      - name: Verify SHA256 hashes
+        run: |
+          cd verify
+          echo "=== Verifying SHA256 hashes ==="
+          sha256sum -c SHA256SUMS
+          echo "All hashes verified successfully"
+
+      - name: Install slsa-verifier
+        uses: slsa-framework/slsa-verifier/actions/installer@v2.7.1
+
+      - name: Verify SLSA provenance for all artifacts
+        run: |
+          cd verify
+          echo "=== Verifying SLSA provenance ==="
+          for artifact in zajel-*; do
+            echo "Verifying: $artifact"
+            slsa-verifier verify-artifact "$artifact" \
+              --provenance-path multiple.intoto.jsonl \
+              --source-uri "github.com/${{ github.repository }}" \
+              --source-tag "${{ github.ref_name }}"
+            echo "  PASSED: $artifact"
+          done
+          echo "All SLSA provenance verified successfully"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4
+
+      - name: Verify Sigstore signature
+        run: |
+          cd verify
+          echo "=== Verifying Sigstore signature ==="
+          cosign verify-blob SHA256SUMS \
+            --bundle SHA256SUMS.sigstore.json \
+            --certificate-identity-regexp="^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer=https://token.actions.githubusercontent.com
+          echo "Sigstore signature verified successfully"
 
   # Skip notification when no app changes
   skip-release:
