@@ -46,7 +46,7 @@ export class AuditLogDO {
    * Prevents arbitrary event injection from within the Worker.
    */
   async verifyInternalAuth(request) {
-    if (!this.env.AUDIT_LOG_INTERNAL_TOKEN) return true; // Allow if not configured (backward compat)
+    if (!this.env.AUDIT_LOG_INTERNAL_TOKEN) return false; // Fail-closed: require token
     const token = request.headers.get('X-Internal-Token');
     if (!token) return false;
     return await timingSafeEqual(token, this.env.AUDIT_LOG_INTERNAL_TOKEN);
