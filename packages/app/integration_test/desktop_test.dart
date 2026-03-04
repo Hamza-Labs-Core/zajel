@@ -258,12 +258,13 @@ void main() {
       expect(find.text('Settings'), findsOneWidget);
       expect(find.text('Profile'), findsOneWidget);
       expect(find.text('Appearance'), findsOneWidget);
-      expect(find.text('Privacy & Security'), findsOneWidget);
 
       // Scroll down to reveal sections below the fold (ListView lazy rendering).
-      // Multiple drags ensure the section is in the viewport.
+      // The Updates section (desktop-only) pushes later sections off-screen.
       await tester.drag(find.byType(ListView), const Offset(0, -300));
       await _pumpFrames(tester);
+      expect(find.text('Privacy & Security'), findsOneWidget);
+
       await tester.drag(find.byType(ListView), const Offset(0, -300));
       await _pumpFrames(tester);
       expect(find.text('External Connections'), findsOneWidget);
@@ -298,6 +299,10 @@ void main() {
       await _pumpApp(tester, prefs);
 
       await tester.tap(find.byIcon(Icons.settings));
+      await _pumpFrames(tester);
+
+      // Scroll down past Updates section to reach Privacy & Security
+      await tester.drag(find.byType(ListView), const Offset(0, -400));
       await _pumpFrames(tester);
 
       // Privacy screen toggle should be visible

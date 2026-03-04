@@ -126,6 +126,30 @@ A comprehensive list of all features in the Zajel project, organized by package 
 
 ---
 
+## App -- Desktop Auto-Updater
+
+- **Package Format Detection** -- Detects MSIX (Windows), Mac App Store, Snap, Flatpak, AppImage, and loose installs at startup; disables in-app updater for store-managed formats and redirects users to the appropriate store
+- **GitHub Releases API Client** -- Queries GitHub Releases API with ETag-based conditional requests (304 Not Modified) and 1-hour in-memory cache; tracks rate-limit headers and enforces the limit without issuing redundant requests
+- **Version Comparison** -- Semver comparison strips leading `v`, pre-release suffixes, and build metadata; returns signed integer for sorting semantics
+- **Background Download** -- Streams release artifacts over HTTPS to a staging directory; supports resumable downloads via HTTP Range requests and stored ETags; cancellable via CancellationToken
+- **SHA-256 Verification** -- Streams the downloaded artifact through chunked SHA-256 hashing; rejects artifacts with missing or mismatched checksums
+- **Archive Extraction** -- Extracts ZIP (Windows), tar.gz (Linux), and DMG (macOS) archives using native platform tools (tar, unzip, hdiutil)
+- **Update State Machine** -- Coordinates the full update lifecycle across seven states: idle, checking, downloading (with progress), verifying, ready, launchingUpdater, failed
+- **Staging Cleanup** -- Deletes stale staging directories for superseded versions and orphaned partial files older than seven days on app start
+- **Go Updater Binary** -- External Go binary that waits for the app to exit, backs up the installation, replaces files, and relaunches the new version; cross-compiled for Windows (amd64), macOS (amd64 + arm64), and Linux (amd64)
+- **Manifest IPC Protocol** -- JSON manifest written by the Dart app and read by the Go binary; carries all paths, the app PID, version strings, checksum, and platform; both sides validate independently
+- **Updater Self-Update** -- Each release artifact includes the new updater binary; the Dart app copies it to the external updater directory before launching, ensuring the updater is always from the latest release
+- **Layer-1 Rollback (Backup/Restore)** -- Go updater copies the installation directory to a backup before touching any files; restores from backup if file replacement fails or the new app fails to launch
+- **Layer-2 Rollback (Crash Counter)** -- App-side `UpdateRollbackService` increments a SharedPreferences counter on each startup when an update result file shows `pending_verification`; triggers rollback via the Go binary after two consecutive failed launch attempts
+- **Layer-3 Rollback (Power-Loss Lock File)** -- Go updater writes `update-in-progress.lock` before replacing files and deletes it on success; Dart detects a stale lock file on the next startup and triggers rollback mode
+- **Idle Detection** -- Three-signal idle model: 5-minute pointer/keyboard inactivity threshold, no active VoIP call, no active file transfer; 10-second grace period before auto-install proceeds
+- **Auto-Install** -- User-configurable opt-in (default off); when enabled, applies a verified update silently when the idle conditions are met
+- **Update Settings Section** -- Desktop-only Settings > Updates section showing current version, last check timestamp, available version with release notes, and Check Now / Retry buttons; adapts display to store-managed installs
+- **Update Ready Banner** -- Non-intrusive banner at the top of the content area when an update is downloaded and verified; includes Install and Dismiss actions; `UpdateReadyDot` provides a smaller badge variant
+- **Update Progress Indicator** -- Inline progress display for force-update flows: linear bar during download, spinner during verification, installing state, and retry-capable error state
+
+---
+
 ## App -- Settings & Onboarding
 
 - **Settings Screen** -- Profile, Appearance, Notifications, Audio/Video, Privacy/Security, Debugging, About, Help

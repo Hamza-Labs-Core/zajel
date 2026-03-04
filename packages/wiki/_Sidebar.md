@@ -26,6 +26,9 @@
 - [Flutter Tests](Flutter-Tests)
 - [Server Tests](Server-Tests)
 
+**Features**
+- [Desktop Auto-Updater](Desktop-Auto-Updater)
+
 **Development**
 - [Build and Deploy](Build-and-Deploy)
 - [Feature Reference](Feature-Reference)

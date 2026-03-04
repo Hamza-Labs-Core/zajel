@@ -11,6 +11,7 @@ This page covers building, testing, and deploying all Zajel packages.
 | Node.js | 20.0.0 | Server, website, web client, integration tests |
 | Flutter | 3.x | Mobile and desktop app |
 | Dart | (bundled with Flutter) | App development |
+| Go | 1.22 | Desktop auto-updater binary |
 | npm | (bundled with Node.js) | Package management |
 | Wrangler | Latest | Cloudflare Workers deployment |
 
@@ -66,6 +67,36 @@ flutter test test/path/to/test_file.dart
 # Run with coverage
 flutter test --coverage
 ```
+
+### Desktop Auto-Updater Binary
+
+The Go updater binary must be built and bundled inside each desktop release artifact. The CI pipeline cross-compiles all four variants from a single Linux runner, but you can build locally for your current platform:
+
+```bash
+cd packages/app/updater
+
+# Build for the current platform
+go build -o zajel-updater .
+
+# Cross-compile for all desktop platforms (from any OS with Go installed)
+GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o zajel-updater.exe .
+GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o zajel-updater-macos-x64 .
+GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o zajel-updater-macos-arm64 .
+GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o zajel-updater-linux .
+
+# Run Go tests
+go test ./...
+```
+
+The binary must be placed inside the release archive so the Dart app can find it in the staging directory. Expected locations inside each archive:
+
+| Archive | Binary path inside archive |
+|---------|---------------------------|
+| `zajel-<version>-windows.zip` | `zajel-updater.exe` or `updater/zajel-updater.exe` |
+| `zajel-<version>-macos.dmg` | `zajel-updater` or `updater/zajel-updater` |
+| `zajel-<version>-linux.tar.gz` | `zajel-updater` or `updater/zajel-updater` |
+
+`UpdaterLauncher.deployUpdater()` searches both the root of the staging directory and a `updater/` subdirectory.
 
 ### Release Builds
 
@@ -294,12 +325,14 @@ pytest
 The CI pipeline performs:
 
 1. **Lint**: Dart format check, lint rules
-2. **Unit tests**: Flutter app tests, server tests
+2. **Unit tests**: Flutter app tests, server tests, Go updater tests (`go test ./...`)
 3. **Integration tests**: Web-to-web, pairing flows
 4. **E2E tests**: Full app flow with headless client
-5. **Build**: Release builds for all platforms
-6. **Attestation**: Upload reference binaries for attestation verification
-7. **Deploy**: Server to Cloudflare Workers, website to Cloudflare Pages
+5. **Build updater**: Cross-compile Go binary for Windows/macOS x64/macOS arm64/Linux from a single ubuntu-latest runner
+6. **Build**: Release builds for all platforms (each bundles the updater binary)
+7. **Checksums**: Generate `checksums.txt` with SHA-256 hashes for all release artifacts
+8. **Attestation**: Upload reference binaries for attestation verification
+9. **Deploy**: Server to Cloudflare Workers, website to Cloudflare Pages
 
 ### Key CI Principles
 
