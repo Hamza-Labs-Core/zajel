@@ -60,6 +60,7 @@ e2e-tests/
     android_helper.py    # AppHelper (952 lines) - full UI automation via Appium
     linux_config.py      # APP_PATH, DATA_DIR_1/2, SIGNALING_URL
     linux_helper.py      # LinuxAppHelper - Shelf HTTP based automation
+    linux_a11y_helper.py # LinuxDesktopHelper - hybrid Shelf + pyautogui (real cursor/keyboard)
     shelf_client.py      # HTTP client for embedded Shelf server
     windows_config.py    # Windows-specific config
     windows_helper.py    # WindowsAppHelper
@@ -130,18 +131,16 @@ The central fixtures are defined in `e2e-tests/conftest.py`:
 - Captures screenshots and page source XML on failure
 - Supports up to 3 simultaneous emulators (alice, bob, charlie)
 
-### Linux (`LinuxAppHelper`)
+### Linux (`LinuxAppHelper` / `LinuxDesktopHelper`)
 
-- Communicates with the Flutter app's embedded Shelf HTTP server (port 9000-9020)
-- Shelf server is started by `integration_test/appium_test.dart` entry point
-- Bypasses AT-SPI entirely -- works in headless Xvfb environments
-- Supports two instances via separate data directories (`DATA_DIR_1`, `DATA_DIR_2`)
-- Three launch modes: pre-launched (env `ZAJEL_SHELF_PORT`), binary (pre-built executable), flutter-test (fallback)
+- **LinuxAppHelper**: Communicates with the Flutter app's embedded Shelf HTTP server (port 9000-9020). Bypasses AT-SPI entirely -- works in headless Xvfb environments. Supports two instances via separate data directories. Three launch modes: pre-launched (env `ZAJEL_SHELF_PORT`), binary, flutter-test (fallback).
+- **LinuxDesktopHelper** (`linux_a11y_helper.py`): Hybrid Shelf HTTP + pyautogui helper for real desktop E2E tests. Uses `pyautogui.write()` for keyboard text input and `pyautogui.moveTo()` + `pyautogui.click()` for real cursor clicks on Flutter's window. Falls back to Shelf-based interaction when cursor mode is unavailable.
 
 ### Windows (`WindowsAppHelper`)
 
-- Currently limited to headless client tests (signaling protocol)
-- No app automation in CI yet
+- Uses `pywinauto` for UIA-based element finding and interaction on the Flutter desktop window
+- Detects home screen via Settings button first (present in both narrow and wide layouts), then falls back to "Zajel" title (narrow layout only)
+- Dismisses onboarding via multiple strategies (exact title, regex, button text)
 
 ### iOS (`IosAppHelper`)
 

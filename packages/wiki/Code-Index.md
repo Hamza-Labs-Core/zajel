@@ -114,6 +114,13 @@ A developer reference mapping features to their implementation locations. All pa
 
 ---
 
+## App -- Shared Widgets
+
+| Feature | Location |
+|---------|----------|
+| Reusable Message List (reversed, paginated, auto-scroll, date dividers) | `packages/app/lib/shared/widgets/message_list_view.dart` |
+| Compose Bar | `packages/app/lib/shared/widgets/compose_bar.dart` |
+
 ## App -- Chat Feature
 
 | Feature | Location |
@@ -141,7 +148,7 @@ A developer reference mapping features to their implementation locations. All pa
 | Chunk Model + Payload | `packages/app/lib/features/channels/models/chunk.dart` |
 | Upstream Message Model | `packages/app/lib/features/channels/models/upstream_message.dart` |
 | Live Stream Model | `packages/app/lib/features/channels/models/live_stream.dart` |
-| Channel Providers (Riverpod) | `packages/app/lib/features/channels/providers/channel_providers.dart` |
+| Channel Providers (Riverpod, ChannelMessagesNotifier with pagination) | `packages/app/lib/features/channels/providers/channel_providers.dart` |
 | Channels Main Screen (responsive) | `packages/app/lib/features/channels/channels_main_screen.dart` |
 | Channels List Screen | `packages/app/lib/features/channels/channels_list_screen.dart` |
 | Channel Detail Screen | `packages/app/lib/features/channels/channel_detail_screen.dart` |
@@ -160,7 +167,7 @@ A developer reference mapping features to their implementation locations. All pa
 | Group Model + GroupMember | `packages/app/lib/features/groups/models/group.dart` |
 | Group Message Model | `packages/app/lib/features/groups/models/group_message.dart` |
 | Vector Clock | `packages/app/lib/features/groups/models/vector_clock.dart` |
-| Group Providers (Riverpod) | `packages/app/lib/features/groups/providers/group_providers.dart` |
+| Group Providers (Riverpod, GroupMessagesNotifier with pagination) | `packages/app/lib/features/groups/providers/group_providers.dart` |
 | Groups List Screen | `packages/app/lib/features/groups/groups_list_screen.dart` |
 | Group Detail Screen | `packages/app/lib/features/groups/group_detail_screen.dart` |
 

@@ -4,6 +4,13 @@ A comprehensive list of all features in the Zajel project, organized by package 
 
 ---
 
+## App -- Shared Widgets
+
+- **Reusable Message List** -- Generic `MessageListView<T>` widget used by Chat, Groups, and Channels screens. Provides reversed ListView (newest at bottom), smart auto-scroll with "New messages" indicator when reading history, load-more pagination on scroll-to-top, and UTC-aware date dividers
+- **Compose Bar** -- Shared text input bar with send button used across messaging screens
+
+---
+
 ## App -- Chat
 
 - **Chat Screen** -- Encrypted messaging interface for peer-to-peer communication
@@ -51,6 +58,8 @@ A comprehensive list of all features in the Zajel project, organized by package 
 - **RTMP Ingest** -- Protocol adapter converting RTMP/FLV frames to live stream frames
 - **Routing Hash Service** -- Rotating HMAC-derived hashes for DHT lookup and censorship resistance
 - **Background Sync** -- Periodic background sync using Android WorkManager / iOS BGAppRefresh
+- **Channel Message Pagination** -- `ChannelMessagesNotifier` loads the 50 most recent sequences on open and fetches older pages via `getChunksForLatestSequences()` when the user scrolls to the top
+- **UTC Timestamps** -- All channel message timestamps stored in UTC and displayed in local time
 - **Responsive Layout** -- Channel list sidebar on wide screens, split-view detail on large displays
 
 ---
@@ -70,6 +79,8 @@ A comprehensive list of all features in the Zajel project, organized by package 
 - **Group Invitation** -- Send/receive group invitations over existing 1:1 P2P channels
 - **Group Message Relay** -- Route encrypted group messages over 1:1 connections
 - **Group Connection Service** -- Mesh WebRTC data channel management for full N*(N-1)/2 connections
+- **Group Message Pagination** -- `GroupMessagesNotifier` loads the 100 most recent messages on open and fetches older pages via `getLatestMessages(offset:)` when the user scrolls to the top
+- **UTC Timestamps** -- All group message timestamps stored in UTC and displayed in local time
 - **Bounded Group Storage** -- Group message history capped at 5,000 messages per group with oldest-first eviction
 
 ---

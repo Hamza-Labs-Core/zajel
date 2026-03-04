@@ -72,12 +72,15 @@ graph TD
     CHAT --> NET
     CHAT --> STORE
     CHAT --> MEDIA
+    CHAT --> SHARED
     CHAN[Channels] --> CRYPTO
     CHAN --> NET
     CHAN --> STORE
+    CHAN --> SHARED
     GRP[Groups] --> CRYPTO
     GRP --> NET
     GRP --> STORE
+    GRP --> SHARED
     CALL[Call / VoIP] --> NET
     CALL --> MEDIA
     CONN[Connection & Pairing] --> CRYPTO
@@ -87,6 +90,7 @@ graph TD
     CONTACT[Contacts] --> STORE
     ATT[Attestation] --> CRYPTO
 
+    SHARED[Shared Widgets<br/>MessageListView, ComposeBar]
     CRYPTO[Crypto Service<br/>X25519 + ChaCha20]
     NET[Network Layer<br/>WebRTC + Signaling]
     STORE[Storage Layer<br/>SQLite + SecureStorage]
@@ -109,6 +113,7 @@ graph TD
 | Secure Storage | `flutter_secure_storage` (Keychain/Keystore) |
 | QR Codes | `mobile_scanner`, `qr_flutter` |
 | Notifications | `flutter_local_notifications` |
+| Shared Widgets | `MessageListView<T>` (paginated reversed list), `ComposeBar` |
 
 ### Server (`packages/server`)
 

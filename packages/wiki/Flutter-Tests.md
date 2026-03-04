@@ -66,7 +66,7 @@ packages/app/test/
 | `channel_crypto_service_test.dart` | Channel encryption (Ed25519 + HKDF + ChaCha20-Poly1305) |
 | `channel_link_service_test.dart` | `zajel://channel/` invite link encoding/decoding |
 | `channel_model_test.dart` | Channel data model |
-| `channel_providers_test.dart` | Riverpod channel providers |
+| `channel_providers_test.dart` | Riverpod channel providers (ChannelMessagesNotifier, StateNotifierProvider) |
 | `channel_service_test.dart` | Channel CRUD operations |
 | `channel_sync_service_test.dart` | Channel sync with relay |
 | `key_rotation_test.dart` | Channel key rotation |
@@ -89,7 +89,7 @@ packages/app/test/
 | `group_connection_service_test.dart` | Group P2P connection management |
 | `group_crypto_service_test.dart` | Sender key encryption/decryption |
 | `group_model_test.dart` | Group data model |
-| `group_providers_test.dart` | Riverpod group providers |
+| `group_providers_test.dart` | Riverpod group providers (GroupMessagesNotifier, StateNotifierProvider) |
 | `group_service_test.dart` | Group CRUD and membership |
 | `group_sync_service_test.dart` | Group sync service |
 

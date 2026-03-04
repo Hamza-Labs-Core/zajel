@@ -69,6 +69,9 @@ Stores channel content chunks indexed for efficient retrieval.
 
 **Indexes**: `channel_id`, `(channel_id, sequence)`, `(routing_hash, channel_id)`
 
+**Pagination queries**:
+- `getChunksForLatestSequences(channelId, {int limit = 50, int? beforeSequence})` — Two-phase query: (1) get the `limit` most recent distinct sequence numbers (optionally before `beforeSequence`), (2) fetch all chunks for those sequences. Used by `ChannelMessagesNotifier` for sequence-based pagination.
+
 ### Groups Table
 
 Stores group metadata.
@@ -99,6 +102,9 @@ Stores group chat messages with composite key for deduplication.
 | is_outgoing | INTEGER | 1 if sent by local user, 0 if received (default 0) |
 
 **Primary key**: `(group_id, author_device_id, sequence_number)`
+
+**Pagination queries**:
+- `getLatestMessages(groupId, {int limit = 50, int offset = 0})` — Returns the `limit` most recent messages ordered by timestamp DESC, skipping `offset` rows. Used by `GroupMessagesNotifier` for offset-based pagination.
 
 ### Vector Clocks Table
 
