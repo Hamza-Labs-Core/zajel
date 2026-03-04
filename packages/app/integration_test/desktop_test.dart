@@ -53,6 +53,7 @@ Future<void> _pumpApp(WidgetTester tester, SharedPreferences prefs) async {
         sharedPreferencesProvider.overrideWithValue(prefs),
         notificationServiceProvider
             .overrideWithValue(_TestNotificationService()),
+        bootstrapVerifierProvider.overrideWithValue(null),
       ],
       child: const ZajelApp(),
     ),
