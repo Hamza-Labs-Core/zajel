@@ -6,7 +6,7 @@ import 'package:zajel/core/crypto/ml_kem_service_stub.dart';
 /// Unit tests for ML-KEM-768 service interface and stub behavior.
 ///
 /// These tests verify:
-/// 1. The MlKemServiceStub correctly throws UnsupportedError on web
+/// 1. The MlKemService correctly throws UnsupportedError on web
 /// 2. Key size constants match NIST FIPS 203 specification
 ///
 /// Note: The FFI-based MlKemService cannot be tested in flutter_test
@@ -14,18 +14,18 @@ import 'package:zajel/core/crypto/ml_kem_service_stub.dart';
 /// Integration tests with liboqs are done via the headless client
 /// (Python cryptography library) and cross-platform test vectors.
 void main() {
-  group('MlKemServiceStub', () {
-    late MlKemServiceStub stub;
+  group('MlKemService', () {
+    late MlKemService stub;
 
     setUp(() {
-      stub = MlKemServiceStub();
+      stub = MlKemService();
     });
 
     test('constants match FIPS 203 spec', () {
-      expect(MlKemServiceStub.publicKeySize, 1184);
-      expect(MlKemServiceStub.secretKeySize, 2400);
-      expect(MlKemServiceStub.ciphertextSize, 1088);
-      expect(MlKemServiceStub.sharedSecretSize, 32);
+      expect(MlKemService.publicKeySize, 1184);
+      expect(MlKemService.secretKeySize, 2400);
+      expect(MlKemService.ciphertextSize, 1088);
+      expect(MlKemService.sharedSecretSize, 32);
     });
 
     test('generateKeyPair throws UnsupportedError', () {
@@ -71,9 +71,9 @@ void main() {
       const expectedCiphertextSize = 1088;
       const expectedSharedSecretSize = 32;
 
-      expect(MlKemServiceStub.publicKeySize, expectedPublicKeySize);
-      expect(MlKemServiceStub.ciphertextSize, expectedCiphertextSize);
-      expect(MlKemServiceStub.sharedSecretSize, expectedSharedSecretSize);
+      expect(MlKemService.publicKeySize, expectedPublicKeySize);
+      expect(MlKemService.ciphertextSize, expectedCiphertextSize);
+      expect(MlKemService.sharedSecretSize, expectedSharedSecretSize);
     });
   });
 }

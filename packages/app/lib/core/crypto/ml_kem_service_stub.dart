@@ -8,13 +8,13 @@ import 'dart:typed_data';
 ///
 /// A future story may implement ML-KEM on Web via @noble/post-quantum
 /// through dart:js_interop.
-class MlKemServiceStub {
+class MlKemService {
   static const int publicKeySize = 1184;
   static const int secretKeySize = 2400;
   static const int ciphertextSize = 1088;
   static const int sharedSecretSize = 32;
 
-  MlKemServiceStub();
+  MlKemService();
 
   /// Not supported on Flutter Web.
   ({Uint8List publicKey, Uint8List secretKey}) generateKeyPair() {
