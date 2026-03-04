@@ -18,6 +18,7 @@
 | [Server Architecture](Server-Architecture) | Cloudflare Workers and Durable Objects |
 | [Data Storage](Data-Storage) | SQLite, secure storage, data lifecycle |
 | [App Attestation](App-Attestation) | Device verification and anti-tamper |
+| [Desktop Auto-Updater](Desktop-Auto-Updater) | In-app update lifecycle, Go binary, rollback |
 | [Build and Deploy](Build-and-Deploy) | Build targets, CI/CD, deployment |
 | [Feature Reference](Feature-Reference) | Complete feature list |
 | [Code Index](Code-Index) | Feature-to-code mapping for developers |

@@ -53,6 +53,7 @@ The signaling server is used only during connection setup. Once WebRTC data chan
 zajel/
   packages/
     app/              Flutter cross-platform client (Android, iOS, Windows, macOS, Linux)
+      updater/        Go auto-updater binary (cross-compiled for all desktop targets)
     server/           Cloudflare Workers signaling server (Durable Objects)
     server-vps/       VPS relay server for fallback connectivity
     website/          Landing page and user guide (React + Vite, Cloudflare Pages)
@@ -89,6 +90,7 @@ graph TD
     HOME --> STORE
     CONTACT[Contacts] --> STORE
     ATT[Attestation] --> CRYPTO
+    UPD[Auto-Updater<br/>desktop only] --> NET
 
     SHARED[Shared Widgets<br/>MessageListView, ComposeBar]
     CRYPTO[Crypto Service<br/>X25519 + ChaCha20]
@@ -114,6 +116,7 @@ graph TD
 | QR Codes | `mobile_scanner`, `qr_flutter` |
 | Notifications | `flutter_local_notifications` |
 | Shared Widgets | `MessageListView<T>` (paginated reversed list), `ComposeBar` |
+| Desktop Auto-Updater | Go 1.22 binary (cross-compiled); Dart orchestration via `UpdateOrchestrator` |
 
 ### Server (`packages/server`)
 
