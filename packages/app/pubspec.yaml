@@ -1,7 +1,7 @@
 name: zajel
 description: "Private peer-to-peer encrypted communication"
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.5.2+1
 
 environment:
   sdk: ^3.5.0
@@ -70,6 +70,6 @@ msix_config:
   display_name: Zajel
   publisher_display_name: Zajel
   identity_name: com.zajel.zajel
-  msix_version: 1.0.0.0
+  msix_version: 1.5.2.0
   logo_path: assets/icons/app_icon.png
   capabilities: internetClient, privateNetworkClientServer
