@@ -90,6 +90,15 @@ class Environment {
   /// Override with `--dart-define=E2E_TEST=true`
   static const bool isE2eTest = bool.fromEnvironment('E2E_TEST');
 
+  /// Whether running Dart integration tests (flutter test integration_test/).
+  ///
+  /// When true, skips signaling server connection to avoid network
+  /// dependencies and slow timeouts. Tests can override pairingCodeProvider
+  /// to inject mock pairing codes without them being overwritten.
+  /// Override with `--dart-define=INTEGRATION_TEST=true`
+  static const bool isIntegrationTest =
+      bool.fromEnvironment('INTEGRATION_TEST');
+
   /// Verify that E2E_TEST is not accidentally enabled in release builds.
   ///
   /// Call this during app startup. Throws in release mode if E2E_TEST is true.
