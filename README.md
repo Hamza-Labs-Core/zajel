@@ -1,6 +1,12 @@
-# Zajel
+<p align="center">
+  <img src="docs/images/logo.png" alt="Zajel" width="400">
+</p>
 
-Private peer-to-peer encrypted communication platform.
+<p align="center">
+  Private peer-to-peer encrypted communication platform.
+</p>
+
+---
 
 **Zajel** (Arabic for "carrier pigeon") enables secure, private messaging between devices with:
 
@@ -14,6 +20,20 @@ Private peer-to-peer encrypted communication platform.
 - Encrypted file transfer (chunked, per-chunk encryption)
 - App attestation and binary verification
 - Cross-platform: Android, iOS, Windows, Linux, macOS, Web
+
+<p align="center">
+  <img src="docs/images/feature-graphic.png" alt="Zajel Feature Graphic" width="700">
+</p>
+
+### Screenshots
+
+<p align="center">
+  <img src="docs/images/onboarding-private.png" alt="Private by Design" width="220">
+  &nbsp;&nbsp;
+  <img src="docs/images/onboarding-p2p.png" alt="Peer-to-Peer" width="220">
+  &nbsp;&nbsp;
+  <img src="docs/images/onboarding-no-account.png" alt="No Account Required" width="220">
+</p>
 
 ## Packages
 

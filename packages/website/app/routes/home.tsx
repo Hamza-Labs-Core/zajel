@@ -141,6 +141,7 @@ export default function Home() {
 
       {/* Hero Section */}
       <section className="hero">
+        <img src="/images/app-icon.png" alt="" className="hero-icon" />
         <h1>Private P2P Messaging</h1>
         <p className="hero-tagline">
           End-to-end encrypted communication that stays between you and your contacts. No servers

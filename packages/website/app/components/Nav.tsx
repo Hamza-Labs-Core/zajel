@@ -11,7 +11,9 @@ export function Nav() {
   return (
     <nav className="nav" aria-label="Main navigation">
       <div className="nav-logo">
-        <Link to="/">Zajel</Link>
+        <Link to="/">
+          <img src="/images/logo.png" alt="Zajel" className="nav-logo-img" />
+        </Link>
       </div>
       <div className="nav-links">
         <a href="/#features">Features</a>

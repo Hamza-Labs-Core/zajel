@@ -20,11 +20,11 @@ void main() {
   }
 
   group('OnboardingScreen', () {
-    testWidgets('displays Welcome page initially', (tester) async {
+    testWidgets('displays image page initially', (tester) async {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
-      expect(find.text('Welcome to Zajel'), findsOneWidget);
+      expect(find.byType(Image), findsOneWidget);
       expect(find.text('Skip'), findsOneWidget);
       expect(find.text('Next'), findsOneWidget);
     });
@@ -82,8 +82,8 @@ void main() {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
-      // Page 1: Welcome
-      expect(find.text('Welcome to Zajel'), findsOneWidget);
+      // Page 1: Welcome (full-bleed image)
+      expect(find.byType(Image), findsOneWidget);
 
       // Page 2: Username
       await tester.tap(find.text('Next'));
@@ -99,15 +99,15 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Your Identity'), findsOneWidget);
 
-      // Page 4: Connect
+      // Page 4: Connect (full-bleed image)
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
-      expect(find.text('How to Connect'), findsOneWidget);
+      expect(find.byType(Image), findsOneWidget);
 
-      // Page 5: Get Started
+      // Page 5: Get Started (full-bleed image)
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
-      expect(find.text("You're Ready"), findsOneWidget);
+      expect(find.byType(Image), findsOneWidget);
       expect(find.text('Get Started'), findsOneWidget);
     });
 
@@ -136,14 +136,14 @@ void main() {
       expect(find.text('Next'), findsNothing);
     });
 
-    testWidgets('displays correct icons on each page', (tester) async {
+    testWidgets('displays correct icons/images on each page', (tester) async {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
-      // Page 1: mail_lock
-      expect(find.byIcon(Icons.mail_lock), findsOneWidget);
+      // Page 1: full-bleed onboarding_private image
+      expect(find.byType(Image), findsOneWidget);
 
-      // Page 2: person (username)
+      // Page 2: person icon (username — still an icon)
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
       expect(find.byIcon(Icons.person), findsOneWidget);
@@ -152,27 +152,28 @@ void main() {
       await tester.enterText(find.byType(TextField), 'TestUser');
       await tester.pump();
 
-      // Page 3: fingerprint (identity)
+      // Page 3: fingerprint icon (identity — still an icon)
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
       expect(find.byIcon(Icons.fingerprint), findsOneWidget);
 
-      // Page 4: people (connect)
+      // Page 4: full-bleed onboarding_p2p image
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
-      expect(find.byIcon(Icons.people), findsOneWidget);
+      expect(find.byType(Image), findsOneWidget);
 
-      // Page 5: rocket_launch (get started)
+      // Page 5: full-bleed onboarding_no_account image
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
-      expect(find.byIcon(Icons.rocket_launch), findsOneWidget);
+      expect(find.byType(Image), findsOneWidget);
     });
 
     testWidgets('swipe left navigates to next page', (tester) async {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
-      expect(find.text('Welcome to Zajel'), findsOneWidget);
+      // Page 1 shows an image
+      expect(find.byType(Image), findsOneWidget);
 
       // Swipe left to go to next page (username)
       await tester.drag(find.byType(PageView), const Offset(-400, 0));
@@ -194,7 +195,8 @@ void main() {
       await tester.fling(find.byType(PageView), const Offset(400, 0), 1000);
       await tester.pumpAndSettle();
 
-      expect(find.text('Welcome to Zajel'), findsOneWidget);
+      // Page 1 shows an image (full-bleed)
+      expect(find.byType(Image), findsOneWidget);
     });
   });
 }

@@ -10,7 +10,7 @@ import type { LinksFunction } from "react-router";
 import "./styles/global.css";
 
 export const links: LinksFunction = () => [
-  { rel: "icon", href: "/favicon.ico" },
+  { rel: "icon", type: "image/png", href: "/favicon.png" },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {

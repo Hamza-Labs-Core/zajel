@@ -5,7 +5,12 @@ import 'package:go_router/go_router.dart';
 import '../../core/providers/app_providers.dart';
 import '../../shared/widgets/warning_box.dart';
 
-/// First-launch onboarding screen with a 4-step swipeable tutorial.
+/// Onboarding background color — matches the generated illustration backgrounds.
+const _onboardingBg = Color(0xFF101030);
+const _textColor = Colors.white;
+final _mutedColor = Colors.white.withValues(alpha: 0.7);
+
+/// First-launch onboarding screen with a 5-step swipeable tutorial.
 class OnboardingScreen extends ConsumerStatefulWidget {
   const OnboardingScreen({super.key});
 
@@ -30,7 +35,6 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
 
   Future<void> _completeOnboarding() async {
     final prefs = ref.read(sharedPreferencesProvider);
-    // Save username
     final username = _usernameController.text.trim();
     if (username.isNotEmpty) {
       await prefs.setString('username', username);
@@ -44,8 +48,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   void _nextPage() {
-    // Block Next on username page if invalid
     if (_currentPage == 1 && !_usernameValid) return;
+    FocusScope.of(context).unfocus();
 
     if (_currentPage < _totalPages - 1) {
       _pageController.nextPage(
@@ -58,7 +62,6 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   void _skip() {
-    // Set default username when skipping
     final prefs = ref.read(sharedPreferencesProvider);
     prefs.setString('username', 'Anonymous');
     ref.read(usernameProvider.notifier).state = 'Anonymous';
@@ -68,6 +71,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: _onboardingBg,
       body: SafeArea(
         child: Column(
           children: [
@@ -75,10 +79,13 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             Align(
               alignment: Alignment.topRight,
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.only(top: 8, right: 16),
                 child: TextButton(
                   onPressed: _skip,
-                  child: const Text('Skip'),
+                  child: Text(
+                    'Skip',
+                    style: TextStyle(color: _mutedColor),
+                  ),
                 ),
               ),
             ),
@@ -87,24 +94,24 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               child: PageView(
                 controller: _pageController,
                 onPageChanged: (page) {
+                  FocusScope.of(context).unfocus();
                   setState(() => _currentPage = page);
                 },
                 children: [
-                  _buildWelcomePage(context),
-                  _buildUsernamePage(context),
-                  _buildIdentityPage(context),
-                  _buildConnectPage(context),
-                  _buildGetStartedPage(context),
+                  _buildWelcomePage(),
+                  _buildUsernamePage(),
+                  _buildIdentityPage(),
+                  _buildConnectPage(),
+                  _buildGetStartedPage(),
                 ],
               ),
             ),
             // Dots indicator and navigation
             Padding(
-              padding: const EdgeInsets.all(24),
+              padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  // Page indicator dots
                   Row(
                     children: List.generate(
                       _totalPages,
@@ -114,22 +121,24 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                         height: 8,
                         decoration: BoxDecoration(
                           color: index == _currentPage
-                              ? Theme.of(context).colorScheme.primary
-                              : Theme.of(context)
-                                  .colorScheme
-                                  .primary
-                                  .withValues(alpha: 0.2),
+                              ? Colors.white
+                              : Colors.white.withValues(alpha: 0.25),
                           borderRadius: BorderRadius.circular(4),
                         ),
                       ),
                     ),
                   ),
-                  // Next / Get Started button
                   ElevatedButton(
                     onPressed: (_currentPage == 1 && !_usernameValid)
                         ? null
                         : _nextPage,
                     style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: _onboardingBg,
+                      disabledBackgroundColor:
+                          Colors.white.withValues(alpha: 0.15),
+                      disabledForegroundColor:
+                          Colors.white.withValues(alpha: 0.4),
                       padding: const EdgeInsets.symmetric(
                         horizontal: 32,
                         vertical: 14,
@@ -148,68 +157,89 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
   }
 
-  Widget _buildWelcomePage(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 32),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.mail_lock,
-            size: 80,
-            color: Theme.of(context).colorScheme.primary,
+  /// Builds an image page with illustration on top, title + subtitle below.
+  Widget _buildImagePage({
+    required String assetPath,
+    required String title,
+    required String subtitle,
+  }) {
+    return Column(
+      children: [
+        Expanded(
+          flex: 3,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+            child: Image.asset(
+              assetPath,
+              fit: BoxFit.contain,
+            ),
           ),
-          const SizedBox(height: 32),
-          Text(
-            'Welcome to Zajel',
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
+        ),
+        Expanded(
+          flex: 2,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.bold,
+                    color: _textColor,
+                  ),
+                  textAlign: TextAlign.center,
                 ),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'Private peer-to-peer messaging.\n\n'
-            'No accounts. No servers storing your messages. '
-            'Just you and your contacts.',
-            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  height: 1.5,
+                const SizedBox(height: 12),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: _mutedColor,
+                    height: 1.5,
+                  ),
+                  textAlign: TextAlign.center,
                 ),
-            textAlign: TextAlign.center,
+              ],
+            ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
-  Widget _buildUsernamePage(BuildContext context) {
-    return Padding(
+  Widget _buildWelcomePage() {
+    return _buildImagePage(
+      assetPath: 'assets/images/onboarding_private.png',
+      title: 'Welcome to Zajel',
+      subtitle: 'Private peer-to-peer messaging.\n'
+          'No accounts. No servers. Just you and your contacts.',
+    );
+  }
+
+  Widget _buildUsernamePage() {
+    return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 32),
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            Icons.person,
-            size: 80,
-            color: Theme.of(context).colorScheme.primary,
-          ),
+          const SizedBox(height: 48),
+          const Icon(Icons.person, size: 80, color: Colors.white70),
           const SizedBox(height: 32),
-          Text(
+          const Text(
             'Choose a Username',
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+            style: TextStyle(
+              fontSize: 26,
+              fontWeight: FontWeight.bold,
+              color: _textColor,
+            ),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 16),
           Text(
             'This is how others will see you. '
             'A unique tag will be added based on your encryption key.',
-            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  height: 1.5,
-                ),
+            style: TextStyle(fontSize: 16, color: _mutedColor, height: 1.5),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 24),
@@ -217,9 +247,26 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             controller: _usernameController,
             autofocus: true,
             maxLength: 32,
-            decoration: const InputDecoration(
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
               hintText: 'Enter your username',
-              border: OutlineInputBorder(),
+              hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.4)),
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.1),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide:
+                    BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide:
+                    BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Colors.white),
+              ),
               counterText: '',
             ),
             onChanged: (value) {
@@ -234,42 +281,39 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           const SizedBox(height: 8),
           Text(
             'Max 32 characters. The # character is not allowed.',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.white.withValues(alpha: 0.5),
+            ),
           ),
+          const SizedBox(height: 48),
         ],
       ),
     );
   }
 
-  Widget _buildIdentityPage(BuildContext context) {
+  Widget _buildIdentityPage() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 32),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            Icons.fingerprint,
-            size: 80,
-            color: Theme.of(context).colorScheme.primary,
-          ),
+          const Icon(Icons.fingerprint, size: 80, color: Colors.white70),
           const SizedBox(height: 32),
-          Text(
+          const Text(
             'Your Identity',
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+            style: TextStyle(
+              fontSize: 26,
+              fontWeight: FontWeight.bold,
+              color: _textColor,
+            ),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 16),
           Text(
             'Your identity was just created as a cryptographic keypair '
             'on this device. It exists nowhere else.',
-            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  height: 1.5,
-                ),
+            style: TextStyle(fontSize: 16, color: _mutedColor, height: 1.5),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 24),
@@ -283,76 +327,22 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
   }
 
-  Widget _buildConnectPage(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 32),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.people,
-            size: 80,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          const SizedBox(height: 32),
-          Text(
-            'How to Connect',
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'Share your pairing code or scan a QR code to connect '
-            'with someone.\n\n'
-            'Both devices must be online at the same time. '
-            'Once paired, devices remember each other and '
-            'reconnect automatically.',
-            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  height: 1.5,
-                ),
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
+  Widget _buildConnectPage() {
+    return _buildImagePage(
+      assetPath: 'assets/images/onboarding_p2p.png',
+      title: 'Direct P2P Connection',
+      subtitle: 'Share your pairing code or scan a QR code. '
+          'Both devices must be online. Once paired, '
+          'they reconnect automatically.',
     );
   }
 
-  Widget _buildGetStartedPage(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 32),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.rocket_launch,
-            size: 80,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          const SizedBox(height: 32),
-          Text(
-            'You\'re Ready',
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'Tap "Get Started" to begin. Go to the Connect screen '
-            'to add your first peer.\n\n'
-            'You can find help and detailed information about Zajel '
-            'any time in Settings.',
-            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  height: 1.5,
-                ),
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
+  Widget _buildGetStartedPage() {
+    return _buildImagePage(
+      assetPath: 'assets/images/onboarding_no_account.png',
+      title: 'No Account Required',
+      subtitle: 'Tap "Get Started" to begin. Add your first peer '
+          'from the Connect screen.',
     );
   }
 }
