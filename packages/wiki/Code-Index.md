@@ -121,6 +121,69 @@ A developer reference mapping features to their implementation locations. All pa
 | Reusable Message List (reversed, paginated, auto-scroll, date dividers) | `packages/app/lib/shared/widgets/message_list_view.dart` |
 | Compose Bar | `packages/app/lib/shared/widgets/compose_bar.dart` |
 
+---
+
+## App -- Desktop Auto-Updater Feature
+
+### Dart -- Models
+
+| Feature | Location |
+|---------|----------|
+| Update status enum + state record | `packages/app/lib/features/updater/models/update_state.dart` |
+| Manifest model (Dart side of IPC) | `packages/app/lib/features/updater/models/update_manifest.dart` |
+| Update result model (written by Go) | `packages/app/lib/features/updater/models/update_result.dart` |
+| GitHub release + asset models | `packages/app/lib/features/updater/models/github_release.dart` |
+| Update check result (sealed) | `packages/app/lib/features/updater/models/update_check_result.dart` |
+| Backward-compatible artifact re-export | `packages/app/lib/features/updater/models/update_artifact.dart` |
+
+### Dart -- Services
+
+| Feature | Location |
+|---------|----------|
+| GitHub Releases API client (ETag caching, rate limit) | `packages/app/lib/features/updater/services/github_release_service.dart` |
+| Chunked HTTPS download, resumption, SHA-256 verify, extraction | `packages/app/lib/features/updater/services/update_download_service.dart` |
+| Update lifecycle state machine | `packages/app/lib/features/updater/services/update_orchestrator.dart` |
+| Package format detector (MSIX/MAS/Snap/Flatpak/AppImage/loose) | `packages/app/lib/features/updater/services/update_package_detector.dart` |
+| Manifest writer + Go binary launcher + rollback launcher | `packages/app/lib/features/updater/services/updater_launcher.dart` |
+| Crash counter + rollback trigger | `packages/app/lib/features/updater/services/update_rollback_service.dart` |
+| Idle timer + grace period | `packages/app/lib/features/updater/services/idle_detector.dart` |
+| Auto-install coordinator (idle + call + transfer checks) | `packages/app/lib/features/updater/services/auto_update_service.dart` |
+
+### Dart -- Providers
+
+| Feature | Location |
+|---------|----------|
+| Core update Riverpod providers | `packages/app/lib/features/updater/providers/update_providers.dart` |
+| Auto-install + background-download preferences | `packages/app/lib/features/updater/providers/auto_update_providers.dart` |
+
+### Dart -- Widgets
+
+| Feature | Location |
+|---------|----------|
+| Settings > Updates section | `packages/app/lib/features/updater/widgets/update_settings_section.dart` |
+| Update-ready banner + dot badge | `packages/app/lib/features/updater/widgets/update_ready_banner.dart` |
+| Download/verify/install progress widget | `packages/app/lib/features/updater/widgets/update_progress_indicator.dart` |
+| Auto-install toggle widget | `packages/app/lib/features/updater/widgets/auto_update_settings.dart` |
+
+### Go Updater Binary
+
+| Feature | Location |
+|---------|----------|
+| Entry point, update sequence, rollback sequence | `packages/app/updater/main.go` |
+| Manifest struct, ParseManifest, path validation | `packages/app/updater/manifest.go` |
+| WaitForExit, LaunchApp, detachProcess | `packages/app/updater/process.go` |
+| CreateBackup, ReplaceFiles, Rollback, lock file, symlink escape detection | `packages/app/updater/fileops.go` |
+| UpdateResult struct, WriteResult | `packages/app/updater/result.go` |
+| Windows: WaitForSingleObject, retry copy, TerminateProcess | `packages/app/updater/platform_windows.go` |
+| macOS: kill(0), SIGTERM, quarantine clearing | `packages/app/updater/platform_darwin.go` |
+| Linux: /proc/<pid>/comm, chmod +x shared objects | `packages/app/updater/platform_linux.go` |
+| File operation unit tests | `packages/app/updater/fileops_test.go` |
+| Manifest parse and validate tests | `packages/app/updater/manifest_test.go` |
+| Process wait logic tests | `packages/app/updater/process_test.go` |
+| Integration-level update/rollback sequence tests | `packages/app/updater/main_test.go` |
+
+---
+
 ## App -- Chat Feature
 
 | Feature | Location |
