@@ -40,11 +40,9 @@
 ### Screenshots (Linux Desktop)
 
 <p align="center">
-  <img src="docs/images/screenshot-linux-onboarding.png" alt="Onboarding" width="280">
+  <img src="docs/images/screenshot-linux-onboarding.png" alt="Onboarding" width="420">
   &nbsp;&nbsp;
-  <img src="docs/images/screenshot-linux-home.png" alt="Home Screen" width="280">
-  &nbsp;&nbsp;
-  <img src="docs/images/screenshot-linux-settings.png" alt="Settings" width="280">
+  <img src="docs/images/screenshot-linux-settings.png" alt="Settings" width="420">
 </p>
 
 ## Packages
