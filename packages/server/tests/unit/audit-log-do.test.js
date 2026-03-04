@@ -103,7 +103,7 @@ describe('AuditLogDO', () => {
       expect(response.status).toBe(401);
     });
 
-    it('should accept POST without internal token when AUDIT_LOG_INTERNAL_TOKEN is not set', async () => {
+    it('should reject POST when AUDIT_LOG_INTERNAL_TOKEN is not set (fail-closed)', async () => {
       const { do: auditLog } = createAuditLogDO({ AUDIT_LOG_INTERNAL_TOKEN: undefined });
 
       const request = new Request('https://audit-log/log', {
@@ -117,7 +117,7 @@ describe('AuditLogDO', () => {
       });
 
       const response = await auditLog.fetch(request);
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(401);
     });
 
     it('should reject POST with missing required fields', async () => {
