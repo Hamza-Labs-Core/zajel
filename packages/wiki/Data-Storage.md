@@ -1,10 +1,12 @@
 # Data Storage
 
-Zajel uses three storage layers on the client device: SQLite for structured data, FlutterSecureStorage for cryptographic keys, and SharedPreferences for user settings.
+Zajel uses three storage layers on the client device: SQLite for structured data, FlutterSecureStorage for cryptographic keys, and SharedPreferences for user settings. Server-side, a D1 database stores aggregated diagnostic metrics shared between the diagnostics and admin workers.
 
 ---
 
 ## Storage Architecture
+
+### Client-Side Storage
 
 | Layer | Technology | What it stores | Encryption |
 |-------|-----------|----------------|-----------|
@@ -12,6 +14,14 @@ Zajel uses three storage layers on the client device: SQLite for structured data
 | Secure Storage | `flutter_secure_storage` | Private keys, session keys, sender keys | Platform keychain/keystore |
 | Preferences | `SharedPreferences` | Settings, display name, device selections | Not encrypted |
 | File System | Platform file system | Received files, log files | Not encrypted |
+
+### Server-Side Storage (Diagnostics)
+
+| Layer | Technology | What it stores |
+|-------|-----------|----------------|
+| D1 (SQLite) | Cloudflare D1 | Aggregated error, performance, network, server metrics, heartbeats |
+| R2 | Cloudflare R2 | Raw diagnostic report JSON files |
+| KV | Cloudflare KV | Per-session rate limiting state, dashboard counters |
 
 ---
 
@@ -117,6 +127,138 @@ Stores causal ordering state per group. Each device's sequence number is stored 
 | sequence_number | INTEGER | Last known sequence number for this device (default 0) |
 
 **Primary key**: `(group_id, device_id)`
+
+---
+
+## D1 Diagnostics Database (Server-Side)
+
+The diagnostics D1 database (`zajel-diagnostics`) is shared between the diagnostics worker (writes) and the admin worker (reads). It contains six tables for aggregated metrics and security events.
+
+### Error Aggregates Table
+
+Stores hourly-bucketed error counts grouped by signature, version, and platform.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER PK | Auto-increment row ID |
+| time_bucket | TEXT | Hour bucket as ISO datetime (e.g., `2026-03-03T14:00:00Z`) |
+| error_signature | TEXT | Unique error signature for deduplication |
+| category | TEXT | Error category: crash, network, crypto, storage, ui, protocol, other |
+| app_version | TEXT | App version (semver) |
+| platform | TEXT | Platform: android, ios, windows, macos, linux, web |
+| count | INTEGER | Occurrence count within this bucket |
+| first_seen | INTEGER | Unix timestamp of first occurrence |
+| last_seen | INTEGER | Unix timestamp of last occurrence |
+| sample_message | TEXT | Most recent error message sample |
+| sample_stack_trace | TEXT | Most recent stack trace sample (nullable) |
+
+**Unique constraint**: `(time_bucket, error_signature, app_version, platform)`
+
+### Performance Aggregates Table
+
+Stores hourly-bucketed performance percentiles (p50/p95/p99) per metric, platform, and version.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER PK | Auto-increment row ID |
+| time_bucket | TEXT | Hour bucket as ISO datetime |
+| platform | TEXT | Platform identifier |
+| app_version | TEXT | App version (semver) |
+| metric_name | TEXT | Metric name: startupTimeMs, frameRateAvg, frameRateP95, memoryUsageMb, memoryPeakMb |
+| p50 | REAL | 50th percentile value |
+| p95 | REAL | 95th percentile value |
+| p99 | REAL | 99th percentile value |
+| sample_count | INTEGER | Number of samples aggregated |
+
+**Unique constraint**: `(time_bucket, platform, app_version, metric_name)`
+
+### Network Aggregates Table
+
+Stores hourly-bucketed network success/failure counts for signaling and WebRTC connections.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER PK | Auto-increment row ID |
+| time_bucket | TEXT | Hour bucket as ISO datetime |
+| platform | TEXT | Platform identifier |
+| app_version | TEXT | App version (semver) |
+| signaling_success_count | INTEGER | Successful signaling connections |
+| signaling_failure_count | INTEGER | Failed signaling connections |
+| webrtc_success_count | INTEGER | Successful WebRTC connections |
+| webrtc_failure_count | INTEGER | Failed WebRTC connections |
+| relay_usage_count | INTEGER | Connections using relay |
+| direct_p2p_count | INTEGER | Connections using direct P2P |
+| avg_latency_ms | REAL | Weighted average latency (nullable) |
+| sample_count | INTEGER | Number of reports aggregated |
+
+**Unique constraint**: `(time_bucket, platform, app_version)`
+
+### Server Metrics Table
+
+Stores time-series metrics from VPS server pushes. Each push creates one row.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER PK | Auto-increment row ID |
+| server_id | TEXT | VPS server identifier |
+| region | TEXT | Server region (nullable) |
+| timestamp | INTEGER | Unix timestamp in milliseconds |
+| connections_total | INTEGER | Total active connections |
+| connections_relay | INTEGER | Active relay connections |
+| connections_signaling | INTEGER | Active signaling connections |
+| entropy_active_codes | INTEGER | Active pairing codes (nullable) |
+| entropy_collision_risk | TEXT | Collision risk level (nullable) |
+| federation_alive_members | INTEGER | Alive federation members (nullable) |
+| federation_total_members | INTEGER | Total federation members (nullable) |
+| message_rate_per_second | REAL | Messages per second (nullable) |
+| message_rate_per_minute | REAL | Messages per minute (nullable) |
+| cpu_percent | REAL | CPU usage percentage (nullable) |
+| memory_mb | REAL | Memory usage in MB (nullable) |
+| uptime_seconds | INTEGER | Server uptime (nullable) |
+| gossip_rtt_p50_ms | REAL | SWIM gossip RTT p50 in ms (nullable) |
+| gossip_rtt_p95_ms | REAL | SWIM gossip RTT p95 in ms (nullable) |
+| gossip_rtt_p99_ms | REAL | SWIM gossip RTT p99 in ms (nullable) |
+| gossip_ping_count | INTEGER | Total gossip pings (default 0) |
+
+**Index**: `(server_id, timestamp DESC)` for efficient latest-per-server queries
+
+Rows older than 7 days are cleaned up automatically on each server metrics push.
+
+### Client Heartbeats Table
+
+Stores the latest heartbeat per anonymous client session.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| session_hash | TEXT PK | SHA-256 session identifier (64 hex chars) |
+| platform | TEXT | Platform identifier |
+| app_version | TEXT | App version (semver) |
+| connection_type | TEXT | Connection type (nullable) |
+| region | TEXT | Cloudflare colo or CF-IPCountry (nullable) |
+| last_seen | INTEGER | Unix timestamp of last heartbeat |
+| session_start | INTEGER | Unix timestamp of first heartbeat |
+
+### Security Events Table
+
+Stores security-related events including rate limit violations, connection spikes, bad client detections, and brute force pairing attempts. Written by the diagnostics worker and read by the admin worker's Epic 7 security monitoring endpoints.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER PK | Auto-increment row ID |
+| event_type | TEXT NOT NULL | Event category: `rate_limit_violation`, `connection_spike`, `bad_client`, `brute_force_attempt` |
+| timestamp | INTEGER NOT NULL | Unix timestamp in milliseconds |
+| server_id | TEXT | VPS server identifier (nullable) |
+| region | TEXT | Server or client region (nullable) |
+| source_ip | TEXT | Hashed or anonymized IP address (nullable) |
+| endpoint | TEXT | Target endpoint path, e.g., `/diagnostics/report`, `/pair` (nullable) |
+| details | TEXT | JSON blob with event-specific data (nullable) |
+| severity | TEXT NOT NULL | Severity level: `low`, `medium`, `high`, `critical` (default `medium`) |
+| count | INTEGER NOT NULL | Occurrence count for this event (default 1) |
+
+**Indexes**:
+- `(event_type, timestamp DESC)` for filtering by event type with recency ordering
+- `(timestamp DESC)` for global time-range queries
+- `(event_type, timestamp, source_ip)` for per-client aggregation within a time range
 
 ---
 

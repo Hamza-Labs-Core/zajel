@@ -31,6 +31,15 @@
     }
   ],
 
+  // D1 database for reading diagnostics data (error_aggregates)
+  "d1_databases": [
+    {
+      "binding": "DIAGNOSTICS_DB",
+      "database_name": "zajel-diagnostics",
+      "database_id": "placeholder-d1-id"
+    }
+  ],
+
   // Secrets (already exists in secret store as ZAJEL_ADMIN_JWT_SECRET)
   // The secret is automatically available as env.ZAJEL_ADMIN_JWT_SECRET
   // To update: wrangler secret put ZAJEL_ADMIN_JWT_SECRET
@@ -68,6 +77,14 @@
         {
           "binding": "BOOTSTRAP_SERVICE",
           "service": "zajel-signaling-qa"
+        }
+      ],
+      // D1 database for QA diagnostics data
+      "d1_databases": [
+        {
+          "binding": "DIAGNOSTICS_DB",
+          "database_name": "zajel-diagnostics-qa",
+          "database_id": "placeholder-d1-qa-id"
         }
       ],
       "routes": [

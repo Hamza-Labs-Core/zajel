@@ -16,7 +16,9 @@
 | [Groups Architecture](Groups-Architecture) | Group chat with sender key encryption |
 | [VoIP Architecture](VoIP-Architecture) | Voice and video call setup |
 | [Server Architecture](Server-Architecture) | Cloudflare Workers and Durable Objects |
-| [Data Storage](Data-Storage) | SQLite, secure storage, data lifecycle |
+| [Diagnostics Architecture](Diagnostics-Architecture) | Diagnostic report ingestion, rate limiting, D1 aggregation |
+| [Admin Dashboard](Admin-Dashboard) | Error dashboard, metrics dashboard, federation health |
+| [Data Storage](Data-Storage) | SQLite, secure storage, D1 schema, data lifecycle |
 | [App Attestation](App-Attestation) | Device verification and anti-tamper |
 | [Desktop Auto-Updater](Desktop-Auto-Updater) | In-app update lifecycle, Go binary, rollback |
 | [Build and Deploy](Build-and-Deploy) | Build targets, CI/CD, deployment |
@@ -41,10 +43,13 @@
 |-------|-----------|
 | Mobile/Desktop App | Flutter (Dart) |
 | Signaling Server | Cloudflare Workers + Durable Objects (JavaScript) |
+| Diagnostics Ingestion | Cloudflare Workers + D1 + R2 + KV (TypeScript) |
+| Admin Dashboard | Cloudflare Workers + D1 + Durable Objects (TypeScript) |
 | Website | React Router + Vite, deployed on Cloudflare Pages |
 | P2P Transport | WebRTC data channels |
 | Encryption | X25519 ECDH, ChaCha20-Poly1305, Ed25519, HKDF-SHA256 |
 | Local Storage | SQLite (messages), FlutterSecureStorage (keys) |
+| Server-Side Storage | D1 (aggregated metrics), R2 (raw reports), KV (rate limits) |
 | VoIP | WebRTC media streams |
 
 ---

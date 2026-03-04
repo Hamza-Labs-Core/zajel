@@ -22,6 +22,9 @@ import {
   type VerifyData,
   type ServersData,
   type HealthData,
+  type ErrorsData,
+  type ErrorTrendsData,
+  type RegressionsData,
 } from './helpers.js';
 
 const client = new AdminApiClient();
@@ -558,7 +561,330 @@ describe('Dashboard UI', () => {
 });
 
 // ─────────────────────────────────────────────
-// Section 7: Edge Cases
+// Section 7: Error Dashboard
+// ─────────────────────────────────────────────
+
+describe('Error Dashboard', () => {
+  it('GET /admin/api/errors returns 200 with valid structure', async () => {
+    await loginAsSuperAdmin(client);
+
+    const res = await client.listErrors();
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as ApiResponse<ErrorsData>;
+    expect(body.success).toBe(true);
+    expect(body.data).toBeDefined();
+
+    // Verify summary structure
+    expect(body.data!.summary).toBeDefined();
+    expect(typeof body.data!.summary.totalErrors).toBe('number');
+    expect(typeof body.data!.summary.rateChangePercent).toBe('number');
+    expect(typeof body.data!.summary.regressionAlerts).toBe('number');
+    expect(typeof body.data!.summary.highestSeverity).toBe('string');
+
+    // Verify errors array
+    expect(Array.isArray(body.data!.errors)).toBe(true);
+
+    // Verify range
+    expect(body.data!.range).toBeDefined();
+    expect(['1h', '24h', '7d']).toContain(body.data!.range);
+  });
+
+  it('GET /admin/api/errors returns 401 without auth header', async () => {
+    const res = await client.listErrorsNoAuth();
+    expect(res.status).toBe(401);
+
+    const body = (await res.json()) as ApiResponse;
+    expect(body.success).toBe(false);
+    expect(body.error).toBe('Unauthorized');
+  });
+
+  it('GET /admin/api/errors respects range parameter', async () => {
+    await loginAsSuperAdmin(client);
+
+    for (const range of ['1h', '24h', '7d']) {
+      const res = await client.listErrors(range);
+      expect(res.status).toBe(200);
+
+      const body = (await res.json()) as ApiResponse<ErrorsData>;
+      expect(body.success).toBe(true);
+      expect(body.data!.range).toBe(range);
+    }
+  });
+
+  it('GET /admin/api/errors defaults to 24h when no range specified', async () => {
+    await loginAsSuperAdmin(client);
+
+    const res = await client.listErrors();
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as ApiResponse<ErrorsData>;
+    expect(body.data!.range).toBe('24h');
+  });
+
+  it('GET /admin/api/errors includes CORS headers', async () => {
+    await loginAsSuperAdmin(client);
+
+    const res = await client.listErrors();
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+  });
+
+  it('error data items have correct field types when present', async () => {
+    await loginAsSuperAdmin(client);
+
+    const res = await client.listErrors('7d');
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as ApiResponse<ErrorsData>;
+    for (const err of body.data!.errors) {
+      expect(typeof err.errorSignature).toBe('string');
+      expect(typeof err.category).toBe('string');
+      expect(typeof err.totalCount).toBe('number');
+      expect(Array.isArray(err.versions)).toBe(true);
+      expect(Array.isArray(err.platforms)).toBe(true);
+      expect(typeof err.firstSeen).toBe('number');
+      expect(typeof err.lastSeen).toBe('number');
+      expect(typeof err.sampleMessage).toBe('string');
+    }
+  });
+});
+
+// ─────────────────────────────────────────────
+// Section 7b: Error Trends (US-2.2)
+// ─────────────────────────────────────────────
+
+describe('Error Trends', () => {
+  it('GET /admin/api/errors/trends returns 200 with valid schema', async () => {
+    await loginAsSuperAdmin(client);
+
+    const res = await client.getErrorTrends();
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as ApiResponse<ErrorTrendsData>;
+    expect(body.success).toBe(true);
+    expect(body.data).toBeDefined();
+
+    // Verify structure
+    expect(Array.isArray(body.data!.timestamps)).toBe(true);
+    expect(typeof body.data!.series).toBe('object');
+    expect(Array.isArray(body.data!.deployments)).toBe(true);
+    expect(typeof body.data!.range).toBe('string');
+    expect(['1h', '24h', '7d']).toContain(body.data!.range);
+    expect(typeof body.data!.bucketSize).toBe('string');
+    expect(['1min', '1h', '6h']).toContain(body.data!.bucketSize);
+  });
+
+  it('GET /admin/api/errors/trends returns 401 without auth', async () => {
+    const res = await client.getErrorTrendsNoAuth();
+    expect(res.status).toBe(401);
+
+    const body = (await res.json()) as ApiResponse;
+    expect(body.success).toBe(false);
+    expect(body.error).toBe('Unauthorized');
+  });
+
+  it('GET /admin/api/errors/trends respects range parameter', async () => {
+    await loginAsSuperAdmin(client);
+
+    for (const range of ['1h', '24h', '7d']) {
+      const res = await client.getErrorTrends(range);
+      expect(res.status).toBe(200);
+
+      const body = (await res.json()) as ApiResponse<ErrorTrendsData>;
+      expect(body.success).toBe(true);
+      expect(body.data!.range).toBe(range);
+    }
+  });
+
+  it('GET /admin/api/errors/trends defaults to 24h range', async () => {
+    await loginAsSuperAdmin(client);
+
+    const res = await client.getErrorTrends();
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as ApiResponse<ErrorTrendsData>;
+    expect(body.data!.range).toBe('24h');
+    expect(body.data!.bucketSize).toBe('1h');
+  });
+
+  it('GET /admin/api/errors/trends returns correct bucket sizes per range', async () => {
+    await loginAsSuperAdmin(client);
+
+    const expected: Record<string, string> = { '1h': '1min', '24h': '1h', '7d': '6h' };
+
+    for (const [range, bucketSize] of Object.entries(expected)) {
+      const res = await client.getErrorTrends(range);
+      const body = (await res.json()) as ApiResponse<ErrorTrendsData>;
+      expect(body.data!.bucketSize).toBe(bucketSize);
+    }
+  });
+
+  it('GET /admin/api/errors/trends includes CORS headers', async () => {
+    await loginAsSuperAdmin(client);
+
+    const res = await client.getErrorTrends();
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+  });
+
+  it('series keys are valid error categories when data exists', async () => {
+    await loginAsSuperAdmin(client);
+
+    const res = await client.getErrorTrends('7d');
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as ApiResponse<ErrorTrendsData>;
+    const validCategories = ['crash', 'network', 'crypto', 'storage', 'ui', 'protocol', 'other'];
+    for (const key of Object.keys(body.data!.series)) {
+      expect(validCategories).toContain(key);
+    }
+  });
+
+  it('timestamps are in ascending order', async () => {
+    await loginAsSuperAdmin(client);
+
+    const res = await client.getErrorTrends('7d');
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as ApiResponse<ErrorTrendsData>;
+    const timestamps = body.data!.timestamps;
+    for (let i = 1; i < timestamps.length; i++) {
+      expect(timestamps[i]).toBeGreaterThanOrEqual(timestamps[i - 1]!);
+    }
+  });
+
+  it('series arrays are aligned with timestamps', async () => {
+    await loginAsSuperAdmin(client);
+
+    const res = await client.getErrorTrends('24h');
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as ApiResponse<ErrorTrendsData>;
+    const tsLen = body.data!.timestamps.length;
+    for (const [, values] of Object.entries(body.data!.series)) {
+      expect(values.length).toBe(tsLen);
+    }
+  });
+
+  it('deployment markers have correct field types', async () => {
+    await loginAsSuperAdmin(client);
+
+    const res = await client.getErrorTrends('7d');
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as ApiResponse<ErrorTrendsData>;
+    for (const dep of body.data!.deployments) {
+      expect(typeof dep.version).toBe('string');
+      expect(typeof dep.timestamp).toBe('number');
+    }
+  });
+});
+
+// ─────────────────────────────────────────────
+// Section 8: Regression Detection (US-2.4)
+// ─────────────────────────────────────────────
+
+describe('Regression Detection', () => {
+  it('GET /admin/api/errors/regressions returns 200 with valid schema', async () => {
+    await loginAsSuperAdmin(client);
+
+    const res = await client.getErrorRegressions();
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as ApiResponse<RegressionsData>;
+    expect(body.success).toBe(true);
+    expect(body.data).toBeDefined();
+
+    // Verify regressions is an array
+    expect(Array.isArray(body.data!.regressions)).toBe(true);
+
+    // Verify currentVersion and previousVersion are strings
+    expect(typeof body.data!.currentVersion).toBe('string');
+    expect(typeof body.data!.previousVersion).toBe('string');
+
+    // Verify window and threshold
+    expect(typeof body.data!.window).toBe('string');
+    expect(['6h', '24h', '48h']).toContain(body.data!.window);
+    expect(typeof body.data!.threshold).toBe('number');
+    expect(typeof body.data!.computedAt).toBe('number');
+  });
+
+  it('GET /admin/api/errors/regressions returns 401 without auth', async () => {
+    const res = await client.getErrorRegressionsNoAuth();
+    expect(res.status).toBe(401);
+
+    const body = (await res.json()) as ApiResponse;
+    expect(body.success).toBe(false);
+    expect(body.error).toBe('Unauthorized');
+  });
+
+  it('GET /admin/api/errors/regressions accepts window parameter', async () => {
+    await loginAsSuperAdmin(client);
+
+    for (const window of ['6h', '24h', '48h']) {
+      const res = await client.getErrorRegressions(window);
+      expect(res.status).toBe(200);
+
+      const body = (await res.json()) as ApiResponse<RegressionsData>;
+      expect(body.success).toBe(true);
+      expect(body.data!.window).toBe(window);
+    }
+  });
+
+  it('GET /admin/api/errors/regressions accepts custom threshold', async () => {
+    await loginAsSuperAdmin(client);
+
+    const res = await client.getErrorRegressions('24h', 2.0);
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as ApiResponse<RegressionsData>;
+    expect(body.success).toBe(true);
+    expect(body.data!.threshold).toBe(2.0);
+  });
+
+  it('GET /admin/api/errors/regressions rejects invalid window', async () => {
+    await loginAsSuperAdmin(client);
+
+    const res = await client.getErrorRegressions('12h');
+    expect(res.status).toBe(400);
+
+    const body = (await res.json()) as ApiResponse;
+    expect(body.success).toBe(false);
+    expect(body.error).toContain('Invalid window');
+  });
+
+  it('GET /admin/api/errors/regressions includes CORS headers', async () => {
+    await loginAsSuperAdmin(client);
+
+    const res = await client.getErrorRegressions();
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+  });
+
+  it('regression items have correct field types when present', async () => {
+    await loginAsSuperAdmin(client);
+
+    const res = await client.getErrorRegressions();
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as ApiResponse<RegressionsData>;
+    // Regressions may be empty if no regressions exist in QA
+    for (const reg of body.data!.regressions) {
+      expect(typeof reg.errorSignature).toBe('string');
+      expect(typeof reg.category).toBe('string');
+      expect(typeof reg.currentVersion).toBe('string');
+      expect(typeof reg.previousVersion).toBe('string');
+      expect(typeof reg.currentRate).toBe('number');
+      expect(typeof reg.previousRate).toBe('number');
+      expect(typeof reg.multiplier).toBe('number');
+      expect(typeof reg.currentTotal).toBe('number');
+      expect(typeof reg.previousTotal).toBe('number');
+      expect(typeof reg.firstDetected).toBe('number');
+      expect(typeof reg.sampleMessage).toBe('string');
+    }
+  });
+});
+
+// ─────────────────────────────────────────────
+// Section 9: Edge Cases
 // ─────────────────────────────────────────────
 
 describe('Edge Cases', () => {

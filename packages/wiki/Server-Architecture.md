@@ -2,6 +2,11 @@
 
 The Zajel server runs on Cloudflare Workers with Durable Objects for stateful coordination. It handles signaling, relay management, peer rendezvous, channel chunk distribution, server bootstrapping, and device attestation.
 
+Two additional Cloudflare Workers support operational monitoring:
+
+- **Diagnostics Worker** (`packages/diagnostics-cf/`) -- Ingests anonymous crash reports, performance metrics, heartbeats, and VPS server metrics. See [Diagnostics Architecture](Diagnostics-Architecture).
+- **Admin Worker** (`packages/admin-cf/`) -- Serves the admin dashboard with error trends, regression detection, app metrics, network metrics, server health, and federation status. See [Admin Dashboard](Admin-Dashboard).
+
 ---
 
 ## Durable Object Hierarchy

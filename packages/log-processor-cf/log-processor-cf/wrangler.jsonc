@@ -1,0 +1,75 @@
+{
+  // Zajel Log Processor Worker — AI-powered error analysis and GitHub issue creation
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "zajel-log-processor",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-01-01",
+
+  // Cron trigger: every 15 minutes
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
+
+  // Shared D1 database (same as diagnostics-cf)
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "zajel-diagnostics",
+      "database_id": "placeholder-d1-id",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // Shared R2 bucket for reading raw diagnostic reports
+  "r2_buckets": [
+    {
+      "binding": "REPORTS_BUCKET",
+      "bucket_name": "zajel-diagnostics"
+    }
+  ],
+
+  // Workers AI binding
+  "ai": {
+    "binding": "AI"
+  },
+
+  // Production vars
+  "vars": {
+    "ENVIRONMENT": "production",
+    "GITHUB_REPO": "zajel/zajel"
+  },
+
+  // Development settings
+  "dev": {
+    "port": 8791,
+    "local_protocol": "http"
+  },
+
+  // QA Environment
+  "env": {
+    "qa": {
+      "name": "zajel-log-processor-qa",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "zajel-diagnostics-qa",
+          "database_id": "placeholder-d1-qa-id",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "REPORTS_BUCKET",
+          "bucket_name": "zajel-diagnostics-qa"
+        }
+      ],
+      "ai": {
+        "binding": "AI"
+      },
+      "vars": {
+        "ENVIRONMENT": "qa",
+        "GITHUB_REPO": "zajel/zajel"
+      }
+    }
+  }
+}

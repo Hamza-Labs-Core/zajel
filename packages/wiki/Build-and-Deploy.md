@@ -206,6 +206,109 @@ npx wrangler deploy --env qa
 
 ---
 
+## Diagnostics Worker (`packages/diagnostics-cf`)
+
+### Development
+
+```bash
+cd packages/diagnostics-cf
+npx wrangler dev
+```
+
+### Testing
+
+```bash
+cd packages/diagnostics-cf
+npm test
+```
+
+### Deployment
+
+```bash
+cd packages/diagnostics-cf
+
+# Deploy to production
+npx wrangler deploy
+
+# Deploy to QA
+npx wrangler deploy --env qa
+
+# Apply D1 migrations
+npx wrangler d1 migrations apply zajel-diagnostics
+
+# Set server metrics secret
+npx wrangler secret put SERVER_METRICS_SECRET
+```
+
+### Configuration (`wrangler.jsonc`)
+
+```jsonc
+{
+  "name": "zajel-diagnostics",
+  "main": "src/index.ts",
+  "d1_databases": [{ "binding": "DB", "database_name": "zajel-diagnostics" }],
+  "r2_buckets": [{ "binding": "REPORTS_BUCKET", "bucket_name": "zajel-diagnostics" }],
+  "kv_namespaces": [{ "binding": "RATE_LIMIT_KV" }],
+  "ratelimits": [{ "name": "GLOBAL_RATE_LIMITER", "simple": { "limit": 167, "period": 60 } }]
+}
+```
+
+### Environments
+
+| Environment | Worker Name | D1 Database |
+|-------------|------------|-------------|
+| Production | `zajel-diagnostics` | `zajel-diagnostics` |
+| QA | `zajel-diagnostics-qa` | `zajel-diagnostics-qa` |
+
+---
+
+## Admin Dashboard Worker (`packages/admin-cf`)
+
+### Development
+
+```bash
+cd packages/admin-cf
+npx wrangler dev
+```
+
+### Deployment
+
+```bash
+cd packages/admin-cf
+
+# Deploy to production
+npx wrangler deploy
+
+# Deploy to QA
+npx wrangler deploy --env qa
+
+# Set JWT secret
+npx wrangler secret put ZAJEL_ADMIN_JWT_SECRET
+```
+
+### Configuration (`wrangler.jsonc`)
+
+```jsonc
+{
+  "name": "zajel-admin",
+  "main": "src/index.ts",
+  "durable_objects": {
+    "bindings": [{ "name": "ADMIN_USERS", "class_name": "AdminUsersDO" }]
+  },
+  "services": [{ "binding": "BOOTSTRAP_SERVICE", "service": "zajel-signaling" }],
+  "d1_databases": [{ "binding": "DIAGNOSTICS_DB", "database_name": "zajel-diagnostics" }]
+}
+```
+
+### Environments
+
+| Environment | Domain | Service Binding |
+|-------------|--------|----------------|
+| Production | `admin.zajel.hamzalabs.dev` | `zajel-signaling` |
+| QA | `admin.zajel.qa.hamzalabs.dev` | `zajel-signaling-qa` |
+
+---
+
 ## VPS Relay Server (`packages/server-vps`)
 
 ### Build

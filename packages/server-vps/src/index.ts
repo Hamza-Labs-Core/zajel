@@ -24,6 +24,7 @@ import { ClientHandler, type ClientHandlerConfig } from './client/handler.js';
 import { logger } from './utils/logger.js';
 import { createAdminModule, type AdminModule } from './admin/index.js';
 import { requireAuth } from './admin/auth.js';
+import { startMetricsPush, type MetricsPushHandle } from './admin/metrics-push.js';
 
 
 export interface ZajelServer {
@@ -414,6 +415,21 @@ export async function createZajelServer(
     console.log('[Zajel] Admin dashboard enabled at /admin/');
   }
 
+  // Start metrics push to diagnostics-cf (if configured)
+  let metricsPush: MetricsPushHandle | null = null;
+  const diagnosticsUrl = process.env['ZAJEL_DIAGNOSTICS_URL'];
+  const pushSecret = process.env['DIAGNOSTICS_PUSH_SECRET'];
+  if (diagnosticsUrl && pushSecret) {
+    metricsPush = startMetricsPush(adminModule.metricsCollector, {
+      diagnosticsUrl,
+      pushSecret,
+      serverId: identity.serverId,
+      region: config.network.region || 'unknown',
+    });
+  } else {
+    console.log('[Zajel] Metrics push disabled (ZAJEL_DIAGNOSTICS_URL or DIAGNOSTICS_PUSH_SECRET not set)');
+  }
+
   // Set up cleanup interval
   const cleanupInterval = setInterval(async () => {
     try {
@@ -452,6 +468,9 @@ export async function createZajelServer(
     console.log('[Zajel] Shutting down...');
 
     clearInterval(cleanupInterval);
+
+    // Stop metrics push
+    metricsPush?.stop();
 
     // Stop admin module
     adminModule.shutdown();
