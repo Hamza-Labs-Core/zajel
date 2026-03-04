@@ -1,0 +1,423 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../core/logging/logger_service.dart';
+
+import '../../../core/network/signaling_client.dart'
+    show SignalingConnectionState;
+import '../../../core/providers/app_providers.dart';
+import '../models/channel.dart';
+import '../models/chunk.dart';
+import '../services/admin_management_service.dart';
+import '../services/background_sync_service.dart';
+import '../services/channel_crypto_service.dart';
+import '../services/channel_service.dart';
+import '../services/channel_storage_service.dart';
+import '../services/channel_sync_service.dart';
+import '../services/routing_hash_service.dart';
+import '../services/upstream_service.dart';
+import '../services/poll_service.dart';
+import '../services/live_stream_service.dart';
+
+/// Provider for the channel crypto service (stateless, no initialization needed).
+final channelCryptoServiceProvider = Provider<ChannelCryptoService>((ref) {
+  return ChannelCryptoService();
+});
+
+/// Provider for the channel storage service.
+///
+/// Requires [initialize] to be called before use (typically at app startup).
+final channelStorageServiceProvider = Provider<ChannelStorageService>((ref) {
+  final service = ChannelStorageService();
+  ref.onDispose(() => service.close());
+  return service;
+});
+
+/// Provider for the channel service (orchestrates crypto + storage).
+final channelServiceProvider = Provider<ChannelService>((ref) {
+  final cryptoService = ref.watch(channelCryptoServiceProvider);
+  final storageService = ref.watch(channelStorageServiceProvider);
+  return ChannelService(
+    cryptoService: cryptoService,
+    storageService: storageService,
+  );
+});
+
+/// Provider for the admin management service.
+///
+/// Provides admin permission management, channel rules, and encryption key rotation.
+final adminManagementServiceProvider = Provider<AdminManagementService>((ref) {
+  final cryptoService = ref.watch(channelCryptoServiceProvider);
+  final storageService = ref.watch(channelStorageServiceProvider);
+  return AdminManagementService(
+    cryptoService: cryptoService,
+    storageService: storageService,
+  );
+});
+
+/// Provider for all channels (owned + subscribed).
+///
+/// This is a [FutureProvider] that loads channels from storage.
+/// Invalidate it after channel creation/deletion to refresh the list.
+final channelsProvider = FutureProvider<List<Channel>>((ref) async {
+  final service = ref.watch(channelServiceProvider);
+  return service.getAllChannels();
+});
+
+/// Provider for a single channel by ID.
+final channelByIdProvider =
+    FutureProvider.family<Channel?, String>((ref, channelId) async {
+  final service = ref.watch(channelServiceProvider);
+  return service.getChannel(channelId);
+});
+
+/// Provider for owned channels only.
+final ownedChannelsProvider = FutureProvider<List<Channel>>((ref) async {
+  final channels = await ref.watch(channelsProvider.future);
+  return channels.where((c) => c.role == ChannelRole.owner).toList();
+});
+
+/// Provider for subscribed channels only.
+final subscribedChannelsProvider = FutureProvider<List<Channel>>((ref) async {
+  final channels = await ref.watch(channelsProvider.future);
+  return channels.where((c) => c.role == ChannelRole.subscriber).toList();
+});
+
+/// Provider for the channel sync service.
+///
+/// Uses the signaling client's send function when connected, or a no-op
+/// when disconnected. The peer ID comes from [pairingCodeProvider].
+final channelSyncServiceProvider = Provider<ChannelSyncService>((ref) {
+  final storageService = ref.watch(channelStorageServiceProvider);
+  final signalingClient = ref.watch(signalingClientProvider);
+  final pairingCode = ref.watch(pairingCodeProvider);
+
+  // Build a send function: use the signaling client if connected,
+  // otherwise silently drop messages (sync will retry on next interval).
+  void sendMessage(Map<String, dynamic> message) {
+    signalingClient?.send(message);
+  }
+
+  final service = ChannelSyncService(
+    storageService: storageService,
+    sendMessage: sendMessage,
+    peerId: pairingCode ?? '',
+  );
+
+  // Wire up chunk received callback: parse, store, and re-announce for seeding.
+  service.onChunkReceived = (chunkId, data) async {
+    try {
+      final channelId = data.remove('_channelId') as String?;
+      if (channelId == null) return;
+
+      final chunk = Chunk.fromJson(data);
+      await storageService.saveChunk(channelId, chunk);
+
+      // Re-announce so we become a seeder for this chunk
+      service.announceChunk(chunk, channelId: channelId);
+
+      // Invalidate the messages provider so UI refreshes
+      ref.read(channelMessagesProvider(channelId).notifier).reload();
+
+      // Show notification when a complete message sequence arrives.
+      // DND / messageNotifications guards are inside showMessageNotification.
+      final sequenceChunks =
+          await storageService.getChunksBySequence(channelId, chunk.sequence);
+      if (sequenceChunks.length == chunk.totalChunks) {
+        try {
+          final channel = await ref.read(channelByIdProvider(channelId).future);
+          final channelName = channel?.manifest.name ?? 'Channel';
+          final settings = ref.read(notificationSettingsProvider);
+          ref.read(notificationServiceProvider).showMessageNotification(
+                peerId: channelId,
+                peerName: channelName,
+                content: 'New channel post',
+                settings: settings,
+              );
+        } catch (e) {
+          logger.warning(
+              'ChannelSync', 'Failed to show channel notification: $e');
+        }
+      }
+    } catch (e, stack) {
+      logger.error('ChannelSync', 'Failed to process received chunk', e, stack);
+    }
+  };
+
+  // Wire up chunk message stream from the signaling client so the
+  // sync service can react to incoming chunk_data, chunk_pull, etc.
+  StreamSubscription? connectionSub;
+  if (signalingClient != null) {
+    service.start(signalingClient.chunkMessages);
+
+    // Register channels when the WebSocket is fully connected, and
+    // re-register on every reconnect. This avoids the race condition
+    // where send() silently drops messages before the connection is ready.
+    if (signalingClient.isConnected) {
+      _registerChannelsWithVps(storageService, sendMessage);
+    }
+    connectionSub = signalingClient.connectionState.listen((state) {
+      if (state == SignalingConnectionState.connected) {
+        _registerChannelsWithVps(storageService, sendMessage);
+      }
+    });
+  }
+
+  ref.onDispose(() {
+    connectionSub?.cancel();
+    service.dispose();
+  });
+  return service;
+});
+
+/// Send channel-owner-register / channel-subscribe for all local channels.
+Future<void> _registerChannelsWithVps(
+  ChannelStorageService storageService,
+  void Function(Map<String, dynamic>) sendMessage,
+) async {
+  try {
+    final channels = await storageService.getAllChannels();
+    for (final channel in channels) {
+      if (channel.role == ChannelRole.owner) {
+        sendMessage({
+          'type': 'channel-owner-register',
+          'channelId': channel.id,
+        });
+      } else {
+        sendMessage({
+          'type': 'channel-subscribe',
+          'channelId': channel.id,
+        });
+      }
+    }
+  } catch (e) {
+    logger.warning('ChannelSync', 'Channel VPS registration failed: $e');
+  }
+}
+
+/// Provider for the upstream service (handles subscriber -> owner messaging).
+final upstreamServiceProvider = Provider<UpstreamService>((ref) {
+  return UpstreamService();
+});
+
+/// Provider for the poll service (poll creation, voting, and tallying).
+final pollServiceProvider = Provider<PollService>((ref) {
+  final channelService = ref.watch(channelServiceProvider);
+  final upstreamService = ref.watch(upstreamServiceProvider);
+  return PollService(
+    channelService: channelService,
+    upstreamService: upstreamService,
+  );
+});
+
+/// Provider for the live stream service.
+final liveStreamServiceProvider = Provider<LiveStreamService>((ref) {
+  final cryptoService = ref.watch(channelCryptoServiceProvider);
+  final channelService = ref.watch(channelServiceProvider);
+  return LiveStreamService(
+    cryptoService: cryptoService,
+    channelService: channelService,
+  );
+});
+
+/// Provider for the routing hash service.
+final routingHashServiceProvider = Provider<RoutingHashService>((ref) {
+  return RoutingHashService();
+});
+
+/// Provider for the background sync service.
+///
+/// Handles periodic synchronization of channel chunks in the background.
+/// On mobile, registers with platform background task schedulers.
+/// On desktop/web, uses a foreground timer.
+final backgroundSyncServiceProvider = Provider<BackgroundSyncService>((ref) {
+  final storageService = ref.watch(channelStorageServiceProvider);
+  final routingHashService = ref.watch(routingHashServiceProvider);
+  final channelSyncService = ref.watch(channelSyncServiceProvider);
+
+  final service = BackgroundSyncService(
+    storageService: storageService,
+    routingHashService: routingHashService,
+  );
+
+  // Wire up the channel sync service for chunk downloads
+  service.setChannelSyncService(channelSyncService);
+
+  ref.onDispose(() => service.dispose());
+  return service;
+});
+
+/// Provider for the currently selected channel ID (for split-view layout).
+final selectedChannelIdProvider = StateProvider<String?>((ref) => null);
+
+/// A single displayable message decoded from channel chunks.
+class ChannelMessage {
+  final int sequence;
+  final ContentType type;
+  final String text;
+  final DateTime timestamp;
+  final String? author;
+
+  const ChannelMessage({
+    required this.sequence,
+    required this.type,
+    required this.text,
+    required this.timestamp,
+    this.author,
+  });
+}
+
+/// Provider for channel messages (decrypted chunks) with pagination.
+final channelMessagesProvider = StateNotifierProvider.family<
+    ChannelMessagesNotifier, List<ChannelMessage>, String>(
+  (ref, channelId) {
+    final storageService = ref.watch(channelStorageServiceProvider);
+    final channelService = ref.watch(channelServiceProvider);
+    final cryptoService = ref.watch(channelCryptoServiceProvider);
+    return ChannelMessagesNotifier(
+      channelId,
+      storageService: storageService,
+      channelService: channelService,
+      cryptoService: cryptoService,
+    );
+  },
+);
+
+/// StateNotifier for channel messages with sequence-based pagination.
+class ChannelMessagesNotifier extends StateNotifier<List<ChannelMessage>> {
+  final String channelId;
+  final ChannelStorageService? _storageService;
+  final ChannelService? _channelService;
+  final ChannelCryptoService? _cryptoService;
+  bool _loaded = false;
+  bool _hasMore = true;
+  int? _oldestSequence;
+  static const _pageSize = 50;
+
+  ChannelMessagesNotifier(
+    this.channelId, {
+    required ChannelStorageService storageService,
+    required ChannelService channelService,
+    required ChannelCryptoService cryptoService,
+  })  : _storageService = storageService,
+        _channelService = channelService,
+        _cryptoService = cryptoService,
+        super([]) {
+    _loadMessages();
+  }
+
+  /// Test-only constructor that pre-seeds state without requiring real services.
+  @visibleForTesting
+  ChannelMessagesNotifier.withMessages(List<ChannelMessage> messages)
+      : channelId = '',
+        _storageService = null,
+        _channelService = null,
+        _cryptoService = null,
+        super(messages) {
+    _loaded = true;
+    _hasMore = false;
+    if (messages.isNotEmpty) {
+      _oldestSequence = messages.first.sequence;
+    }
+  }
+
+  /// Whether there are more older messages to load.
+  bool get hasMore => _hasMore;
+
+  Future<void> _loadMessages() async {
+    if (_loaded) return;
+    final messages = await _decryptChunks();
+    if (mounted) {
+      state = messages;
+      _loaded = true;
+      _hasMore = messages.length >= _pageSize;
+      if (messages.isNotEmpty) {
+        _oldestSequence = messages.first.sequence;
+      }
+    }
+  }
+
+  /// Load older messages (pagination).
+  Future<void> loadMore() async {
+    if (!_hasMore || !_loaded || _oldestSequence == null) return;
+    if (_channelService == null) return;
+    final older = await _decryptChunks(beforeSequence: _oldestSequence);
+    if (mounted && older.isNotEmpty) {
+      state = [...older, ...state];
+      _hasMore = older.length >= _pageSize;
+      _oldestSequence = older.first.sequence;
+    } else {
+      _hasMore = false;
+    }
+  }
+
+  /// Reload messages from DB. Called when new chunks arrive.
+  Future<void> reload() async {
+    if (_channelService == null) return;
+    final messages = await _decryptChunks();
+    if (mounted) {
+      state = messages;
+      _hasMore = messages.length >= _pageSize;
+      if (messages.isNotEmpty) {
+        _oldestSequence = messages.first.sequence;
+      }
+    }
+  }
+
+  /// Fetch chunks, group by sequence, decrypt and return messages.
+  Future<List<ChannelMessage>> _decryptChunks({int? beforeSequence}) async {
+    final channel = await _channelService!.getChannel(channelId);
+    if (channel == null) return [];
+
+    final encryptionKey = channel.encryptionKeyPrivate;
+    if (encryptionKey == null) return [];
+
+    final chunks = await _storageService!.getChunksForLatestSequences(
+      channelId,
+      limit: _pageSize,
+      beforeSequence: beforeSequence,
+    );
+    if (chunks.isEmpty) return [];
+
+    // Group by sequence number
+    final grouped = <int, List<Chunk>>{};
+    for (final chunk in chunks) {
+      grouped.putIfAbsent(chunk.sequence, () => []).add(chunk);
+    }
+
+    // Decrypt each sequence group
+    final messages = <ChannelMessage>[];
+    for (final entry in grouped.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key))) {
+      try {
+        final seqChunks = entry.value;
+        if (seqChunks.length != seqChunks.first.totalChunks) continue;
+
+        final encryptedBytes = _channelService.reassembleChunks(seqChunks);
+        final payload = await _cryptoService!.decryptPayload(
+          encryptedBytes,
+          encryptionKey,
+          channel.manifest.keyEpoch,
+        );
+
+        messages.add(ChannelMessage(
+          sequence: entry.key,
+          type: payload.type,
+          text: payload.type == ContentType.text
+              ? utf8.decode(payload.payload)
+              : '[${payload.type.name}]',
+          timestamp: payload.timestamp,
+          author: payload.author,
+        ));
+      } catch (e) {
+        logger.warning('ChannelMessages',
+            'Failed to decrypt/reassemble sequence ${entry.key}: $e');
+      }
+    }
+
+    return messages;
+  }
+}

@@ -110,6 +110,8 @@ export class RendezvousRegistry extends EventEmitter {
     const now = Date.now();
     const expiresAt = now + this.config.hourlyTtl;
     const result: { liveMatches: LiveMatchResult[] } = { liveMatches: [] };
+    // Track matched peerIds to avoid duplicate notifications
+    const matchedPeers = new Set<string>();
 
     for (const tokenHash of tokens) {
       // Get existing entries at this token
@@ -117,7 +119,8 @@ export class RendezvousRegistry extends EventEmitter {
 
       // Find live matches
       for (const entry of entries) {
-        if (entry.peerId !== peerId && entry.expiresAt > now) {
+        if (entry.peerId !== peerId && entry.expiresAt > now && !matchedPeers.has(entry.peerId)) {
+          matchedPeers.add(entry.peerId);
           const match: LiveMatchResult = {
             peerId: entry.peerId,
             relayId: entry.relayId || '',

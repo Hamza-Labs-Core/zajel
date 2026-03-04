@@ -24,12 +24,6 @@ export const CRYPTO = {
   /** X25519 public key size in bytes */
   X25519_KEY_SIZE: 32,
 
-  /** Sequence number size for replay protection (4 bytes = 32-bit counter) */
-  SEQUENCE_NUMBER_SIZE: 4,
-
-  /** Sliding window size for out-of-order message tolerance in replay protection */
-  SEQUENCE_WINDOW: 64,
-
   /** Session key expiration time (24 hours) for forward secrecy */
   SESSION_KEY_EXPIRY_MS: 24 * 60 * 60 * 1000,
 } as const;

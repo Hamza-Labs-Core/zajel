@@ -318,12 +318,11 @@ export class RoutingTable {
     const routing = new Map<string, string[]>();
 
     for (const hash of hashes) {
-      const responsible = this.ring.getResponsibleNodes(hash, 1);
-      if (responsible.length > 0) {
-        const serverId = responsible[0]!.serverId;
-        const existing = routing.get(serverId) || [];
+      const responsible = this.ring.getResponsibleNodes(hash, this.replicationFactor);
+      for (const node of responsible) {
+        const existing = routing.get(node.serverId) || [];
         existing.push(hash);
-        routing.set(serverId, existing);
+        routing.set(node.serverId, existing);
       }
     }
 

@@ -53,7 +53,8 @@ export function verifyJwt(token: string, secret: string): JwtPayload | null {
     }
 
     return payload;
-  } catch {
+  } catch (error) {
+    console.warn('[Admin Auth] JWT verification failed:', error);
     return null;
   }
 }
@@ -141,11 +142,13 @@ export function sendJson<T>(
 /**
  * Set authentication cookie (after verifying token from URL)
  */
-export function setAuthCookie(res: ServerResponse, token: string): void {
-  // 15 minute expiry, matching JWT
-  const maxAge = 15 * 60;
+export function setAuthCookie(res: ServerResponse, token: string, isSecure = false): void {
+  // 4 hour expiry, matching JWT
+  const maxAge = 4 * 60 * 60;
+  const securePart = isSecure ? '; Secure' : '';
+  const sameSite = isSecure ? 'Strict' : 'Lax';
   res.setHeader(
     'Set-Cookie',
-    `zajel_vps_token=${token}; Path=/admin; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Strict`
+    `zajel_vps_token=${token}; Path=/admin; Max-Age=${maxAge}; HttpOnly${securePart}; SameSite=${sameSite}`
   );
 }

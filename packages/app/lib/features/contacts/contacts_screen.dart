@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/models/models.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/storage/trusted_peers_storage.dart';
+import '../../core/utils/identity_utils.dart';
 import '../../shared/widgets/relative_time.dart';
 
 /// Provider for all trusted peers as contacts.
@@ -13,8 +14,8 @@ final contactsProvider = FutureProvider<List<TrustedPeer>>((ref) async {
   final peers = await storage.getAllPeers();
   return peers.where((p) => !p.isBlocked).toList()
     ..sort((a, b) {
-      final aName = a.alias ?? a.displayName;
-      final bName = b.alias ?? b.displayName;
+      final aName = resolveTrustedPeerDisplayName(a);
+      final bName = resolveTrustedPeerDisplayName(b);
       return aName.toLowerCase().compareTo(bName.toLowerCase());
     });
 });
@@ -60,7 +61,8 @@ class _ContactsScreenState extends ConsumerState<ContactsScreen> {
                 final filtered = _searchQuery.isEmpty
                     ? contacts
                     : contacts.where((c) {
-                        final name = (c.alias ?? c.displayName).toLowerCase();
+                        final name =
+                            resolveTrustedPeerDisplayName(c).toLowerCase();
                         return name.contains(_searchQuery.toLowerCase());
                       }).toList();
 
@@ -101,16 +103,16 @@ class _ContactTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final displayName = contact.alias ?? contact.displayName;
+    final displayName = resolveTrustedPeerDisplayName(contact);
     final peersAsync = ref.watch(visiblePeersProvider);
 
     // Check if this contact is currently online
     bool isOnline = false;
-    peersAsync.whenData((peers) {
-      isOnline = peers.any((p) =>
+    if (peersAsync case AsyncData(:final value)) {
+      isOnline = value.any((p) =>
           p.id == contact.id &&
           p.connectionState == PeerConnectionState.connected);
-    });
+    }
 
     return ListTile(
       leading: CircleAvatar(
@@ -147,12 +149,12 @@ class _ContactTile extends ConsumerWidget {
           : null,
       onTap: () {
         // Set selected peer and navigate to chat
-        peersAsync.whenData((peers) {
-          final peer = peers.where((p) => p.id == contact.id).firstOrNull;
+        if (peersAsync case AsyncData(:final value)) {
+          final peer = value.where((p) => p.id == contact.id).firstOrNull;
           if (peer != null) {
             ref.read(selectedPeerProvider.notifier).state = peer;
           }
-        });
+        }
         context.push('/chat/${contact.id}');
       },
       onLongPress: () => context.push('/contacts/${contact.id}'),

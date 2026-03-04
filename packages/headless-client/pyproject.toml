@@ -23,6 +23,10 @@ dev = [
     "pytest-timeout>=2.3",
 ]
 
+[project.scripts]
+zajel-daemon = "zajel.cli.daemon:main"
+zajel-cli = "zajel.cli.client:main"
+
 [tool.setuptools.packages.find]
 include = ["zajel*"]
 

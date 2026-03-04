@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../logging/logger_service.dart';
@@ -8,11 +9,13 @@ import '../models/notification_settings.dart';
 /// Handles local notifications across all platforms.
 class NotificationService {
   static const _tag = 'NotificationService';
+  static const _windowsChannel = MethodChannel('com.zajel.zajel/notifications');
 
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
   final void Function(String? payload)? onNotificationTap;
   bool _initialized = false;
+  bool _loggedInitWarning = false;
 
   NotificationService({this.onNotificationTap});
 
@@ -21,10 +24,11 @@ class NotificationService {
   Future<void> initialize() async {
     if (_initialized) return;
 
-    // Windows is not supported by flutter_local_notifications 18.x
+    // Windows uses native Shell_NotifyIcon via method channel
     if (Platform.isWindows) {
-      logger.warning(_tag,
-          'Notifications not supported on Windows with current plugin version');
+      _initialized = true;
+      logger.info(
+          _tag, 'Notification service initialized (windows/native channel)');
       return;
     }
 
@@ -81,6 +85,21 @@ class NotificationService {
     return true;
   }
 
+  /// Show a notification via the native Windows method channel.
+  Future<void> _showWindowsNotification({
+    required String title,
+    required String body,
+  }) async {
+    try {
+      await _windowsChannel.invokeMethod('showNotification', {
+        'title': title,
+        'body': body,
+      });
+    } catch (e) {
+      logger.error(_tag, 'Failed to show Windows notification', e);
+    }
+  }
+
   /// Show a message notification if settings allow.
   Future<void> showMessageNotification({
     required String peerId,
@@ -88,11 +107,23 @@ class NotificationService {
     required String content,
     required NotificationSettings settings,
   }) async {
-    if (!_initialized) return;
+    if (!_initialized) {
+      if (!_loggedInitWarning) {
+        logger.warning(
+            _tag, 'Notification suppressed: service not initialized');
+        _loggedInitWarning = true;
+      }
+      return;
+    }
     if (!settings.shouldNotify(peerId)) return;
     if (!settings.messageNotifications) return;
 
     final body = settings.previewEnabled ? content : 'New message';
+
+    if (Platform.isWindows) {
+      await _showWindowsNotification(title: peerName, body: body);
+      return;
+    }
 
     try {
       await _plugin.show(
@@ -124,11 +155,26 @@ class NotificationService {
     required bool withVideo,
     required NotificationSettings settings,
   }) async {
-    if (!_initialized) return;
+    if (!_initialized) {
+      if (!_loggedInitWarning) {
+        logger.warning(
+            _tag, 'Notification suppressed: service not initialized');
+        _loggedInitWarning = true;
+      }
+      return;
+    }
     if (!settings.shouldNotify(peerId)) return;
     if (!settings.callNotifications) return;
 
     final callType = withVideo ? 'Video' : 'Voice';
+
+    if (Platform.isWindows) {
+      await _showWindowsNotification(
+        title: 'Incoming $callType Call',
+        body: peerName,
+      );
+      return;
+    }
 
     try {
       await _plugin.show(
@@ -161,11 +207,23 @@ class NotificationService {
     required bool connected,
     required NotificationSettings settings,
   }) async {
-    if (!_initialized) return;
+    if (!_initialized) {
+      if (!_loggedInitWarning) {
+        logger.warning(
+            _tag, 'Notification suppressed: service not initialized');
+        _loggedInitWarning = true;
+      }
+      return;
+    }
     if (settings.isDndActive) return;
     if (!settings.peerStatusNotifications) return;
 
     final status = connected ? 'is now online' : 'went offline';
+
+    if (Platform.isWindows) {
+      await _showWindowsNotification(title: peerName, body: status);
+      return;
+    }
 
     try {
       await _plugin.show(
@@ -196,9 +254,24 @@ class NotificationService {
     required String fileName,
     required NotificationSettings settings,
   }) async {
-    if (!_initialized) return;
+    if (!_initialized) {
+      if (!_loggedInitWarning) {
+        logger.warning(
+            _tag, 'Notification suppressed: service not initialized');
+        _loggedInitWarning = true;
+      }
+      return;
+    }
     if (!settings.shouldNotify(peerId)) return;
     if (!settings.fileReceivedNotifications) return;
+
+    if (Platform.isWindows) {
+      await _showWindowsNotification(
+        title: 'File from $peerName',
+        body: fileName,
+      );
+      return;
+    }
 
     try {
       await _plugin.show(
@@ -225,11 +298,27 @@ class NotificationService {
 
   /// Cancel a specific notification.
   Future<void> cancel(int id) async {
+    if (Platform.isWindows) {
+      try {
+        await _windowsChannel.invokeMethod('cancelNotification');
+      } catch (e) {
+        logger.error(_tag, 'Failed to cancel Windows notification', e);
+      }
+      return;
+    }
     await _plugin.cancel(id);
   }
 
   /// Cancel all notifications.
   Future<void> cancelAll() async {
+    if (Platform.isWindows) {
+      try {
+        await _windowsChannel.invokeMethod('cancelNotification');
+      } catch (e) {
+        logger.error(_tag, 'Failed to cancel Windows notifications', e);
+      }
+      return;
+    }
     await _plugin.cancelAll();
   }
 }

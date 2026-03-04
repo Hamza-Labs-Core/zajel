@@ -1,0 +1,215 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../core/logging/logger_service.dart';
+import '../../../core/providers/app_providers.dart';
+import '../models/group.dart';
+import '../models/group_message.dart';
+import '../services/group_connection_service.dart';
+import '../services/group_crypto_service.dart';
+import '../services/group_invitation_service.dart';
+import '../services/group_service.dart';
+import '../services/group_storage_service.dart';
+import '../services/group_sync_service.dart';
+import '../services/webrtc_p2p_adapter.dart';
+
+/// Provider for the group crypto service (stateless, no initialization needed).
+final groupCryptoServiceProvider = Provider<GroupCryptoService>((ref) {
+  return GroupCryptoService();
+});
+
+/// Provider for the group storage service.
+///
+/// Requires [initialize] to be called before use (typically at app startup).
+final groupStorageServiceProvider = Provider<GroupStorageService>((ref) {
+  final service = GroupStorageService();
+  ref.onDispose(() => service.close());
+  return service;
+});
+
+/// Provider for the group sync service.
+final groupSyncServiceProvider = Provider<GroupSyncService>((ref) {
+  final storageService = ref.watch(groupStorageServiceProvider);
+  return GroupSyncService(storageService: storageService);
+});
+
+/// Provider for the group service (orchestrates crypto + storage + sync).
+final groupServiceProvider = Provider<GroupService>((ref) {
+  final cryptoService = ref.watch(groupCryptoServiceProvider);
+  final storageService = ref.watch(groupStorageServiceProvider);
+  final syncService = ref.watch(groupSyncServiceProvider);
+  return GroupService(
+    cryptoService: cryptoService,
+    storageService: storageService,
+    syncService: syncService,
+  );
+});
+
+/// Provider for the P2P connection adapter.
+///
+/// Bridges the abstract [P2PConnectionAdapter] interface to the real
+/// [ConnectionManager] and [WebRTCService] via [WebRtcP2PAdapter].
+final p2pConnectionAdapterProvider = Provider<P2PConnectionAdapter>((ref) {
+  final connectionManager = ref.watch(connectionManagerProvider);
+  final webrtcService = ref.watch(webrtcServiceProvider);
+  final adapter = WebRtcP2PAdapter(
+    connectionManager: connectionManager,
+    webrtcService: webrtcService,
+  );
+  ref.onDispose(() => adapter.dispose());
+  return adapter;
+});
+
+/// Provider for the group connection service (mesh WebRTC connections).
+///
+/// Manages P2P connections to all members of active groups.
+final groupConnectionServiceProvider = Provider<GroupConnectionService>((ref) {
+  final adapter = ref.watch(p2pConnectionAdapterProvider);
+  final service = GroupConnectionService(adapter: adapter);
+  ref.onDispose(() => service.dispose());
+  return service;
+});
+
+/// Provider for the group invitation service.
+///
+/// Handles sending and receiving group invitations over existing 1:1
+/// WebRTC data channels. Starts listening automatically.
+final groupInvitationServiceProvider = Provider<GroupInvitationService>((ref) {
+  final connectionManager = ref.watch(connectionManagerProvider);
+  final groupService = ref.watch(groupServiceProvider);
+  final cryptoService = ref.watch(groupCryptoServiceProvider);
+  final appCryptoService = ref.watch(cryptoServiceProvider);
+
+  final service = GroupInvitationService(
+    connectionManager: connectionManager,
+    groupService: groupService,
+    cryptoService: cryptoService,
+    selfDeviceId: appCryptoService.stableId,
+  );
+
+  // Wire up the callback: when a group invitation is received and accepted,
+  // refresh the groups list so the UI picks it up.
+  service.onGroupJoined = (group) {
+    ref.invalidate(groupsProvider);
+  };
+
+  // Wire up the callback: when a group message arrives over a 1:1 channel,
+  // refresh that group's messages so the UI picks it up, and show a notification.
+  service.onGroupMessageReceived = (groupId, message) async {
+    ref.read(groupMessagesProvider(groupId).notifier).reload();
+
+    // Show OS notification for the incoming group message.
+    // DND / messageNotifications guards are inside showMessageNotification.
+    try {
+      final group = await ref.read(groupByIdProvider(groupId).future);
+      final groupName = group?.name ?? 'Group';
+      final settings = ref.read(notificationSettingsProvider);
+      ref.read(notificationServiceProvider).showMessageNotification(
+            peerId: groupId,
+            peerName: groupName,
+            content: message.content,
+            settings: settings,
+          );
+    } catch (e) {
+      logger.warning('GroupProviders', 'Failed to show group notification: $e');
+    }
+  };
+
+  // Start listening for incoming invitations and group messages
+  service.start();
+
+  ref.onDispose(() => service.dispose());
+  return service;
+});
+
+/// Provider for all groups.
+///
+/// This is a [FutureProvider] that loads groups from storage.
+/// Invalidate it after group creation/deletion to refresh the list.
+final groupsProvider = FutureProvider<List<Group>>((ref) async {
+  final service = ref.watch(groupServiceProvider);
+  return service.getAllGroups();
+});
+
+/// Provider for a single group by ID.
+final groupByIdProvider =
+    FutureProvider.family<Group?, String>((ref, groupId) async {
+  final service = ref.watch(groupServiceProvider);
+  return service.getGroup(groupId);
+});
+
+/// Provider for managing group messages per group with pagination.
+final groupMessagesProvider = StateNotifierProvider.family<
+    GroupMessagesNotifier, List<GroupMessage>, String>(
+  (ref, groupId) {
+    final service = ref.watch(groupServiceProvider);
+    return GroupMessagesNotifier(groupId, service);
+  },
+);
+
+/// StateNotifier for group messages with pagination support.
+///
+/// Modeled after [ChatMessagesNotifier] in chat_providers.dart.
+class GroupMessagesNotifier extends StateNotifier<List<GroupMessage>> {
+  final String groupId;
+  final GroupService? _service;
+  bool _loaded = false;
+  bool _hasMore = true;
+  static const _pageSize = 100;
+
+  GroupMessagesNotifier(this.groupId, GroupService service)
+      : _service = service,
+        super([]) {
+    _loadMessages();
+  }
+
+  /// Test-only constructor that pre-seeds state without requiring a real service.
+  @visibleForTesting
+  GroupMessagesNotifier.withMessages(super.messages)
+      : groupId = '',
+        _service = null {
+    _loaded = true;
+    _hasMore = false;
+  }
+
+  /// Whether there are more older messages to load.
+  bool get hasMore => _hasMore;
+
+  Future<void> _loadMessages() async {
+    if (_loaded) return;
+    final messages =
+        await _service!.getLatestMessages(groupId, limit: _pageSize);
+    if (mounted) {
+      state = messages;
+      _loaded = true;
+      _hasMore = messages.length >= _pageSize;
+    }
+  }
+
+  /// Load older messages (pagination). Prepends to current state.
+  Future<void> loadMore() async {
+    if (!_hasMore || !_loaded || _service == null) return;
+    final older = await _service.getLatestMessages(
+      groupId,
+      limit: _pageSize,
+      offset: state.length,
+    );
+    if (mounted && older.isNotEmpty) {
+      state = [...older, ...state];
+      _hasMore = older.length >= _pageSize;
+    } else {
+      _hasMore = false;
+    }
+  }
+
+  /// Reload messages from DB. Called when a new message arrives.
+  Future<void> reload() async {
+    if (_service == null) return;
+    final messages =
+        await _service.getLatestMessages(groupId, limit: _pageSize);
+    if (mounted) {
+      state = messages;
+      _hasMore = messages.length >= _pageSize;
+    }
+  }
+}

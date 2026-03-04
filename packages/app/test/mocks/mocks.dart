@@ -16,6 +16,7 @@ import 'package:zajel/core/media/media_service.dart';
 import 'package:zajel/core/network/voip_service.dart';
 import 'package:zajel/core/network/peer_reconnection_service.dart';
 import 'package:zajel/core/network/relay_client.dart';
+import 'package:zajel/core/storage/message_storage.dart';
 
 // Mock classes
 class MockFlutterSecureStorage extends Mock implements FlutterSecureStorage {}
@@ -44,6 +45,8 @@ class MockDeviceLinkService extends Mock implements DeviceLinkService {}
 class MockMediaService extends Mock implements MediaService {}
 
 class MockVoIPService extends Mock implements VoIPService {}
+
+class MockMessageStorage extends Mock implements MessageStorage {}
 
 class MockWebSocketChannel extends Mock implements WebSocketChannel {}
 

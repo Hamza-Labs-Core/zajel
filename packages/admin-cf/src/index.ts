@@ -520,6 +520,12 @@ function serveDashboard(): Response {
       error: null,
     };
 
+    // HTML escaping to prevent XSS
+    function escapeHtml(str) {
+      if (!str) return '';
+      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    }
+
     // Initialize
     async function init() {
       // Check for stored token
@@ -534,10 +540,27 @@ function serveDashboard(): Response {
             if (data.success) {
               state.token = token;
               state.user = data.data;
+
+              // Handle redirect back from VPS dashboard
+              const params = new URLSearchParams(window.location.search);
+              const redirectUrl = params.get('redirect');
+              if (redirectUrl) {
+                try {
+                  const url = new URL(redirectUrl);
+                  // Only allow redirects to HTTPS URLs with /admin/ path
+                  if (url.protocol === 'https:' && url.pathname.startsWith('/admin')) {
+                    url.searchParams.set('token', state.token);
+                    window.location.href = url.toString();
+                    return; // Stop init — we're redirecting
+                  }
+                } catch { /* invalid URL, ignore */ }
+              }
+
               await loadData();
             }
           }
         } catch (e) {
+          console.warn('Token verification failed:', e);
           localStorage.removeItem('zajel_admin_token');
         }
       }
@@ -598,6 +621,22 @@ function serveDashboard(): Response {
           state.token = data.data.token;
           state.user = data.data.user;
           localStorage.setItem('zajel_admin_token', state.token);
+
+          // Check if we should redirect back to a VPS dashboard
+          const params = new URLSearchParams(window.location.search);
+          const redirectUrl = params.get('redirect');
+          if (redirectUrl) {
+            try {
+              const url = new URL(redirectUrl);
+              // Only allow redirects to HTTPS URLs with /admin/ path
+              if (url.protocol === 'https:' && url.pathname.startsWith('/admin')) {
+                url.searchParams.set('token', state.token);
+                window.location.href = url.toString();
+                return;
+              }
+            } catch { /* invalid URL, ignore */ }
+          }
+
           await loadData();
           render();
         } else {
@@ -669,9 +708,11 @@ function serveDashboard(): Response {
 
     // Navigate to VPS dashboard
     function openVpsDashboard(server) {
-      const url = server.endpoint.replace('wss://', 'https://').replace('ws://', 'http://');
+      // Convert WS endpoint to HTTP base URL (strip any path component)
+      const wsUrl = new URL(server.endpoint.replace('wss://', 'https://').replace('ws://', 'http://'));
+      const baseUrl = wsUrl.protocol + '//' + wsUrl.host;
       // Pass token in URL for initial auth
-      window.open(url + '/admin/?token=' + encodeURIComponent(state.token), '_blank');
+      window.open(baseUrl + '/admin/?token=' + encodeURIComponent(state.token), '_blank');
     }
 
     // Render
@@ -706,7 +747,7 @@ function serveDashboard(): Response {
               <input type="password" id="password" name="password" required autocomplete="current-password">
             </div>
             <button type="submit">Login</button>
-            \${state.error ? '<p class="error-message">' + state.error + '</p>' : ''}
+            \${state.error ? '<p class="error-message">' + escapeHtml(state.error) + '</p>' : ''}
           </form>
         </div>
       \`;
@@ -718,7 +759,7 @@ function serveDashboard(): Response {
           <header>
             <h1>🕊️ Zajel Admin Dashboard</h1>
             <div class="user-info">
-              <span class="user-badge">\${state.user.username} (\${state.user.role})</span>
+              <span class="user-badge">\${escapeHtml(state.user.username)} (\${escapeHtml(state.user.role)})</span>
               <button id="logout-btn">Logout</button>
             </div>
           </header>
@@ -764,12 +805,12 @@ function serveDashboard(): Response {
 
         <div class="server-grid">
           \${state.servers.map(server => \`
-            <div class="server-card" data-endpoint="\${server.endpoint}">
+            <div class="server-card" data-endpoint="\${escapeHtml(server.endpoint)}">
               <div class="server-header">
-                <span class="server-name">\${server.id}</span>
-                <span class="status-badge status-\${server.status}">\${server.status.toUpperCase()}</span>
+                <span class="server-name">\${escapeHtml(server.id)}</span>
+                <span class="status-badge status-\${escapeHtml(server.status)}">\${escapeHtml(server.status.toUpperCase())}</span>
               </div>
-              <div class="server-region">📍 \${server.region}</div>
+              <div class="server-region">📍 \${escapeHtml(server.region)}</div>
               <div class="server-stats">
                 <div class="stat-item">
                   <span class="stat-label">Connections</span>
@@ -821,7 +862,7 @@ function serveDashboard(): Response {
               </div>
               <button type="submit" style="margin-top: 1rem;">Add User</button>
             </form>
-            \${state.error ? '<p class="error-message">' + state.error + '</p>' : ''}
+            \${state.error ? '<p class="error-message">' + escapeHtml(state.error) + '</p>' : ''}
           </div>
         \` : ''}
 
@@ -829,15 +870,15 @@ function serveDashboard(): Response {
           \${state.users.map(user => \`
             <div class="user-row">
               <div class="user-info-row">
-                <span>\${user.username}</span>
-                <span class="role-badge">\${user.role}</span>
+                <span>\${escapeHtml(user.username)}</span>
+                <span class="role-badge">\${escapeHtml(user.role)}</span>
               </div>
               <div style="display: flex; align-items: center; gap: 1rem;">
                 <span style="font-size: 0.75rem; color: var(--text-secondary)">
                   Last login: \${user.lastLogin ? new Date(user.lastLogin).toLocaleDateString() : 'Never'}
                 </span>
                 \${canManageUsers && user.id !== state.user.userId ? \`
-                  <button class="danger delete-user-btn" data-user-id="\${user.id}">Delete</button>
+                  <button class="danger delete-user-btn" data-user-id="\${escapeHtml(user.id)}">Delete</button>
                 \` : ''}
               </div>
             </div>

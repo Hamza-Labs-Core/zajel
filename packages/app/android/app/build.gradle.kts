@@ -35,7 +35,7 @@ android {
         applicationId = "com.zajel.zajel"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = 23  // Required by androidx.camera:camera-core (mobile_scanner)
+        minSdk = flutter.minSdkVersion  // Required by androidx.camera:camera-core (mobile_scanner)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -60,6 +60,13 @@ android {
                 // Fall back to debug signing for local development
                 signingConfigs.getByName("debug")
             }
+            // R8 code shrinking + obfuscation for attestation hardening
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 }

@@ -255,7 +255,7 @@ void main() {
 
       // Set up message listener on Device B
       final messageCompleter = Completer<(String, String)>();
-      connectionManagerB.messages.listen((msg) {
+      connectionManagerB.peerMessages.listen((msg) {
         if (!messageCompleter.isCompleted) {
           messageCompleter.complete(msg);
         }
@@ -330,8 +330,8 @@ void main() {
       final messagesAtA = <(String, String)>[];
       final messagesAtB = <(String, String)>[];
 
-      connectionManagerA.messages.listen((msg) => messagesAtA.add(msg));
-      connectionManagerB.messages.listen((msg) => messagesAtB.add(msg));
+      connectionManagerA.peerMessages.listen((msg) => messagesAtA.add(msg));
+      connectionManagerB.peerMessages.listen((msg) => messagesAtB.add(msg));
 
       // Send messages in both directions
       await connectionManagerA.sendMessage(pairingCodeB, 'Message 1 from A');

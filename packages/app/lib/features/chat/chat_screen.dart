@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -10,13 +9,18 @@ import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../app_router.dart';
+import '../../core/logging/logger_service.dart';
 import '../../core/media/media_service.dart';
 import '../../core/models/models.dart';
 import '../../core/network/voip_service.dart';
 import '../../core/providers/app_providers.dart';
+import '../../core/utils/identity_utils.dart';
+import '../../shared/widgets/compose_bar.dart';
+import '../../shared/widgets/message_list_view.dart';
 import '../call/call_screen.dart';
 import '../call/incoming_call_dialog.dart';
-import 'widgets/filtered_emoji_picker.dart';
+import 'services/typing_indicator_service.dart';
+import 'widgets/safety_number_screen.dart';
 
 /// Chat screen for messaging with a peer.
 class ChatScreen extends ConsumerStatefulWidget {
@@ -34,11 +38,10 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen>
     with WidgetsBindingObserver {
   final _messageController = TextEditingController();
-  final _scrollController = ScrollController();
   final _messageFocusNode = FocusNode();
   bool _isSending = false;
   bool _isIncomingCallDialogOpen = false;
-  bool _showEmojiPicker = false;
+  int _newMessageSignal = 0;
   StreamSubscription<CallState>? _voipStateSubscription;
 
   /// Check if running on desktop platform
@@ -59,12 +62,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     WidgetsBinding.instance.addObserver(this);
     _listenToMessages();
     _setupVoipListener();
+    // Mark this chat as the active screen so notifications are suppressed,
+    // and send a read receipt to tell the peer we've seen their messages.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(activeScreenProvider.notifier).state =
+          ActiveScreen(type: 'chat', id: widget.peerId);
+      _sendReadReceipt();
+    });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _messageFocusNode.requestFocus();
+      // Re-send read receipt when user returns to this chat
+      _sendReadReceipt();
     }
   }
 
@@ -92,48 +104,50 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     // Messages are persisted by the global listener in main.dart.
     // Here we just reload from DB when a new message arrives for this peer.
     ref.listenManual(messagesStreamProvider, (previous, next) {
-      next.whenData((data) {
-        final (peerId, _) = data;
+      if (next case AsyncData(:final value)) {
+        final (peerId, _) = value;
         if (peerId == widget.peerId) {
           ref.read(chatMessagesProvider(widget.peerId).notifier).reload();
-          _scrollToBottom();
+          setState(() => _newMessageSignal++);
+          // Send read receipt when a new message arrives while viewing this chat
+          _sendReadReceipt();
         }
-      });
+      }
     });
+  }
+
+  /// Send a read receipt to the peer, telling them we've seen their messages.
+  void _sendReadReceipt() {
+    ref.read(readReceiptServiceProvider).sendReadReceipt(widget.peerId);
   }
 
   @override
   void dispose() {
+    // Clear active screen so notifications resume for this chat
+    try {
+      ref.read(activeScreenProvider.notifier).state = ActiveScreen.other;
+    } catch (e) {
+      debugPrint(
+          '[ChatScreen] dispose error (may be expected during teardown): $e');
+    }
     WidgetsBinding.instance.removeObserver(this);
     _voipStateSubscription?.cancel();
     _messageController.dispose();
-    _scrollController.dispose();
     _messageFocusNode.dispose();
     super.dispose();
   }
 
   /// Handle key events for desktop: Enter sends, Shift+Enter creates newline
-  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
-    if (!_isDesktop) return KeyEventResult.ignored;
-
-    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.enter) {
-      final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
-      if (!isShiftPressed && !_isSending) {
-        _sendMessage();
-        return KeyEventResult.handled;
-      }
-    }
-    return KeyEventResult.ignored;
-  }
-
   @override
   Widget build(BuildContext context) {
     final peer = ref.watch(selectedPeerProvider);
     final messages = ref.watch(chatMessagesProvider(widget.peerId));
     final aliases = ref.watch(peerAliasesProvider);
-    final peerName = (peer != null ? aliases[peer.id] : null) ??
-        peer?.displayName ??
-        'Unknown';
+    final peerName = peer != null
+        ? resolvePeerDisplayName(peer, alias: aliases[peer.id])
+        : 'Unknown';
+
+    final pendingKeyChanges = ref.watch(pendingKeyChangesProvider);
 
     final body = Column(
       children: [
@@ -156,26 +170,60 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               ],
             ),
           ),
-        Expanded(
-          child: messages.isEmpty
-              ? _buildEmptyState()
-              : _buildMessageList(messages),
-        ),
-        _buildInputBar(),
-        if (_showEmojiPicker)
-          FilteredEmojiPicker(
-            textEditingController: _messageController,
-            onEmojiSelected: (category, emoji) {
-              // Emoji is auto-inserted by the textEditingController binding
-            },
-            onBackspacePressed: () {
-              _messageController
-                ..text = _messageController.text.characters.skipLast(1).string
-                ..selection = TextSelection.fromPosition(
-                  TextPosition(offset: _messageController.text.length),
-                );
-            },
+        if (switch (pendingKeyChanges) {
+          AsyncData(:final value) => value.containsKey(widget.peerId),
+          _ => false,
+        })
+          _KeyChangeBanner(
+            peerId: widget.peerId,
+            peerName: peerName,
+            onVerify: () => _showSafetyNumberScreen(context, widget.peerId),
+            onDismiss: () => _acknowledgeKeyChange(widget.peerId),
           ),
+        Expanded(
+          child: MessageListView<Message>(
+            messages: messages,
+            messageBuilder: (context, message) {
+              if (message.type == MessageType.system) {
+                return _SystemMessageBubble(
+                  message: message,
+                  onTap: () => _showSafetyNumberScreen(context, widget.peerId),
+                );
+              }
+              return _MessageBubble(
+                message: message,
+                onOpenFile: message.attachmentPath != null
+                    ? () => _openFile(message.attachmentPath!)
+                    : null,
+              );
+            },
+            timestampExtractor: (msg) => msg.timestamp,
+            onLoadMore: () => ref
+                .read(chatMessagesProvider(widget.peerId).notifier)
+                .loadMore(),
+            hasMore:
+                ref.read(chatMessagesProvider(widget.peerId).notifier).hasMore,
+            newMessageSignal: _newMessageSignal,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            emptyState: _buildEmptyState(),
+          ),
+        ),
+        _TypingIndicator(peerId: widget.peerId),
+        ComposeBar(
+          controller: _messageController,
+          focusNode: _messageFocusNode,
+          onSend: _sendMessage,
+          isSending: _isSending,
+          showAttachButton: true,
+          onAttach: _pickFile,
+          onTextChanged: (text) {
+            if (text.trim().isNotEmpty) {
+              ref
+                  .read(typingIndicatorServiceProvider)
+                  .sendTyping(widget.peerId);
+            }
+          },
+        ),
       ],
     );
 
@@ -377,31 +425,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     );
   }
 
-  Widget _buildMessageList(List<Message> messages) {
-    return ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      itemCount: messages.length,
-      itemBuilder: (context, index) {
-        final message = messages[index];
-        final showDate = index == 0 ||
-            !_isSameDay(messages[index - 1].timestamp, message.timestamp);
-
-        return Column(
-          children: [
-            if (showDate) _buildDateDivider(message.timestamp),
-            _MessageBubble(
-              message: message,
-              onOpenFile: message.attachmentPath != null
-                  ? () => _openFile(message.attachmentPath!)
-                  : null,
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   Future<void> _openFile(String filePath) async {
     try {
       if (_isDesktop) {
@@ -415,7 +438,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not open file: $e')),
+          SnackBar(
+            content: Text('Could not open file: $e'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }
@@ -434,8 +460,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     } else if (Platform.isMacOS) {
       result = await Process.run('open', [filePath]);
     } else if (Platform.isWindows) {
-      // On Windows, use 'start' command via cmd
-      result = await Process.run('cmd', ['/c', 'start', '', filePath]);
+      // Use explorer.exe directly — avoids cmd.exe shell parser which is
+      // vulnerable to injection via crafted filenames (& calc.exe, | net user)
+      result = await Process.run('explorer.exe', [filePath]);
     } else {
       throw Exception('Unsupported platform');
     }
@@ -443,108 +470,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     if (result.exitCode != 0) {
       throw Exception('Failed to open file: ${result.stderr}');
     }
-  }
-
-  Widget _buildDateDivider(DateTime date) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 16),
-      child: Row(
-        children: [
-          Expanded(child: Divider(color: Colors.grey.shade300)),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              _formatDate(date),
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey.shade600,
-              ),
-            ),
-          ),
-          Expanded(child: Divider(color: Colors.grey.shade300)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInputBar() {
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, -2),
-          ),
-        ],
-      ),
-      child: SafeArea(
-        child: Row(
-          children: [
-            IconButton(
-              icon: Icon(
-                _showEmojiPicker
-                    ? Icons.keyboard
-                    : Icons.emoji_emotions_outlined,
-              ),
-              tooltip: _showEmojiPicker ? 'Keyboard' : 'Emoji',
-              onPressed: () {
-                if (_showEmojiPicker) {
-                  setState(() => _showEmojiPicker = false);
-                  _messageFocusNode.requestFocus();
-                } else {
-                  _messageFocusNode.unfocus();
-                  setState(() => _showEmojiPicker = true);
-                }
-              },
-            ),
-            IconButton(
-              icon: const Icon(Icons.attach_file),
-              tooltip: 'Attach file',
-              onPressed: _pickFile,
-            ),
-            Expanded(
-              child: TextField(
-                controller: _messageController,
-                focusNode: _messageFocusNode..onKeyEvent = _handleKeyEvent,
-                decoration: const InputDecoration(
-                  hintText: 'Type a message...',
-                  border: InputBorder.none,
-                ),
-                textCapitalization: TextCapitalization.sentences,
-                maxLines: null,
-                onTap: () {
-                  if (_showEmojiPicker) {
-                    setState(() => _showEmojiPicker = false);
-                  }
-                },
-                // On mobile, onSubmitted handles send; on desktop, key handler does
-                onSubmitted: _isDesktop ? null : (_) => _sendMessage(),
-              ),
-            ),
-            _isSending
-                ? const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  )
-                : IconButton(
-                    icon: Icon(
-                      Icons.send,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                    tooltip: 'Send message',
-                    onPressed: _sendMessage,
-                  ),
-          ],
-        ),
-      ),
-    );
   }
 
   Future<void> _sendMessage() async {
@@ -557,18 +482,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       localId: const Uuid().v4(),
       peerId: widget.peerId,
       content: text,
-      timestamp: DateTime.now(),
+      timestamp: DateTime.now().toUtc(),
       isOutgoing: true,
       status: MessageStatus.sending,
     );
 
     ref.read(chatMessagesProvider(widget.peerId).notifier).addMessage(message);
     _messageController.clear();
-    _scrollToBottom();
+    setState(() => _newMessageSignal++);
 
-    // Check if peer is connected
-    final peer = ref.read(selectedPeerProvider);
-    if (peer?.connectionState != PeerConnectionState.connected) {
+    // Check if the actual peer (not selectedPeerProvider) is connected
+    bool isConnected = false;
+    if (ref.read(peersProvider) case AsyncData(:final value)) {
+      final peer = value.where((p) => p.id == widget.peerId).firstOrNull;
+      isConnected = peer?.connectionState == PeerConnectionState.connected;
+    }
+    if (!isConnected) {
       // Queue as pending — will be sent on reconnect
       ref
           .read(chatMessagesProvider(widget.peerId).notifier)
@@ -612,7 +541,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       peerId: widget.peerId,
       content: 'Sending file: $fileName',
       type: MessageType.file,
-      timestamp: DateTime.now(),
+      timestamp: DateTime.now().toUtc(),
       isOutgoing: true,
       status: MessageStatus.sending,
       attachmentName: fileName,
@@ -620,7 +549,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     );
 
     ref.read(chatMessagesProvider(widget.peerId).notifier).addMessage(message);
-    _scrollToBottom();
+    setState(() => _newMessageSignal++);
 
     try {
       final connectionManager = ref.read(connectionManagerProvider);
@@ -638,18 +567,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     }
   }
 
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-  }
-
   /// Start a VoIP call to the current peer.
   Future<void> _startCall({required bool withVideo}) async {
     final voipService = ref.read(voipServiceProvider);
@@ -661,6 +578,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           const SnackBar(
             content:
                 Text('VoIP not available. Connect to signaling server first.'),
+            duration: Duration(seconds: 3),
           ),
         );
       }
@@ -676,7 +594,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to start call: $e')),
+          SnackBar(
+            content: Text('Failed to start call: $e'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }
@@ -699,7 +620,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     if (voipService == null || voipService.currentCall == null) return;
 
     final call = voipService.currentCall!;
-    final callerName = peer?.displayName ?? 'Unknown';
+    final aliases = ref.read(peerAliasesProvider);
+    final callerName = peer != null
+        ? resolvePeerDisplayName(peer, alias: aliases[peer.id])
+        : 'Unknown';
 
     _isIncomingCallDialogOpen = true;
 
@@ -736,7 +660,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   void _navigateToCallScreen(VoIPService voipService, MediaService mediaService,
       {bool withVideo = false}) {
     final peer = ref.read(selectedPeerProvider);
-    final peerName = peer?.displayName ?? 'Unknown';
+    final aliases = ref.read(peerAliasesProvider);
+    final peerName = peer != null
+        ? resolvePeerDisplayName(peer, alias: aliases[peer.id])
+        : 'Unknown';
 
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -753,7 +680,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   Future<void> _showRenameDialog(Peer? peer) async {
     if (peer == null) return;
     final aliases = ref.read(peerAliasesProvider);
-    final currentName = aliases[peer.id] ?? peer.displayName;
+    final currentName = resolvePeerDisplayName(peer, alias: aliases[peer.id]);
     final controller = TextEditingController(text: currentName);
     final newName = await showDialog<String>(
       context: _dialogContext,
@@ -790,7 +717,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       ref.read(peerAliasesProvider.notifier).state = updatedAliases;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Renamed to $newName')),
+          SnackBar(
+            content: Text('Renamed to $newName'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }
@@ -804,7 +734,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       builder: (ctx) => AlertDialog(
         title: const Text('Delete Conversation?'),
         content: Text(
-          'Delete conversation with ${peer.displayName}? This will remove all messages and the connection.',
+          'Delete conversation with ${resolvePeerDisplayName(peer, alias: ref.read(peerAliasesProvider)[peer.id])}? This will remove all messages and the connection.',
         ),
         actions: [
           TextButton(
@@ -830,7 +760,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       final connectionManager = ref.read(connectionManagerProvider);
       try {
         await connectionManager.disconnectPeer(peer.id);
-      } catch (_) {}
+      } catch (e) {
+        logger.debug(
+            'ChatScreen', 'Best-effort disconnect failed for ${peer.id}: $e');
+      }
       if (mounted) {
         Navigator.of(context).pop(); // Go back to home
       }
@@ -858,6 +791,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     return Colors.grey;
   }
 
+  void _showSafetyNumberScreen(BuildContext context, String peerId) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SafetyNumberScreen(peerId: peerId),
+      ),
+    );
+  }
+
+  Future<void> _acknowledgeKeyChange(String peerId) async {
+    final storage = ref.read(trustedPeersStorageProvider);
+    await storage.acknowledgeKeyChange(peerId);
+    ref.invalidate(pendingKeyChangesProvider);
+  }
+
   void _showPeerInfo(BuildContext context, Peer? peer) {
     if (peer == null) return;
 
@@ -882,7 +829,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
                 const SizedBox(height: 16),
-                _InfoRow(label: 'Name', value: peer.displayName),
+                _InfoRow(
+                    label: 'Name',
+                    value: resolvePeerDisplayName(peer,
+                        alias: ref.read(peerAliasesProvider)[peer.id])),
                 _InfoRow(label: 'ID', value: peer.id),
                 if (peer.ipAddress != null)
                   _InfoRow(label: 'IP', value: peer.ipAddress!),
@@ -917,21 +867,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     );
   }
 
-  bool _isSameDay(DateTime a, DateTime b) {
-    return a.year == b.year && a.month == b.month && a.day == b.day;
-  }
-
-  String _formatDate(DateTime date) {
-    final now = DateTime.now();
-    if (_isSameDay(date, now)) return 'Today';
-    if (_isSameDay(date, now.subtract(const Duration(days: 1)))) {
-      return 'Yesterday';
-    }
-    return '${date.day}/${date.month}/${date.year}';
-  }
-
   String _formatDateTime(DateTime date) {
-    return '${date.day}/${date.month}/${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+    final local = date.toLocal();
+    return '${local.day}/${local.month}/${local.year} ${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
   }
 }
 
@@ -983,7 +921,7 @@ class _MessageBubble extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 11,
                     color: isOutgoing
-                        ? Colors.white.withOpacity(0.7)
+                        ? Colors.white.withValues(alpha: 0.7)
                         : Colors.grey,
                   ),
                 ),
@@ -1028,7 +966,7 @@ class _MessageBubble extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 12,
                     color: isOutgoing
-                        ? Colors.white.withOpacity(0.7)
+                        ? Colors.white.withValues(alpha: 0.7)
                         : Colors.grey,
                   ),
                 ),
@@ -1075,7 +1013,8 @@ class _MessageBubble extends StatelessWidget {
   }
 
   String _formatTime(DateTime time) {
-    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    final local = time.toLocal();
+    return '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
   }
 
   String _formatFileSize(int bytes) {
@@ -1430,6 +1369,123 @@ class _FingerprintCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Warning banner shown when a peer's public key has changed.
+class _KeyChangeBanner extends StatelessWidget {
+  final String peerId;
+  final String peerName;
+  final VoidCallback onVerify;
+  final VoidCallback onDismiss;
+
+  const _KeyChangeBanner({
+    required this.peerId,
+    required this.peerName,
+    required this.onVerify,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      color: Colors.amber.shade50,
+      child: Row(
+        children: [
+          Icon(Icons.warning_amber_rounded,
+              size: 20, color: Colors.amber.shade800),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'The safety number with $peerName has changed. '
+              'This could mean they reinstalled the app or their device changed.',
+              style: TextStyle(fontSize: 13, color: Colors.amber.shade900),
+            ),
+          ),
+          TextButton(
+            onPressed: onVerify,
+            child: const Text('Verify'),
+          ),
+          TextButton(
+            onPressed: onDismiss,
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// System message bubble — centered, no bubble, for key change notifications etc.
+class _SystemMessageBubble extends StatelessWidget {
+  final Message message;
+  final VoidCallback? onTap;
+
+  const _SystemMessageBubble({required this.message, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.lock_outline,
+                size: 14, color: Theme.of(context).colorScheme.outline),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                message.content,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.outline,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Typing indicator shown above the compose bar when the peer is typing.
+class _TypingIndicator extends ConsumerWidget {
+  final String peerId;
+
+  const _TypingIndicator({required this.peerId});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isTyping = ref.watch(isTypingProvider(peerId));
+
+    return isTyping.when(
+      data: (typing) {
+        if (!typing) return const SizedBox.shrink();
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          child: Text(
+            'typing...',
+            style: TextStyle(
+              fontSize: 12,
+              fontStyle: FontStyle.italic,
+              color: Theme.of(context).colorScheme.outline,
+            ),
+          ),
+        );
+      },
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
     );
   }
 }

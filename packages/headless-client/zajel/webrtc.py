@@ -22,18 +22,24 @@ from aiortc import (
     MediaStreamTrack,
 )
 from aiortc.contrib.media import MediaRelay
+from aiortc.sdp import candidate_from_sdp
 
 from .protocol import MESSAGE_CHANNEL_LABEL, FILE_CHANNEL_LABEL
 
 logger = logging.getLogger("zajel.webrtc")
 
-# NOTE: This STUN URL is also defined in:
+# NOTE: These STUN URLs are also defined in:
 #   - e2e-tests/conftest.py (headless_bob fixture)
 #   - packages/app/lib/core/constants.dart (defaultIceServers)
 # Keep all three in sync when changing.
 DEFAULT_ICE_SERVERS = [
     RTCIceServer(urls=["stun:stun.l.google.com:19302"]),
+    RTCIceServer(urls=["stun:stun1.l.google.com:19302"]),
 ]
+
+# Timeout for WebRTC operations (connection establishment, etc.).
+# Matches WebRTCConstants.operationTimeout in the Flutter app.
+OPERATION_TIMEOUT = 30  # seconds
 
 EventHandler = Callable[..., Coroutine[Any, Any, None]]
 
@@ -188,24 +194,13 @@ class WebRTCService:
         if not candidate_str:
             return
 
-        # Parse the candidate string
-        # aiortc expects the full candidate line
-        candidate = RTCIceCandidate(
-            component=1,
-            foundation="0",
-            ip="0.0.0.0",
-            port=0,
-            priority=0,
-            protocol="udp",
-            type="host",
-            sdpMid=candidate_dict.get("sdpMid", "0"),
-            sdpMLineIndex=candidate_dict.get("sdpMLineIndex", 0),
-        )
-        # Use the raw candidate string for proper parsing
         try:
+            candidate = candidate_from_sdp(candidate_str)
+            candidate.sdpMid = candidate_dict.get("sdpMid", "0")
+            candidate.sdpMLineIndex = candidate_dict.get("sdpMLineIndex", 0)
             await self._pc.addIceCandidate(candidate)
         except Exception as e:
-            logger.debug("ICE candidate add error (non-fatal): %s", e)
+            logger.info("ICE candidate add error (non-fatal): %s", e)
 
     async def send_message(self, data: str) -> None:
         """Send data on the message channel."""
@@ -219,11 +214,11 @@ class WebRTCService:
         if self._channels.file_channel:
             self._channels.file_channel.send(data)
 
-    async def wait_for_message_channel(self, timeout: float = 30) -> None:
+    async def wait_for_message_channel(self, timeout: float = OPERATION_TIMEOUT) -> None:
         """Wait for the message data channel to open."""
         await asyncio.wait_for(self._message_channel_open.wait(), timeout=timeout)
 
-    async def wait_for_connection(self, timeout: float = 30) -> None:
+    async def wait_for_connection(self, timeout: float = OPERATION_TIMEOUT) -> None:
         """Wait for the WebRTC connection to be established."""
         await asyncio.wait_for(self._connected.wait(), timeout=timeout)
 
@@ -259,6 +254,11 @@ class WebRTCService:
                 if self.on_message_channel_message:
                     self.on_message_channel_message(data)
 
+            # For responder: channel may already be open when datachannel event fires
+            if channel.readyState == "open":
+                logger.info("Message channel already open on setup")
+                self._message_channel_open.set()
+
         elif channel.label == FILE_CHANNEL_LABEL:
             self._channels.file_channel = channel
 
@@ -271,3 +271,8 @@ class WebRTCService:
             def on_message(data):
                 if self.on_file_channel_message:
                     self.on_file_channel_message(data)
+
+            # For responder: channel may already be open when datachannel event fires
+            if channel.readyState == "open":
+                logger.info("File channel already open on setup")
+                self._file_channel_open.set()

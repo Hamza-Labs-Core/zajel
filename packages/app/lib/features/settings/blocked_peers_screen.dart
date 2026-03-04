@@ -161,7 +161,10 @@ class BlockedPeersScreen extends ConsumerWidget {
       ref.invalidate(blockedPeerDetailsProvider);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$displayName unblocked')),
+          SnackBar(
+            content: Text('$displayName unblocked'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }
@@ -202,7 +205,10 @@ class BlockedPeersScreen extends ConsumerWidget {
       ref.invalidate(blockedPeerDetailsProvider);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$displayName removed permanently')),
+          SnackBar(
+            content: Text('$displayName removed permanently'),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }

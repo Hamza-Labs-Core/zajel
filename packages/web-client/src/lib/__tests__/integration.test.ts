@@ -457,7 +457,7 @@ describe('Pairing Flow Integration', () => {
         publicKey: alice.crypto.getPublicKeyBase64(),
       }));
 
-      expect(bob.webrtcEvents.onHandshake).toHaveBeenCalledWith(alice.crypto.getPublicKeyBase64());
+      expect(bob.webrtcEvents.onHandshake).toHaveBeenCalledWith(alice.crypto.getPublicKeyBase64(), undefined);
 
       // Verify key verification works
       expect(alice.crypto.verifyPeerKey(VALID_PAIRING_CODE_BOB, bob.crypto.getPublicKeyBase64())).toBe(true);
