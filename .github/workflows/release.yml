@@ -534,7 +534,8 @@ jobs:
 
           for TAG in $PRERELEASES; do
             echo "  Deleting pre-release $TAG..."
-            gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+            gh release delete "$TAG" --yes 2>/dev/null || true
+            gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG" 2>/dev/null || true
           done
           echo "All pre-releases deleted"
 
