@@ -13,6 +13,15 @@
  * Run twice: once for production, once for QA.
  */
 
+console.warn('');
+console.warn('=== DEPRECATION WARNING ===');
+console.warn('This script generates a single Ed25519 keypair with no threshold protection.');
+console.warn('For production use, prefer threshold key generation:');
+console.warn('  node scripts/threshold/shamir-keygen.mjs --threshold 3 --shares 5');
+console.warn('See docs/operations/threshold-signing-ceremony.md for details.');
+console.warn('===========================');
+console.warn('');
+
 const keyPair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);
 
 // Export raw private key (32-byte seed)

@@ -114,6 +114,14 @@ export interface PairMatchedMessage {
   peerCode: string;
   peerPublicKey: string;
   isInitiator: boolean;
+  peerPqPublicKey?: string;
+  peerProtocolVersion?: number;
+}
+
+export interface HybridKeyExchangeMessage {
+  type: 'hybrid_key_exchange';
+  senderPeerId: string;
+  pqCiphertext: string;
 }
 
 export interface PairRejectedMessage {
@@ -211,7 +219,8 @@ export type ServerMessage =
   | CallAnswerReceivedMessage
   | CallRejectReceivedMessage
   | CallHangupReceivedMessage
-  | CallIceReceivedMessage;
+  | CallIceReceivedMessage
+  | HybridKeyExchangeMessage;
 
 // Data channel messages (after WebRTC connected)
 export interface HandshakeMessage {

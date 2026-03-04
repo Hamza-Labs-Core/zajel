@@ -22,6 +22,7 @@ import { RendezvousRegistry } from './registry/rendezvous-registry.js';
 import { DistributedRendezvous } from './registry/distributed-rendezvous.js';
 import { ClientHandler, type ClientHandlerConfig } from './client/handler.js';
 import { logger } from './utils/logger.js';
+import { getClientIp } from './utils/client-ip.js';
 import { createAdminModule, type AdminModule } from './admin/index.js';
 import { requireAuth } from './admin/auth.js';
 import { loadBuildManifest } from './identity/build-manifest.js';
@@ -314,7 +315,7 @@ export async function createZajelServer(
 
   // Handle client WebSocket connections
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-    const clientIp = req.socket.remoteAddress || 'unknown';
+    const clientIp = getClientIp(req);
 
     // Check total connection limit
     const totalConnections = clientHandler.clientCount + clientHandler.signalingClientCount;

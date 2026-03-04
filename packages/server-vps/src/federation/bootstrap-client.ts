@@ -40,6 +40,7 @@ export function createBootstrapClient(
   buildManifest?: BuildManifest | null,
 ): BootstrapClient {
   let heartbeatTimer: NodeJS.Timeout | null = null;
+  let heartbeatSeq = 0;
   const baseUrl = config.bootstrap.serverUrl;
 
   async function register(): Promise<void> {
@@ -48,6 +49,8 @@ export function createBootstrapClient(
     const metrics = getMetrics?.();
     const body: Record<string, unknown> = {
       serverId: identity.serverId,
+      timestamp: Date.now(),
+      nonce: crypto.randomUUID(),
       endpoint: config.network.publicEndpoint,
       publicKey: base64Encode(identity.publicKey),
       region: config.network.region || 'unknown',
@@ -68,9 +71,14 @@ export function createBootstrapClient(
     console.log(`[Bootstrap] Registering with ${baseUrl}...`);
 
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (config.bootstrap.registrySecret) {
+        headers['Authorization'] = `Bearer ${config.bootstrap.registrySecret}`;
+      }
+
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(body),
       });
 
@@ -93,7 +101,15 @@ export function createBootstrapClient(
     console.log(`[Bootstrap] Unregistering from ${baseUrl}...`);
 
     try {
-      const response = await fetch(url, { method: 'DELETE' });
+      const deleteHeaders: Record<string, string> = {};
+      if (config.bootstrap.registrySecret) {
+        deleteHeaders['Authorization'] = `Bearer ${config.bootstrap.registrySecret}`;
+      }
+
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: Object.keys(deleteHeaders).length > 0 ? deleteHeaders : undefined,
+      });
 
       if (!response.ok && response.status !== 404) {
         console.warn(`[Bootstrap] Unregister returned ${response.status}`);
@@ -127,9 +143,14 @@ export function createBootstrapClient(
     const url = `${baseUrl}/servers/heartbeat`;
 
     try {
+      heartbeatSeq++;
+
       const metrics = getMetrics?.();
       const heartbeatBody: Record<string, unknown> = {
         serverId: identity.serverId,
+        timestamp: Date.now(),
+        nonce: crypto.randomUUID(),
+        sequenceNumber: heartbeatSeq,
         connections: metrics?.connections ?? 0,
         relayConnections: metrics?.relayConnections ?? 0,
         signalingConnections: metrics?.signalingConnections ?? 0,
@@ -143,9 +164,14 @@ export function createBootstrapClient(
         heartbeatBody.buildSigningKey = buildManifest.publicKey;
       }
 
+      const hbHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (config.bootstrap.registrySecret) {
+        hbHeaders['Authorization'] = `Bearer ${config.bootstrap.registrySecret}`;
+      }
+
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: hbHeaders,
         body: JSON.stringify(heartbeatBody),
       });
 

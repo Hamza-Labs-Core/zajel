@@ -48,6 +48,8 @@ class PairMatch:
     peer_code: str
     peer_public_key: str
     is_initiator: bool
+    peer_pq_public_key: Optional[str] = None
+    peer_protocol_version: Optional[int] = None
 
 
 @dataclass
@@ -142,11 +144,20 @@ class SignalingClient:
     def is_connected(self) -> bool:
         return self._ws is not None and self._connected.is_set()
 
-    async def connect(self, public_key_b64: str) -> str:
+    async def connect(
+        self,
+        public_key_b64: str,
+        pq_public_key_b64: Optional[str] = None,
+        protocol_version: int = 2,
+        supported_kems: Optional[list[str]] = None,
+    ) -> str:
         """Connect to the signaling server and register.
 
         Args:
             public_key_b64: Our X25519 public key (base64).
+            pq_public_key_b64: Our ML-KEM-768 public key (base64, optional).
+            protocol_version: Protocol version to advertise (default: 2 for hybrid).
+            supported_kems: Supported KEM methods (default: ["x25519", "x25519-mlkem768"]).
 
         Returns:
             Our pairing code.
@@ -165,6 +176,7 @@ class SignalingClient:
             )
 
         self._public_key_b64 = public_key_b64
+        self._pq_public_key_b64 = pq_public_key_b64
         logger.info("Connecting to %s with code %s", self.url, self.pairing_code)
         self._ws = await websockets.connect(self.url)
         self._connected.set()
@@ -173,11 +185,16 @@ class SignalingClient:
         self._receive_task = asyncio.create_task(self._receive_loop())
 
         # Register and wait for server confirmation
-        await self._send({
+        register_msg: dict[str, Any] = {
             "type": "register",
             "pairingCode": self.pairing_code,
             "publicKey": public_key_b64,
-        })
+            "protocolVersion": protocol_version,
+            "supportedKEMs": supported_kems or ["x25519", "x25519-mlkem768"],
+        }
+        if pq_public_key_b64:
+            register_msg["pqPublicKey"] = pq_public_key_b64
+        await self._send(register_msg)
 
         # Wait for 'registered' response so redirect tasks can be created
         try:
@@ -700,6 +717,8 @@ class SignalingClient:
                         peer_code=peer_code,
                         peer_public_key=msg["peerPublicKey"],
                         is_initiator=msg["isInitiator"],
+                        peer_pq_public_key=msg.get("peerPqPublicKey"),
+                        peer_protocol_version=msg.get("peerProtocolVersion"),
                     )
                     await self._pair_matches.put(pair_match)
                     if self._on_pair_match:

@@ -58,6 +58,15 @@ export class CryptoService {
   // Track session creation time for expiration (forward secrecy)
   private sessionCreatedAt = new Map<string, number>();
 
+  // ML-KEM-768 post-quantum key exchange fields
+  // Note: Web client ML-KEM support requires @noble/post-quantum package.
+  // When the package is not installed, mlKemAvailable will be false and
+  // the client falls back to classical X25519-only.
+  private mlKemKeyPair: { publicKey: Uint8Array; secretKey: Uint8Array } | null = null;
+  private peerMlKemPublicKeys = new Map<string, Uint8Array>();
+  private peerProtocolVersions = new Map<string, number>();
+  private _mlKemAvailable = false;
+
   /**
    * Check if a nonce has been seen before (replay detection).
    *
@@ -107,6 +116,41 @@ export class CryptoService {
     return Date.now() - createdAt > CRYPTO.SESSION_KEY_EXPIRY_MS;
   }
 
+  /** Encode Uint8Array to base64 (safe for large arrays like ML-KEM keys). */
+  private static uint8ToBase64(bytes: Uint8Array): string {
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  }
+
+  /** Decode base64 to Uint8Array. */
+  private static base64ToUint8(b64: string): Uint8Array {
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  }
+
+  /** Whether ML-KEM hybrid key exchange is available. */
+  get mlKemAvailable(): boolean {
+    return this._mlKemAvailable;
+  }
+
+  /** Get our ML-KEM public key as base64, or null if unavailable. */
+  getMlKemPublicKeyBase64(): string | null {
+    if (!this.mlKemKeyPair) return null;
+    return CryptoService.uint8ToBase64(this.mlKemKeyPair.publicKey);
+  }
+
+  /** Get the protocol version for a specific peer's session. */
+  getPeerProtocolVersion(peerId: string): number | undefined {
+    return this.peerProtocolVersions.get(peerId);
+  }
+
   async initialize(): Promise<void> {
     // Generate ephemeral key pair - keys live only in memory
     // This is the most secure approach for ephemeral messaging:
@@ -116,6 +160,19 @@ export class CryptoService {
     const privateKey = x25519.utils.randomPrivateKey();
     const publicKey = x25519.getPublicKey(privateKey);
     this.keyPair = { privateKey, publicKey };
+
+    // ML-KEM initialization: requires @noble/post-quantum package
+    // If not available, fall back to classical X25519-only
+    try {
+      const { ml_kem768 } = await import('@noble/post-quantum/ml-kem.js');
+      const seed = crypto.getRandomValues(new Uint8Array(64));
+      const [mlKemPub, mlKemSec] = ml_kem768.keygen(seed);
+      this.mlKemKeyPair = { publicKey: mlKemPub, secretKey: mlKemSec };
+      this._mlKemAvailable = true;
+    } catch {
+      // @noble/post-quantum not installed or keygen failed
+      this._mlKemAvailable = false;
+    }
   }
 
   getPublicKeyBase64(): string {
@@ -225,6 +282,12 @@ export class CryptoService {
     return lines.join('\n');
   }
 
+  /**
+   * Establish a session with a peer using X25519 key exchange.
+   *
+   * This is the classical (non-hybrid) session establishment.
+   * For hybrid X25519 + ML-KEM-768 sessions, use establishHybridSession().
+   */
   establishSession(peerId: string, peerPublicKeyBase64: string): void {
     if (!this.keyPair) {
       throw new CryptoError('CryptoService not initialized', ErrorCodes.CRYPTO_NOT_INITIALIZED);
@@ -264,8 +327,87 @@ export class CryptoService {
     const sessionKey = hkdf(sha256, sharedSecret, undefined, info, 32);
 
     this.sessionKeys.set(peerId, sessionKey);
+    this.peerProtocolVersions.set(peerId, CRYPTO.PROTOCOL_VERSION_CLASSICAL);
     // Record session creation time for expiration tracking
     this.sessionCreatedAt.set(peerId, Date.now());
+  }
+
+  /**
+   * Establish a hybrid X25519 + ML-KEM-768 session with a peer.
+   *
+   * Combines classical X25519 ECDH with post-quantum ML-KEM-768 KEM:
+   * session_key = HKDF-SHA256(x25519_secret || mlkem_secret, "zajel_hybrid_session")
+   *
+   * @param peerId - The peer identifier
+   * @param peerX25519PublicKeyBase64 - Peer's X25519 public key (base64)
+   * @param peerMlKemPublicKeyBase64 - Peer's ML-KEM-768 public key (base64)
+   * @param role - "initiator" (encapsulate) or "responder" (decapsulate)
+   * @param mlKemCiphertextBase64 - ML-KEM ciphertext (base64, required for responder)
+   * @returns Object with optional ciphertext (non-null for initiator)
+   */
+  async establishHybridSession(
+    peerId: string,
+    peerX25519PublicKeyBase64: string,
+    peerMlKemPublicKeyBase64: string,
+    role: 'initiator' | 'responder',
+    mlKemCiphertextBase64?: string,
+  ): Promise<{ ciphertext?: string }> {
+    if (!this.keyPair) {
+      throw new CryptoError('CryptoService not initialized', ErrorCodes.CRYPTO_NOT_INITIALIZED);
+    }
+    if (!this._mlKemAvailable || !this.mlKemKeyPair) {
+      throw new CryptoError('ML-KEM not available for hybrid key exchange', ErrorCodes.CRYPTO_NOT_INITIALIZED);
+    }
+
+    // 1. X25519 ECDH
+    const peerX25519Key = CryptoService.base64ToUint8(peerX25519PublicKeyBase64);
+    if (peerX25519Key.length !== CRYPTO.X25519_KEY_SIZE) {
+      throw new CryptoError(
+        `Invalid X25519 key size: ${peerX25519Key.length}`,
+        ErrorCodes.CRYPTO_INVALID_KEY
+      );
+    }
+    this.peerPublicKeys.set(peerId, peerX25519PublicKeyBase64);
+    const x25519SharedSecret = x25519.getSharedSecret(
+      this.keyPair.privateKey,
+      peerX25519Key
+    );
+
+    // 2. ML-KEM encapsulation or decapsulation
+    const { ml_kem768 } = await import('@noble/post-quantum/ml-kem.js');
+    const peerMlKemKey = CryptoService.base64ToUint8(peerMlKemPublicKeyBase64);
+    let mlKemSharedSecret: Uint8Array;
+    let mlKemCiphertext: Uint8Array | undefined;
+
+    if (role === 'initiator') {
+      const [ct, ss] = ml_kem768.encapsulate(peerMlKemKey);
+      mlKemCiphertext = ct;
+      mlKemSharedSecret = ss;
+    } else {
+      if (!mlKemCiphertextBase64) {
+        throw new CryptoError('mlKemCiphertextBase64 required for responder role', ErrorCodes.CRYPTO_INVALID_KEY);
+      }
+      const ct = CryptoService.base64ToUint8(mlKemCiphertextBase64);
+      mlKemSharedSecret = ml_kem768.decapsulate(ct, this.mlKemKeyPair.secretKey);
+    }
+
+    // 3. Combine secrets: X25519 || ML-KEM
+    const combinedSecret = new Uint8Array(x25519SharedSecret.length + mlKemSharedSecret.length);
+    combinedSecret.set(x25519SharedSecret, 0);
+    combinedSecret.set(mlKemSharedSecret, x25519SharedSecret.length);
+
+    // 4. Derive session key via HKDF with hybrid info string
+    const info = new TextEncoder().encode('zajel_hybrid_session');
+    const sessionKey = hkdf(sha256, combinedSecret, undefined, info, 32);
+
+    this.sessionKeys.set(peerId, sessionKey);
+    this.peerProtocolVersions.set(peerId, CRYPTO.PROTOCOL_VERSION_HYBRID);
+    this.sessionCreatedAt.set(peerId, Date.now());
+
+    if (mlKemCiphertext) {
+      return { ciphertext: CryptoService.uint8ToBase64(mlKemCiphertext) };
+    }
+    return {};
   }
 
   hasSession(peerId: string): boolean {
