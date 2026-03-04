@@ -20,11 +20,11 @@ void main() {
   }
 
   group('OnboardingScreen', () {
-    testWidgets('displays Welcome page initially', (tester) async {
+    testWidgets('displays image page initially', (tester) async {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
-      expect(find.text('Welcome to Zajel'), findsOneWidget);
+      expect(find.byType(Image), findsOneWidget);
       expect(find.text('Skip'), findsOneWidget);
       expect(find.text('Next'), findsOneWidget);
     });
@@ -82,8 +82,8 @@ void main() {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
-      // Page 1: Welcome
-      expect(find.text('Welcome to Zajel'), findsOneWidget);
+      // Page 1: Welcome (full-bleed image)
+      expect(find.byType(Image), findsOneWidget);
 
       // Page 2: Username
       await tester.tap(find.text('Next'));
@@ -99,15 +99,15 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Your Identity'), findsOneWidget);
 
-      // Page 4: Connect
+      // Page 4: Connect (full-bleed image)
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
-      expect(find.text('How to Connect'), findsOneWidget);
+      expect(find.byType(Image), findsOneWidget);
 
-      // Page 5: Get Started
+      // Page 5: Get Started (full-bleed image)
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
-      expect(find.text("You're Ready"), findsOneWidget);
+      expect(find.byType(Image), findsOneWidget);
       expect(find.text('Get Started'), findsOneWidget);
     });
 
@@ -140,7 +140,7 @@ void main() {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
-      // Page 1: onboarding_private image (replaced mail_lock icon)
+      // Page 1: full-bleed onboarding_private image
       expect(find.byType(Image), findsOneWidget);
 
       // Page 2: person icon (username — still an icon)
@@ -157,12 +157,12 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byIcon(Icons.fingerprint), findsOneWidget);
 
-      // Page 4: onboarding_p2p image (replaced people icon)
+      // Page 4: full-bleed onboarding_p2p image
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
       expect(find.byType(Image), findsOneWidget);
 
-      // Page 5: onboarding_no_account image (replaced rocket_launch icon)
+      // Page 5: full-bleed onboarding_no_account image
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
       expect(find.byType(Image), findsOneWidget);
@@ -172,7 +172,8 @@ void main() {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
-      expect(find.text('Welcome to Zajel'), findsOneWidget);
+      // Page 1 shows an image
+      expect(find.byType(Image), findsOneWidget);
 
       // Swipe left to go to next page (username)
       await tester.drag(find.byType(PageView), const Offset(-400, 0));
@@ -194,7 +195,8 @@ void main() {
       await tester.fling(find.byType(PageView), const Offset(400, 0), 1000);
       await tester.pumpAndSettle();
 
-      expect(find.text('Welcome to Zajel'), findsOneWidget);
+      // Page 1 shows an image (full-bleed)
+      expect(find.byType(Image), findsOneWidget);
     });
   });
 }

@@ -15,6 +15,17 @@ class EmptyState extends StatelessWidget {
     this.action,
   });
 
+  /// Resolves the image path for the current theme brightness.
+  /// In dark mode, replaces `.png` with `_dark.png` (e.g.
+  /// `empty_no_messages.png` → `empty_no_messages_dark.png`).
+  String _resolveImagePath(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (isDark) {
+      return imagePath.replaceAll('.png', '_dark.png');
+    }
+    return imagePath;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Center(
@@ -23,11 +34,15 @@ class EmptyState extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 160, maxWidth: 160),
-              child: Image.asset(
-                imagePath,
-                fit: BoxFit.contain,
+            ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: ConstrainedBox(
+                constraints:
+                    const BoxConstraints(maxHeight: 160, maxWidth: 160),
+                child: Image.asset(
+                  _resolveImagePath(context),
+                  fit: BoxFit.contain,
+                ),
               ),
             ),
             const SizedBox(height: 24),
