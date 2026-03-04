@@ -25,14 +25,16 @@
   <img src="docs/images/feature-graphic.png" alt="Zajel Feature Graphic" width="700">
 </p>
 
-### Screenshots
+### Screenshots (Android)
 
 <p align="center">
-  <img src="docs/images/onboarding-private.png" alt="Private by Design" width="220">
+  <img src="docs/images/screenshot-android-onboarding.png" alt="Onboarding" width="200">
   &nbsp;&nbsp;
-  <img src="docs/images/onboarding-p2p.png" alt="Peer-to-Peer" width="220">
+  <img src="docs/images/screenshot-android-home.png" alt="Home Screen" width="200">
   &nbsp;&nbsp;
-  <img src="docs/images/onboarding-no-account.png" alt="No Account Required" width="220">
+  <img src="docs/images/screenshot-android-contacts.png" alt="Contacts" width="200">
+  &nbsp;&nbsp;
+  <img src="docs/images/screenshot-android-settings.png" alt="Settings" width="200">
 </p>
 
 ## Packages
