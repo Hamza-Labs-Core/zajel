@@ -4,6 +4,11 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
+    paths-ignore:
+      - 'packages/wiki/**'
+      - 'docs/**'
+      - '*.md'
+      - 'LICENSE'
   workflow_dispatch:
     inputs:
       skip_e2e:
