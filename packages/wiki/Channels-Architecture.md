@@ -112,7 +112,7 @@ Chunk:
         - data: raw content bytes
         - metadata: JSON map
         - author: author identifier
-        - timestamp: creation time
+        - timestamp: creation time (UTC; converted to local for display)
 ```
 
 ### Content Splitting
@@ -167,6 +167,20 @@ Subscribers announce their locally held chunks to the relay. When another subscr
 | `chunk_pull` | Server -> Client | Ask client to push a chunk |
 | `chunk_available` | Server -> Client | Notify that a requested chunk is ready |
 | `chunk_not_found` | Server -> Client | Chunk not available from any source |
+
+---
+
+## Message Display and Pagination
+
+The Flutter app uses a `ChannelMessagesNotifier` (Riverpod `StateNotifierProvider`) to load and paginate channel messages:
+
+- **Page size**: 50 sequences per page
+- **Initial load**: Decrypts the 50 most recent sequences from SQLite
+- **Load more**: Fetches older sequences via `getChunksForLatestSequences(channelId, limit: 50, beforeSequence: oldestLoaded)`
+- **Reload**: Called when new chunks arrive (via `onChunkReceived` callback), refreshes the latest 50 sequences
+- **Decryption pipeline**: Chunks are grouped by sequence, reassembled, then decrypted with the channel's X25519 encryption key and current key epoch
+
+All timestamps are stored in UTC (`DateTime.now().toUtc()`) and converted to local time only at display time via the shared `MessageListView<T>` widget, which provides reversed ListView, smart auto-scroll, date dividers, and a "New messages" indicator.
 
 ---
 
