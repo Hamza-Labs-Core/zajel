@@ -60,20 +60,16 @@ export function verifyJwt(token: string, secret: string): JwtPayload | null {
 }
 
 /**
- * Extract JWT from request (header or query param for initial auth)
+ * Extract JWT from request (header or cookie only).
+ * Query parameter token extraction has been removed for security --
+ * tokens are no longer passed via URL. Authorization codes are exchanged
+ * server-to-server before any API calls are made.
  */
 export function extractToken(req: IncomingMessage): string | null {
   // Check Authorization header first
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith('Bearer ')) {
     return authHeader.substring(7);
-  }
-
-  // Check query parameter (for initial redirect from CF dashboard)
-  const url = new URL(req.url || '/', `http://${req.headers.host}`);
-  const queryToken = url.searchParams.get('token');
-  if (queryToken) {
-    return queryToken;
   }
 
   // Check cookie

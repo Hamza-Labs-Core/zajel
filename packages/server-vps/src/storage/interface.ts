@@ -14,6 +14,18 @@ import type {
   ServerIdentity,
 } from '../types.js';
 
+export interface IPReputationEntry {
+  ipAddress: string;
+  reputationScore: number;
+  lastUpdated: number;
+  totalEvents: number;
+  rateLimitHits: number;
+  connectionRejects: number;
+  invalidRequests: number;
+  successfulAttestations: number;
+  createdAt: number;
+}
+
 export interface Storage {
   // Lifecycle
   init(): Promise<void>;
@@ -82,6 +94,18 @@ export interface Storage {
   deleteChunkSourcesByPeer(peerId: string): Promise<number>;
   deleteChunkSource(chunkId: string, peerId: string): Promise<boolean>;
   cleanupExpiredChunkSources(maxAgeMs: number): Promise<number>;
+
+  // IP Reputation
+  incrementReputation(
+    ip: string,
+    points: number,
+    eventType: string,
+    metadata?: Record<string, unknown>
+  ): Promise<number>;
+  getReputation(ip: string): Promise<IPReputationEntry | null>;
+  getTopOffenders(limit: number): Promise<IPReputationEntry[]>;
+  cleanupOldReputationEvents(maxAgeMs: number): Promise<number>;
+  setReputation(ip: string, score: number): Promise<void>;
 
   // Statistics
   getStats(): Promise<StorageStats>;

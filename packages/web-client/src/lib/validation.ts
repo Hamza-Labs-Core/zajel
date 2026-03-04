@@ -37,6 +37,7 @@ import type {
   CallRejectReceivedMessage,
   CallHangupReceivedMessage,
   CallIceReceivedMessage,
+  HybridKeyExchangeMessage,
 } from './protocol';
 import { PAIRING_CODE_REGEX } from './constants';
 
@@ -280,6 +281,8 @@ function validatePairMatchedMessage(obj: Record<string, unknown>): ValidationRes
     peerCode: obj.peerCode,
     peerPublicKey: obj.peerPublicKey,
     isInitiator: obj.isInitiator,
+    ...(typeof obj.peerPqPublicKey === 'string' ? { peerPqPublicKey: obj.peerPqPublicKey } : {}),
+    ...(typeof obj.peerProtocolVersion === 'number' ? { peerProtocolVersion: obj.peerProtocolVersion } : {}),
   });
 }
 
@@ -491,9 +494,25 @@ export function validateServerMessage(data: unknown): ValidationResult<ServerMes
       return validateCallHangupReceivedMessage(data);
     case 'call_ice':
       return validateCallIceReceivedMessage(data);
+    case 'hybrid_key_exchange':
+      return validateHybridKeyExchangeMessage(data);
     default:
       return failure(`Unknown message type: ${data.type}`);
   }
+}
+
+function validateHybridKeyExchangeMessage(obj: Record<string, unknown>): ValidationResult<HybridKeyExchangeMessage> {
+  if (!isString(obj.senderPeerId)) {
+    return failure('Invalid or missing senderPeerId in hybrid_key_exchange message');
+  }
+  if (!isString(obj.pqCiphertext)) {
+    return failure('Invalid or missing pqCiphertext in hybrid_key_exchange message');
+  }
+  return success({
+    type: 'hybrid_key_exchange',
+    senderPeerId: obj.senderPeerId,
+    pqCiphertext: obj.pqCiphertext,
+  });
 }
 
 // Data channel message validators

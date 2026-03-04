@@ -16,9 +16,34 @@
       {
         "name": "ATTESTATION_REGISTRY",
         "class_name": "AttestationRegistryDO"
+      },
+      {
+        "name": "TUF_METADATA",
+        "class_name": "TufMetadataDO"
+      },
+      {
+        "name": "AUDIT_LOG",
+        "class_name": "AuditLogDO"
       }
     ]
   },
+
+  // Threshold signing secrets (set via `wrangler secret put`):
+  //   OPERATOR_PUBLIC_KEYS        - Comma-separated base64 Ed25519 operator public keys
+  //   ADMIN_THRESHOLD             - Number of operator signatures required (default: 2)
+  //   REQUIRE_REGISTRATION_AUTH   - 'true' to require signed registrations (default: false)
+  //   REQUIRE_HEARTBEAT_AUTH      - 'true' to require signed heartbeats (default: false)
+  //   AUDIT_LOG_SECRET            - Bearer token for reading audit log
+  //   AUDIT_LOG_INTERNAL_TOKEN    - Internal token for audit log POST endpoint
+
+  // TUF role signing keys (set via `wrangler secret put`):
+  //   TARGETS_SIGNING_KEY    - Hex-encoded Ed25519 seed for targets role
+  //   TARGETS_PUBLIC_KEY     - Base64-encoded Ed25519 public key for targets role
+  //   SNAPSHOT_SIGNING_KEY   - Hex-encoded Ed25519 seed for snapshot role
+  //   SNAPSHOT_PUBLIC_KEY    - Base64-encoded Ed25519 public key for snapshot role
+  //   TIMESTAMP_SIGNING_KEY  - Hex-encoded Ed25519 seed for timestamp role
+  //   TIMESTAMP_PUBLIC_KEY   - Base64-encoded Ed25519 public key for timestamp role
+  //   TUF_UPDATE_SECRET      - Bearer token for authenticating PUT /tuf/:role requests
 
   // Migrations for Durable Objects
   "migrations": [
@@ -38,6 +63,20 @@
     {
       "tag": "v4",
       "new_classes": ["AttestationRegistryDO"]
+    },
+    {
+      "tag": "v5-tuf-metadata",
+      "new_classes": ["TufMetadataDO"]
+    },
+    {
+      "tag": "v6",
+      "new_classes": ["AuditLogDO"]
+    },
+    {
+      // v7: DO sharding - no class changes needed.
+      // Sharding is implemented via naming (idFromName('region:us-east') vs idFromName('global')).
+      "tag": "v7",
+      "renamed_classes": []
     }
   ],
 
@@ -65,6 +104,14 @@
           {
             "name": "ATTESTATION_REGISTRY",
             "class_name": "AttestationRegistryDO"
+          },
+          {
+            "name": "TUF_METADATA",
+            "class_name": "TufMetadataDO"
+          },
+          {
+            "name": "AUDIT_LOG",
+            "class_name": "AuditLogDO"
           }
         ]
       },

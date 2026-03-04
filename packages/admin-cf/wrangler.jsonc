@@ -48,7 +48,8 @@
 
   // Production vars
   "vars": {
-    "ZAJEL_BOOTSTRAP_URL": "https://signal.zajel.hamzalabs.dev"
+    "ZAJEL_BOOTSTRAP_URL": "https://signal.zajel.hamzalabs.dev",
+    "ADMIN_ALLOWED_ORIGINS": "https://admin.zajel.hamzalabs.dev"
   },
 
   // QA Environment for PR testing
@@ -74,7 +75,8 @@
         { "pattern": "admin.zajel.qa.hamzalabs.dev", "custom_domain": true }
       ],
       "vars": {
-        "ZAJEL_BOOTSTRAP_URL": "https://signal.zajel.qa.hamzalabs.dev"
+        "ZAJEL_BOOTSTRAP_URL": "https://signal.zajel.qa.hamzalabs.dev",
+        "ADMIN_ALLOWED_ORIGINS": "https://admin.zajel.qa.hamzalabs.dev,http://localhost:*"
       }
     }
   }

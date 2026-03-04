@@ -17,6 +17,7 @@ import type {
 import { signMessage, verifyMessage, publicKeyFromServerId } from '../../identity/server-identity.js';
 import { WEBSOCKET } from '../../constants.js';
 import { logger } from '../../utils/logger.js';
+import { getClientIp } from '../../utils/client-ip.js';
 
 export interface ServerConnectionConfig {
   handshakeTimeout: number;     // Time to complete handshake (ms)
@@ -94,7 +95,7 @@ export class ServerConnectionManager extends EventEmitter {
     this.wss = wss;
 
     wss.on('connection', (ws, req) => {
-      this.handleIncomingConnection(ws, req.socket.remoteAddress || 'unknown');
+      this.handleIncomingConnection(ws, getClientIp(req));
     });
   }
 
@@ -483,12 +484,19 @@ export class ServerConnectionManager extends EventEmitter {
     this.emit('disconnected', serverId, code, reason);
 
     // Only attempt reconnect for outgoing connections
-    if (conn.isOutgoing && this.config.maxReconnectAttempts !== 0) {
+    if (conn.isOutgoing) {
       if (
         this.config.maxReconnectAttempts === 0 ||
         conn.reconnectAttempts < this.config.maxReconnectAttempts
       ) {
+        logger.info(
+          `[Transport] Scheduling reconnect to ${logger.serverId(conn.entry.serverId)} (attempt ${conn.reconnectAttempts + 1}${this.config.maxReconnectAttempts === 0 ? ', infinite retries' : '/' + this.config.maxReconnectAttempts})`
+        );
         this.scheduleReconnect(conn.entry, conn.reconnectAttempts + 1);
+      } else {
+        logger.warn(
+          `[Transport] Max reconnect attempts (${this.config.maxReconnectAttempts}) reached for ${logger.serverId(conn.entry.serverId)}, giving up`
+        );
       }
     }
   }
@@ -497,17 +505,29 @@ export class ServerConnectionManager extends EventEmitter {
    * Schedule reconnection attempt
    */
   private scheduleReconnect(entry: MembershipEntry, attempt: number): void {
-    // Exponential backoff with jitter
-    const delay = Math.min(
-      this.config.reconnectInterval * Math.pow(2, attempt - 1) + Math.random() * 1000,
+    // Exponential backoff with jitter applied after clamping to prevent thundering herd
+    const baseDelay = Math.min(
+      this.config.reconnectInterval * Math.pow(2, attempt - 1),
       this.config.reconnectMaxInterval
     );
+    const delay = baseDelay + Math.random() * 1000;
 
     setTimeout(async () => {
       try {
         await this.connect(entry);
       } catch (error) {
         logger.error(`[Transport] Reconnect to ${logger.serverId(entry.serverId)} failed`, error);
+        // Chain the next retry if allowed
+        if (
+          this.config.maxReconnectAttempts === 0 ||
+          attempt < this.config.maxReconnectAttempts
+        ) {
+          this.scheduleReconnect(entry, attempt + 1);
+        } else {
+          logger.warn(
+            `[Transport] Max reconnect attempts (${this.config.maxReconnectAttempts}) exhausted for ${logger.serverId(entry.serverId)}, giving up`
+          );
+        }
       }
     }, delay);
   }

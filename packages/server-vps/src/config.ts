@@ -34,7 +34,7 @@ export function loadConfig(): ServerConfig {
     },
 
     network: {
-      host: envString('ZAJEL_HOST', '0.0.0.0'),
+      host: envString('ZAJEL_HOST', '127.0.0.1'),
       port: envNumber('ZAJEL_PORT', 9000),
       publicEndpoint: envString('ZAJEL_PUBLIC_ENDPOINT', `ws://localhost:${envNumber('ZAJEL_PORT', 9000)}`),
       region: process.env['ZAJEL_REGION'],
@@ -49,6 +49,8 @@ export function loadConfig(): ServerConfig {
     bootstrap: {
       // CF Workers bootstrap server URL
       serverUrl: envString('ZAJEL_BOOTSTRAP_URL', 'https://signal.zajel.hamzalabs.dev'),
+      // SERVER_REGISTRY_SECRET for authentication with CF Workers
+      registrySecret: envString('ZAJEL_REGISTRY_SECRET', ''),
       // Heartbeat interval (how often to ping CF)
       heartbeatInterval: envNumber('ZAJEL_BOOTSTRAP_HEARTBEAT', 60000), // 1 minute
       // Legacy: direct peer nodes (optional, for manual configuration)

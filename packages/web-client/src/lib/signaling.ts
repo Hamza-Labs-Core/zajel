@@ -53,7 +53,7 @@ import type {
   CallIceReceivedMessage,
 } from './protocol';
 import { validateServerMessage, safeJsonParse } from './validation';
-import { TIMEOUTS, PAIRING_CODE, PAIRING_CODE_REGEX, MESSAGE_LIMITS } from './constants';
+import { TIMEOUTS, PAIRING_CODE, PAIRING_CODE_REGEX, MESSAGE_LIMITS, CRYPTO } from './constants';
 import { logger, mask } from './logger';
 import { handleError, ErrorCodes } from './errors';
 
@@ -107,7 +107,8 @@ export interface SignalingEvents {
   onStateChange: (state: ConnectionState) => void;
   onPairIncoming: (fromCode: string, fromPublicKey: string, expiresIn?: number) => void;
   onPairExpiring: (peerCode: string, remainingSeconds: number) => void;
-  onPairMatched: (peerCode: string, peerPublicKey: string, isInitiator: boolean) => void;
+  onPairMatched: (peerCode: string, peerPublicKey: string, isInitiator: boolean,
+    peerPqPublicKey?: string, peerProtocolVersion?: number) => void;
   onPairRejected: (peerCode: string) => void;
   onPairTimeout: (peerCode: string) => void;
   onPairError: (error: string) => void;
@@ -115,6 +116,8 @@ export interface SignalingEvents {
   onAnswer: (from: string, payload: RTCSessionDescriptionInit) => void;
   onIceCandidate: (from: string, payload: RTCIceCandidateInit) => void;
   onError: (error: string) => void;
+  // Post-quantum hybrid key exchange
+  onHybridKeyExchange?: (senderPeerId: string, pqCiphertext: string) => void;
   // Call signaling events
   onCallOffer?: (message: CallOfferReceivedMessage) => void;
   onCallAnswer?: (message: CallAnswerReceivedMessage) => void;
@@ -128,6 +131,7 @@ export class SignalingClient {
   private serverUrl: string;
   private myCode: string = '';
   private myPublicKey: string = '';
+  private myPqPublicKey: string | null = null;
   private pingInterval: number | null = null;
   private reconnectTimeout: number | null = null;
   private reconnectAttempts: number = 0;
@@ -157,12 +161,13 @@ export class SignalingClient {
     return this.state;
   }
 
-  connect(publicKey: string): void {
+  connect(publicKey: string, pqPublicKey?: string | null): void {
     if (this.ws) {
       this.ws.close();
     }
 
     this.myPublicKey = publicKey;
+    this.myPqPublicKey = pqPublicKey ?? null;
     this.myCode = this.generatePairingCode();
     logger.info('Signaling', `Connecting to server, pairing code: ${mask(this.myCode)}`);
     this.setState('connecting');
@@ -232,11 +237,17 @@ export class SignalingClient {
   }
 
   private register(): void {
-    this.send({
+    const msg: Record<string, unknown> = {
       type: 'register',
       pairingCode: this.myCode,
       publicKey: this.myPublicKey,
-    });
+      protocolVersion: CRYPTO.PROTOCOL_VERSION_CURRENT,
+      supportedKEMs: [...CRYPTO.SUPPORTED_KEMS],
+    };
+    if (this.myPqPublicKey) {
+      msg.pqPublicKey = this.myPqPublicKey;
+    }
+    this.send(msg as ClientMessage);
   }
 
   private scheduleReconnect(): void {
@@ -312,7 +323,16 @@ export class SignalingClient {
         this.events.onPairMatched(
           message.peerCode,
           message.peerPublicKey,
-          message.isInitiator
+          message.isInitiator,
+          (message as Record<string, unknown>).peerPqPublicKey as string | undefined,
+          (message as Record<string, unknown>).peerProtocolVersion as number | undefined,
+        );
+        break;
+
+      case 'hybrid_key_exchange':
+        this.events.onHybridKeyExchange?.(
+          (message as Record<string, unknown>).senderPeerId as string,
+          (message as Record<string, unknown>).pqCiphertext as string,
         );
         break;
 
@@ -411,6 +431,18 @@ export class SignalingClient {
 
   sendIceCandidate(target: string, payload: RTCIceCandidateInit): void {
     this.send({ type: 'ice_candidate', target, payload });
+  }
+
+  /**
+   * Send ML-KEM ciphertext for hybrid key exchange.
+   * Called by the initiator after pair_match when both peers support hybrid mode.
+   */
+  sendHybridKeyExchange(targetPeerId: string, pqCiphertextBase64: string): void {
+    this.send({
+      type: 'hybrid_key_exchange',
+      targetPeerId,
+      pqCiphertext: pqCiphertextBase64,
+    } as unknown as ClientMessage);
   }
 
   // Call signaling methods

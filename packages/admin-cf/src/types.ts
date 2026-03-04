@@ -70,6 +70,12 @@ export interface Env {
   APP_VERSION?: string;
   /** Service binding to the bootstrap server (zajel-signaling worker) */
   BOOTSTRAP_SERVICE?: ServiceBinding;
+  /**
+   * Comma-separated list of allowed origins for CORS.
+   * Example: "https://admin.zajel.hamzalabs.dev,http://localhost:*"
+   * If not set, no cross-origin requests will be allowed.
+   */
+  ADMIN_ALLOWED_ORIGINS?: string;
 }
 
 /**
@@ -93,4 +99,30 @@ export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
+}
+
+/**
+ * Authorization code for cross-origin auth (JWT token exchange)
+ */
+export interface AuthCode {
+  code: string;
+  payload: JwtPayload;  // JWT claims from authenticated user
+  createdAt: number;
+  expiresAt: number;
+  used: boolean;
+}
+
+/**
+ * Request/response types for auth code endpoints
+ */
+export interface GenerateCodeData {
+  code: string;
+}
+
+export interface ExchangeCodeRequest {
+  code: string;
+}
+
+export interface ExchangeCodeData {
+  token: string;
 }
