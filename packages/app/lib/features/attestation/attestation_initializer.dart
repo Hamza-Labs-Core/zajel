@@ -1,7 +1,9 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/logging/logger_service.dart';
+import '../updater/services/update_package_detector.dart';
 import 'models/version_policy.dart';
 import 'providers/attestation_providers.dart';
 import 'widgets/force_update_dialog.dart';
@@ -14,7 +16,7 @@ import 'widgets/update_prompt_dialog.dart';
 /// [AttestationInitializer.initialize] from your app's init sequence.
 ///
 /// Initialization steps:
-/// 1. Run version check — may block the app with a force update dialog.
+/// 1. Run version check -- may block the app with a force update dialog.
 /// 2. Run attestation registration if no valid session token exists.
 /// 3. Initialize anti-tamper checks (informational only).
 class AttestationInitializer {
@@ -98,7 +100,7 @@ class AttestationInitializer {
       }
     } catch (e) {
       logger.error(_tag, 'Version check failed', e);
-      // Fail open — let the app continue
+      // Fail open -- let the app continue
       return true;
     }
   }
@@ -135,13 +137,37 @@ class AttestationInitializer {
     }
   }
 
+  /// Create an [UpdatePackageDetector] for passing store info to dialogs.
+  ///
+  /// Returns null on non-desktop platforms (mobile, web) where package
+  /// detection is not applicable.
+  static UpdatePackageDetector? _createDetector() {
+    if (kIsWeb) return null;
+    try {
+      return UpdatePackageDetector();
+    } catch (e) {
+      logger.warning(
+        _tag,
+        'Failed to create UpdatePackageDetector: $e',
+      );
+      return null;
+    }
+  }
+
   /// Show a non-blocking update prompt.
   static void _showUpdatePrompt(BuildContext context, VersionPolicy? policy) {
+    final detector = _createDetector();
+    final isStore = detector?.isStoreManaged() ?? false;
+
     showDialog(
       context: context,
       barrierDismissible: true,
       builder: (_) => UpdatePromptDialog(
         recommendedVersion: policy?.recommendedVersion,
+        isStoreManaged: isStore,
+        storeName: detector?.storeName(),
+        storeDeepLink: detector?.storeDeepLink(),
+        storeWebUrl: detector?.storeWebUrl(),
       ),
     );
   }
@@ -152,11 +178,33 @@ class AttestationInitializer {
     String? requiredVersion,
     bool isBlocked = false,
   }) {
+    final detector = _createDetector();
+    final isStore = detector?.isStoreManaged() ?? false;
+    final supportsAutoUpdate = detector?.supportsAutoUpdate() ?? false;
+
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(
         builder: (_) => ForceUpdateDialog(
           requiredVersion: requiredVersion,
           isBlocked: isBlocked,
+          isStoreManaged: isStore,
+          storeName: detector?.storeName(),
+          storeDeepLink: detector?.storeDeepLink(),
+          storeWebUrl: detector?.storeWebUrl(),
+          // On desktop non-store installs, provide a callback placeholder.
+          // The actual orchestrator integration will be wired by US-3/US-7
+          // when UpdateOrchestrator is available.
+          onDownloadAndInstall: supportsAutoUpdate
+              ? () async {
+                  throw UnimplementedError(
+                    'In-app update installation will be available in a future release. '
+                    'Please use the download link below.',
+                  );
+                }
+              : null,
+          fallbackUrl: supportsAutoUpdate
+              ? 'https://github.com/AhmedBaset/zajel/releases/latest'
+              : null,
         ),
       ),
       (_) => false,
