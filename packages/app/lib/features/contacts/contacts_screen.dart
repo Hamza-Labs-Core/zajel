@@ -6,6 +6,7 @@ import '../../core/models/models.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/storage/trusted_peers_storage.dart';
 import '../../core/utils/identity_utils.dart';
+import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/relative_time.dart';
 
 /// Provider for all trusted peers as contacts.
@@ -67,14 +68,13 @@ class _ContactsScreenState extends ConsumerState<ContactsScreen> {
                       }).toList();
 
                 if (filtered.isEmpty) {
-                  return Center(
-                    child: Text(
-                      _searchQuery.isEmpty ? 'No contacts yet' : 'No matches',
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                            color:
-                                Theme.of(context).colorScheme.onSurfaceVariant,
-                          ),
-                    ),
+                  return EmptyState(
+                    imagePath: 'assets/images/empty_pairing.png',
+                    message:
+                        _searchQuery.isEmpty ? 'No contacts yet' : 'No matches',
+                    subtitle: _searchQuery.isEmpty
+                        ? 'Connect with peers to add them as contacts'
+                        : null,
                   );
                 }
 

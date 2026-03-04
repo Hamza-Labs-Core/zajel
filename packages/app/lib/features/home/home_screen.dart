@@ -6,6 +6,7 @@ import '../../core/logging/logger_service.dart';
 import '../../core/models/models.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/utils/identity_utils.dart';
+import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/relative_time.dart';
 
 /// Home screen showing discovered peers and connection options.
@@ -187,38 +188,14 @@ class HomeScreen extends ConsumerWidget {
 
   Widget _buildPeerList(BuildContext context, WidgetRef ref, List<Peer> peers) {
     if (peers.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                Icons.devices_other,
-                size: 64,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'No devices found',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Make sure other devices with Zajel are on the same network',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-              ),
-              const SizedBox(height: 24),
-              OutlinedButton.icon(
-                onPressed: () => context.push('/connect'),
-                icon: const Icon(Icons.qr_code),
-                label: const Text('Connect via QR code'),
-              ),
-            ],
-          ),
+      return EmptyState(
+        imagePath: 'assets/images/empty_no_messages.png',
+        message: 'No devices found',
+        subtitle: 'Make sure other devices with Zajel are on the same network',
+        action: OutlinedButton.icon(
+          onPressed: () => context.push('/connect'),
+          icon: const Icon(Icons.qr_code),
+          label: const Text('Connect via QR code'),
         ),
       );
     }

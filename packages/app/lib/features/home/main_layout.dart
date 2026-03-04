@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/models/models.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/utils/identity_utils.dart';
+import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/relative_time.dart';
 import '../chat/chat_screen.dart';
 
@@ -74,31 +75,10 @@ class _WideLayout extends ConsumerWidget {
 class _EmptyChatPlaceholder extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.chat_bubble_outline,
-            size: 64,
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'Select a conversation',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Choose a peer from the sidebar to start chatting',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-          ),
-        ],
-      ),
+    return const EmptyState(
+      imagePath: 'assets/images/empty_no_messages.png',
+      message: 'Select a conversation',
+      subtitle: 'Choose a peer from the sidebar to start chatting',
     );
   }
 }
@@ -156,27 +136,9 @@ class _ConversationSidebar extends ConsumerWidget {
 
   Widget _buildPeerList(BuildContext context, WidgetRef ref, List<Peer> peers) {
     if (peers.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                Icons.devices_other,
-                size: 48,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'No conversations yet',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-              ),
-            ],
-          ),
-        ),
+      return const EmptyState(
+        imagePath: 'assets/images/empty_pairing.png',
+        message: 'No conversations yet',
       );
     }
 

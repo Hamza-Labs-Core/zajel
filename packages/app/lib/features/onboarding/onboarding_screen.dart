@@ -149,15 +149,18 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   Widget _buildWelcomePage(BuildContext context) {
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 32),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            Icons.mail_lock,
-            size: 80,
-            color: Theme.of(context).colorScheme.primary,
+          const SizedBox(height: 32),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 180),
+            child: Image.asset(
+              'assets/images/onboarding_private.png',
+              fit: BoxFit.contain,
+            ),
           ),
           const SizedBox(height: 32),
           Text(
@@ -178,6 +181,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 ),
             textAlign: TextAlign.center,
           ),
+          const SizedBox(height: 32),
         ],
       ),
     );
@@ -284,15 +288,18 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   Widget _buildConnectPage(BuildContext context) {
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 32),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            Icons.people,
-            size: 80,
-            color: Theme.of(context).colorScheme.primary,
+          const SizedBox(height: 32),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 180),
+            child: Image.asset(
+              'assets/images/onboarding_p2p.png',
+              fit: BoxFit.contain,
+            ),
           ),
           const SizedBox(height: 32),
           Text(
@@ -315,21 +322,25 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 ),
             textAlign: TextAlign.center,
           ),
+          const SizedBox(height: 32),
         ],
       ),
     );
   }
 
   Widget _buildGetStartedPage(BuildContext context) {
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 32),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            Icons.rocket_launch,
-            size: 80,
-            color: Theme.of(context).colorScheme.primary,
+          const SizedBox(height: 32),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 180),
+            child: Image.asset(
+              'assets/images/onboarding_no_account.png',
+              fit: BoxFit.contain,
+            ),
           ),
           const SizedBox(height: 32),
           Text(
@@ -351,6 +362,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 ),
             textAlign: TextAlign.center,
           ),
+          const SizedBox(height: 32),
         ],
       ),
     );

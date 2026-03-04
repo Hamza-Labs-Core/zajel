@@ -136,14 +136,14 @@ void main() {
       expect(find.text('Next'), findsNothing);
     });
 
-    testWidgets('displays correct icons on each page', (tester) async {
+    testWidgets('displays correct icons/images on each page', (tester) async {
       await tester.pumpWidget(createTestWidget());
       await tester.pump();
 
-      // Page 1: mail_lock
-      expect(find.byIcon(Icons.mail_lock), findsOneWidget);
+      // Page 1: onboarding_private image (replaced mail_lock icon)
+      expect(find.byType(Image), findsOneWidget);
 
-      // Page 2: person (username)
+      // Page 2: person icon (username — still an icon)
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
       expect(find.byIcon(Icons.person), findsOneWidget);
@@ -152,20 +152,20 @@ void main() {
       await tester.enterText(find.byType(TextField), 'TestUser');
       await tester.pump();
 
-      // Page 3: fingerprint (identity)
+      // Page 3: fingerprint icon (identity — still an icon)
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
       expect(find.byIcon(Icons.fingerprint), findsOneWidget);
 
-      // Page 4: people (connect)
+      // Page 4: onboarding_p2p image (replaced people icon)
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
-      expect(find.byIcon(Icons.people), findsOneWidget);
+      expect(find.byType(Image), findsOneWidget);
 
-      // Page 5: rocket_launch (get started)
+      // Page 5: onboarding_no_account image (replaced rocket_launch icon)
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
-      expect(find.byIcon(Icons.rocket_launch), findsOneWidget);
+      expect(find.byType(Image), findsOneWidget);
     });
 
     testWidgets('swipe left navigates to next page', (tester) async {
