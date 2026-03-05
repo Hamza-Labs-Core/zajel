@@ -300,6 +300,23 @@ async def cmd_unblock_peer(client: ZajelHeadlessClient, args: dict):
     return {"ok": True}
 
 
+async def cmd_diagnostics(client: ZajelHeadlessClient, args: dict):
+    action = args.get("action", "summary")
+    tracker = client.error_tracker
+    if action == "summary":
+        return tracker.get_summary()
+    elif action == "errors":
+        return [e.to_dict() for e in tracker.snapshot()]
+    elif action == "drain":
+        return [e.to_dict() for e in tracker.drain()]
+    elif action == "write":
+        path = args.get("path")
+        result = tracker.write_to_file(path)
+        return {"path": result}
+    else:
+        raise UserFacingError(f"Unknown diagnostics action: {action}")
+
+
 async def cmd_disconnect(client: ZajelHeadlessClient, args: dict):
     await client.disconnect()
     return {"ok": True}
@@ -330,6 +347,7 @@ COMMANDS = {
     "get_trusted_peers": cmd_get_trusted_peers,
     "block_peer": cmd_block_peer,
     "unblock_peer": cmd_unblock_peer,
+    "diagnostics": cmd_diagnostics,
     "disconnect": cmd_disconnect,
 }
 
@@ -346,6 +364,8 @@ async def run_daemon(args: argparse.Namespace) -> None:
         auto_accept_pairs=args.auto_accept,
         log_level=args.log_level,
         ice_servers=ice_servers,
+        diagnostics=args.diagnostics,
+        diagnostics_path=args.diagnostics_path,
     )
 
     pairing_code = await client.connect()
@@ -441,6 +461,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--ice-servers",
         default=None,
         help="ICE servers as a JSON array string",
+    )
+    parser.add_argument(
+        "--diagnostics",
+        action="store_true",
+        help="Enable diagnostics error tracking",
+    )
+    parser.add_argument(
+        "--diagnostics-path",
+        default=None,
+        help="File path for diagnostics JSON output",
     )
     return parser.parse_args(argv)
 

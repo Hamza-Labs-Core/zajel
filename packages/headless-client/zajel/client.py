@@ -147,6 +147,8 @@ class ZajelHeadlessClient:
         receive_dir: str = "./received_files",
         db_path: str = "zajel_headless.db",
         ice_servers: Optional[list[dict[str, Any]]] = None,
+        diagnostics: bool = False,
+        diagnostics_path: Optional[str] = None,
     ):
         self.signaling_url = signaling_url
         self.name = name
@@ -259,6 +261,15 @@ class ZajelHeadlessClient:
         self._storage = PeerStorage(db_path)
         self._events = EventEmitter()
 
+        # Diagnostics
+        from zajel.diagnostics import ErrorTracker
+        self._error_tracker = ErrorTracker(
+            enabled=diagnostics,
+            output_path=diagnostics_path,
+        )
+        if diagnostics:
+            self._error_tracker.start()
+
         # State
         self._connected_peers: dict[str, ConnectedPeer] = {}
         self._pending_peers: dict[str, ConnectedPeer] = {}
@@ -341,6 +352,11 @@ class ZajelHeadlessClient:
     def stable_id(self) -> str:
         """Get our persistent stable device identity (16 hex chars)."""
         return self._crypto.stable_id
+
+    @property
+    def error_tracker(self):
+        """Access the diagnostics error tracker."""
+        return self._error_tracker
 
     def has_session_key(self, peer_id: str) -> bool:
         """Check if we have a session key for a peer."""
@@ -434,6 +450,12 @@ class ZajelHeadlessClient:
         self._connected_peers.clear()
         self._pending_peers.clear()
         self._webrtc_peer_id = None
+
+        # Write diagnostics and stop tracker
+        if self._error_tracker.is_running:
+            self._error_tracker.write_to_file()
+            self._error_tracker.stop()
+
         logger.info("Disconnected")
 
     # ── Pairing ──────────────────────────────────────────────
