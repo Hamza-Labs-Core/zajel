@@ -1761,12 +1761,15 @@ jobs:
           echo "Resolved SIGNALING_URL=${URL:-<empty>}"
 
       - name: Setup TURN relay (coturn)
+        timeout-minutes: 5
         env:
           # Must match the credentials baked into the APK (--dart-define in build-android)
           TURN_USER_SECRET: ${{ secrets.TURN_USER || 'ci-turn' }}
           TURN_PASS_SECRET: ${{ secrets.TURN_PASS || 'ci-turn-pass' }}
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq coturn
+          # Use timeout on apt-get update to avoid hanging on slow mirrors
+          timeout 60 sudo apt-get update -qq || echo "apt-get update timed out, continuing with existing cache"
+          sudo apt-get install -y -qq coturn
           HOST_IP=$(hostname -I | awk '{print $1}')
           echo "Host IP for TURN: $HOST_IP"
 
