@@ -573,6 +573,24 @@ jobs:
           tar -czvf zajel-${{ env.VERSION }}-linux-x64.tar.gz *
           mv zajel-${{ env.VERSION }}-linux-x64.tar.gz ../../../../../
 
+      - name: Build AppImage
+        if: steps.check.outputs.needed == 'true'
+        working-directory: packages/app
+        run: |
+          sudo apt-get install -y fuse libfuse2
+          bash linux/packaging/build-appimage.sh \
+            build/linux/x64/release/bundle \
+            "zajel-${{ env.VERSION }}-linux.AppImage"
+
+      - name: Build deb package
+        if: steps.check.outputs.needed == 'true'
+        working-directory: packages/app
+        run: |
+          bash linux/packaging/build-deb.sh \
+            build/linux/x64/release/bundle \
+            "${{ env.VERSION }}" \
+            "zajel-${{ env.VERSION }}-linux.deb"
+
       # NOTE: Linux E2E runs in the e2e-linux job with ALSA→PulseAudio routing
       # and software rendering to handle headless CI (no GPU, no audio device).
 
@@ -587,7 +605,10 @@ jobs:
           name: linux-build
           path: |
             packages/app/zajel-${{ env.VERSION }}-linux-x64.tar.gz
+            packages/app/zajel-${{ env.VERSION }}-linux.AppImage
+            packages/app/zajel-${{ env.VERSION }}-linux.deb
             packages/app/.build-sha
+          if-no-files-found: ignore
           retention-days: 1
 
       - name: Upload reused artifact
@@ -786,7 +807,14 @@ jobs:
         if: steps.check.outputs.needed == 'true'
         run: |
           # Install OpenSSL with development files (no pinned version - use latest available)
+          # Ignore choco exit code — OpenSSL may already be installed on the runner,
+          # and transient CDN errors (503) cause choco to return non-zero even when
+          # the package is already present. We validate OpenSSL presence below.
           choco install openssl -y --no-progress
+          $chocoExit = $LASTEXITCODE
+          if ($chocoExit -ne 0) {
+            Write-Host "WARNING: choco install returned exit code $chocoExit (may be pre-installed or CDN issue)"
+          }
 
           # Find the installed OpenSSL directory
           $opensslRoot = "C:\Program Files\OpenSSL-Win64"
@@ -823,6 +851,9 @@ jobs:
           # Verify the files exist
           dir "$libDir\*.lib"
           dir "$opensslRoot\include\openssl\" | Select-Object -First 5
+
+          # Ensure clean exit (choco's $LASTEXITCODE may still be non-zero)
+          exit 0
 
       - name: Enable Windows desktop
         if: steps.check.outputs.needed == 'true'
@@ -1078,7 +1109,9 @@ jobs:
           echo "|----------|------|" >> CHANGELOG.md
           echo "| Android | zajel-${{ env.VERSION }}-android.apk |" >> CHANGELOG.md
           echo "| iOS | zajel-${{ env.VERSION }}-ios.ipa |" >> CHANGELOG.md
-          echo "| Linux | zajel-${{ env.VERSION }}-linux-x64.tar.gz |" >> CHANGELOG.md
+          echo "| Linux (tarball) | zajel-${{ env.VERSION }}-linux-x64.tar.gz |" >> CHANGELOG.md
+          echo "| Linux (AppImage) | zajel-${{ env.VERSION }}-linux.AppImage |" >> CHANGELOG.md
+          echo "| Linux (deb) | zajel-${{ env.VERSION }}-linux.deb |" >> CHANGELOG.md
           echo "| macOS | zajel-${{ env.VERSION }}-macos.zip |" >> CHANGELOG.md
           echo "| Windows | zajel-${{ env.VERSION }}-windows.zip |" >> CHANGELOG.md
           echo "| Web | zajel-${{ env.VERSION }}-web.zip |" >> CHANGELOG.md
@@ -1092,7 +1125,7 @@ jobs:
           mkdir -p release-assets
 
           # Move all artifacts to release-assets with proper names (excludes .build-sha metadata)
-          find ./artifacts -type f \( -name "*.apk" -o -name "*.ipa" -o -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} ./release-assets/ \;
+          find ./artifacts -type f \( -name "*.apk" -o -name "*.ipa" -o -name "*.tar.gz" -o -name "*.zip" -o -name "*.AppImage" -o -name "*.deb" \) -exec mv {} ./release-assets/ \;
 
           ls -la release-assets/
 
@@ -1448,22 +1481,81 @@ jobs:
             # Obtain TLS certificate for IP address (Let's Encrypt, 6-day short-lived)
             CERT_NAME="zajel-vps"
             CERT_DIR="/etc/letsencrypt/live/${CERT_NAME}"
-            if [ ! -f "${CERT_DIR}/fullchain.pem" ]; then
-              echo "Obtaining TLS certificate for ${PUBLIC_IP}..."
+
+            # Free port 80 — certbot standalone needs it for HTTP-01 challenge
+            # A pm2-managed Node process binds port 80 and auto-restarts on kill.
+            # Must stop pm2 first, then kill stragglers.
+            free_port_80() {
+              echo "Freeing port 80 for certbot..."
+              # Stop ALL pm2 processes (they auto-restart killed processes)
+              pm2 stop all 2>/dev/null || true
+              sleep 1
+              # Stop common web servers
+              for svc in nginx apache2 httpd caddy lighttpd; do
+                sudo systemctl stop "$svc" 2>/dev/null || true
+              done
+              # Kill any remaining process on port 80
+              sudo fuser -k -9 80/tcp 2>/dev/null || true
+              sleep 1
+              # Verify port 80 is free
+              if sudo fuser 80/tcp 2>/dev/null; then
+                echo "WARNING: Port 80 still in use:"
+                sudo lsof -i :80 2>/dev/null || true
+              else
+                echo "Port 80 is free"
+              fi
+            }
+
+            obtain_cert() {
+              echo "Obtaining new TLS certificate for ${PUBLIC_IP}..."
+              free_port_80
               sudo certbot certonly --standalone --non-interactive \
                 --agree-tos -m "${CERTBOT_EMAIL}" \
                 --ip-address "${PUBLIC_IP}" \
                 --preferred-profile shortlived \
                 --cert-name "${CERT_NAME}"
+            }
+
+            NEED_NEW_CERT=false
+            if [ ! -f "${CERT_DIR}/fullchain.pem" ]; then
+              NEED_NEW_CERT=true
             else
-              echo "TLS certificate exists, attempting renewal..."
-              sudo certbot renew --quiet --cert-name "${CERT_NAME}" || true
+              # Check if existing cert is valid for at least 1 hour
+              if ! sudo openssl x509 -checkend 3600 -noout -in "${CERT_DIR}/fullchain.pem" 2>/dev/null; then
+                echo "WARNING: TLS certificate is expired or expiring within 1 hour"
+                NEED_NEW_CERT=true
+              else
+                echo "TLS certificate exists and is valid, attempting renewal..."
+                # Free port 80 before renewal too (standalone authenticator needs it)
+                free_port_80
+                if ! sudo certbot renew --cert-name "${CERT_NAME}"; then
+                  echo "WARNING: certbot renew failed — will force re-issue"
+                  NEED_NEW_CERT=true
+                fi
+              fi
             fi
 
+            if [ "$NEED_NEW_CERT" = true ]; then
+              # Delete old cert if it exists (force clean re-issue)
+              if [ -d "${CERT_DIR}" ]; then
+                echo "Deleting old certificate to force re-issue..."
+                sudo certbot delete --cert-name "${CERT_NAME}" --non-interactive 2>/dev/null || true
+              fi
+              obtain_cert
+            fi
+
+            # Final validation: cert must exist and be valid
             if [ ! -f "${CERT_DIR}/fullchain.pem" ]; then
               echo "ERROR: Failed to obtain TLS certificate for ${PUBLIC_IP}"
               exit 1
             fi
+            if ! sudo openssl x509 -checkend 300 -noout -in "${CERT_DIR}/fullchain.pem"; then
+              echo "ERROR: TLS certificate is expired or invalid after renewal"
+              sudo openssl x509 -dates -noout -in "${CERT_DIR}/fullchain.pem"
+              exit 1
+            fi
+            echo "TLS certificate valid:"
+            sudo openssl x509 -dates -subject -noout -in "${CERT_DIR}/fullchain.pem"
 
             TLS_CERT="${CERT_DIR}/fullchain.pem"
             TLS_KEY="${CERT_DIR}/privkey.pem"
@@ -1476,7 +1568,8 @@ jobs:
             echo "TLS configured: cert=${TLS_CERT}"
 
             # Setup auto-renewal cron (6-day certs need frequent renewal)
-            echo "0 3 */3 * * root certbot renew --quiet --deploy-hook 'pm2 restart zajel-server-qa'" \
+            # Stops pm2 (which has a process on port 80) before certbot standalone
+            echo '0 3 */3 * * root pm2 stop all 2>/dev/null; sleep 1; fuser -k -9 80/tcp 2>/dev/null; sleep 1; certbot renew 2>&1 | logger -t certbot-renew; pm2 start all 2>/dev/null' \
               | sudo tee /etc/cron.d/zajel-cert-renew > /dev/null
 
             # Create deployment directory
@@ -1536,12 +1629,12 @@ jobs:
             pm2 start start-qa.sh --name zajel-server-qa --interpreter bash
             pm2 save
 
-            # Health check
+            # Health check — use public IP (not localhost) so TLS cert is verified
             sleep 5
             HEALTHY=false
             for i in {1..6}; do
-              if curl -sf -k "https://localhost:8443/health" | grep -q "healthy"; then
-                echo "Server healthy (${PUBLIC_ENDPOINT})"
+              if curl -sf "https://${PUBLIC_IP}:8443/health" | grep -q "healthy"; then
+                echo "Server healthy with valid TLS (${PUBLIC_ENDPOINT})"
                 HEALTHY=true
                 break
               fi
@@ -1550,14 +1643,21 @@ jobs:
             done
 
             if [ "$HEALTHY" = false ]; then
-              echo "Health check failed"
+              echo "Health check failed — checking if it's a TLS issue..."
+              # Diagnose: is the app running but TLS broken?
+              if curl -sf -k "https://localhost:8443/health" | grep -q "healthy"; then
+                echo "ERROR: Server is running but TLS verification fails (cert may be invalid for ${PUBLIC_IP})"
+                sudo openssl x509 -dates -subject -noout -in "${TLS_CERT}" 2>/dev/null
+              else
+                echo "ERROR: Server is not responding at all"
+              fi
               pm2 logs zajel-server-qa --lines 50 --nostream
               exit 1
             fi
 
             # Verify bootstrap registration (server should self-register on startup)
             sleep 5
-            SERVER_ID=$(curl -sf -k "https://localhost:8443/health" | python3 -c "import sys,json; print(json.load(sys.stdin).get('serverId',''))" 2>/dev/null || true)
+            SERVER_ID=$(curl -sf "https://${PUBLIC_IP}:8443/health" | python3 -c "import sys,json; print(json.load(sys.stdin).get('serverId',''))" 2>/dev/null || true)
             BOOTSTRAP_SERVERS=$(curl -sf "${BOOTSTRAP_URL}/servers" 2>/dev/null || echo '{"servers":[]}')
 
             if echo "$BOOTSTRAP_SERVERS" | grep -q "${SERVER_ID}"; then
@@ -1661,12 +1761,15 @@ jobs:
           echo "Resolved SIGNALING_URL=${URL:-<empty>}"
 
       - name: Setup TURN relay (coturn)
+        timeout-minutes: 5
         env:
           # Must match the credentials baked into the APK (--dart-define in build-android)
           TURN_USER_SECRET: ${{ secrets.TURN_USER || 'ci-turn' }}
           TURN_PASS_SECRET: ${{ secrets.TURN_PASS || 'ci-turn-pass' }}
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq coturn
+          # Use timeout on apt-get update to avoid hanging on slow mirrors
+          timeout 60 sudo apt-get update -qq || echo "apt-get update timed out, continuing with existing cache"
+          sudo apt-get install -y -qq coturn
           HOST_IP=$(hostname -I | awk '{print $1}')
           echo "Host IP for TURN: $HOST_IP"
 
@@ -1830,14 +1933,38 @@ jobs:
 
           # ── Phase B: Single-device tests ──
           # UI navigation, settings, toggles — no P2P pairing needed.
+          # Exclude requires_signaling tests when VPS is unavailable.
+          # Re-probe VPS before Phase B (initial probe may be stale by now).
           echo "=== Phase B: Single-device tests ==="
           SINGLE_RESULT=0
-          pytest -m "single_device and not headless and not windows and not linux" -v -s --timeout=120 --deselect tests/test_pairing.py::TestPairing::test_app_launches_successfully || SINGLE_RESULT=$?
+          PHASE_B_MARKER="single_device and not headless and not windows and not linux"
+          if [ -n "$SIGNALING_URL" ]; then
+            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||')
+            VPS_PORT=$(echo "$SIGNALING_URL" | sed 's|.*:||')
+            if ! timeout 10 curl -sf "https://${VPS_HOST}:${VPS_PORT}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS not reachable at ${VPS_HOST}:${VPS_PORT} — excluding requires_signaling from Phase B"
+              SIGNALING_URL=""
+            fi
+          fi
+          if [ -z "$SIGNALING_URL" ]; then
+            PHASE_B_MARKER="$PHASE_B_MARKER and not requires_signaling"
+            echo "SIGNALING_URL not set — excluding requires_signaling tests from Phase B"
+          fi
+          pytest -m "$PHASE_B_MARKER" -v -s --timeout=120 --deselect tests/test_pairing.py::TestPairing::test_app_launches_successfully || SINGLE_RESULT=$?
 
           # ── Phase C: Signaling protocol tests ──
           # Two headless clients validate the signaling protocol: registration,
           # pairing handshake, rejection, and signal relay. No WebRTC/ICE needed.
+          # Re-probe VPS before signaling tests (may have gone down since initial probe)
           PROTOCOL_RESULT=0
+          if [ -n "$SIGNALING_URL" ]; then
+            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||')
+            VPS_PORT=$(echo "$SIGNALING_URL" | sed 's|.*:||')
+            if ! timeout 10 curl -sf "https://${VPS_HOST}:${VPS_PORT}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS no longer reachable at ${VPS_HOST}:${VPS_PORT} — skipping signaling tests"
+              SIGNALING_URL=""
+            fi
+          fi
           if [ -n "$SIGNALING_URL" ]; then
             echo "=== Phase C: Signaling protocol tests ==="
             pytest tests/test_signaling_headless.py -v -s --timeout=120 || PROTOCOL_RESULT=$?
@@ -2141,7 +2268,16 @@ jobs:
           timeout 180 python3 -m pytest tests/test_pairing.py::TestPairing::test_app_launches_successfully -v -s --timeout=120 || SMOKE_RESULT=$?
 
           # ── Part 2: Signaling tests ──
+          # Re-probe VPS before signaling tests (may have gone down since initial probe)
           SIGNALING_RESULT=0
+          if [ -n "$SIGNALING_URL" ]; then
+            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||')
+            VPS_PORT=$(echo "$SIGNALING_URL" | sed 's|.*:||')
+            if ! timeout 10 curl -sf "https://${VPS_HOST}:${VPS_PORT}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS no longer reachable at ${VPS_HOST}:${VPS_PORT} — skipping signaling tests"
+              SIGNALING_URL=""
+            fi
+          fi
           if [ -n "$SIGNALING_URL" ]; then
             echo ""
             echo "=== Running signaling tests ==="
@@ -2251,11 +2387,24 @@ jobs:
         run: |
           URL="${{ vars.VPS_QA_WS_URL }}"
           if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
-            FIRST_IP=$(echo "${{ vars.QA_VPS_IP }}" | cut -d',' -f1 | tr -d ' ')
-            URL="wss://${FIRST_IP}:8443"
+            IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
+            for ip in "${IPS[@]}"; do
+              ip=$(echo "$ip" | tr -d ' ')
+              echo "Probing VPS at $ip:8443 (WSS)..."
+              if timeout 10 curl -sf "https://${ip}:8443/health" >/dev/null 2>&1; then
+                URL="wss://${ip}:8443"
+                echo "Reachable and healthy: $ip:8443"
+                break
+              else
+                echo "Not reachable: $ip:8443"
+              fi
+            done
+          fi
+          if [ -z "$URL" ]; then
+            echo "::warning::No VPS signaling server reachable — signaling tests will be skipped"
           fi
           echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
-          echo "Resolved SIGNALING_URL=$URL"
+          echo "Resolved SIGNALING_URL=${URL:-<empty>}"
 
       - name: Run Windows E2E tests
         timeout-minutes: 20
@@ -2264,13 +2413,27 @@ jobs:
           ZAJEL_TEST_PLATFORM: windows
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
+          $ErrorActionPreference = "Continue"
+
+          # Re-probe VPS before signaling tests (may have gone down since initial probe)
+          $signalingResult = 0
+          $sigUrl = $env:SIGNALING_URL
+          if ($sigUrl) {
+            $vpsHost = ($sigUrl -replace 'wss://','' -replace ':.*','')
+            $vpsPort = ($sigUrl -replace '.*:','')
+            try {
+              $response = Invoke-WebRequest -Uri "https://${vpsHost}:${vpsPort}/health" -TimeoutSec 10 -SkipCertificateCheck -ErrorAction Stop
+              Write-Host "VPS health check passed"
+            } catch {
+              Write-Host "::warning::VPS no longer reachable at ${vpsHost}:${vpsPort} — skipping signaling tests"
+              $sigUrl = ""
+            }
+          }
 
           # ── Signaling tests (no WebRTC needed) ──
-          $signalingResult = 0
-          if ($env:SIGNALING_URL) {
+          if ($sigUrl) {
             Write-Host "=== Running signaling tests ==="
-            Write-Host "SIGNALING_URL=$($env:SIGNALING_URL)"
+            Write-Host "SIGNALING_URL=$sigUrl"
             Set-Location "${{ github.workspace }}\e2e-tests"
             pytest tests\test_signaling_headless.py -v -s --timeout=120
             $signalingResult = $LASTEXITCODE
@@ -2341,8 +2504,21 @@ jobs:
         run: |
           URL="${{ vars.VPS_QA_WS_URL }}"
           if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
-            FIRST_IP=$(echo "${{ vars.QA_VPS_IP }}" | cut -d',' -f1 | tr -d ' ')
-            URL="wss://${FIRST_IP}:8443"
+            IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
+            for ip in "${IPS[@]}"; do
+              ip=$(echo "$ip" | tr -d ' ')
+              echo "Probing VPS at $ip:8443 (WSS)..."
+              if timeout 10 curl -sf "https://${ip}:8443/health" >/dev/null 2>&1; then
+                URL="wss://${ip}:8443"
+                echo "Reachable and healthy: $ip:8443"
+                break
+              else
+                echo "Not reachable: $ip:8443"
+              fi
+            done
+          fi
+          if [ -z "$URL" ]; then
+            echo "::warning::No VPS signaling server reachable — signaling tests will be skipped"
           fi
           echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
           echo "Resolved SIGNALING_URL=${URL:-<empty>}"
@@ -2363,7 +2539,16 @@ jobs:
           }
 
           # ── Signaling protocol tests ──
+          # Re-probe VPS before signaling tests (may have gone down since initial probe)
           SIGNALING_RESULT=0
+          if [ -n "$SIGNALING_URL" ]; then
+            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||')
+            VPS_PORT=$(echo "$SIGNALING_URL" | sed 's|.*:||')
+            if ! timeout 10 curl -sf "https://${VPS_HOST}:${VPS_PORT}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS no longer reachable at ${VPS_HOST}:${VPS_PORT} — skipping signaling tests"
+              SIGNALING_URL=""
+            fi
+          fi
           if [ -n "$SIGNALING_URL" ]; then
             echo ""
             echo "=== Running signaling tests ==="
