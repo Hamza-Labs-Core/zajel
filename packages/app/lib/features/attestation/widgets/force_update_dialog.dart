@@ -1,8 +1,16 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/config/environment.dart';
+import '../../../core/logging/logger_service.dart';
+import '../../updater/models/update_check_result.dart';
 import '../../updater/models/update_state.dart';
+import '../../updater/providers/auto_update_providers.dart';
+import '../../updater/providers/update_providers.dart';
 import '../../updater/widgets/update_progress_indicator.dart';
 
 /// Full-screen blocking dialog shown when the app version is too old or blocked.
@@ -17,7 +25,7 @@ import '../../updater/widgets/update_progress_indicator.dart';
 ///   "Download and Install" button that triggers the in-app update flow
 ///   with inline progress.
 /// - **Mobile** (existing behavior): shows "Update Now" opening a URL.
-class ForceUpdateDialog extends StatefulWidget {
+class ForceUpdateDialog extends ConsumerStatefulWidget {
   /// Optional URL to the app store or download page (mobile fallback).
   final String? updateUrl;
 
@@ -39,17 +47,6 @@ class ForceUpdateDialog extends StatefulWidget {
   /// Fallback web URL when the deep link fails.
   final String? storeWebUrl;
 
-  /// Callback to trigger the download-and-install flow on desktop non-store.
-  /// When provided, the dialog shows a "Download and Install" button.
-  final Future<void> Function()? onDownloadAndInstall;
-
-  /// Fallback URL for "Download Manually" when the in-app flow fails.
-  final String? fallbackUrl;
-
-  /// Current update state for tracking download progress.
-  /// When non-null and the download is in progress, inline progress is shown.
-  final UpdateState? updateState;
-
   const ForceUpdateDialog({
     super.key,
     this.updateUrl,
@@ -59,17 +56,15 @@ class ForceUpdateDialog extends StatefulWidget {
     this.storeName,
     this.storeDeepLink,
     this.storeWebUrl,
-    this.onDownloadAndInstall,
-    this.fallbackUrl,
-    this.updateState,
   });
 
   @override
-  State<ForceUpdateDialog> createState() => _ForceUpdateDialogState();
+  ConsumerState<ForceUpdateDialog> createState() => _ForceUpdateDialogState();
 }
 
-class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
+class _ForceUpdateDialogState extends ConsumerState<ForceUpdateDialog> {
   bool _isDownloading = false;
+  bool _launchingUpdater = false;
   String? _localErrorMessage;
 
   bool get _isDesktop =>
@@ -78,9 +73,17 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
           Theme.of(context).platform == TargetPlatform.macOS ||
           Theme.of(context).platform == TargetPlatform.linux);
 
-  UpdateStatus get _effectiveStatus {
-    if (widget.updateState != null) {
-      return widget.updateState!.status;
+  bool get _supportsAutoUpdate {
+    try {
+      return ref.read(supportsAutoUpdateProvider);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  UpdateStatus _effectiveStatus(UpdateState updateState) {
+    if (updateState.status != UpdateStatus.idle) {
+      return updateState.status;
     }
     if (_localErrorMessage != null) {
       return UpdateStatus.failed;
@@ -88,8 +91,24 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
     return UpdateStatus.idle;
   }
 
+  String? get _fallbackUrl => _supportsAutoUpdate
+      ? 'https://github.com/Hamza-Labs-Core/zajel/releases/latest'
+      : null;
+
   @override
   Widget build(BuildContext context) {
+    // Watch update state for reactive UI updates
+    final updateState = ref.watch(updateStateProvider);
+    final status = _effectiveStatus(updateState);
+
+    // If update reaches ready state, launch the updater (one-shot)
+    if (updateState.status == UpdateStatus.ready && !_launchingUpdater) {
+      _launchingUpdater = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _launchUpdater();
+      });
+    }
+
     return PopScope(
       canPop: false,
       child: Scaffold(
@@ -99,13 +118,13 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _buildIcon(),
+                _buildIcon(status),
                 const SizedBox(height: 24),
-                _buildTitle(context),
+                _buildTitle(context, status),
                 const SizedBox(height: 16),
-                _buildMessage(context),
+                _buildMessage(context, status),
                 const SizedBox(height: 32),
-                _buildActionArea(context),
+                _buildActionArea(context, updateState, status),
               ],
             ),
           ),
@@ -114,8 +133,7 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
     );
   }
 
-  Widget _buildIcon() {
-    final status = _effectiveStatus;
+  Widget _buildIcon(UpdateStatus status) {
     if (status == UpdateStatus.downloading ||
         status == UpdateStatus.verifying ||
         status == UpdateStatus.launchingUpdater) {
@@ -132,8 +150,7 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
     );
   }
 
-  Widget _buildTitle(BuildContext context) {
-    final status = _effectiveStatus;
+  Widget _buildTitle(BuildContext context, UpdateStatus status) {
     String title;
     switch (status) {
       case UpdateStatus.downloading:
@@ -155,8 +172,7 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
     );
   }
 
-  Widget _buildMessage(BuildContext context) {
-    final status = _effectiveStatus;
+  Widget _buildMessage(BuildContext context, UpdateStatus status) {
     if (status == UpdateStatus.downloading ||
         status == UpdateStatus.verifying ||
         status == UpdateStatus.launchingUpdater) {
@@ -175,17 +191,19 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
     );
   }
 
-  Widget _buildActionArea(BuildContext context) {
-    final status = _effectiveStatus;
-
+  Widget _buildActionArea(
+    BuildContext context,
+    UpdateState updateState,
+    UpdateStatus status,
+  ) {
     // Show progress indicator during active download/verify/install states
     if (status == UpdateStatus.downloading ||
         status == UpdateStatus.verifying ||
         status == UpdateStatus.launchingUpdater) {
       return UpdateProgressIndicator(
         status: status,
-        progress: widget.updateState?.downloadProgress,
-        version: widget.updateState?.availableVersion ?? widget.requiredVersion,
+        progress: updateState.downloadProgress,
+        version: updateState.availableVersion ?? widget.requiredVersion,
       );
     }
 
@@ -200,9 +218,7 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
     }
 
     // Desktop non-store: show download and install button
-    if (_isDesktop &&
-        !widget.isStoreManaged &&
-        widget.onDownloadAndInstall != null) {
+    if (_isDesktop && !widget.isStoreManaged && _supportsAutoUpdate) {
       return _buildDownloadButton(context);
     }
 
@@ -248,7 +264,8 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
   }
 
   Widget _buildErrorActions(BuildContext context) {
-    final errorMsg = widget.updateState?.errorMessage ??
+    final updateState = ref.watch(updateStateProvider);
+    final errorMsg = updateState.errorMessage ??
         _localErrorMessage ??
         'An error occurred during the update.';
 
@@ -261,7 +278,7 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
           onRetry: () => _startDownload(context),
         ),
         const SizedBox(height: 12),
-        if (widget.fallbackUrl != null)
+        if (_fallbackUrl != null)
           TextButton.icon(
             onPressed: () => _openFallbackUrl(context),
             icon: const Icon(Icons.open_in_new),
@@ -272,14 +289,42 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
   }
 
   Future<void> _startDownload(BuildContext context) async {
-    if (widget.onDownloadAndInstall == null) return;
     setState(() {
       _isDownloading = true;
       _localErrorMessage = null;
     });
     try {
-      await widget.onDownloadAndInstall!();
+      // 1. Check for updates via GitHub Releases
+      final releaseService = ref.read(githubReleaseServiceProvider);
+      final result = await releaseService.checkForUpdate(Environment.version);
+
+      if (result is! UpdateCheckAvailable) {
+        throw Exception('No update available');
+      }
+
+      final release = releaseService.cachedRelease;
+      if (release == null) {
+        throw Exception('Could not fetch release information');
+      }
+
+      // 2. Start download via orchestrator
+      final platformName = Platform.isWindows
+          ? 'windows'
+          : Platform.isMacOS
+              ? 'macos'
+              : 'linux';
+
+      final orchestrator = ref.read(updateOrchestratorProvider);
+      await orchestrator.checkAndPrepare(
+        release: release,
+        platformName: platformName,
+      );
+
+      // State transitions (downloading -> verifying -> ready) are handled
+      // reactively via ref.watch(updateStateProvider) in build().
+      // When ready state is reached, _launchUpdater() is called.
     } catch (e) {
+      logger.error('ForceUpdate', 'Download failed', e);
       if (mounted) {
         setState(() {
           _localErrorMessage = e.toString();
@@ -288,6 +333,40 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
     } finally {
       if (mounted) {
         setState(() => _isDownloading = false);
+      }
+    }
+  }
+
+  Future<void> _launchUpdater() async {
+    final updateState = ref.read(updateStateProvider);
+    if (updateState.availableVersion == null) return;
+
+    try {
+      final launcher = ref.read(updaterLauncherProvider);
+      final orchestrator = ref.read(updateOrchestratorProvider);
+      final stagingDir = await orchestrator.getStagingDir();
+      final platformName = Platform.isWindows
+          ? 'windows'
+          : Platform.isMacOS
+              ? 'macos'
+              : 'linux';
+      final versionDir =
+          '$stagingDir/zajel-${updateState.availableVersion}-$platformName';
+
+      await launcher.launchUpdate(
+        targetVersion: updateState.availableVersion!,
+        currentVersion: Environment.version,
+        stagingDir: versionDir,
+        checksumSha256: orchestrator.verifiedChecksum ?? '',
+      );
+      exit(0);
+    } catch (e) {
+      logger.error('ForceUpdate', 'Failed to launch updater', e);
+      if (mounted) {
+        setState(() {
+          _launchingUpdater = false;
+          _localErrorMessage = 'Failed to launch updater: $e';
+        });
       }
     }
   }
@@ -355,8 +434,9 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
   }
 
   Future<void> _openFallbackUrl(BuildContext context) async {
-    if (widget.fallbackUrl == null) return;
-    final uri = Uri.tryParse(widget.fallbackUrl!);
+    final url = _fallbackUrl;
+    if (url == null) return;
+    final uri = Uri.tryParse(url);
     if (uri == null) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

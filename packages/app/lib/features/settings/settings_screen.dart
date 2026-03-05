@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/logging/logger_service.dart';
 import '../../core/providers/app_providers.dart';
+import '../updater/widgets/auto_update_settings.dart';
 import '../updater/widgets/update_settings_section.dart';
 
 /// Settings screen for app configuration.
@@ -61,6 +62,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           if (_isDesktop) ...[
             const SizedBox(height: 24),
             const UpdateSettingsSection(),
+            const AutoUpdateSettings(),
           ],
           const SizedBox(height: 24),
           _buildSection(
