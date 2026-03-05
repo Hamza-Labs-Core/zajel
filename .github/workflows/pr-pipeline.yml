@@ -573,6 +573,24 @@ jobs:
           tar -czvf zajel-${{ env.VERSION }}-linux-x64.tar.gz *
           mv zajel-${{ env.VERSION }}-linux-x64.tar.gz ../../../../../
 
+      - name: Build AppImage
+        if: steps.check.outputs.needed == 'true'
+        working-directory: packages/app
+        run: |
+          sudo apt-get install -y fuse libfuse2
+          bash linux/packaging/build-appimage.sh \
+            build/linux/x64/release/bundle \
+            "zajel-${{ env.VERSION }}-linux.AppImage"
+
+      - name: Build deb package
+        if: steps.check.outputs.needed == 'true'
+        working-directory: packages/app
+        run: |
+          bash linux/packaging/build-deb.sh \
+            build/linux/x64/release/bundle \
+            "${{ env.VERSION }}" \
+            "zajel-${{ env.VERSION }}-linux.deb"
+
       # NOTE: Linux E2E runs in the e2e-linux job with ALSA→PulseAudio routing
       # and software rendering to handle headless CI (no GPU, no audio device).
 
@@ -587,7 +605,10 @@ jobs:
           name: linux-build
           path: |
             packages/app/zajel-${{ env.VERSION }}-linux-x64.tar.gz
+            packages/app/zajel-${{ env.VERSION }}-linux.AppImage
+            packages/app/zajel-${{ env.VERSION }}-linux.deb
             packages/app/.build-sha
+          if-no-files-found: ignore
           retention-days: 1
 
       - name: Upload reused artifact
@@ -1078,7 +1099,9 @@ jobs:
           echo "|----------|------|" >> CHANGELOG.md
           echo "| Android | zajel-${{ env.VERSION }}-android.apk |" >> CHANGELOG.md
           echo "| iOS | zajel-${{ env.VERSION }}-ios.ipa |" >> CHANGELOG.md
-          echo "| Linux | zajel-${{ env.VERSION }}-linux-x64.tar.gz |" >> CHANGELOG.md
+          echo "| Linux (tarball) | zajel-${{ env.VERSION }}-linux-x64.tar.gz |" >> CHANGELOG.md
+          echo "| Linux (AppImage) | zajel-${{ env.VERSION }}-linux.AppImage |" >> CHANGELOG.md
+          echo "| Linux (deb) | zajel-${{ env.VERSION }}-linux.deb |" >> CHANGELOG.md
           echo "| macOS | zajel-${{ env.VERSION }}-macos.zip |" >> CHANGELOG.md
           echo "| Windows | zajel-${{ env.VERSION }}-windows.zip |" >> CHANGELOG.md
           echo "| Web | zajel-${{ env.VERSION }}-web.zip |" >> CHANGELOG.md
@@ -1092,7 +1115,7 @@ jobs:
           mkdir -p release-assets
 
           # Move all artifacts to release-assets with proper names (excludes .build-sha metadata)
-          find ./artifacts -type f \( -name "*.apk" -o -name "*.ipa" -o -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} ./release-assets/ \;
+          find ./artifacts -type f \( -name "*.apk" -o -name "*.ipa" -o -name "*.tar.gz" -o -name "*.zip" -o -name "*.AppImage" -o -name "*.deb" \) -exec mv {} ./release-assets/ \;
 
           ls -la release-assets/
 

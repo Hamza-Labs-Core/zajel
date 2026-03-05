@@ -148,6 +148,12 @@ class UpdaterLauncher {
       return File(_resolvedExecutable).parent.path;
     }
 
+    // AppImage: the APPIMAGE env var points to the actual .AppImage file.
+    // The resolvedExecutable is inside the FUSE mount, so use the env var instead.
+    if (_isLinux && _environment.containsKey('APPIMAGE')) {
+      return File(_environment['APPIMAGE']!).parent.path;
+    }
+
     // Windows and Linux: parent directory of the executable
     return File(_resolvedExecutable).parent.path;
   }
@@ -332,6 +338,8 @@ class UpdaterLauncher {
       platform: _getPlatformString(),
       checksumSha256: checksumSha256,
       timestamp: DateTime.now().toUtc(),
+      packageFormat:
+          _isLinux && _environment.containsKey('APPIMAGE') ? 'appimage' : null,
     );
 
     try {
@@ -403,7 +411,17 @@ class UpdaterLauncher {
   }
 
   /// Returns the app executable name for the current platform.
+  ///
+  /// For AppImage, returns the actual `.AppImage` filename (from the APPIMAGE
+  /// env var) rather than the FUSE-mount binary name.
   String _getAppExecutableName() {
+    // AppImage: use the real AppImage filename, not the FUSE mount binary
+    if (_isLinux && _environment.containsKey('APPIMAGE')) {
+      final appImagePath = _environment['APPIMAGE']!;
+      final parts = appImagePath.split('/');
+      return parts.last;
+    }
+
     final exePath = _resolvedExecutable;
     final sep = _isWindows ? '\\' : '/';
     final parts = exePath.split(sep);
