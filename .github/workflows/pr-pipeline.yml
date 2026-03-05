@@ -1472,10 +1472,24 @@ jobs:
             CERT_NAME="zajel-vps"
             CERT_DIR="/etc/letsencrypt/live/${CERT_NAME}"
 
+            # Kill anything on port 80 — certbot standalone needs it for HTTP-01
+            free_port_80() {
+              echo "Freeing port 80 for certbot..."
+              sudo fuser -k 80/tcp 2>/dev/null || true
+              # Also stop common services that bind port 80
+              sudo systemctl stop nginx 2>/dev/null || true
+              sudo systemctl stop apache2 2>/dev/null || true
+              sleep 1
+              # Verify port 80 is free
+              if sudo fuser 80/tcp 2>/dev/null; then
+                echo "WARNING: Port 80 still in use after cleanup"
+                sudo fuser -v 80/tcp 2>/dev/null || true
+              fi
+            }
+
             obtain_cert() {
               echo "Obtaining new TLS certificate for ${PUBLIC_IP}..."
-              # Ensure port 80 is free for HTTP-01 challenge
-              sudo fuser -k 80/tcp 2>/dev/null || true
+              free_port_80
               sudo certbot certonly --standalone --non-interactive \
                 --agree-tos -m "${CERTBOT_EMAIL}" \
                 --ip-address "${PUBLIC_IP}" \
@@ -1493,6 +1507,8 @@ jobs:
                 NEED_NEW_CERT=true
               else
                 echo "TLS certificate exists and is valid, attempting renewal..."
+                # Free port 80 before renewal too (standalone authenticator needs it)
+                free_port_80
                 if ! sudo certbot renew --cert-name "${CERT_NAME}"; then
                   echo "WARNING: certbot renew failed — will force re-issue"
                   NEED_NEW_CERT=true
@@ -1533,8 +1549,8 @@ jobs:
             echo "TLS configured: cert=${TLS_CERT}"
 
             # Setup auto-renewal cron (6-day certs need frequent renewal)
-            # Uses --pre-hook to free port 80 for standalone HTTP-01 challenge
-            echo "0 3 */3 * * root certbot renew --deploy-hook 'pm2 restart zajel-server-qa' --pre-hook 'fuser -k 80/tcp 2>/dev/null || true' 2>&1 | logger -t certbot-renew" \
+            # --pre-hook kills port 80 users + stops nginx/apache for standalone HTTP-01
+            echo "0 3 */3 * * root certbot renew --pre-hook 'fuser -k 80/tcp 2>/dev/null; systemctl stop nginx 2>/dev/null; systemctl stop apache2 2>/dev/null; sleep 1' --deploy-hook 'pm2 restart zajel-server-qa' 2>&1 | logger -t certbot-renew" \
               | sudo tee /etc/cron.d/zajel-cert-renew > /dev/null
 
             # Create deployment directory
