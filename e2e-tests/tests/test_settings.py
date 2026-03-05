@@ -79,6 +79,7 @@ class TestSettings:
         assert persisted, "Display name should persist after app restart"
 
     @pytest.mark.single_device
+    @pytest.mark.requires_signaling
     def test_connection_status_shown(self, alice, app_helper):
         """Settings shows connection status ('Connected' or 'Connecting...')."""
         helper = app_helper(alice)
