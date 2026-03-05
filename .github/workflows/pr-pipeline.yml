@@ -1853,14 +1853,29 @@ jobs:
 
           # ── Phase B: Single-device tests ──
           # UI navigation, settings, toggles — no P2P pairing needed.
+          # Exclude requires_signaling tests when VPS is unavailable.
           echo "=== Phase B: Single-device tests ==="
           SINGLE_RESULT=0
-          pytest -m "single_device and not headless and not windows and not linux" -v -s --timeout=120 --deselect tests/test_pairing.py::TestPairing::test_app_launches_successfully || SINGLE_RESULT=$?
+          PHASE_B_MARKER="single_device and not headless and not windows and not linux"
+          if [ -z "$SIGNALING_URL" ]; then
+            PHASE_B_MARKER="$PHASE_B_MARKER and not requires_signaling"
+            echo "SIGNALING_URL not set — excluding requires_signaling tests from Phase B"
+          fi
+          pytest -m "$PHASE_B_MARKER" -v -s --timeout=120 --deselect tests/test_pairing.py::TestPairing::test_app_launches_successfully || SINGLE_RESULT=$?
 
           # ── Phase C: Signaling protocol tests ──
           # Two headless clients validate the signaling protocol: registration,
           # pairing handshake, rejection, and signal relay. No WebRTC/ICE needed.
+          # Re-probe VPS before signaling tests (may have gone down since initial probe)
           PROTOCOL_RESULT=0
+          if [ -n "$SIGNALING_URL" ]; then
+            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||')
+            VPS_PORT=$(echo "$SIGNALING_URL" | sed 's|.*:||')
+            if ! timeout 10 curl -sf "https://${VPS_HOST}:${VPS_PORT}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS no longer reachable at ${VPS_HOST}:${VPS_PORT} — skipping signaling tests"
+              SIGNALING_URL=""
+            fi
+          fi
           if [ -n "$SIGNALING_URL" ]; then
             echo "=== Phase C: Signaling protocol tests ==="
             pytest tests/test_signaling_headless.py -v -s --timeout=120 || PROTOCOL_RESULT=$?
@@ -2164,7 +2179,16 @@ jobs:
           timeout 180 python3 -m pytest tests/test_pairing.py::TestPairing::test_app_launches_successfully -v -s --timeout=120 || SMOKE_RESULT=$?
 
           # ── Part 2: Signaling tests ──
+          # Re-probe VPS before signaling tests (may have gone down since initial probe)
           SIGNALING_RESULT=0
+          if [ -n "$SIGNALING_URL" ]; then
+            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||')
+            VPS_PORT=$(echo "$SIGNALING_URL" | sed 's|.*:||')
+            if ! timeout 10 curl -sf "https://${VPS_HOST}:${VPS_PORT}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS no longer reachable at ${VPS_HOST}:${VPS_PORT} — skipping signaling tests"
+              SIGNALING_URL=""
+            fi
+          fi
           if [ -n "$SIGNALING_URL" ]; then
             echo ""
             echo "=== Running signaling tests ==="
@@ -2274,11 +2298,24 @@ jobs:
         run: |
           URL="${{ vars.VPS_QA_WS_URL }}"
           if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
-            FIRST_IP=$(echo "${{ vars.QA_VPS_IP }}" | cut -d',' -f1 | tr -d ' ')
-            URL="wss://${FIRST_IP}:8443"
+            IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
+            for ip in "${IPS[@]}"; do
+              ip=$(echo "$ip" | tr -d ' ')
+              echo "Probing VPS at $ip:8443 (WSS)..."
+              if timeout 10 curl -sf "https://${ip}:8443/health" >/dev/null 2>&1; then
+                URL="wss://${ip}:8443"
+                echo "Reachable and healthy: $ip:8443"
+                break
+              else
+                echo "Not reachable: $ip:8443"
+              fi
+            done
+          fi
+          if [ -z "$URL" ]; then
+            echo "::warning::No VPS signaling server reachable — signaling tests will be skipped"
           fi
           echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
-          echo "Resolved SIGNALING_URL=$URL"
+          echo "Resolved SIGNALING_URL=${URL:-<empty>}"
 
       - name: Run Windows E2E tests
         timeout-minutes: 20
@@ -2287,13 +2324,27 @@ jobs:
           ZAJEL_TEST_PLATFORM: windows
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
+          $ErrorActionPreference = "Continue"
+
+          # Re-probe VPS before signaling tests (may have gone down since initial probe)
+          $signalingResult = 0
+          $sigUrl = $env:SIGNALING_URL
+          if ($sigUrl) {
+            $vpsHost = ($sigUrl -replace 'wss://','' -replace ':.*','')
+            $vpsPort = ($sigUrl -replace '.*:','')
+            try {
+              $response = Invoke-WebRequest -Uri "https://${vpsHost}:${vpsPort}/health" -TimeoutSec 10 -SkipCertificateCheck -ErrorAction Stop
+              Write-Host "VPS health check passed"
+            } catch {
+              Write-Host "::warning::VPS no longer reachable at ${vpsHost}:${vpsPort} — skipping signaling tests"
+              $sigUrl = ""
+            }
+          }
 
           # ── Signaling tests (no WebRTC needed) ──
-          $signalingResult = 0
-          if ($env:SIGNALING_URL) {
+          if ($sigUrl) {
             Write-Host "=== Running signaling tests ==="
-            Write-Host "SIGNALING_URL=$($env:SIGNALING_URL)"
+            Write-Host "SIGNALING_URL=$sigUrl"
             Set-Location "${{ github.workspace }}\e2e-tests"
             pytest tests\test_signaling_headless.py -v -s --timeout=120
             $signalingResult = $LASTEXITCODE
@@ -2364,8 +2415,21 @@ jobs:
         run: |
           URL="${{ vars.VPS_QA_WS_URL }}"
           if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
-            FIRST_IP=$(echo "${{ vars.QA_VPS_IP }}" | cut -d',' -f1 | tr -d ' ')
-            URL="wss://${FIRST_IP}:8443"
+            IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
+            for ip in "${IPS[@]}"; do
+              ip=$(echo "$ip" | tr -d ' ')
+              echo "Probing VPS at $ip:8443 (WSS)..."
+              if timeout 10 curl -sf "https://${ip}:8443/health" >/dev/null 2>&1; then
+                URL="wss://${ip}:8443"
+                echo "Reachable and healthy: $ip:8443"
+                break
+              else
+                echo "Not reachable: $ip:8443"
+              fi
+            done
+          fi
+          if [ -z "$URL" ]; then
+            echo "::warning::No VPS signaling server reachable — signaling tests will be skipped"
           fi
           echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
           echo "Resolved SIGNALING_URL=${URL:-<empty>}"
@@ -2386,7 +2450,16 @@ jobs:
           }
 
           # ── Signaling protocol tests ──
+          # Re-probe VPS before signaling tests (may have gone down since initial probe)
           SIGNALING_RESULT=0
+          if [ -n "$SIGNALING_URL" ]; then
+            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||')
+            VPS_PORT=$(echo "$SIGNALING_URL" | sed 's|.*:||')
+            if ! timeout 10 curl -sf "https://${VPS_HOST}:${VPS_PORT}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS no longer reachable at ${VPS_HOST}:${VPS_PORT} — skipping signaling tests"
+              SIGNALING_URL=""
+            fi
+          fi
           if [ -n "$SIGNALING_URL" ]; then
             echo ""
             echo "=== Running signaling tests ==="
