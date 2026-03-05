@@ -132,6 +132,10 @@ class AppInitializationService {
   ///
   /// Updates provider state as connection progresses.
   Future<void> connectSignaling() async {
+    if (Environment.isIntegrationTest) {
+      logger.info(_tag, 'Skipping signaling connection (INTEGRATION_TEST)');
+      return;
+    }
     try {
       logger.info(_tag, 'Auto-connecting to signaling server...');
       setDisplayStateConnecting();

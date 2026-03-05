@@ -89,6 +89,14 @@ export interface HealthData {
   timestamp: string;
 }
 
+export interface GenerateCodeData {
+  code: string;
+}
+
+export interface ExchangeCodeData {
+  token: string;
+}
+
 export interface ErrorAggregate {
   errorSignature: string;
   category: string;
@@ -299,6 +307,18 @@ export class AdminApiClient {
     return fetch(`${this.baseUrl}/admin/api/servers`, {
       method: 'GET',
     });
+  }
+
+  // --- Generic fetch (for custom requests like auth code endpoints) ---
+
+  async fetchPath(path: string, options: RequestInit = {}): Promise<Response> {
+    const url = `${this.baseUrl}${path}`;
+    // If no Authorization header is set in options but we have a token, add it
+    const headers = new Headers(options.headers);
+    if (this.token && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${this.token}`);
+    }
+    return fetch(url, { ...options, headers });
   }
 
   // --- Errors ---

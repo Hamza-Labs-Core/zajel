@@ -42,7 +42,7 @@ def configure_logging(
         handler.setFormatter(
             logging.Formatter(
                 "%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-                datefmt="%H:%M:%S",
+                datefmt="%Y-%m-%dT%H:%M:%S",
             )
         )
 

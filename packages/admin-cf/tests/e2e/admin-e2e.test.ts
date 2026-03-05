@@ -22,6 +22,8 @@ import {
   type VerifyData,
   type ServersData,
   type HealthData,
+  type GenerateCodeData,
+  type ExchangeCodeData,
   type ErrorsData,
   type ErrorTrendsData,
   type RegressionsData,
@@ -497,21 +499,30 @@ describe('Server Monitoring', () => {
 // ─────────────────────────────────────────────
 
 describe('Security', () => {
-  it('API responses include CORS headers', async () => {
+  it('API responses do not use wildcard CORS', async () => {
+    // Same-origin requests don't send an Origin header, so no wildcard CORS
     const res = await client.health();
-    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    const origin = res.headers.get('access-control-allow-origin');
+    expect(origin).not.toBe('*');
   });
 
-  it('Error responses include CORS headers', async () => {
+  it('API responses include security headers', async () => {
+    const res = await client.health();
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(res.headers.get('x-frame-options')).toBe('DENY');
+  });
+
+  it('Error responses include security headers', async () => {
     const res = await client.listUsersNoAuth();
     expect(res.status).toBe(401);
-    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(res.headers.get('x-frame-options')).toBe('DENY');
   });
 
-  it('OPTIONS preflight returns 204 with CORS headers', async () => {
+  it('OPTIONS preflight returns 204 with CORS configuration headers', async () => {
     const res = await client.options('/admin/api/users');
     expect(res.status).toBe(204);
-    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    expect(res.headers.get('access-control-allow-origin')).not.toBe('*');
     expect(res.headers.get('access-control-allow-methods')).toContain('GET');
     expect(res.headers.get('access-control-allow-methods')).toContain('POST');
     expect(res.headers.get('access-control-allow-methods')).toContain('DELETE');
@@ -526,7 +537,134 @@ describe('Security', () => {
 });
 
 // ─────────────────────────────────────────────
-// Section 6: Dashboard UI
+// Section 6: Authorization Code Exchange
+// ─────────────────────────────────────────────
+
+describe('Authorization Code Exchange', () => {
+  it('POST /admin/api/auth/code generates a code for authenticated user', async () => {
+    await loginAsSuperAdmin(client);
+
+    const res = await client.fetchPath('/admin/api/auth/code', {
+      method: 'POST',
+    });
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as ApiResponse<GenerateCodeData>;
+    expect(body.success).toBe(true);
+    expect(body.data?.code).toBeDefined();
+    expect(body.data!.code).toHaveLength(64); // 32 bytes hex encoded
+  });
+
+  it('POST /admin/api/auth/code requires authentication', async () => {
+    const res = await fetch(`${client['baseUrl']}/admin/api/auth/code`, {
+      method: 'POST',
+    });
+    expect(res.status).toBe(401);
+
+    const body = (await res.json()) as ApiResponse;
+    expect(body.success).toBe(false);
+  });
+
+  it('POST /admin/api/auth/exchange exchanges valid code for JWT', async () => {
+    await loginAsSuperAdmin(client);
+
+    // Generate code first
+    const codeRes = await client.fetchPath('/admin/api/auth/code', {
+      method: 'POST',
+    });
+    const codeBody = (await codeRes.json()) as ApiResponse<GenerateCodeData>;
+    expect(codeBody.success).toBe(true);
+    const code = codeBody.data!.code;
+
+    // Exchange code for token (no auth required — server-to-server call)
+    const exchangeRes = await fetch(`${client['baseUrl']}/admin/api/auth/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    expect(exchangeRes.status).toBe(200);
+
+    const exchangeBody = (await exchangeRes.json()) as ApiResponse<ExchangeCodeData>;
+    expect(exchangeBody.success).toBe(true);
+    expect(exchangeBody.data?.token).toBeDefined();
+
+    // Verify token has correct structure (3 dot-separated parts)
+    const parts = exchangeBody.data!.token.split('.');
+    expect(parts).toHaveLength(3);
+  });
+
+  it('POST /admin/api/auth/exchange rejects code reuse (single-use)', async () => {
+    await loginAsSuperAdmin(client);
+
+    // Generate code
+    const codeRes = await client.fetchPath('/admin/api/auth/code', {
+      method: 'POST',
+    });
+    const codeBody = (await codeRes.json()) as ApiResponse<GenerateCodeData>;
+    const code = codeBody.data!.code;
+
+    // Exchange code first time (should succeed)
+    const firstExchange = await fetch(`${client['baseUrl']}/admin/api/auth/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    expect(firstExchange.status).toBe(200);
+
+    // Attempt to exchange same code again (should fail)
+    const secondExchange = await fetch(`${client['baseUrl']}/admin/api/auth/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    expect(secondExchange.status).toBe(401);
+
+    const body = (await secondExchange.json()) as ApiResponse;
+    expect(body.success).toBe(false);
+    expect(body.error).toMatch(/invalid|expired|used/i);
+  });
+
+  it('POST /admin/api/auth/exchange rejects invalid code', async () => {
+    const res = await fetch(`${client['baseUrl']}/admin/api/auth/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: 'invalid-code-12345' }),
+    });
+    expect(res.status).toBe(401);
+
+    const body = (await res.json()) as ApiResponse;
+    expect(body.success).toBe(false);
+  });
+
+  it('POST /admin/api/auth/exchange rejects empty code', async () => {
+    const res = await fetch(`${client['baseUrl']}/admin/api/auth/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: '' }),
+    });
+    expect(res.status).toBe(400);
+
+    const body = (await res.json()) as ApiResponse;
+    expect(body.success).toBe(false);
+    expect(body.error).toBe('Code required');
+  });
+
+  it('POST /admin/api/auth/exchange rejects invalid JSON', async () => {
+    const res = await fetch(`${client['baseUrl']}/admin/api/auth/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: 'not-json',
+    });
+    expect(res.status).toBe(400);
+
+    const body = (await res.json()) as ApiResponse;
+    expect(body.success).toBe(false);
+    expect(body.error).toBe('Invalid JSON body');
+  });
+});
+
+// ─────────────────────────────────────────────
+// Section 7: Dashboard UI (renumbered from 6)
 // ─────────────────────────────────────────────
 
 describe('Dashboard UI', () => {
@@ -924,9 +1062,10 @@ describe('Edge Cases', () => {
     expect(location).toContain('/admin/');
   });
 
-  it('404 responses include CORS headers', async () => {
+  it('404 responses include security headers', async () => {
     const res = await client.rawGet('/admin/api/unknown');
     expect(res.status).toBe(404);
-    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(res.headers.get('x-frame-options')).toBe('DENY');
   });
 });
