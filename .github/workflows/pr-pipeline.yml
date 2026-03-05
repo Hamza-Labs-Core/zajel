@@ -807,7 +807,14 @@ jobs:
         if: steps.check.outputs.needed == 'true'
         run: |
           # Install OpenSSL with development files (no pinned version - use latest available)
+          # Ignore choco exit code — OpenSSL may already be installed on the runner,
+          # and transient CDN errors (503) cause choco to return non-zero even when
+          # the package is already present. We validate OpenSSL presence below.
           choco install openssl -y --no-progress
+          $chocoExit = $LASTEXITCODE
+          if ($chocoExit -ne 0) {
+            Write-Host "WARNING: choco install returned exit code $chocoExit (may be pre-installed or CDN issue)"
+          }
 
           # Find the installed OpenSSL directory
           $opensslRoot = "C:\Program Files\OpenSSL-Win64"
@@ -844,6 +851,9 @@ jobs:
           # Verify the files exist
           dir "$libDir\*.lib"
           dir "$opensslRoot\include\openssl\" | Select-Object -First 5
+
+          # Ensure clean exit (choco's $LASTEXITCODE may still be non-zero)
+          exit 0
 
       - name: Enable Windows desktop
         if: steps.check.outputs.needed == 'true'
@@ -1921,9 +1931,18 @@ jobs:
           # ── Phase B: Single-device tests ──
           # UI navigation, settings, toggles — no P2P pairing needed.
           # Exclude requires_signaling tests when VPS is unavailable.
+          # Re-probe VPS before Phase B (initial probe may be stale by now).
           echo "=== Phase B: Single-device tests ==="
           SINGLE_RESULT=0
           PHASE_B_MARKER="single_device and not headless and not windows and not linux"
+          if [ -n "$SIGNALING_URL" ]; then
+            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||')
+            VPS_PORT=$(echo "$SIGNALING_URL" | sed 's|.*:||')
+            if ! timeout 10 curl -sf "https://${VPS_HOST}:${VPS_PORT}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS not reachable at ${VPS_HOST}:${VPS_PORT} — excluding requires_signaling from Phase B"
+              SIGNALING_URL=""
+            fi
+          fi
           if [ -z "$SIGNALING_URL" ]; then
             PHASE_B_MARKER="$PHASE_B_MARKER and not requires_signaling"
             echo "SIGNALING_URL not set — excluding requires_signaling tests from Phase B"
