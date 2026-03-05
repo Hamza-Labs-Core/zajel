@@ -259,4 +259,58 @@ describe('startMetricsPush', () => {
 
     handle.stop();
   });
+
+  // ─── Gossip latency (US-3.4) ─────────────────────────────
+
+  it('includes gossipLatency when getGossipLatency is provided and pingCount > 0', async () => {
+    const collector = makeMockCollector();
+    const handle = startMetricsPush(collector, {
+      ...defaultConfig,
+      getGossipLatency: () => ({ p50Ms: 12, p95Ms: 45, p99Ms: 80, pingCount: 100 }),
+    });
+
+    await handle.pushNow();
+
+    const [, init] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const payload = JSON.parse(init.body);
+
+    expect(payload.metrics.gossipLatency).toBeDefined();
+    expect(payload.metrics.gossipLatency.p50Ms).toBe(12);
+    expect(payload.metrics.gossipLatency.p95Ms).toBe(45);
+    expect(payload.metrics.gossipLatency.p99Ms).toBe(80);
+    expect(payload.metrics.gossipLatency.pingCount).toBe(100);
+
+    handle.stop();
+  });
+
+  it('omits gossipLatency when getGossipLatency returns pingCount 0', async () => {
+    const collector = makeMockCollector();
+    const handle = startMetricsPush(collector, {
+      ...defaultConfig,
+      getGossipLatency: () => ({ p50Ms: 0, p95Ms: 0, p99Ms: 0, pingCount: 0 }),
+    });
+
+    await handle.pushNow();
+
+    const [, init] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const payload = JSON.parse(init.body);
+
+    expect(payload.metrics.gossipLatency).toBeUndefined();
+
+    handle.stop();
+  });
+
+  it('omits gossipLatency when getGossipLatency is not provided', async () => {
+    const collector = makeMockCollector();
+    const handle = startMetricsPush(collector, defaultConfig);
+
+    await handle.pushNow();
+
+    const [, init] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const payload = JSON.parse(init.body);
+
+    expect(payload.metrics.gossipLatency).toBeUndefined();
+
+    handle.stop();
+  });
 });

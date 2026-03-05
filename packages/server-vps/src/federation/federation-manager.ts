@@ -14,6 +14,7 @@ import type {
   ServerMetadata,
 } from '../types.js';
 import { GossipProtocol, type GossipConfig } from './gossip/protocol.js';
+import type { RttStats } from './gossip/failure-detector.js';
 import { ServerConnectionManager, type ServerConnectionConfig } from './transport/server-connection.js';
 import { HashRing, RoutingTable } from './dht/hash-ring.js';
 import type { Storage } from '../storage/interface.js';
@@ -192,6 +193,13 @@ export class FederationManager extends EventEmitter {
    */
   getAliveCount(): number {
     return this.gossip.getAliveCount();
+  }
+
+  /**
+   * Get RTT statistics from the gossip failure detector.
+   */
+  getRttStats(): RttStats {
+    return this.gossip.getRttStats();
   }
 
   /**

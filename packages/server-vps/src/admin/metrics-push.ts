@@ -11,6 +11,14 @@ import type { MetricsCollector } from './metrics.js';
 /** Push interval in milliseconds (60 seconds). */
 const PUSH_INTERVAL_MS = 60_000;
 
+/** Gossip latency stats shape (mirrors RttStats from failure-detector). */
+export interface GossipLatencyStats {
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  pingCount: number;
+}
+
 export interface MetricsPushConfig {
   /** URL of the diagnostics-cf worker (e.g., https://diagnostics.zajel.hamzalabs.dev) */
   diagnosticsUrl: string;
@@ -20,6 +28,11 @@ export interface MetricsPushConfig {
   serverId: string;
   /** This server's region */
   region: string;
+  /**
+   * Optional callback that returns gossip RTT statistics.
+   * When provided, gossipLatency will be included in each push payload.
+   */
+  getGossipLatency?: () => GossipLatencyStats;
 }
 
 export interface MetricsPushHandle {
@@ -77,6 +90,9 @@ export function startMetricsPush(
       // Memory in MB
       const memoryMb = Math.round(process.memoryUsage().rss / (1024 * 1024) * 100) / 100;
 
+      // Collect optional gossip latency stats
+      const gossipLatency = config.getGossipLatency?.() ?? undefined;
+
       const payload = {
         serverId: config.serverId,
         region: config.region,
@@ -104,6 +120,10 @@ export function startMetricsPush(
             memoryMb,
             uptimeSeconds: Math.floor(process.uptime()),
           },
+          // Include gossip latency when available (non-zero pingCount)
+          ...(gossipLatency && gossipLatency.pingCount > 0
+            ? { gossipLatency }
+            : {}),
         },
       };
 

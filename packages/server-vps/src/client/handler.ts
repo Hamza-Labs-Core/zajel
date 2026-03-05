@@ -15,6 +15,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { createHash } from 'crypto';
 import type { WebSocket } from 'ws';
 import type { ServerIdentity, ServerMetadata } from '../types.js';
 import { RelayRegistry } from '../registry/relay-registry.js';
@@ -32,6 +33,9 @@ import type { HandlerContext } from './context.js';
 import type { Storage } from '../storage/interface.js';
 import { AttestationManager, type AttestationConfig } from '../attestation/attestation-manager.js';
 import type { FederationManager } from '../federation/federation-manager.js';
+import type { SecurityEventReporter } from '../security/security-events.js';
+import type { QuarantineManager } from '../security/quarantine.js';
+import type { BruteForceDetector } from '../security/brute-force-detector.js';
 
 // Re-export types for backward compatibility
 export type { ClientHandlerConfig, ClientInfo, ClientHandlerEvents } from './types.js';
@@ -122,6 +126,10 @@ export class ClientHandler extends EventEmitter {
 
   // Federation manager for DHT redirect info (optional)
   private federation: FederationManager | null = null;
+
+  // Security modules (optional — injected from index.ts when configured)
+  private securityReporter: SecurityEventReporter | null = null;
+  private quarantineManager: QuarantineManager | null = null;
 
   constructor(
     identity: ServerIdentity,
@@ -230,6 +238,44 @@ export class ClientHandler extends EventEmitter {
     if (!this.federation) return [];
     const targets = this.federation.getRedirectTargets([pairingCode]);
     return targets.map(t => ({ serverId: t.serverId, endpoint: t.endpoint }));
+  }
+
+  /**
+   * Set the security event reporter for recording security events.
+   */
+  setSecurityReporter(reporter: SecurityEventReporter): void {
+    this.securityReporter = reporter;
+  }
+
+  /**
+   * Set the quarantine manager for connection-level quarantine enforcement.
+   */
+  setQuarantineManager(manager: QuarantineManager): void {
+    this.quarantineManager = manager;
+  }
+
+  /**
+   * Set the brute force detector on the signaling handler.
+   */
+  setBruteForceDetector(detector: BruteForceDetector): void {
+    this.signalingHandler.setBruteForceDetector(detector);
+  }
+
+  /**
+   * Hash a source IP for privacy before passing to security modules.
+   * Uses SHA-256 to produce a fixed-length, irreversible identifier.
+   */
+  static hashSourceIp(ip: string): string {
+    return createHash('sha256').update(ip).digest('hex').slice(0, 16);
+  }
+
+  /**
+   * Check if a source IP is quarantined. Returns true if the connection should be rejected.
+   */
+  isSourceQuarantined(sourceIp: string): boolean {
+    if (!this.quarantineManager) return false;
+    const sourceHash = ClientHandler.hashSourceIp(sourceIp);
+    return this.quarantineManager.isQuarantined(sourceHash);
   }
 
   /**
@@ -413,10 +459,15 @@ export class ClientHandler extends EventEmitter {
   /**
    * Handle incoming WebSocket message
    */
-  async handleMessage(ws: WebSocket, data: string): Promise<void> {
+  async handleMessage(ws: WebSocket, data: string, sourceIp?: string): Promise<void> {
     // Size validation (defense in depth)
     if (data.length > WEBSOCKET.MAX_MESSAGE_SIZE) {
       console.warn(`[Security] Rejected oversized message: ${data.length} bytes (limit: ${WEBSOCKET.MAX_MESSAGE_SIZE})`);
+      this.recordSecurityEvent('bad_client', sourceIp, '/ws', 'high', {
+        reason: 'oversized_message',
+        size: data.length,
+        limit: WEBSOCKET.MAX_MESSAGE_SIZE,
+      });
       this.sendError(ws, 'Message too large');
       ws.close(1009, 'Message Too Big');
       return;
@@ -424,6 +475,9 @@ export class ClientHandler extends EventEmitter {
 
     // Rate limiting check
     if (!this.checkRateLimit(ws)) {
+      this.recordSecurityEvent('rate_limit_violation', sourceIp, '/ws', 'medium', {
+        reason: 'message_rate_limit',
+      });
       this.sendError(ws, 'Rate limit exceeded. Please slow down.');
       return;
     }
@@ -433,6 +487,9 @@ export class ClientHandler extends EventEmitter {
     try {
       message = JSON.parse(data);
     } catch (e) {
+      this.recordSecurityEvent('bad_client', sourceIp, '/ws', 'medium', {
+        reason: 'json_parse_error',
+      });
       this.sendError(ws, 'Invalid message format: JSON parse error');
       return;
     }
@@ -440,6 +497,10 @@ export class ClientHandler extends EventEmitter {
     // Validate required fields per message type
     const validationError = this.validateMessage(message as unknown as Record<string, unknown>);
     if (validationError) {
+      this.recordSecurityEvent('bad_client', sourceIp, '/ws', 'low', {
+        reason: 'validation_error',
+        error: validationError,
+      });
       this.sendError(ws, `Invalid message: ${validationError}`);
       return;
     }
@@ -476,6 +537,9 @@ export class ClientHandler extends EventEmitter {
         // ----- Pairing -----
         case 'pair_request':
           if (!this.checkPairRequestRateLimit(ws)) {
+            this.recordSecurityEvent('rate_limit_violation', sourceIp, '/pair', 'high', {
+              reason: 'pair_request_rate_limit',
+            });
             this.sendError(ws, 'Too many pair requests. Please slow down.');
             return;
           }
@@ -829,6 +893,31 @@ export class ClientHandler extends EventEmitter {
     } catch (e) {
       logger.error('[ClientHandler] Unexpected error in handleDisconnect:', e);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Security event recording
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Record a security event if the security reporter is wired.
+   * Hashes sourceIp for privacy before recording.
+   */
+  private recordSecurityEvent(
+    eventType: 'rate_limit_violation' | 'bad_client' | 'brute_force_attempt' | 'connection_spike',
+    sourceIp: string | undefined,
+    endpoint: string,
+    severity: 'low' | 'medium' | 'high' | 'critical',
+    details?: Record<string, unknown>,
+  ): void {
+    if (!this.securityReporter) return;
+    this.securityReporter.record({
+      eventType,
+      sourceIp: sourceIp ? ClientHandler.hashSourceIp(sourceIp) : undefined,
+      endpoint,
+      severity,
+      details,
+    });
   }
 
   // ---------------------------------------------------------------------------
