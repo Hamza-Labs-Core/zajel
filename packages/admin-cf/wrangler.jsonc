@@ -44,7 +44,7 @@
     {
       "binding": "DIAGNOSTICS_DB",
       "database_name": "zajel-diagnostics",
-      "database_id": "placeholder-d1-id"
+      "database_id": "50053b5e-b18f-40c7-abab-4d2e58bc9f7d"
     }
   ],
 
@@ -59,7 +59,7 @@
   "kv_namespaces": [
     {
       "binding": "ADMIN_KV",
-      "id": "placeholder-kv-id"
+      "id": "c5e75d672d044f6a910f8a5aeeb1f516"
     }
   ],
 
@@ -117,7 +117,7 @@
         {
           "binding": "DIAGNOSTICS_DB",
           "database_name": "zajel-diagnostics-qa",
-          "database_id": "placeholder-d1-qa-id"
+          "database_id": "5093d39a-2f31-4e7f-981b-a39f9523bded"
         }
       ],
       // Email Workers binding for QA
@@ -130,7 +130,7 @@
       "kv_namespaces": [
         {
           "binding": "ADMIN_KV",
-          "id": "placeholder-kv-qa-id"
+          "id": "21e680e4ad704960af3ecfd855268f32"
         }
       ],
       // Cron trigger for QA alert engine
