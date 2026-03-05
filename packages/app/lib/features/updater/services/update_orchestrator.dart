@@ -45,6 +45,10 @@ class UpdateOrchestrator {
   /// Guard flag to prevent concurrent [downloadUpdate] calls.
   bool _isDownloading = false;
 
+  /// SHA-256 checksum of the last verified artifact.
+  /// Set after successful checksum verification; null otherwise.
+  String? _verifiedChecksum;
+
   UpdateOrchestrator({
     required UpdateDownloadService downloadService,
     required UpdatePackageDetector packageDetector,
@@ -60,6 +64,9 @@ class UpdateOrchestrator {
 
   /// Current state (synchronous snapshot).
   UpdateState get state => _state;
+
+  /// SHA-256 checksum of the last verified artifact, or null if not yet verified.
+  String? get verifiedChecksum => _verifiedChecksum;
 
   /// Full flow: check platform support, download artifact, verify checksum.
   ///
@@ -168,6 +175,7 @@ class UpdateOrchestrator {
         final valid =
             await _downloadService.verifyChecksum(artifactPath, checksum);
         if (valid) {
+          _verifiedChecksum = checksum;
           _setState(UpdateState.ready(
             version: release.version,
             releaseNotes: release.body,
@@ -243,6 +251,7 @@ class UpdateOrchestrator {
       }
 
       // Success
+      _verifiedChecksum = checksum;
       _setState(UpdateState.ready(
         version: release.version,
         releaseNotes: release.body,

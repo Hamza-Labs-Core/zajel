@@ -1,8 +1,14 @@
+import 'dart:io';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../../core/providers/preferences_providers.dart';
+import '../../../core/config/environment.dart';
+import '../../../core/providers/app_providers.dart';
+import '../models/update_state.dart';
+import '../services/auto_update_service.dart';
 import '../services/idle_detector.dart';
+import '../services/updater_launcher.dart';
 
 // ── Auto-Install Updates ──────────────────────────────────
 
@@ -72,4 +78,81 @@ final idleDetectorProvider = ChangeNotifierProvider<IdleDetector>((ref) {
   final detector = IdleDetector();
   ref.onDispose(() => detector.dispose());
   return detector;
+});
+
+// ── Updater Launcher ──────────────────────────────────
+
+/// Provides a singleton [UpdaterLauncher] instance.
+final updaterLauncherProvider = Provider<UpdaterLauncher>((ref) {
+  return UpdaterLauncher();
+});
+
+// ── Auto-Update Service ──────────────────────────────────
+
+/// Provides the [AutoUpdateService] that coordinates silent auto-updates.
+///
+/// The service monitors idle state, VoIP calls, file transfers, and update
+/// readiness before launching an update. It calls [exit(0)] after launching
+/// the updater binary.
+final autoUpdateServiceProvider = Provider<AutoUpdateService>((ref) {
+  final idleDetector = ref.read(idleDetectorProvider);
+  final updateState = ref.read(updateStateProvider);
+  final orchestrator = ref.read(updateOrchestratorProvider);
+  final launcher = ref.read(updaterLauncherProvider);
+
+  final service = AutoUpdateService(
+    idleDetector: idleDetector,
+    hasActiveCall: () {
+      // VoipService is nullable (null when signaling isn't connected)
+      try {
+        final voip = ref.read(voipServiceProvider);
+        return voip?.hasActiveCall ?? false;
+      } catch (_) {
+        return false;
+      }
+    },
+    hasActiveTransfer: () {
+      try {
+        return ref.read(fileReceiveServiceProvider).activeTransfers.isNotEmpty;
+      } catch (_) {
+        return false;
+      }
+    },
+    isUpdateReady: () {
+      return ref.read(updateStateProvider).status == UpdateStatus.ready;
+    },
+    launchUpdate: () async {
+      final state = ref.read(updateStateProvider);
+      if (state.status != UpdateStatus.ready ||
+          state.availableVersion == null) {
+        return;
+      }
+      final stagingDir = await orchestrator.getStagingDir();
+      final platformName = Platform.isWindows
+          ? 'windows'
+          : Platform.isMacOS
+              ? 'macos'
+              : 'linux';
+      final versionDir =
+          '$stagingDir/zajel-${state.availableVersion}-$platformName';
+      await launcher.launchUpdate(
+        targetVersion: state.availableVersion!,
+        currentVersion: Environment.version,
+        stagingDir: versionDir,
+        checksumSha256: orchestrator.verifiedChecksum ?? '',
+      );
+      exit(0);
+    },
+  );
+
+  // Sync enabled state from preference
+  service.setEnabled(ref.read(autoInstallUpdatesProvider));
+
+  // React to update state changes
+  if (updateState.status == UpdateStatus.ready) {
+    service.onUpdateReady();
+  }
+
+  ref.onDispose(() => service.dispose());
+  return service;
 });
