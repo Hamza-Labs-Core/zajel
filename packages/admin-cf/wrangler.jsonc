@@ -5,12 +5,16 @@
   "main": "src/index.ts",
   "compatibility_date": "2024-01-01",
 
-  // Durable Object for admin user management
+  // Durable Objects for admin user management and notifications
   "durable_objects": {
     "bindings": [
       {
         "name": "ADMIN_USERS",
         "class_name": "AdminUsersDO"
+      },
+      {
+        "name": "NOTIFICATION_DO",
+        "class_name": "NotificationDO"
       }
     ]
   },
@@ -20,6 +24,10 @@
     {
       "tag": "v1",
       "new_classes": ["AdminUsersDO"]
+    },
+    {
+      "tag": "v2",
+      "new_classes": ["NotificationDO"]
     }
   ],
 
@@ -28,6 +36,30 @@
     {
       "binding": "BOOTSTRAP_SERVICE",
       "service": "zajel-signaling"
+    }
+  ],
+
+  // D1 database for reading diagnostics data (error_aggregates)
+  "d1_databases": [
+    {
+      "binding": "DIAGNOSTICS_DB",
+      "database_name": "zajel-diagnostics",
+      "database_id": "placeholder-d1-id"
+    }
+  ],
+
+  // Email Workers binding for sending notification emails (unrestricted mode)
+  "send_email": [
+    {
+      "name": "SEND_EMAIL"
+    }
+  ],
+
+  // KV namespace for cooldown state (email/webhook rate limiting)
+  "kv_namespaces": [
+    {
+      "binding": "ADMIN_KV",
+      "id": "placeholder-kv-id"
     }
   ],
 
@@ -46,6 +78,11 @@
     { "pattern": "admin.zajel.hamzalabs.dev", "custom_domain": true }
   ],
 
+  // Cron trigger for alert engine evaluation (every 5 minutes)
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+
   // Production vars
   "vars": {
     "ZAJEL_BOOTSTRAP_URL": "https://signal.zajel.hamzalabs.dev"
@@ -60,6 +97,10 @@
           {
             "name": "ADMIN_USERS",
             "class_name": "AdminUsersDO"
+          },
+          {
+            "name": "NOTIFICATION_DO",
+            "class_name": "NotificationDO"
           }
         ]
       },
@@ -70,6 +111,31 @@
           "service": "zajel-signaling-qa"
         }
       ],
+      // D1 database for QA diagnostics data
+      "d1_databases": [
+        {
+          "binding": "DIAGNOSTICS_DB",
+          "database_name": "zajel-diagnostics-qa",
+          "database_id": "placeholder-d1-qa-id"
+        }
+      ],
+      // Email Workers binding for QA
+      "send_email": [
+        {
+          "name": "SEND_EMAIL"
+        }
+      ],
+      // KV namespace for QA cooldown state
+      "kv_namespaces": [
+        {
+          "binding": "ADMIN_KV",
+          "id": "placeholder-kv-qa-id"
+        }
+      ],
+      // Cron trigger for QA alert engine
+      "triggers": {
+        "crons": ["*/5 * * * *"]
+      },
       "routes": [
         { "pattern": "admin.zajel.qa.hamzalabs.dev", "custom_domain": true }
       ],

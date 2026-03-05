@@ -22,12 +22,22 @@ graph TB
             DO3[ServerRegistry DO<br/>VPS Bootstrap]
             DO4[AttestationRegistry DO<br/>Device Verification]
         end
+        DX[Diagnostics Worker<br/>Report Ingestion]
+        subgraph "Diagnostics Storage"
+            D1DB[(D1 Database<br/>Aggregated Metrics)]
+            R2B[(R2 Bucket<br/>Raw Reports)]
+        end
+        ADM[Admin Worker<br/>Dashboard & API]
         W1[Website<br/>Cloudflare Pages]
     end
 
     subgraph "VPS Relay Servers"
         V1[VPS Node 1<br/>WebSocket Relay]
         V2[VPS Node 2<br/>WebSocket Relay]
+    end
+
+    subgraph "Admin User"
+        BR[Browser<br/>Admin Dashboard]
     end
 
     A1 -- "WSS signaling" --> S1
@@ -41,9 +51,15 @@ graph TB
     A1 -. "Relay fallback" .-> V1
     V1 -- "heartbeat" --> DO3
     V2 -- "heartbeat" --> DO3
+    A1 -- "diagnostics" --> DX
+    V1 -- "server metrics" --> DX
+    DX --> D1DB
+    DX --> R2B
+    ADM -- "reads" --> D1DB
+    BR --> ADM
 ```
 
-The signaling server is used only during connection setup. Once WebRTC data channels are established, all communication is direct peer-to-peer. VPS relay servers provide fallback connectivity when direct P2P is not possible.
+The signaling server is used only during connection setup. Once WebRTC data channels are established, all communication is direct peer-to-peer. VPS relay servers provide fallback connectivity when direct P2P is not possible. The diagnostics worker collects anonymous crash reports, performance metrics, and heartbeats from client apps. VPS servers push their own metrics to the diagnostics worker. The admin worker provides a browser-based dashboard that reads from the shared diagnostics D1 database.
 
 ---
 
@@ -56,11 +72,12 @@ zajel/
       updater/        Go auto-updater binary (cross-compiled for all desktop targets)
     server/           Cloudflare Workers signaling server (Durable Objects)
     server-vps/       VPS relay server for fallback connectivity
+    diagnostics-cf/   Cloudflare Worker for diagnostic report ingestion (D1 + R2 + KV)
+    admin-cf/         Cloudflare Worker for admin dashboard and metrics API (D1 + DO)
     website/          Landing page and user guide (React + Vite, Cloudflare Pages)
     web-client/       Browser-based client (linked to mobile app)
     headless-client/  Python headless client for E2E testing
     integration-tests/ Integration test suite
-    admin-cf/         Admin tooling for Cloudflare
 ```
 
 ---
@@ -126,6 +143,27 @@ graph TD
 | State Management | Durable Objects (in-memory + persistent) |
 | Protocol | WebSocket (signaling), HTTP (bootstrap, attestation) |
 | Cryptography | Web Crypto API (Ed25519, HMAC-SHA256) |
+
+### Diagnostics Worker (`packages/diagnostics-cf`)
+
+| Component | Technology |
+|-----------|-----------|
+| Runtime | Cloudflare Workers (V8 isolates) |
+| Database | D1 (SQLite) for aggregated metrics |
+| Object Storage | R2 for raw diagnostic reports |
+| Rate Limiting | KV (per-session) + Native Rate Limiting (global DDoS) |
+| Auth | Shared secret (server metrics push only) |
+
+### Admin Worker (`packages/admin-cf`)
+
+| Component | Technology |
+|-----------|-----------|
+| Runtime | Cloudflare Workers (V8 isolates) |
+| User Management | Durable Objects (`AdminUsersDO`) |
+| Auth | JWT (HMAC-SHA256) via cookie or Bearer token |
+| Dashboard | Inline HTML (vanilla JS, inline SVG charts) |
+| Data Source | Shared D1 binding to diagnostics database |
+| Server List | Service binding to `zajel-signaling` worker |
 
 ### Website (`packages/website`)
 

@@ -8,9 +8,11 @@
  * Device linking has been further extracted to LinkHandler.
  */
 
+import { createHash } from 'crypto';
 import type { WebSocket } from 'ws';
 import { logger } from '../utils/logger.js';
 import { CRYPTO, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING } from '../constants.js';
+import type { BruteForceDetector } from '../security/brute-force-detector.js';
 import type {
   PendingPairRequest,
   EntropyMetrics,
@@ -63,6 +65,9 @@ export class SignalingHandler {
   private readonly pairRequestTimeout: number;
   private readonly pairRequestWarningTime: number;
 
+  // Brute force detector (optional — injected after construction)
+  private bruteForceDetector: BruteForceDetector | null = null;
+
   constructor(deps: SignalingHandlerDeps) {
     this.send = deps.send;
     this.sendError = deps.sendError;
@@ -70,6 +75,13 @@ export class SignalingHandler {
     this.getPairingCodeRedirects = deps.getPairingCodeRedirects;
     this.pairRequestTimeout = deps.pairRequestTimeout;
     this.pairRequestWarningTime = deps.pairRequestWarningTime;
+  }
+
+  /**
+   * Set the brute force detector for tracking failed pair attempts.
+   */
+  setBruteForceDetector(detector: BruteForceDetector): void {
+    this.bruteForceDetector = detector;
   }
 
   /**
@@ -249,6 +261,13 @@ export class SignalingHandler {
     const targetWs = this.pairingCodeToWs.get(targetCode);
 
     if (!targetWs) {
+      // Record failed pair attempt for brute force detection (US-7.4)
+      if (this.bruteForceDetector) {
+        const sourceHash = createHash('sha256').update(requesterCode).digest('hex').slice(0, 16);
+        const targetCodeHash = createHash('sha256').update(targetCode).digest('hex').slice(0, 16);
+        this.bruteForceDetector.recordFailure(sourceHash, targetCodeHash);
+      }
+
       this.send(ws, {
         type: 'pair_error',
         error: 'Pair request could not be processed',

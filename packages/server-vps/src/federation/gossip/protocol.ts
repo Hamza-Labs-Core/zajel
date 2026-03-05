@@ -15,7 +15,7 @@ import type {
   ServerMetadata,
 } from '../../types.js';
 import { Membership } from './membership.js';
-import { FailureDetector, type FailureDetectorConfig } from './failure-detector.js';
+import { FailureDetector, type FailureDetectorConfig, type RttStats } from './failure-detector.js';
 import { signMessage, verifyMessage, publicKeyFromServerId } from '../../identity/server-identity.js';
 
 export interface GossipConfig {
@@ -486,6 +486,13 @@ export class GossipProtocol extends EventEmitter {
    */
   getAliveCount(): number {
     return this.membership.aliveCount;
+  }
+
+  /**
+   * Get RTT statistics from the failure detector's sliding window.
+   */
+  getRttStats(): RttStats {
+    return this.failureDetector.getRttStats();
   }
 
   /**

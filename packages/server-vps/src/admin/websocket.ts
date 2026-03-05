@@ -9,6 +9,7 @@ import type { IncomingMessage } from 'http';
 import { verifyJwt, extractToken } from './auth.js';
 import type { MetricsCollector } from './metrics.js';
 import type { AdminWsMessage } from './types.js';
+import type { DDoSDetector } from '../security/ddos-detector.js';
 
 export class AdminWebSocketHandler {
   private wss: WebSocketServer;
@@ -18,6 +19,7 @@ export class AdminWebSocketHandler {
   private metricsInterval: ReturnType<typeof setInterval> | null = null;
   private lastFederationHash: string = '';
   private lastScalingLevel: string = 'normal';
+  private ddosDetector: DDoSDetector | null = null;
 
   constructor(
     wss: WebSocketServer,
@@ -27,6 +29,14 @@ export class AdminWebSocketHandler {
     this.wss = wss;
     this.metricsCollector = metricsCollector;
     this.jwtSecret = jwtSecret;
+  }
+
+  /**
+   * Set the DDoS detector. Its evaluate() method is called once per second
+   * inside the metrics broadcast loop.
+   */
+  setDDoSDetector(detector: DDoSDetector): void {
+    this.ddosDetector = detector;
   }
 
   /**
@@ -126,6 +136,13 @@ export class AdminWebSocketHandler {
    * Broadcast metrics to all connected clients
    */
   private broadcastMetrics(): void {
+    // Evaluate DDoS detector every second (piggybacks on metrics loop)
+    // This must run even when no admin clients are connected so the
+    // rolling window stays up-to-date.
+    if (this.ddosDetector) {
+      this.ddosDetector.evaluate();
+    }
+
     if (this.clients.size === 0) return;
 
     const snapshot = this.metricsCollector.takeSnapshot();

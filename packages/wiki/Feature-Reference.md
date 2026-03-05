@@ -241,8 +241,36 @@ A comprehensive list of all features in the Zajel project, organized by package 
 - **Server Identity** -- Ed25519 keypair generation, persistent storage, and cryptographic operations (signing, verification) for server authentication
 - **Admin Dashboard** -- Web-based dashboard providing real-time server metrics, federation topology visualization, and admin controls. Authenticated via shared JWT with CF Workers. Includes REST API endpoints and WebSocket streaming for live metric updates
 - **Metrics Collector** -- Rolling window aggregation of server metrics (connected clients, relay count, federation status, message throughput) with historical data retention
+- **Server Metrics Push** -- Periodic push of server metrics (connections, entropy, federation, message rate, system, gossip latency) to the diagnostics worker for centralized monitoring
 - **SQLite Storage** -- Persistent storage using better-sqlite3 for rendezvous data, relay entries, membership state, and chunk cache
 - **Secure Logger** -- Structured logging with automatic redaction of sensitive data (pairing codes, IP addresses, server IDs) in production per OWASP guidelines
+
+---
+
+## Diagnostics Worker (packages/diagnostics-cf)
+
+- **Diagnostic Report Submission** -- POST endpoint accepting crash reports, error reports, performance metrics, and network metrics from Flutter client apps. Validates payload schema, applies rate limiting, stores raw JSON in R2, and aggregates metrics into D1 (hourly buckets)
+- **Client Heartbeat** -- POST endpoint for anonymous active client counting. Tracks session hash, platform, version, connection type, and region. Rate-limited to one heartbeat per session per 5 minutes via D1 last_seen check
+- **Server Metrics Push** -- POST endpoint for VPS servers to push periodic metrics snapshots (connections, entropy, federation, message rate, system metrics, SWIM gossip latency). Authenticated via shared secret Bearer token. Automatically cleans up rows older than 7 days
+- **Two-Layer Rate Limiting** -- Global DDoS protection via native Cloudflare Rate Limiting binding (167/60s), plus per-session rate limiting via KV (10 reports/hour/session). Both fail open for availability
+- **D1 Aggregation** -- Atomic UPSERT operations for error counting, performance percentile approximation (weighted average), and network success/failure tallying. All aggregation runs in background via waitUntil
+- **R2 Raw Storage** -- Date-partitioned storage of raw diagnostic report JSON for later analysis. Path format: `diagnostics/{YYYY}/{MM}/{DD}/{HH}/{sessionHash}_{timestamp}.json`
+- **KV Dashboard Counters** -- Best-effort eventually consistent counters for active clients by platform, version, and connection type (15-minute TTL)
+
+## Admin Dashboard (packages/admin-cf)
+
+- **Error Summary List** -- Aggregated error list with category filtering, time ranges (1h/24h/7d), severity classification (critical/high/medium/low), and rate change calculation against the previous period
+- **Error Trends Chart** -- Time-bucketed error counts grouped by category for chart rendering, with deployment markers derived from first-seen version timestamps. Bucket granularity adapts to range (1min/1h/6h)
+- **Error Detail View** -- Drill-down for a specific error signature showing version and platform distribution, occurrence timeline, sample message, and stack trace
+- **Regression Detection** -- Compares error rates across the two most recent app versions with configurable time windows (6h/24h/48h) and rate multiplier threshold (default 3.0x). New errors with 10+ occurrences are flagged
+- **App Performance Metrics** -- Startup time, frame rate, and memory usage percentiles (p50/p95/p99) across platforms and versions. Color-coded health classification (green/yellow/red)
+- **Network Success Rates** -- Signaling connect and WebRTC establish success rates, relay vs. direct P2P distribution, average latency, time-bucketed trends, and per-platform breakdown
+- **Server Metrics Overview** -- Latest metrics for all VPS servers with health status (healthy/degraded/offline), aggregate totals, CPU, memory, connections, message throughput
+- **Server Metrics Detail** -- Historical time-series for a specific server (CPU, memory, connections, message rate, federation members) with configurable range
+- **Federation Health** -- SWIM gossip latency (p50/p95/p99), node availability (alive/suspect/failed), sync completeness, per-server federation view, and availability history timeline. Health classified as healthy/degraded/critical
+- **Inline HTML Dashboard** -- Vanilla JavaScript SPA served inline from the worker. No external dependencies or chart libraries -- uses inline SVG for data visualization
+- **JWT Authentication** -- HMAC-SHA256 JWT via Authorization header or HttpOnly cookie. Two roles: admin (read-only) and super-admin (user management)
+- **Admin User Management** -- Durable Object-backed user store with PBKDF2 password hashing, create/delete operations, login rate limiting (5/min/IP)
 
 ---
 

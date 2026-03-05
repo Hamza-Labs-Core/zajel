@@ -5,6 +5,9 @@
 **Architecture**
 - [Architecture Overview](Architecture-Overview)
 - [Server Architecture](Server-Architecture)
+- [Diagnostics Architecture](Diagnostics-Architecture)
+- [Log Processor Architecture](Log-Processor-Architecture)
+- [Admin Dashboard](Admin-Dashboard)
 - [Data Storage](Data-Storage)
 
 **Protocols**

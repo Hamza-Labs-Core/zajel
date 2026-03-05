@@ -37,6 +37,17 @@ interface SuspicionTimer {
   timeout: NodeJS.Timeout;
 }
 
+/** RTT statistics from the sliding window. */
+export interface RttStats {
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  pingCount: number;
+}
+
+/** Default sliding window size for RTT samples. */
+const RTT_WINDOW_SIZE = 200;
+
 export class FailureDetector extends EventEmitter {
   private config: FailureDetectorConfig;
   private pendingPings: Map<string, PendingPing> = new Map();
@@ -44,6 +55,11 @@ export class FailureDetector extends EventEmitter {
   private pingInterval: NodeJS.Timeout | null = null;
   private getRandomPeers: (count: number, exclude: string[]) => MembershipEntry[];
   private getAllPeers: () => MembershipEntry[];
+
+  /** Sliding window of recent RTT measurements (milliseconds). */
+  private rttSamples: number[] = [];
+  /** Total number of successful pings since start (not just window). */
+  private totalPingCount = 0;
 
   constructor(
     config: FailureDetectorConfig,
@@ -129,6 +145,12 @@ export class FailureDetector extends EventEmitter {
   ack(serverId: string, incarnation: number): void {
     const pending = this.pendingPings.get(serverId);
     if (!pending) return;
+
+    // Record RTT for direct (non-indirect) pings
+    if (!pending.isIndirect) {
+      const rtt = Date.now() - pending.startTime;
+      this.recordRtt(rtt);
+    }
 
     clearTimeout(pending.timeout);
     this.pendingPings.delete(serverId);
@@ -278,5 +300,82 @@ export class FailureDetector extends EventEmitter {
     const timer = this.suspicionTimers.get(serverId);
     if (!timer) return null;
     return Date.now() - timer.startTime;
+  }
+
+  // ─── RTT tracking ───────────────────────────────────────
+
+  /**
+   * Record an RTT sample into the sliding window.
+   */
+  private recordRtt(rttMs: number): void {
+    this.totalPingCount++;
+    this.rttSamples.push(rttMs);
+    // Keep only the most recent RTT_WINDOW_SIZE samples
+    if (this.rttSamples.length > RTT_WINDOW_SIZE) {
+      this.rttSamples = this.rttSamples.slice(-RTT_WINDOW_SIZE);
+    }
+  }
+
+  /**
+   * Compute a percentile value from a sorted array.
+   * Uses nearest-rank method.
+   */
+  private percentile(sorted: number[], p: number): number {
+    if (sorted.length === 0) return 0;
+    const idx = Math.max(0, Math.ceil((p / 100) * sorted.length) - 1);
+    return sorted[idx]!;
+  }
+
+  /**
+   * Get the P50 (median) RTT in milliseconds.
+   * Returns 0 if no samples are available.
+   */
+  getRttP50(): number {
+    if (this.rttSamples.length === 0) return 0;
+    const sorted = [...this.rttSamples].sort((a, b) => a - b);
+    return this.percentile(sorted, 50);
+  }
+
+  /**
+   * Get the P95 RTT in milliseconds.
+   * Returns 0 if no samples are available.
+   */
+  getRttP95(): number {
+    if (this.rttSamples.length === 0) return 0;
+    const sorted = [...this.rttSamples].sort((a, b) => a - b);
+    return this.percentile(sorted, 95);
+  }
+
+  /**
+   * Get the P99 RTT in milliseconds.
+   * Returns 0 if no samples are available.
+   */
+  getRttP99(): number {
+    if (this.rttSamples.length === 0) return 0;
+    const sorted = [...this.rttSamples].sort((a, b) => a - b);
+    return this.percentile(sorted, 99);
+  }
+
+  /**
+   * Get aggregate RTT statistics.
+   */
+  getRttStats(): RttStats {
+    if (this.rttSamples.length === 0) {
+      return { p50Ms: 0, p95Ms: 0, p99Ms: 0, pingCount: this.totalPingCount };
+    }
+    const sorted = [...this.rttSamples].sort((a, b) => a - b);
+    return {
+      p50Ms: this.percentile(sorted, 50),
+      p95Ms: this.percentile(sorted, 95),
+      p99Ms: this.percentile(sorted, 99),
+      pingCount: this.totalPingCount,
+    };
+  }
+
+  /**
+   * Get the total number of successful pings since start.
+   */
+  getPingCount(): number {
+    return this.totalPingCount;
   }
 }
