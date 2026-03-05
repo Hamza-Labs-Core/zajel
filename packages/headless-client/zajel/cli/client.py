@@ -230,6 +230,13 @@ def cmd_unblock_peer(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_diagnostics(args: argparse.Namespace) -> int:
+    cmd_args = {"action": args.action}
+    if args.path:
+        cmd_args["path"] = args.path
+    return execute_command(args.socket, "diagnostics", cmd_args, args.pretty)
+
+
 def cmd_disconnect(args: argparse.Namespace) -> int:
     return execute_command(args.socket, "disconnect", {}, args.pretty)
 
@@ -371,6 +378,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("unblock-peer", help="Unblock a peer")
     p.add_argument("peer_id", help="Peer ID")
     p.set_defaults(func=cmd_unblock_peer)
+
+    # diagnostics
+    p = sub.add_parser("diagnostics", help="Query diagnostics error tracker")
+    p.add_argument(
+        "--action",
+        choices=["summary", "errors", "drain", "write"],
+        default="summary",
+        help="Diagnostics action (default: summary)",
+    )
+    p.add_argument("--path", default=None, help="Output file path (for 'write' action)")
+    p.set_defaults(func=cmd_diagnostics)
 
     # disconnect
     p = sub.add_parser("disconnect", help="Disconnect and shut down daemon")

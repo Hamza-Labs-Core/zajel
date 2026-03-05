@@ -465,12 +465,16 @@ describe('E2E: Complete Pairing Flow', () => {
       expect(alice.signalingEvents.onPairMatched).toHaveBeenCalledWith(
         VALID_PAIRING_CODE_BOB,
         bob.crypto.getPublicKeyBase64(),
-        true
+        true,
+        undefined,
+        undefined
       );
       expect(bob.signalingEvents.onPairMatched).toHaveBeenCalledWith(
         VALID_PAIRING_CODE_ALICE,
         alice.crypto.getPublicKeyBase64(),
-        false
+        false,
+        undefined,
+        undefined
       );
 
       // Phase 5: Establish crypto sessions

@@ -43,6 +43,7 @@ export class SignalingHandler {
   private pairingCodeToWs: Map<string, WebSocket> = new Map();
   private wsToPairingCode: Map<WebSocket, string> = new Map();
   private pairingCodeToPublicKey: Map<string, string> = new Map();
+  private pairingCodeToSigningKey: Map<string, string> = new Map(); // Ed25519 signing keys
   // Pending pair requests: targetCode -> list of pending requests
   private pendingPairRequests: Map<string, PendingPairRequest[]> = new Map();
 
@@ -195,6 +196,11 @@ export class SignalingHandler {
     this.pairingCodeToWs.set(pairingCode, ws);
     this.wsToPairingCode.set(ws, pairingCode);
     this.pairingCodeToPublicKey.set(pairingCode, publicKey);
+    // Store signing public key if provided (backward compatible -- old clients won't send it)
+    const signingPublicKey = (message as any).signingPublicKey as string | undefined;
+    if (signingPublicKey) {
+      this.pairingCodeToSigningKey.set(pairingCode, signingPublicKey);
+    }
 
     // Issue #41: Update entropy metrics
     this.entropyMetrics.totalRegistrations++;
@@ -235,6 +241,7 @@ export class SignalingHandler {
     const requesterCode = this.wsToPairingCode.get(ws);
 
     if (!requesterCode) {
+      logger.warn(`[Pairing] pair_request rejected: ws not registered (target=${logger.pairingCode(targetCode || '?')}, activeCodes=${this.pairingCodeToWs.size})`);
       this.sendError(ws, 'Not registered. Send register message first.');
       return;
     }
@@ -251,6 +258,7 @@ export class SignalingHandler {
     }
 
     if (targetCode === requesterCode) {
+      logger.warn(`[Pairing] pair_request rejected: self-pairing (code=${logger.pairingCode(requesterCode)})`);
       this.send(ws, {
         type: 'pair_error',
         error: 'Pair request could not be processed',
@@ -261,6 +269,7 @@ export class SignalingHandler {
     const targetWs = this.pairingCodeToWs.get(targetCode);
 
     if (!targetWs) {
+      logger.warn(`[Pairing] pair_request rejected: target not found (requester=${logger.pairingCode(requesterCode)}, target=${logger.pairingCode(targetCode)}, activeCodes=${this.pairingCodeToWs.size}, knownCodes=[${Array.from(this.pairingCodeToWs.keys()).map(c => logger.pairingCode(c)).join(',')}])`);
       // Record failed pair attempt for brute force detection (US-7.4)
       if (this.bruteForceDetector) {
         const sourceHash = createHash('sha256').update(requesterCode).digest('hex').slice(0, 16);
@@ -277,6 +286,7 @@ export class SignalingHandler {
 
     const requesterPublicKey = this.pairingCodeToPublicKey.get(requesterCode);
     if (!requesterPublicKey) {
+      logger.warn(`[Pairing] pair_request rejected: no public key for requester (requester=${logger.pairingCode(requesterCode)})`);
       this.send(ws, {
         type: 'pair_error',
         error: 'Pair request could not be processed',
@@ -284,6 +294,7 @@ export class SignalingHandler {
       return;
     }
 
+    logger.pairingEvent('request', { requester: requesterCode, target: targetCode });
     this.processPairRequest(requesterCode, requesterPublicKey, targetCode, targetWs, proposedName);
   }
 
@@ -330,10 +341,12 @@ export class SignalingHandler {
     this.pendingPairRequests.set(targetCode, pending);
 
     // Notify target about incoming pair request
+    const requesterSigningKey = this.pairingCodeToSigningKey.get(requesterCode);
     this.send(targetWs, {
       type: 'pair_incoming',
       fromCode: requesterCode,
       fromPublicKey: requesterPublicKey,
+      ...(requesterSigningKey ? { fromSigningPublicKey: requesterSigningKey } : {}),
       expiresIn: this.pairRequestTimeout,
       ...(proposedName ? { proposedName } : {}),
     });
@@ -439,12 +452,16 @@ export class SignalingHandler {
       }
 
       // Notify both peers about the match
+      const responderSigningKey = this.pairingCodeToSigningKey.get(responderCode);
+      const requesterSigningKey = this.pairingCodeToSigningKey.get(targetCode);
+
       const requesterWs = this.pairingCodeToWs.get(targetCode);
       if (requesterWs) {
         this.send(requesterWs, {
           type: 'pair_matched',
           peerCode: responderCode,
           peerPublicKey: responderPublicKey,
+          ...(responderSigningKey ? { peerSigningPublicKey: responderSigningKey } : {}),
           isInitiator: true,
         });
       }
@@ -453,6 +470,7 @@ export class SignalingHandler {
         type: 'pair_matched',
         peerCode: targetCode,
         peerPublicKey: request.requesterPublicKey,
+        ...(requesterSigningKey ? { peerSigningPublicKey: requesterSigningKey } : {}),
         isInitiator: false,
       });
 
@@ -674,6 +692,7 @@ export class SignalingHandler {
         this.pairingCodeToWs.delete(pairingCode);
         this.wsToPairingCode.delete(ws);
         this.pairingCodeToPublicKey.delete(pairingCode);
+        this.pairingCodeToSigningKey.delete(pairingCode);
 
         // Clean up timers for requests where this peer was the target
         const pendingAsTarget = this.pendingPairRequests.get(pairingCode) || [];
@@ -740,6 +759,7 @@ export class SignalingHandler {
     this.pairingCodeToWs.clear();
     this.wsToPairingCode.clear();
     this.pairingCodeToPublicKey.clear();
+    this.pairingCodeToSigningKey.clear();
     this.pendingPairRequests.clear();
   }
 }

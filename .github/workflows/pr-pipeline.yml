@@ -1173,6 +1173,14 @@ jobs:
         working-directory: packages/server
         run: npm ci
 
+      - name: Sync registry secret to CF Worker
+        working-directory: packages/server
+        run: printf '%s' "$SERVER_REGISTRY_SECRET" | npx wrangler secret put SERVER_REGISTRY_SECRET -c wrangler.jsonc --env qa
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SERVER_REGISTRY_SECRET: ${{ secrets.SERVER_REGISTRY_SECRET }}
+
       - name: Deploy signaling server
         id: deploy-signaling
         uses: cloudflare/wrangler-action@v3
@@ -1395,13 +1403,14 @@ jobs:
           APP_VERSION: ${{ needs.tag-prerelease.outputs.version }}
           BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL }}
           ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
+          SERVER_REGISTRY_SECRET: ${{ secrets.SERVER_REGISTRY_SECRET }}
           CERTBOT_EMAIL: ${{ vars.CERTBOT_EMAIL || 'admin@hamzalabs.dev' }}
         with:
           host: ${{ vars.QA_VPS_IP }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          envs: APP_VERSION,BOOTSTRAP_URL,ZAJEL_ADMIN_JWT_SECRET,CERTBOT_EMAIL
+          envs: APP_VERSION,BOOTSTRAP_URL,ZAJEL_ADMIN_JWT_SECRET,SERVER_REGISTRY_SECRET,CERTBOT_EMAIL
           script: |
             set -e
 
@@ -1492,12 +1501,14 @@ jobs:
             # Create QA startup script with env vars
             cat > start-qa.sh << EOF
             #!/bin/bash
+            export ZAJEL_HOST=0.0.0.0
             export ZAJEL_PORT=8443
             export ZAJEL_KEY_PATH=./data-qa/server.key
             export ZAJEL_DB_PATH=./data-qa/zajel.db
             export ZAJEL_PUBLIC_ENDPOINT=${PUBLIC_ENDPOINT}
             export ZAJEL_REGION=qa
             export ZAJEL_BOOTSTRAP_URL=${BOOTSTRAP_URL}
+            export ZAJEL_REGISTRY_SECRET=${SERVER_REGISTRY_SECRET}
             export ZAJEL_ADMIN_JWT_SECRET=${ZAJEL_ADMIN_JWT_SECRET}
             export ZAJEL_CF_ADMIN_URL=https://admin.zajel.qa.hamzalabs.dev
             export ZAJEL_TLS_CERT=${TLS_CERT}
@@ -1556,6 +1567,7 @@ jobs:
               PUB_KEY=$(echo "${SERVER_ID}" | sed 's/^ed25519://')
               curl -sf -X POST "${BOOTSTRAP_URL}/servers" \
                 -H "Content-Type: application/json" \
+                -H "Authorization: Bearer ${SERVER_REGISTRY_SECRET}" \
                 -d "{\"serverId\":\"${SERVER_ID}\",\"endpoint\":\"${PUBLIC_ENDPOINT}\",\"publicKey\":\"${PUB_KEY}\",\"region\":\"qa\"}" \
                 && echo "Manually registered with bootstrap" \
                 || echo "WARNING: Manual bootstrap registration failed"
@@ -1889,8 +1901,8 @@ jobs:
           fi
           echo "All E2E tests passed."
 
-      - name: Collect logs on failure
-        if: failure()
+      - name: Collect logs
+        if: always()
         timeout-minutes: 2
         run: |
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
@@ -1899,8 +1911,22 @@ jobs:
           timeout 10 adb -s emulator-5554 logcat -d > test-artifacts/logcat-emu1.txt 2>&1 || true
           cp /tmp/appium*.log test-artifacts/ 2>/dev/null || true
           cat /tmp/coturn.log >> test-artifacts/coturn.log 2>/dev/null || true
-          # Collect E2E failure artifacts (screenshots, page sources)
+          # Collect E2E failure artifacts (screenshots, page sources, headless logs)
           cp ${{ github.workspace }}/test-artifacts/e2e/* test-artifacts/ 2>/dev/null || true
+
+      - name: Collect VPS server logs
+        if: always()
+        timeout-minutes: 1
+        continue-on-error: true
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ vars.QA_VPS_IP }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            echo "=== VPS Server Logs (last 500 lines) ==="
+            pm2 logs zajel-server-qa --lines 500 --nostream 2>&1 | tail -500
 
       - name: Stop emulators
         if: always()
@@ -1912,12 +1938,13 @@ jobs:
           pkill -9 qemu-system-x86_64 2>/dev/null || true
 
       - name: Upload test artifacts
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-test-artifacts
           path: test-artifacts/
           retention-days: 3
+          if-no-files-found: ignore
 
   # ============================================
   # PHASE 5b: Linux E2E Tests (Xvfb + Shelf HTTP + headless client)

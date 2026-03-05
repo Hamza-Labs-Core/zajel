@@ -62,6 +62,11 @@ class WebRTCService {
   // Queued ICE candidates that arrived before the connection was ready
   final Map<String, List<Map<String, dynamic>>> _pendingCandidates = {};
 
+  // SDP signing: trusted peer signing keys (bound via signaling server pair_matched)
+  final Map<String, String> _trustedPeerSigningKeys = {};
+  // TOFU: peers that have previously sent signed SDP (downgrade detection)
+  final Set<String> _peersSendingSignedSDP = {};
+
   // Stream-based signaling events to avoid race conditions
   // when multiple connections are attempted simultaneously.
   // Uses a broadcast stream so multiple listeners can subscribe.
@@ -95,6 +100,62 @@ class WebRTCService {
               {'urls': 'stun:stun1.l.google.com:19302'},
             ];
 
+  /// Store a trusted signing key for a peer (received via signaling server pair_matched).
+  ///
+  /// This binds the signing key to peer identity via the signaling server,
+  /// preventing self-asserted key substitution in SDP payloads.
+  void setPeerSigningKey(String peerId, String signingPublicKeyBase64) {
+    _trustedPeerSigningKeys[peerId] = signingPublicKeyBase64;
+  }
+
+  /// Verify an SDP signature from a peer, enforcing TOFU and key binding.
+  ///
+  /// Security checks:
+  /// 1. If both signature and key are present, verify the signature
+  /// 2. Cross-check payload key against trusted key from pair_matched
+  /// 3. TOFU: reject unsigned SDP from peers that previously sent signed SDP
+  /// 4. Log warning for unsigned SDP from unknown peers (backward compat)
+  Future<void> _verifySdpSignature({
+    required String peerId,
+    required String sdp,
+    required String? payloadSignature,
+    required String? payloadSigningPublicKey,
+    required String sdpType,
+  }) async {
+    if (payloadSignature != null && payloadSigningPublicKey != null) {
+      // Signed SDP: verify signature using trusted key (or payload key if no trusted key)
+      final trustedKey = _trustedPeerSigningKeys[peerId];
+      if (trustedKey != null && trustedKey != payloadSigningPublicKey) {
+        throw WebRTCException(
+            'SDP signing key mismatch -- possible MITM attack');
+      }
+
+      final verificationKey = trustedKey ?? payloadSigningPublicKey;
+      final isValid = await _cryptoService.verifySDP(
+        sdp: sdp,
+        signature: payloadSignature,
+        peerSigningPublicKey: verificationKey,
+      );
+      if (!isValid) {
+        throw WebRTCException(
+            'SDP $sdpType signature verification failed -- possible MITM attack');
+      }
+
+      // TOFU: remember this peer sends signed SDP
+      _peersSendingSignedSDP.add(peerId);
+      logger.info(
+          'WebRTCService', 'SDP $sdpType signature verified for peer $peerId');
+    } else {
+      // Unsigned SDP: check for downgrade attack (TOFU)
+      if (_peersSendingSignedSDP.contains(peerId)) {
+        throw WebRTCException(
+            'Unsigned SDP $sdpType from peer that previously signed -- possible downgrade attack');
+      }
+      logger.warning('WebRTCService',
+          'Received unsigned SDP $sdpType from peer $peerId -- degraded trust level');
+    }
+  }
+
   /// Create an offer to initiate a connection with a peer.
   Future<Map<String, dynamic>> createOffer(String peerId) async {
     final connection = await _createConnection(peerId);
@@ -121,10 +182,22 @@ class WebRTCService {
           onTimeout: () => throw WebRTCException('setLocalDescription timeout'),
         );
 
-    return {
+    final result = <String, dynamic>{
       'type': 'offer',
       'sdp': offer.sdp,
     };
+
+    // Sign the SDP offer with our Ed25519 signing key
+    try {
+      final signature = await _cryptoService.signSDP(offer.sdp!);
+      result['sdpSignature'] = signature;
+      result['signingPublicKey'] = _cryptoService.signingPublicKeyBase64;
+    } catch (e) {
+      logger.warning(
+          'WebRTCService', 'Failed to sign SDP offer (sending unsigned): $e');
+    }
+
+    return result;
   }
 
   /// Handle an incoming offer and create an answer.
@@ -132,6 +205,16 @@ class WebRTCService {
     String peerId,
     Map<String, dynamic> offer,
   ) async {
+    // Verify incoming SDP offer signature (MITM/TOFU checks)
+    final offerSdp = offer['sdp'] as String;
+    await _verifySdpSignature(
+      peerId: peerId,
+      sdp: offerSdp,
+      payloadSignature: offer['sdpSignature'] as String?,
+      payloadSigningPublicKey: offer['signingPublicKey'] as String?,
+      sdpType: 'offer',
+    );
+
     final connection = await _createConnection(peerId);
 
     // Pre-generate ephemeral keypair BEFORE setRemoteDescription triggers
@@ -144,7 +227,7 @@ class WebRTCService {
     // Set remote description with timeout to prevent hanging
     await connection.pc
         .setRemoteDescription(
-          RTCSessionDescription(offer['sdp'] as String, 'offer'),
+          RTCSessionDescription(offerSdp, 'offer'),
         )
         .timeout(
           WebRTCConstants.operationTimeout,
@@ -165,10 +248,22 @@ class WebRTCService {
           onTimeout: () => throw WebRTCException('setLocalDescription timeout'),
         );
 
-    return {
+    final result = <String, dynamic>{
       'type': 'answer',
       'sdp': answer.sdp,
     };
+
+    // Sign the SDP answer with our Ed25519 signing key
+    try {
+      final signature = await _cryptoService.signSDP(answer.sdp!);
+      result['sdpSignature'] = signature;
+      result['signingPublicKey'] = _cryptoService.signingPublicKeyBase64;
+    } catch (e) {
+      logger.warning(
+          'WebRTCService', 'Failed to sign SDP answer (sending unsigned): $e');
+    }
+
+    return result;
   }
 
   /// Handle an incoming answer to complete connection setup.
@@ -176,6 +271,15 @@ class WebRTCService {
     String peerId,
     Map<String, dynamic> answer,
   ) async {
+    // Verify incoming SDP answer signature (MITM/TOFU checks)
+    await _verifySdpSignature(
+      peerId: peerId,
+      sdp: answer['sdp'] as String,
+      payloadSignature: answer['sdpSignature'] as String?,
+      payloadSigningPublicKey: answer['signingPublicKey'] as String?,
+      sdpType: 'answer',
+    );
+
     final connection = _connections[peerId];
     if (connection == null) {
       throw WebRTCException('No connection found for peer: $peerId');
@@ -194,13 +298,45 @@ class WebRTCService {
   }
 
   /// Add an ICE candidate from signaling.
+  ///
+  /// Verifies the ICE candidate signature if present (TOFU-aware).
   Future<void> addIceCandidate(
     String peerId,
     Map<String, dynamic> candidate,
   ) async {
+    // Verify ICE candidate signature if present
+    final candidateString = candidate['candidate'] as String?;
+    final candidateSignature = candidate['candidateSignature'] as String?;
+    final candidateSigningKey = candidate['signingPublicKey'] as String?;
+
+    if (candidateSignature != null &&
+        candidateSigningKey != null &&
+        candidateString != null) {
+      // Cross-check against trusted key from pair_matched
+      final trustedKey = _trustedPeerSigningKeys[peerId];
+      if (trustedKey != null && trustedKey != candidateSigningKey) {
+        logger.warning('WebRTCService',
+            'ICE candidate signing key mismatch for peer $peerId -- ignoring candidate');
+        return;
+      }
+
+      final verificationKey = trustedKey ?? candidateSigningKey;
+      final candidateBytes = Uint8List.fromList(utf8.encode(candidateString));
+      final isValid = await _cryptoService.verifyData(
+        data: candidateBytes,
+        signatureBase64: candidateSignature,
+        peerSigningPublicKeyBase64: verificationKey,
+      );
+      if (!isValid) {
+        logger.warning('WebRTCService',
+            'ICE candidate signature verification failed for peer $peerId -- ignoring candidate');
+        return;
+      }
+    }
+
     final connection = _connections[peerId];
     if (connection == null) {
-      // Queue candidate — connection is still being set up (handleOffer in progress)
+      // Queue candidate -- connection is still being set up (handleOffer in progress)
       logger.debug('WebRTCService',
           'Queuing ICE candidate for $peerId (connection not ready)');
       _pendingCandidates.putIfAbsent(peerId, () => []).add(candidate);
@@ -211,7 +347,7 @@ class WebRTCService {
     await connection.pc
         .addCandidate(
           RTCIceCandidate(
-            candidate['candidate'] as String?,
+            candidateString,
             candidate['sdpMid'] as String?,
             candidate['sdpMLineIndex'] as int?,
           ),
@@ -454,22 +590,18 @@ class WebRTCService {
     final peerId = connection.peerId;
 
     // ICE candidate handler - emit to stream for race-condition-free handling
+    // Uses async signing: signs the raw candidate string with Ed25519
     connection.pc.onIceCandidate = (candidate) {
       if (candidate.candidate != null) {
-        final message = {
+        final message = <String, dynamic>{
           'type': 'ice_candidate',
           'candidate': candidate.candidate,
           'sdpMid': candidate.sdpMid,
           'sdpMLineIndex': candidate.sdpMLineIndex,
         };
 
-        // Emit to stream (preferred approach - no race conditions)
-        _signalingController
-            .add(SignalingEvent(peerId: peerId, message: message));
-
-        // Also call deprecated callback for backward compatibility
-        // ignore: deprecated_member_use_from_same_package
-        onSignalingMessage?.call(peerId, message);
+        // Sign the raw candidate string (async, fire-and-forget with emission)
+        _signAndEmitIceCandidate(peerId, message, candidate.candidate!);
       }
     };
 
@@ -510,6 +642,33 @@ class WebRTCService {
     connection.pc.onDataChannel = (channel) {
       _setupDataChannel(connection, channel);
     };
+  }
+
+  /// Sign an ICE candidate and emit it to the signaling stream.
+  ///
+  /// Signs the raw candidate string (not the JSON wrapper) to ensure
+  /// byte-exact verification on the receiving end.
+  Future<void> _signAndEmitIceCandidate(
+    String peerId,
+    Map<String, dynamic> message,
+    String candidateString,
+  ) async {
+    try {
+      final candidateBytes = Uint8List.fromList(utf8.encode(candidateString));
+      final signature = await _cryptoService.signData(candidateBytes);
+      message['candidateSignature'] = signature;
+      message['signingPublicKey'] = _cryptoService.signingPublicKeyBase64;
+    } catch (e) {
+      logger.warning('WebRTCService',
+          'Failed to sign ICE candidate (sending unsigned): $e');
+    }
+
+    // Emit to stream (preferred approach - no race conditions)
+    _signalingController.add(SignalingEvent(peerId: peerId, message: message));
+
+    // Also call deprecated callback for backward compatibility
+    // ignore: deprecated_member_use_from_same_package
+    onSignalingMessage?.call(peerId, message);
   }
 
   Future<void> _createDataChannels(_PeerConnection connection) async {

@@ -67,6 +67,7 @@ Future<void> _pumpApp(
         sharedPreferencesProvider.overrideWithValue(prefs),
         notificationServiceProvider
             .overrideWithValue(_TestNotificationService()),
+        bootstrapVerifierProvider.overrideWithValue(null),
         if (mockPairingCode != null)
           pairingCodeProvider.overrideWith((ref) => mockPairingCode),
       ],
@@ -209,6 +210,7 @@ void main() {
             sharedPreferencesProvider.overrideWithValue(prefs),
             notificationServiceProvider
                 .overrideWithValue(_TestNotificationService()),
+            bootstrapVerifierProvider.overrideWithValue(null),
           ],
           child: const ZajelApp(),
         ),

@@ -20,6 +20,7 @@ import type {
   LoginRequest,
   CreateUserRequest,
   ApiResponse,
+  AuthCode,
 } from './types.js';
 
 export class AdminUsersDO implements DurableObject {
@@ -63,6 +64,14 @@ export class AdminUsersDO implements DurableObject {
         return this.handleInit(request);
       }
 
+      if (path === '/auth-codes' && method === 'POST') {
+        return this.handleStoreAuthCode(request);
+      }
+
+      if (path === '/auth-codes/exchange' && method === 'POST') {
+        return this.handleExchangeAuthCode(request);
+      }
+
       return this.jsonResponse({ success: false, error: 'Not found' }, 404);
     } catch (error) {
       console.error('AdminUsersDO error:', error);
@@ -70,6 +79,117 @@ export class AdminUsersDO implements DurableObject {
         { success: false, error: 'Internal server error' },
         500
       );
+    }
+  }
+
+  /**
+   * Store a short-lived authorization code
+   * Called by CF Worker when generating a code for VPS redirect
+   */
+  private async handleStoreAuthCode(request: Request): Promise<Response> {
+    const body = await request.json() as {
+      code: string;
+      payload: JwtPayload;
+      expiresAt: number;
+    };
+
+    if (!body.code || !body.payload || !body.expiresAt) {
+      return this.jsonResponse(
+        { success: false, error: 'Invalid request' },
+        400
+      );
+    }
+
+    const authCode: AuthCode = {
+      code: body.code,
+      payload: body.payload,
+      createdAt: Date.now(),
+      expiresAt: body.expiresAt,
+      used: false,
+    };
+
+    await this.state.storage.put(`authcode:${body.code}`, authCode);
+
+    // Set alarm for cleanup (30 seconds + 5 second buffer)
+    const cleanupDelay = body.expiresAt - Date.now() + 5000;
+    if (cleanupDelay > 0) {
+      await this.state.storage.setAlarm(Date.now() + cleanupDelay);
+    }
+
+    return this.jsonResponse({ success: true });
+  }
+
+  /**
+   * Exchange an authorization code for a JWT token
+   * Called by VPS server via server-to-server request
+   */
+  private async handleExchangeAuthCode(request: Request): Promise<Response> {
+    const body = await request.json() as { code: string };
+
+    if (!body.code) {
+      return this.jsonResponse(
+        { success: false, error: 'Code required' },
+        400
+      );
+    }
+
+    const authCode = await this.state.storage.get<AuthCode>(`authcode:${body.code}`);
+
+    if (!authCode) {
+      return this.jsonResponse(
+        { success: false, error: 'Invalid or expired code' },
+        401
+      );
+    }
+
+    // Check expiration
+    if (Date.now() > authCode.expiresAt) {
+      await this.state.storage.delete(`authcode:${body.code}`);
+      return this.jsonResponse(
+        { success: false, error: 'Code expired' },
+        401
+      );
+    }
+
+    // Check single-use
+    if (authCode.used) {
+      return this.jsonResponse(
+        { success: false, error: 'Code already used' },
+        401
+      );
+    }
+
+    // Mark as used and delete immediately (single-use)
+    await this.state.storage.delete(`authcode:${body.code}`);
+
+    // Generate a new JWT with the stored payload
+    const token = await generateJwt(
+      {
+        sub: authCode.payload.sub,
+        username: authCode.payload.username,
+        role: authCode.payload.role,
+      },
+      this.env.ZAJEL_ADMIN_JWT_SECRET,
+      240 // 4 hours
+    );
+
+    return this.jsonResponse({
+      success: true,
+      data: { token },
+    });
+  }
+
+  /**
+   * Alarm handler for cleaning up expired auth codes
+   */
+  async alarm(): Promise<void> {
+    const now = Date.now();
+    const allKeys = await this.state.storage.list<AuthCode>({ prefix: 'authcode:' });
+
+    for (const [key, authCode] of allKeys.entries()) {
+      if (authCode.expiresAt < now) {
+        await this.state.storage.delete(key);
+      }
     }
   }
 

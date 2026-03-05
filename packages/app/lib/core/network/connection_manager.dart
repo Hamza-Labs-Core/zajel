@@ -329,6 +329,7 @@ class ConnectionManager {
       serverUrl: serverUrl,
       pairingCode: code,
       publicKey: _cryptoService.publicKeyBase64,
+      cryptoService: _cryptoService,
     );
 
     // Update state with sealed class - guaranteed non-null access
@@ -873,6 +874,7 @@ class ConnectionManager {
         case SignalingPairMatched(
             peerCode: final peerCode,
             peerPublicKey: final peerPublicKey,
+            peerSigningPublicKey: final peerSigningPublicKey,
             isInitiator: final isInitiator
           ):
           // Pairing approved by both sides - start WebRTC connection
@@ -885,6 +887,13 @@ class ConnectionManager {
           _codeToStableId[peerCode] = stableId;
           _stableIdToCode[stableId] = peerCode;
           _peers.remove(peerCode); // Remove placeholder under pairing code
+
+          // Store peer signing key from pair_matched for SDP verification.
+          // The WebRTC layer uses the signaling code, so store under both.
+          if (peerSigningPublicKey != null) {
+            _webrtcService.setPeerSigningKey(peerCode, peerSigningPublicKey);
+            _webrtcService.setPeerSigningKey(stableId, peerSigningPublicKey);
+          }
 
           // Check if this is a reconnection (existing trusted peer)
           final existingTrusted = await _trustedPeersStorage.getPeer(stableId);
@@ -1053,6 +1062,10 @@ class ConnectionManager {
         case SignalingLinkTimeout():
           // Link request timed out
           _deviceLinkService.cancelLinkSession();
+          break;
+
+        case SignalingHybridKeyExchange():
+          // ML-KEM hybrid key exchange handled elsewhere
           break;
       }
     } catch (e, stackTrace) {
@@ -1314,6 +1327,7 @@ class ConnectionManager {
       serverUrl: endpoint,
       pairingCode: pairingCode,
       publicKey: publicKey,
+      cryptoService: _cryptoService,
     );
 
     // Listen for rendezvous events from this redirect server
@@ -1410,6 +1424,7 @@ class ConnectionManager {
       serverUrl: endpoint,
       pairingCode: pairingCode,
       publicKey: publicKey,
+      cryptoService: _cryptoService,
     );
 
     // Listen for pairing messages from this redirect server

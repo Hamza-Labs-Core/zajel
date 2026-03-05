@@ -23,6 +23,36 @@ class CryptoConstants {
 
   /// HKDF output length in bytes
   static const int hkdfOutputLength = 32;
+
+  /// ML-KEM-768 public key size in bytes (NIST FIPS 203)
+  static const int mlKem768PublicKeySize = 1184;
+
+  /// ML-KEM-768 ciphertext size in bytes
+  static const int mlKem768CiphertextSize = 1088;
+
+  /// ML-KEM-768 secret (private) key size in bytes
+  static const int mlKem768SecretKeySize = 2400;
+
+  /// ML-KEM-768 shared secret size in bytes
+  static const int mlKem768SharedSecretSize = 32;
+
+  /// Protocol version for classical X25519-only key exchange
+  static const int protocolVersionClassical = 1;
+
+  /// Protocol version for hybrid X25519 + ML-KEM-768 key exchange
+  static const int protocolVersionHybrid = 2;
+
+  /// Current protocol version (what we advertise in signaling)
+  static const int protocolVersionCurrent = protocolVersionHybrid;
+
+  /// HKDF info string for classical X25519-only sessions
+  static const String hkdfInfoClassical = 'zajel_session';
+
+  /// HKDF info string for hybrid X25519 + ML-KEM sessions
+  static const String hkdfInfoHybrid = 'zajel_hybrid_session';
+
+  /// Supported key exchange methods
+  static const List<String> supportedKEMs = ['x25519', 'x25519-mlkem768'];
 }
 
 // =============================================================================

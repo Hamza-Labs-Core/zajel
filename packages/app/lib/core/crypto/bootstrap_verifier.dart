@@ -5,13 +5,19 @@ import 'package:cryptography/cryptography.dart';
 
 import '../config/environment.dart';
 import '../logging/logger_service.dart';
+import 'tuf/metadata_models.dart';
+import 'tuf/tuf_verifier.dart';
 
 /// Verifies Ed25519 signatures on bootstrap server responses.
 ///
 /// The bootstrap server signs `GET /servers` responses with an Ed25519 key.
 /// This class verifies those signatures using a hardcoded public key,
 /// providing transport-agnostic trust that survives TLS CA rotations.
+///
+/// When TUF mode is enabled (Environment.useTufMetadata), delegates
+/// verification to [TufVerifier] for full TUF metadata chain verification.
 class BootstrapVerifier {
+  /// DEPRECATED: These keys will be moved to TUF root metadata.
   static const _productionPublicKey =
       'attUirGAvR2WHcjz00q9lZoQTkWw5QmzJVM0waXwlWQ=';
   static const _qaPublicKey = 'aT6HRI0epsGWdhIX2E2I0h/j/h/9ravxrjl09qnGc/A=';
@@ -21,6 +27,9 @@ class BootstrapVerifier {
 
   final SimplePublicKey _publicKey;
   final Ed25519 _ed25519 = Ed25519();
+
+  /// TUF verifier instance for TUF mode.
+  TufVerifier? _tufVerifier;
 
   BootstrapVerifier._(this._publicKey);
 
@@ -38,6 +47,9 @@ class BootstrapVerifier {
   }
 
   /// Verify the signature and freshness of a bootstrap response.
+  ///
+  /// LEGACY MODE: If TUF is not enabled, verifies Ed25519 signature directly.
+  /// TUF MODE: Use [verifyTuf] instead for full TUF metadata chain verification.
   ///
   /// Returns `true` if:
   /// 1. The Ed25519 signature over [responseBody] is valid
@@ -72,5 +84,55 @@ class BootstrapVerifier {
           'Signature verification threw an exception (returning false): $e');
       return false;
     }
+  }
+
+  /// Verify the full TUF metadata chain and extract verified server list.
+  ///
+  /// This is the TUF-enabled replacement for [verify]. Instead of checking
+  /// a single signature, it verifies the complete TUF metadata chain:
+  /// Root -> Timestamp -> Snapshot -> Targets.
+  ///
+  /// [rootMetadataJson] - Embedded or cached root metadata (trust anchor)
+  /// [timestampJson] - Fetched from GET /tuf/timestamp.json
+  /// [snapshotJson] - Fetched from GET /tuf/snapshot.json
+  /// [targetsJson] - Fetched from GET /tuf/targets.json
+  ///
+  /// Returns the list of verified server entries from the targets metadata,
+  /// or throws [TufVerificationException] if verification fails.
+  Future<List<Map<String, dynamic>>> verifyTuf({
+    required Map<String, dynamic> rootMetadataJson,
+    required Map<String, dynamic> timestampJson,
+    required Map<String, dynamic> snapshotJson,
+    required Map<String, dynamic> targetsJson,
+  }) async {
+    // Initialize TUF verifier if not already done
+    _tufVerifier ??= TufVerifier();
+
+    if (!_tufVerifier!.isBootstrapped) {
+      final rootMetadata = SignedMetadata<RootMetadata>.fromJson(
+        rootMetadataJson,
+        RootMetadata.fromJson,
+      );
+      await _tufVerifier!.bootstrapWithRoot(rootMetadata);
+    }
+
+    final timestamp = SignedMetadata<TimestampMetadata>.fromJson(
+      timestampJson,
+      TimestampMetadata.fromJson,
+    );
+    final snapshot = SignedMetadata<SnapshotMetadata>.fromJson(
+      snapshotJson,
+      SnapshotMetadata.fromJson,
+    );
+    final targets = SignedMetadata<TargetsMetadata>.fromJson(
+      targetsJson,
+      TargetsMetadata.fromJson,
+    );
+
+    return _tufVerifier!.verifyAndExtractTargets(
+      timestamp: timestamp,
+      snapshot: snapshot,
+      targets: targets,
+    );
   }
 }

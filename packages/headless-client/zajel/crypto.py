@@ -26,13 +26,32 @@ from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
+from .ml_kem import (
+    is_mlkem_available,
+    generate_mlkem_keypair,
+    mlkem_encapsulate,
+    mlkem_decapsulate,
+    PROTOCOL_VERSION_CLASSICAL,
+    PROTOCOL_VERSION_HYBRID,
+    PROTOCOL_VERSION_CURRENT,
+    SUPPORTED_KEMS,
+)
+
 logger = logging.getLogger(__name__)
 
 # Constants matching the Dart app
 NONCE_SIZE = 12
 MAC_SIZE = 16
 HKDF_INFO = b"zajel_session"
+HKDF_INFO_CLASSICAL = b"zajel_session"  # alias for cross-platform test compat
 HKDF_INFO_V2 = b"zajel_session_v2"
+HKDF_INFO_HYBRID = b"zajel_hybrid_session"
+
+# ML-KEM-768 sizes (NIST FIPS 203)
+MLKEM768_PUBLIC_KEY_SIZE = 1184
+MLKEM768_SECRET_KEY_SIZE = 2400
+MLKEM768_CIPHERTEXT_SIZE = 1088
+MLKEM768_SHARED_SECRET_SIZE = 32
 HKDF_RATCHET_INFO = b"zajel_ratchet"
 RATCHET_NONCE_SIZE = 32
 GRACE_PERIOD_SECONDS = 30
@@ -40,6 +59,54 @@ DAILY_PREFIX = "day_"
 HOURLY_PREFIX = "hr_"
 DAILY_SALT = "zajel:daily:"
 HOURLY_SALT = "zajel:hourly:"
+
+
+def derive_hybrid_session_key(
+    x25519_shared_secret: bytes,
+    mlkem_shared_secret: bytes,
+) -> bytes:
+    """Derive a hybrid session key from X25519 + ML-KEM shared secrets.
+
+    Implements: session_key = HKDF-SHA256(
+        IKM = x25519_shared_secret || mlkem_shared_secret,
+        salt = b"",
+        info = "zajel_hybrid_session",
+        L = 32 bytes
+    )
+    """
+    if len(x25519_shared_secret) != 32:
+        raise ValueError("X25519 shared secret must be 32 bytes")
+    if len(mlkem_shared_secret) != MLKEM768_SHARED_SECRET_SIZE:
+        raise ValueError(
+            f"ML-KEM shared secret must be {MLKEM768_SHARED_SECRET_SIZE} bytes"
+        )
+    combined = x25519_shared_secret + mlkem_shared_secret
+    hkdf = HKDF(
+        algorithm=SHA256(),
+        length=32,
+        salt=b"",
+        info=HKDF_INFO_HYBRID,
+    )
+    return hkdf.derive(combined)
+
+
+def negotiate_protocol_version(
+    our_version: int,
+    peer_version: int,
+    peer_has_pq_key: bool,
+) -> int:
+    """Negotiate the protocol version between two peers.
+
+    Returns the highest common version, falling back to classical
+    if either peer doesn't support hybrid or no PQ key is available.
+    """
+    if (
+        our_version >= PROTOCOL_VERSION_HYBRID
+        and peer_version >= PROTOCOL_VERSION_HYBRID
+        and peer_has_pq_key
+    ):
+        return PROTOCOL_VERSION_HYBRID
+    return PROTOCOL_VERSION_CLASSICAL
 
 
 class CryptoService:
@@ -66,10 +133,34 @@ class CryptoService:
         self._stable_id: Optional[str] = None
         self._stable_id_path: Optional[str] = stable_id_path
 
+        # ML-KEM-768 post-quantum key exchange fields
+        self._mlkem_public_key: Optional[bytes] = None
+        self._mlkem_private_key = None  # MLKEM768PrivateKey or None
+        self._mlkem_available: bool = False
+
+        # Store peer ML-KEM public keys
+        self._peer_mlkem_public_keys: dict[str, bytes] = {}
+
+        # Protocol version tracking per peer
+        self._peer_protocol_versions: dict[str, int] = {}
+
     def initialize(self) -> None:
-        """Generate a new X25519 key pair and load/generate stable ID."""
+        """Generate X25519 and (optionally) ML-KEM-768 key pairs, and load/generate stable ID."""
         self._private_key = X25519PrivateKey.generate()
         self._public_key_bytes = self._private_key.public_key().public_bytes_raw()
+
+        # Generate ML-KEM identity keys if available
+        if is_mlkem_available():
+            try:
+                self._mlkem_public_key, self._mlkem_private_key = generate_mlkem_keypair()
+                self._mlkem_available = True
+                logger.info("ML-KEM-768 initialized successfully")
+            except Exception as e:
+                self._mlkem_available = False
+                logger.warning("Failed to initialize ML-KEM: %s. Hybrid mode disabled.", e)
+        else:
+            self._mlkem_available = False
+
         self._load_or_generate_stable_id()
 
     @property
@@ -83,6 +174,103 @@ class CryptoService:
     def public_key_base64(self) -> str:
         """Get our public key as base64."""
         return base64.b64encode(self.public_key_bytes).decode()
+
+    @property
+    def mlkem_available(self) -> bool:
+        """Whether ML-KEM hybrid key exchange is available."""
+        return self._mlkem_available
+
+    @property
+    def mlkem_public_key_base64(self) -> Optional[str]:
+        """Get our ML-KEM-768 public key as base64, or None if unavailable."""
+        if self._mlkem_public_key is None:
+            return None
+        return base64.b64encode(self._mlkem_public_key).decode()
+
+    def get_peer_protocol_version(self, peer_id: str) -> Optional[int]:
+        """Get the protocol version for a specific peer's session."""
+        return self._peer_protocol_versions.get(peer_id)
+
+    def establish_hybrid_session(
+        self,
+        peer_id: str,
+        peer_x25519_public_key_b64: str,
+        peer_mlkem_public_key_b64: str,
+        role: str = "initiator",
+        mlkem_ciphertext_b64: Optional[str] = None,
+    ) -> tuple[bytes, Optional[bytes]]:
+        """Establish a hybrid X25519 + ML-KEM-768 session.
+
+        Args:
+            peer_id: The peer's identifier.
+            peer_x25519_public_key_b64: Peer's X25519 public key (base64).
+            peer_mlkem_public_key_b64: Peer's ML-KEM-768 public key (base64).
+            role: "initiator" (encapsulate) or "responder" (decapsulate).
+            mlkem_ciphertext_b64: ML-KEM ciphertext (base64, required for responder).
+
+        Returns:
+            Tuple of (session_key, mlkem_ciphertext_bytes).
+            For initiator: returns the ciphertext to send to peer.
+            For responder: returns None as ciphertext.
+        """
+        if self._private_key is None or self._mlkem_private_key is None:
+            raise RuntimeError("CryptoService not initialized")
+
+        if role not in ("initiator", "responder"):
+            raise ValueError(f"Invalid role: {role}")
+
+        # 1. X25519 ECDH
+        peer_x25519_bytes = base64.b64decode(peer_x25519_public_key_b64)
+        self._peer_public_keys[peer_id] = peer_x25519_bytes
+        peer_x25519_pub = X25519PublicKey.from_public_bytes(peer_x25519_bytes)
+        x25519_shared_secret = self._private_key.exchange(peer_x25519_pub)
+
+        # 2. ML-KEM encapsulation or decapsulation
+        peer_mlkem_bytes = base64.b64decode(peer_mlkem_public_key_b64)
+        self._peer_mlkem_public_keys[peer_id] = peer_mlkem_bytes
+
+        mlkem_ciphertext_return: Optional[bytes] = None
+
+        if role == "initiator":
+            mlkem_ciphertext, mlkem_shared_secret = mlkem_encapsulate(
+                peer_mlkem_bytes
+            )
+            mlkem_ciphertext_return = mlkem_ciphertext
+        else:
+            if mlkem_ciphertext_b64 is None:
+                raise ValueError("mlkem_ciphertext_b64 required for responder role")
+            mlkem_ciphertext = base64.b64decode(mlkem_ciphertext_b64)
+            mlkem_shared_secret = mlkem_decapsulate(
+                mlkem_ciphertext, self._mlkem_private_key
+            )
+
+        # 3. Combine secrets: X25519 || ML-KEM
+        combined_secret = x25519_shared_secret + mlkem_shared_secret
+
+        # 4. Derive session key via HKDF with hybrid info string
+        session_key = HKDF(
+            algorithm=SHA256(),
+            length=32,
+            salt=b"",
+            info=HKDF_INFO_HYBRID,
+        ).derive(combined_secret)
+
+        self._session_keys[peer_id] = session_key
+        self._peer_protocol_versions[peer_id] = PROTOCOL_VERSION_HYBRID
+        self._seen_nonces[peer_id] = set()
+
+        # Diagnostic logging
+        x25519_hash = hashlib.sha256(x25519_shared_secret).hexdigest()[:16]
+        mlkem_hash = hashlib.sha256(mlkem_shared_secret).hexdigest()[:16]
+        session_hash = hashlib.sha256(session_key).hexdigest()[:16]
+
+        logger.info(
+            "establish_hybrid_session(%s, role=%s): "
+            "x25519Hash=%s mlKemHash=%s sessionHash=%s",
+            peer_id, role, x25519_hash, mlkem_hash, session_hash,
+        )
+
+        return session_key, mlkem_ciphertext_return
 
     @property
     def stable_id(self) -> str:

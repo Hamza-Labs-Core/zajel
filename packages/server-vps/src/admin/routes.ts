@@ -38,28 +38,61 @@ export class AdminRoutes {
       return true;
     }
 
-    // Handle token from URL (set cookie and redirect)
+    // Handle authorization code from URL (exchange for token, set cookie, redirect)
     if (path === '/admin/' || path === '/admin') {
       const url = new URL(req.url || '/', `http://${req.headers.host}`);
-      const queryToken = url.searchParams.get('token');
+      const queryCode = url.searchParams.get('code');
 
-      if (queryToken) {
-        // Verify token before setting cookie
-        const payload = verifyJwt(queryToken, this.config.jwtSecret);
-        if (payload) {
+      if (queryCode) {
+        try {
+          // Exchange code for JWT token via CF admin server-to-server call
+          if (!this.config.cfAdminUrl) {
+            throw new Error('CF admin URL not configured');
+          }
+
+          const exchangeUrl = `${this.config.cfAdminUrl}/admin/api/auth/exchange`;
+          const exchangeRes = await fetch(exchangeUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: queryCode }),
+          });
+
+          if (!exchangeRes.ok) {
+            const errorText = await exchangeRes.text();
+            console.error('[VPS Admin] Code exchange failed:', exchangeRes.status, errorText);
+            throw new Error('Code exchange failed');
+          }
+
+          const exchangeData = await exchangeRes.json() as { success: boolean; data?: { token: string } };
+          if (!exchangeData.success || !exchangeData.data?.token) {
+            console.error('[VPS Admin] Invalid exchange response:', exchangeData);
+            throw new Error('Invalid exchange response');
+          }
+
+          const token = exchangeData.data.token;
+
+          // Verify the received token
+          const payload = verifyJwt(token, this.config.jwtSecret);
+          if (!payload) {
+            console.error('[VPS Admin] Received invalid token from exchange');
+            throw new Error('Invalid token from exchange');
+          }
+
+          // Set auth cookie and redirect to remove code from URL
           const isSecure = req.headers['x-forwarded-proto'] === 'https'
             || (req.connection as { encrypted?: boolean })?.encrypted === true;
-          setAuthCookie(res, queryToken, isSecure);
-          // Redirect to remove token from URL
+          setAuthCookie(res, token, isSecure);
           res.writeHead(302, { Location: '/admin/' });
           res.end();
           return true;
-        }
-        // Token invalid/expired — redirect to CF admin if configured
-        if (this.config.cfAdminUrl) {
-          res.writeHead(302, { Location: this.config.cfAdminUrl });
-          res.end();
-          return true;
+        } catch (error) {
+          console.error('[VPS Admin] Authorization code exchange error:', error);
+          // Redirect to CF admin for re-authentication
+          if (this.config.cfAdminUrl) {
+            res.writeHead(302, { Location: this.config.cfAdminUrl });
+            res.end();
+            return true;
+          }
         }
       }
 

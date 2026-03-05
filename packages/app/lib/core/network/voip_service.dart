@@ -224,8 +224,8 @@ class VoIPService extends ChangeNotifier {
       final offer = await _peerConnection!.createOffer();
       await _peerConnection!.setLocalDescription(offer);
 
-      // Send offer via signaling
-      _signaling.sendCallOffer(callId, peerId, offer.sdp!, withVideo);
+      // Send offer via signaling (with SDP signature)
+      await _signaling.sendCallOffer(callId, peerId, offer.sdp!, withVideo);
 
       // Start ringing timeout
       _startRingingTimeout();
@@ -275,8 +275,9 @@ class VoIPService extends ChangeNotifier {
       final answer = await _peerConnection!.createAnswer();
       await _peerConnection!.setLocalDescription(answer);
 
-      // Send answer via signaling
-      _signaling.sendCallAnswer(callId, _currentCall!.peerId, answer.sdp!);
+      // Send answer via signaling (with SDP signature)
+      await _signaling.sendCallAnswer(
+          callId, _currentCall!.peerId, answer.sdp!);
     } catch (e) {
       logger.error(_tag, 'Failed to accept call', e);
       await _cleanup();
