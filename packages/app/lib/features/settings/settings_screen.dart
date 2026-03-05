@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/logging/logger_service.dart';
 import '../../core/providers/app_providers.dart';
+import '../updater/widgets/auto_update_settings.dart';
 import '../updater/widgets/update_settings_section.dart';
 
 /// Settings screen for app configuration.
@@ -61,6 +62,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           if (_isDesktop) ...[
             const SizedBox(height: 24),
             const UpdateSettingsSection(),
+            const AutoUpdateSettings(),
           ],
           const SizedBox(height: 24),
           _buildSection(
@@ -131,6 +133,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ref.read(privacyScreenProvider.notifier).setEnabled(value);
                 },
               ),
+              _buildDiagnosticsTile(),
             ],
           ),
           const SizedBox(height: 24),
@@ -309,6 +312,51 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
       ],
+    );
+  }
+
+  Widget _buildDiagnosticsTile() {
+    return SwitchListTile(
+      secondary: const Icon(Icons.analytics_outlined),
+      title: Row(
+        children: [
+          const Expanded(child: Text('Send Anonymous Diagnostics')),
+          IconButton(
+            icon: const Icon(Icons.info_outline, size: 20),
+            tooltip: 'Learn more',
+            onPressed: () => _showDiagnosticsInfoDialog(context),
+          ),
+        ],
+      ),
+      subtitle: const Text(
+        'Help improve Zajel by sharing anonymous crash reports and performance data',
+      ),
+      value: ref.watch(diagnosticsEnabledProvider),
+      onChanged: (value) {
+        ref.read(diagnosticsEnabledProvider.notifier).setEnabled(value);
+      },
+    );
+  }
+
+  Future<void> _showDiagnosticsInfoDialog(BuildContext context) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('About Diagnostics'),
+        content: const Text(
+          'Zajel collects anonymous, non-identifying crash reports and '
+          'performance metrics to improve the app.\n\n'
+          'No personal data, IP addresses, or message content is ever '
+          'collected. A random session ID is generated on each app launch '
+          'and cannot be linked to you.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
     );
   }
 

@@ -35,6 +35,15 @@
   <img src="docs/images/screenshot-android-contacts.png" alt="Contacts" width="200">
   &nbsp;&nbsp;
   <img src="docs/images/screenshot-android-settings.png" alt="Settings" width="200">
+
+</p>
+
+### Screenshots (Linux Desktop)
+
+<p align="center">
+  <img src="docs/images/screenshot-linux-onboarding.png" alt="Onboarding" width="420">
+  &nbsp;&nbsp;
+  <img src="docs/images/screenshot-linux-settings.png" alt="Settings" width="420">
 </p>
 
 ## Packages

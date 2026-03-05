@@ -2,10 +2,10 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    include: ['tests/**/*.test.ts'],
+    include: ['tests/unit/**/*.test.ts'],
     testTimeout: 30000,
     maxWorkers: 1,
-    isolate: false,
+    isolate: true,
     globals: true,
     reporters: ['verbose'],
   },

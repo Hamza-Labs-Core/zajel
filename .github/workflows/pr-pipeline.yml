@@ -1901,8 +1901,8 @@ jobs:
           fi
           echo "All E2E tests passed."
 
-      - name: Collect logs on failure
-        if: failure()
+      - name: Collect logs
+        if: always()
         timeout-minutes: 2
         run: |
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
@@ -1911,8 +1911,22 @@ jobs:
           timeout 10 adb -s emulator-5554 logcat -d > test-artifacts/logcat-emu1.txt 2>&1 || true
           cp /tmp/appium*.log test-artifacts/ 2>/dev/null || true
           cat /tmp/coturn.log >> test-artifacts/coturn.log 2>/dev/null || true
-          # Collect E2E failure artifacts (screenshots, page sources)
+          # Collect E2E failure artifacts (screenshots, page sources, headless logs)
           cp ${{ github.workspace }}/test-artifacts/e2e/* test-artifacts/ 2>/dev/null || true
+
+      - name: Collect VPS server logs
+        if: always()
+        timeout-minutes: 1
+        continue-on-error: true
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ vars.QA_VPS_IP }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            echo "=== VPS Server Logs (last 500 lines) ==="
+            pm2 logs zajel-server-qa --lines 500 --nostream 2>&1 | tail -500
 
       - name: Stop emulators
         if: always()
@@ -1924,12 +1938,13 @@ jobs:
           pkill -9 qemu-system-x86_64 2>/dev/null || true
 
       - name: Upload test artifacts
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-test-artifacts
           path: test-artifacts/
           retention-days: 3
+          if-no-files-found: ignore
 
   # ============================================
   # PHASE 5b: Linux E2E Tests (Xvfb + Shelf HTTP + headless client)

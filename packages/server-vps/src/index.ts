@@ -26,6 +26,11 @@ import { getClientIp } from './utils/client-ip.js';
 import { createAdminModule, type AdminModule } from './admin/index.js';
 import { requireAuth } from './admin/auth.js';
 import { loadBuildManifest } from './identity/build-manifest.js';
+import { startMetricsPush, type MetricsPushHandle } from './admin/metrics-push.js';
+import { SecurityEventReporter } from './security/security-events.js';
+import { QuarantineManager } from './security/quarantine.js';
+import { DDoSDetector } from './security/ddos-detector.js';
+import { BruteForceDetector } from './security/brute-force-detector.js';
 
 
 export interface ZajelServer {
@@ -286,6 +291,34 @@ export async function createZajelServer(
   // Set the reference for HTTP handler (used by /metrics endpoint)
   clientHandlerRef = clientHandler;
 
+  // ── Security modules ─────────────────────────────────────────────────
+  // Instantiate SecurityEventReporter, QuarantineManager, DDoSDetector,
+  // and BruteForceDetector. Wire them into the client handler and admin
+  // WebSocket handler for live request handling.
+
+  const securityReporter = new SecurityEventReporter();
+  const quarantineManager = new QuarantineManager();
+  const ddosDetector = new DDoSDetector(identity.serverId);
+  const bruteForceDetector = new BruteForceDetector({
+    autoQuarantineEnabled: true,
+  });
+
+  // Wire cross-references between security modules
+  ddosDetector.setSecurityReporter(securityReporter);
+  bruteForceDetector.setSecurityReporter(securityReporter);
+  bruteForceDetector.setQuarantineManager(quarantineManager);
+
+  // Wire security modules into client handler
+  clientHandler.setSecurityReporter(securityReporter);
+  clientHandler.setQuarantineManager(quarantineManager);
+  clientHandler.setBruteForceDetector(bruteForceDetector);
+
+  // Start periodic cleanup for quarantine and brute force detector
+  quarantineManager.startCleanup();
+  bruteForceDetector.startCleanup();
+
+  console.log('[Zajel] Security modules initialized (reporter, quarantine, ddos, brute-force)');
+
   // Handle WebSocket upgrades
   httpServer.on('upgrade', (request: IncomingMessage, socket, head) => {
     const pathname = new URL(request.url || '/', `http://${request.headers.host}`).pathname;
@@ -317,6 +350,15 @@ export async function createZajelServer(
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     const clientIp = getClientIp(req);
 
+    // Record connection for DDoS detection (US-7.3)
+    ddosDetector.recordConnection();
+
+    // Quarantine enforcement (US-7.4): reject quarantined sources early
+    if (clientHandler.isSourceQuarantined(clientIp)) {
+      ws.close(4403, 'Quarantined');
+      return;
+    }
+
     // Check total connection limit
     const totalConnections = clientHandler.clientCount + clientHandler.signalingClientCount;
     if (totalConnections >= CONNECTION_LIMITS.MAX_TOTAL_CONNECTIONS) {
@@ -341,7 +383,7 @@ export async function createZajelServer(
     ws.on('message', async (data) => {
       // Track message for admin metrics
       adminModuleRef?.recordMessage();
-      await clientHandler.handleMessage(ws, data.toString());
+      await clientHandler.handleMessage(ws, data.toString(), clientIp);
     });
 
     // Handle disconnect
@@ -424,6 +466,37 @@ export async function createZajelServer(
     console.log('[Zajel] Admin dashboard enabled at /admin/');
   }
 
+  // Start metrics push to diagnostics-cf (if configured)
+  let metricsPush: MetricsPushHandle | null = null;
+  const diagnosticsUrl = process.env['ZAJEL_DIAGNOSTICS_URL'];
+  const pushSecret = process.env['DIAGNOSTICS_PUSH_SECRET'];
+  if (diagnosticsUrl && pushSecret) {
+    metricsPush = startMetricsPush(adminModule.metricsCollector, {
+      diagnosticsUrl,
+      pushSecret,
+      serverId: identity.serverId,
+      region: config.network.region || 'unknown',
+      getGossipLatency: () => federation.getRttStats(),
+    });
+  } else {
+    console.log('[Zajel] Metrics push disabled (ZAJEL_DIAGNOSTICS_URL or DIAGNOSTICS_PUSH_SECRET not set)');
+  }
+
+  // Start security event push to diagnostics-cf (reuses same env vars as metrics push)
+  if (diagnosticsUrl && pushSecret) {
+    securityReporter.start({
+      diagnosticsUrl,
+      pushSecret,
+      serverId: identity.serverId,
+      region: config.network.region || 'unknown',
+    });
+  }
+
+  // Wire DDoS detector into admin WebSocket handler's 1-second metrics loop
+  if (adminModule.wsHandler) {
+    adminModule.wsHandler.setDDoSDetector(ddosDetector);
+  }
+
   // Set up cleanup interval
   const cleanupInterval = setInterval(async () => {
     try {
@@ -462,6 +535,14 @@ export async function createZajelServer(
     console.log('[Zajel] Shutting down...');
 
     clearInterval(cleanupInterval);
+
+    // Stop metrics push
+    metricsPush?.stop();
+
+    // Stop security modules
+    securityReporter.stop();
+    quarantineManager.shutdown();
+    bruteForceDetector.shutdown();
 
     // Stop admin module
     adminModule.shutdown();

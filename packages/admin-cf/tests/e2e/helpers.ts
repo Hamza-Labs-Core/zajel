@@ -97,6 +97,66 @@ export interface ExchangeCodeData {
   token: string;
 }
 
+export interface ErrorAggregate {
+  errorSignature: string;
+  category: string;
+  totalCount: number;
+  versions: string[];
+  platforms: string[];
+  firstSeen: number;
+  lastSeen: number;
+  sampleMessage: string;
+}
+
+export interface ErrorSummary {
+  totalErrors: number;
+  rateChangePercent: number;
+  regressionAlerts: number;
+  highestSeverity: string;
+}
+
+export interface ErrorsData {
+  summary: ErrorSummary;
+  errors: ErrorAggregate[];
+  range: string;
+}
+
+export interface Regression {
+  errorSignature: string;
+  category: string;
+  currentVersion: string;
+  previousVersion: string;
+  currentRate: number;
+  previousRate: number;
+  multiplier: number;
+  currentTotal: number;
+  previousTotal: number;
+  firstDetected: number;
+  sampleMessage: string;
+}
+
+export interface DeploymentMarker {
+  version: string;
+  timestamp: number;
+}
+
+export interface ErrorTrendsData {
+  timestamps: number[];
+  series: Record<string, number[]>;
+  deployments: DeploymentMarker[];
+  range: string;
+  bucketSize: string;
+}
+
+export interface RegressionsData {
+  regressions: Regression[];
+  currentVersion: string;
+  previousVersion: string;
+  window: string;
+  threshold: number;
+  computedAt: number;
+}
+
 // --- Admin API Client ---
 
 export class AdminApiClient {
@@ -259,6 +319,60 @@ export class AdminApiClient {
       headers.set('Authorization', `Bearer ${this.token}`);
     }
     return fetch(url, { ...options, headers });
+  }
+
+  // --- Errors ---
+
+  async listErrors(range?: string): Promise<Response> {
+    const query = range ? `?range=${encodeURIComponent(range)}` : '';
+    return fetch(`${this.baseUrl}/admin/api/errors${query}`, {
+      method: 'GET',
+      headers: this.headers(),
+    });
+  }
+
+  async listErrorsNoAuth(): Promise<Response> {
+    return fetch(`${this.baseUrl}/admin/api/errors`, {
+      method: 'GET',
+    });
+  }
+
+  // --- Error Trends ---
+
+  async getErrorTrends(range?: string, category?: string): Promise<Response> {
+    const params = new URLSearchParams();
+    if (range) params.set('range', range);
+    if (category) params.set('category', category);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return fetch(`${this.baseUrl}/admin/api/errors/trends${query}`, {
+      method: 'GET',
+      headers: this.headers(),
+    });
+  }
+
+  async getErrorTrendsNoAuth(): Promise<Response> {
+    return fetch(`${this.baseUrl}/admin/api/errors/trends`, {
+      method: 'GET',
+    });
+  }
+
+  // --- Regressions ---
+
+  async getErrorRegressions(window?: string, threshold?: number): Promise<Response> {
+    const params = new URLSearchParams();
+    if (window) params.set('window', window);
+    if (threshold !== undefined) params.set('threshold', String(threshold));
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return fetch(`${this.baseUrl}/admin/api/errors/regressions${query}`, {
+      method: 'GET',
+      headers: this.headers(),
+    });
+  }
+
+  async getErrorRegressionsNoAuth(): Promise<Response> {
+    return fetch(`${this.baseUrl}/admin/api/errors/regressions`, {
+      method: 'GET',
+    });
   }
 
   // --- Raw requests ---

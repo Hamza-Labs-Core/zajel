@@ -21,7 +21,10 @@ import 'core/services/notification_listener_service.dart';
 import 'core/services/pair_request_handler.dart';
 import 'core/services/voip_call_handler.dart';
 import 'features/channels/providers/channel_providers.dart';
+import 'features/updater/providers/auto_update_providers.dart';
 import 'features/groups/providers/group_providers.dart';
+import 'features/updater/models/update_check_result.dart';
+import 'features/updater/models/update_state.dart';
 import 'features/updater/services/update_rollback_service.dart';
 import 'features/updater/services/updater_launcher.dart';
 import 'shared/theme/app_theme.dart';
@@ -121,6 +124,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   StreamSubscription? _signalingReconnectSubscription;
   ProviderSubscription? _peerStatusSubscription;
   ProviderSubscription? _voipSubscription;
+  ProviderSubscription? _updateStateSubscription;
 
   @override
   void initState() {
@@ -128,6 +132,16 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     WidgetsBinding.instance.addObserver(this);
     _buildServices();
     _initialize();
+
+    // Register keyboard handler for idle detection on desktop
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      HardwareKeyboard.instance.addHandler(_onKeyEventForIdleDetector);
+    }
+  }
+
+  bool _onKeyEventForIdleDetector(KeyEvent event) {
+    ref.read(idleDetectorProvider).onUserActivity();
+    return false; // Don't consume the event
   }
 
   void _buildServices() {
@@ -397,6 +411,11 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       setState(() => _initialized = true);
     }
 
+    // Desktop: check for rollback notification after UI is ready
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      _checkRollbackNotification();
+    }
+
     try {
       await _initService.connectSignaling();
       logger.info('ZajelApp', 'Signaling connection complete');
@@ -407,6 +426,12 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     _signalingReconnectSubscription = _initService.setupSignalingReconnect(
       isDisposed: () => _disposed,
     );
+
+    // Desktop: wire auto-update service and background update check
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      _setupAutoUpdateService();
+      unawaited(_startBackgroundUpdateCheck());
+    }
   }
 
   void _setupPeerStatusNotifications() {
@@ -442,6 +467,90 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     });
   }
 
+  void _setupAutoUpdateService() {
+    // Eagerly create the auto-update service
+    final autoUpdateService = ref.read(autoUpdateServiceProvider);
+
+    // Listen to update state changes to drive the auto-update service
+    _updateStateSubscription =
+        ref.listenManual(updateStateProvider, (previous, next) {
+      if (next.status == UpdateStatus.ready) {
+        autoUpdateService.onUpdateReady();
+      } else {
+        autoUpdateService.onUpdateNotReady();
+      }
+    });
+
+    // Listen to auto-install preference changes
+    ref.listenManual(autoInstallUpdatesProvider, (previous, next) {
+      autoUpdateService.setEnabled(next);
+    });
+  }
+
+  Future<void> _startBackgroundUpdateCheck() async {
+    try {
+      final supportsAutoUpdate = ref.read(supportsAutoUpdateProvider);
+      final backgroundEnabled = ref.read(backgroundDownloadEnabledProvider);
+      if (!supportsAutoUpdate || !backgroundEnabled) return;
+
+      final releaseService = ref.read(githubReleaseServiceProvider);
+      final result = await releaseService.checkForUpdate(Environment.version);
+      if (result is! UpdateCheckAvailable) return;
+
+      final release = releaseService.cachedRelease;
+      if (release == null) return;
+
+      final platformName = Platform.isWindows
+          ? 'windows'
+          : Platform.isMacOS
+              ? 'macos'
+              : 'linux';
+
+      final orchestrator = ref.read(updateOrchestratorProvider);
+      await orchestrator.checkAndPrepare(
+        release: release,
+        platformName: platformName,
+      );
+
+      logger.info('ZajelApp', 'Background update check complete');
+    } catch (e) {
+      logger.warning('ZajelApp', 'Background update check failed: $e');
+    }
+  }
+
+  void _checkRollbackNotification() {
+    final launcher = UpdaterLauncher();
+    final result = UpdateRollbackService.getRollbackResult(launcher: launcher);
+    if (result == null) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = rootNavigatorKey.currentContext;
+      if (ctx == null) return;
+      final messenger = ScaffoldMessenger.maybeOf(ctx);
+      if (messenger == null) return;
+
+      final wasInterrupted = result.status == 'interrupted_recovery';
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            wasInterrupted
+                ? 'An interrupted update was detected and rolled back to '
+                    'version ${result.previousVersion}.'
+                : 'Update to version ${result.targetVersion} was rolled back '
+                    'to version ${result.previousVersion}.',
+          ),
+          duration: const Duration(seconds: 8),
+          action: SnackBarAction(
+            label: 'Dismiss',
+            onPressed: () {},
+          ),
+        ),
+      );
+
+      UpdateRollbackService.clearRollbackFlag(launcher: launcher);
+    });
+  }
+
   static const _privacyChannel = MethodChannel('com.zajel.zajel/privacy');
 
   Future<void> _syncAndroidSecureFlag() async {
@@ -464,6 +573,10 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
 
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      HardwareKeyboard.instance.removeHandler(_onKeyEventForIdleDetector);
+    }
+
     _fileTransferListener.dispose();
     _pairRequestHandler.dispose();
     _linkRequestHandler.dispose();
@@ -472,6 +585,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     _signalingReconnectSubscription?.cancel();
     _peerStatusSubscription?.close();
     _voipSubscription?.close();
+    _updateStateSubscription?.close();
 
     if (!_disposed) {
       _disposed = true;
@@ -515,7 +629,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       );
     }
 
-    final app = MaterialApp.router(
+    final materialApp = MaterialApp.router(
       title: 'Zajel',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
@@ -523,6 +637,17 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       themeMode: ref.watch(themeModeProvider),
       routerConfig: appRouter,
     );
+
+    // Wrap with Listener on desktop to feed pointer events to IdleDetector
+    final app = (Platform.isWindows || Platform.isLinux || Platform.isMacOS)
+        ? Listener(
+            onPointerDown: (_) =>
+                ref.read(idleDetectorProvider).onUserActivity(),
+            onPointerMove: (_) =>
+                ref.read(idleDetectorProvider).onUserActivity(),
+            child: materialApp,
+          )
+        : materialApp;
 
     if (!_showPrivacyScreen) return app;
 

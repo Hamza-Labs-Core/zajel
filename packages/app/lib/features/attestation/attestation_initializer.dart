@@ -180,7 +180,6 @@ class AttestationInitializer {
   }) {
     final detector = _createDetector();
     final isStore = detector?.isStoreManaged() ?? false;
-    final supportsAutoUpdate = detector?.supportsAutoUpdate() ?? false;
 
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(
@@ -191,20 +190,6 @@ class AttestationInitializer {
           storeName: detector?.storeName(),
           storeDeepLink: detector?.storeDeepLink(),
           storeWebUrl: detector?.storeWebUrl(),
-          // On desktop non-store installs, provide a callback placeholder.
-          // The actual orchestrator integration will be wired by US-3/US-7
-          // when UpdateOrchestrator is available.
-          onDownloadAndInstall: supportsAutoUpdate
-              ? () async {
-                  throw UnimplementedError(
-                    'In-app update installation will be available in a future release. '
-                    'Please use the download link below.',
-                  );
-                }
-              : null,
-          fallbackUrl: supportsAutoUpdate
-              ? 'https://github.com/AhmedBaset/zajel/releases/latest'
-              : null,
         ),
       ),
       (_) => false,

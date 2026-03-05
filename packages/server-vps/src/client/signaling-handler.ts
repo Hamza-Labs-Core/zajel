@@ -8,9 +8,11 @@
  * Device linking has been further extracted to LinkHandler.
  */
 
+import { createHash } from 'crypto';
 import type { WebSocket } from 'ws';
 import { logger } from '../utils/logger.js';
 import { CRYPTO, PAIRING, PAIRING_CODE, ENTROPY, CALL_SIGNALING } from '../constants.js';
+import type { BruteForceDetector } from '../security/brute-force-detector.js';
 import type {
   PendingPairRequest,
   EntropyMetrics,
@@ -64,6 +66,9 @@ export class SignalingHandler {
   private readonly pairRequestTimeout: number;
   private readonly pairRequestWarningTime: number;
 
+  // Brute force detector (optional — injected after construction)
+  private bruteForceDetector: BruteForceDetector | null = null;
+
   constructor(deps: SignalingHandlerDeps) {
     this.send = deps.send;
     this.sendError = deps.sendError;
@@ -71,6 +76,13 @@ export class SignalingHandler {
     this.getPairingCodeRedirects = deps.getPairingCodeRedirects;
     this.pairRequestTimeout = deps.pairRequestTimeout;
     this.pairRequestWarningTime = deps.pairRequestWarningTime;
+  }
+
+  /**
+   * Set the brute force detector for tracking failed pair attempts.
+   */
+  setBruteForceDetector(detector: BruteForceDetector): void {
+    this.bruteForceDetector = detector;
   }
 
   /**
@@ -229,6 +241,7 @@ export class SignalingHandler {
     const requesterCode = this.wsToPairingCode.get(ws);
 
     if (!requesterCode) {
+      logger.warn(`[Pairing] pair_request rejected: ws not registered (target=${logger.pairingCode(targetCode || '?')}, activeCodes=${this.pairingCodeToWs.size})`);
       this.sendError(ws, 'Not registered. Send register message first.');
       return;
     }
@@ -245,6 +258,7 @@ export class SignalingHandler {
     }
 
     if (targetCode === requesterCode) {
+      logger.warn(`[Pairing] pair_request rejected: self-pairing (code=${logger.pairingCode(requesterCode)})`);
       this.send(ws, {
         type: 'pair_error',
         error: 'Pair request could not be processed',
@@ -255,6 +269,14 @@ export class SignalingHandler {
     const targetWs = this.pairingCodeToWs.get(targetCode);
 
     if (!targetWs) {
+      logger.warn(`[Pairing] pair_request rejected: target not found (requester=${logger.pairingCode(requesterCode)}, target=${logger.pairingCode(targetCode)}, activeCodes=${this.pairingCodeToWs.size}, knownCodes=[${Array.from(this.pairingCodeToWs.keys()).map(c => logger.pairingCode(c)).join(',')}])`);
+      // Record failed pair attempt for brute force detection (US-7.4)
+      if (this.bruteForceDetector) {
+        const sourceHash = createHash('sha256').update(requesterCode).digest('hex').slice(0, 16);
+        const targetCodeHash = createHash('sha256').update(targetCode).digest('hex').slice(0, 16);
+        this.bruteForceDetector.recordFailure(sourceHash, targetCodeHash);
+      }
+
       this.send(ws, {
         type: 'pair_error',
         error: 'Pair request could not be processed',
@@ -264,6 +286,7 @@ export class SignalingHandler {
 
     const requesterPublicKey = this.pairingCodeToPublicKey.get(requesterCode);
     if (!requesterPublicKey) {
+      logger.warn(`[Pairing] pair_request rejected: no public key for requester (requester=${logger.pairingCode(requesterCode)})`);
       this.send(ws, {
         type: 'pair_error',
         error: 'Pair request could not be processed',
@@ -271,6 +294,7 @@ export class SignalingHandler {
       return;
     }
 
+    logger.pairingEvent('request', { requester: requesterCode, target: targetCode });
     this.processPairRequest(requesterCode, requesterPublicKey, targetCode, targetWs, proposedName);
   }
 

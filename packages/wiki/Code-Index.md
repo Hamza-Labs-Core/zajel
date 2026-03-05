@@ -292,6 +292,53 @@ A developer reference mapping features to their implementation locations. All pa
 
 ---
 
+## Server -- Diagnostics Worker (packages/diagnostics-cf)
+
+| Feature | Location |
+|---------|----------|
+| Worker Entry Point (routing, CORS, rate limit) | `packages/diagnostics-cf/src/index.ts` |
+| Type Definitions (Env, report, metrics, heartbeat) | `packages/diagnostics-cf/src/types.ts` |
+| Report Handler (POST /diagnostics/report) | `packages/diagnostics-cf/src/handlers/report.ts` |
+| Heartbeat Handler (POST /diagnostics/heartbeat) | `packages/diagnostics-cf/src/handlers/heartbeat.ts` |
+| Server Metrics Push Handler (POST /diagnostics/server-metrics) | `packages/diagnostics-cf/src/handlers/server-push.ts` |
+| Health Check Handler (GET /diagnostics/health) | `packages/diagnostics-cf/src/handlers/health.ts` |
+| D1 Aggregation (error, performance, network, heartbeat) | `packages/diagnostics-cf/src/aggregation.ts` |
+| Rate Limiting (global + per-session) | `packages/diagnostics-cf/src/rate-limit.ts` |
+| Report Validation (schema validation) | `packages/diagnostics-cf/src/validation.ts` |
+| R2 Storage (raw report storage) | `packages/diagnostics-cf/src/storage.ts` |
+| KV Counters (dashboard fast reads) | `packages/diagnostics-cf/src/counters.ts` |
+| CORS Headers | `packages/diagnostics-cf/src/cors.ts` |
+| D1 Schema Reference | `packages/diagnostics-cf/src/schema.sql` |
+| Wrangler Config | `packages/diagnostics-cf/wrangler.jsonc` |
+
+### Diagnostics D1 Migrations
+
+| Migration | Location |
+|-----------|----------|
+| Initial schema (error, performance, network, heartbeat tables) | `packages/diagnostics-cf/migrations/0001_initial_schema.sql` |
+| Server metrics table | `packages/diagnostics-cf/migrations/0002_server_metrics.sql` |
+| Gossip latency columns | `packages/diagnostics-cf/migrations/0003_gossip_latency.sql` |
+
+---
+
+## Server -- Admin Dashboard (packages/admin-cf)
+
+| Feature | Location |
+|---------|----------|
+| Worker Entry Point (routing, dashboard HTML, CORS) | `packages/admin-cf/src/index.ts` |
+| Type Definitions (Env, responses, metrics types) | `packages/admin-cf/src/types.ts` |
+| Admin Users Durable Object (user management, login) | `packages/admin-cf/src/admin-users-do.ts` |
+| JWT Crypto (sign, verify) | `packages/admin-cf/src/crypto.ts` |
+| Route Exports | `packages/admin-cf/src/routes/index.ts` |
+| Auth Handlers (login, logout, verify, middleware) | `packages/admin-cf/src/routes/auth.ts` |
+| User Handlers (list, create, delete) | `packages/admin-cf/src/routes/users.ts` |
+| Server Handlers (list VPS servers via bootstrap) | `packages/admin-cf/src/routes/servers.ts` |
+| Error Dashboard Handlers (list, trends, detail, regressions) | `packages/admin-cf/src/routes/errors.ts` |
+| Metrics Handlers (app, network, server, server detail, federation) | `packages/admin-cf/src/routes/metrics.ts` |
+| Wrangler Config | `packages/admin-cf/wrangler.jsonc` |
+
+---
+
 ## Server -- VPS (Federated Signaling)
 
 The VPS server is the primary signaling and relay server. It implements SWIM gossip federation, DHT-based consistent hashing, and a modular handler architecture.

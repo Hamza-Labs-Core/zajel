@@ -81,37 +81,103 @@ PACKAGE_NAME = "com.zajel.zajel"
 # Store active drivers for failure diagnostics (Android only)
 _active_drivers: dict = {}
 
+# Store active HeadlessBob log files for failure diagnostics
+_active_headless_log_files: dict[str, str] = {}
 
-# ── Hooks (Android screenshot on failure) ────────────────────────
+
+# ── Hooks (failure diagnostics) ──────────────────────────────────
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
 def pytest_runtest_makereport(item, call):
-    """Capture screenshot and page source on test failure (Android only)."""
+    """Capture diagnostics on test failure: screenshots, page source, headless logs."""
     outcome = yield
     report = outcome.get_result()
-    if report.when == "call" and report.failed and PLATFORM == "android":
+    if report.when == "call" and report.failed:
         os.makedirs(ARTIFACTS_DIR, exist_ok=True)
         safe_name = item.nodeid.replace("/", "_").replace("::", "__")
-        for name, driver in _active_drivers.items():
+
+        # Android: screenshot + page source
+        if PLATFORM == "android":
+            for name, driver in _active_drivers.items():
+                try:
+                    screenshot_path = os.path.join(
+                        ARTIFACTS_DIR, f"fail_{safe_name}_{name}.png"
+                    )
+                    driver.save_screenshot(screenshot_path)
+                    print(f"Screenshot saved: {screenshot_path}")
+                except Exception as e:
+                    print(f"Failed to save screenshot for {name}: {e}")
+                try:
+                    source_path = os.path.join(
+                        ARTIFACTS_DIR, f"fail_{safe_name}_{name}_source.xml"
+                    )
+                    source = driver.page_source
+                    if source:
+                        with open(source_path, "w") as f:
+                            f.write(source)
+                        print(f"Page source saved: {source_path}")
+                except Exception as e:
+                    print(f"Failed to save page source for {name}: {e}")
+
+        # HeadlessBob: copy log files to artifacts with test name
+        for bob_name, log_path in _active_headless_log_files.items():
             try:
-                screenshot_path = os.path.join(
-                    ARTIFACTS_DIR, f"fail_{safe_name}_{name}.png"
-                )
-                driver.save_screenshot(screenshot_path)
-                print(f"Screenshot saved: {screenshot_path}")
+                if os.path.exists(log_path):
+                    dest = os.path.join(
+                        ARTIFACTS_DIR, f"fail_{safe_name}_{bob_name}_headless.log"
+                    )
+                    shutil.copy2(log_path, dest)
+                    print(f"Headless log saved: {dest}")
             except Exception as e:
-                print(f"Failed to save screenshot for {name}: {e}")
-            try:
-                source_path = os.path.join(
-                    ARTIFACTS_DIR, f"fail_{safe_name}_{name}_source.xml"
-                )
-                source = driver.page_source
-                if source:
-                    with open(source_path, "w") as f:
-                        f.write(source)
-                    print(f"Page source saved: {source_path}")
-            except Exception as e:
-                print(f"Failed to save page source for {name}: {e}")
+                print(f"Failed to save headless log for {bob_name}: {e}")
+
+        # VPS server logs: fetch recent logs from admin API
+        _capture_server_logs(safe_name)
+
+
+def _capture_server_logs(safe_name: str):
+    """Fetch recent VPS server logs and save to artifacts."""
+    import urllib.request
+    import json as _json
+    admin_url = os.environ.get("VPS_ADMIN_URL", "")
+    admin_token = os.environ.get("VPS_ADMIN_TOKEN", "")
+    if not admin_url:
+        return
+    try:
+        req = urllib.request.Request(
+            f"{admin_url}/admin/api/metrics",
+            headers={"Authorization": f"Bearer {admin_token}"} if admin_token else {},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = _json.loads(resp.read())
+        dest = os.path.join(ARTIFACTS_DIR, f"fail_{safe_name}_server_metrics.json")
+        with open(dest, "w") as f:
+            _json.dump(data, f, indent=2)
+        print(f"Server metrics saved: {dest}")
+    except Exception as e:
+        print(f"Failed to capture server metrics: {e}")
+
+
+def _setup_headless_log_file(name: str) -> logging.FileHandler:
+    """Create a file handler for headless client logs."""
+    os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+    log_path = os.path.join(ARTIFACTS_DIR, f"{name}_headless.log")
+    handler = logging.FileHandler(log_path, mode="w")
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    ))
+    logging.getLogger("zajel").addHandler(handler)
+    _active_headless_log_files[name] = log_path
+    return handler
+
+
+def _teardown_headless_log_file(name: str, handler: logging.FileHandler):
+    """Remove and close the headless log file handler."""
+    logging.getLogger("zajel").removeHandler(handler)
+    handler.close()
+    _active_headless_log_files.pop(name, None)
 
 
 # ── Android driver helpers ───────────────────────────────────────
@@ -722,6 +788,9 @@ def headless_bob():
 
     ice_servers = _build_ice_servers()
 
+    # Set up log file for headless client diagnostics
+    log_handler = _setup_headless_log_file("HeadlessBob")
+
     if len(signaling_urls) <= 1:
         # Single server — simple case
         bob = HeadlessBob(
@@ -779,3 +848,5 @@ def headless_bob():
             yield MultiServerBob(bobs)
             for b in bobs:
                 b.disconnect()
+
+    _teardown_headless_log_file("HeadlessBob", log_handler)

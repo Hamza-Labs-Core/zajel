@@ -1,0 +1,29 @@
+{
+  "name": "@zajel/diagnostics-cf",
+  "version": "1.0.0",
+  "description": "Zajel Diagnostics Collection Worker - Anonymous diagnostic report ingestion",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "build": "wrangler deploy --dry-run --outdir=dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run tests/unit/",
+    "test:e2e": "vitest run tests/e2e/"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250210.0",
+    "typescript": "^5.8.3",
+    "vitest": "^4.0.16",
+    "wrangler": "^4.58.0"
+  },
+  "keywords": [
+    "zajel",
+    "diagnostics",
+    "cloudflare-workers"
+  ],
+  "license": "MIT"
+}

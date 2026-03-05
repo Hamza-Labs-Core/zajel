@@ -251,3 +251,92 @@ export async function timingSafeEqual(a: string, b: string): Promise<boolean> {
   }
   return result === 0;
 }
+
+// ─── AES-GCM Webhook Config Encryption (US-8.3) ──
+
+const WEBHOOK_HKDF_SALT = 'webhook-config';
+const WEBHOOK_HKDF_INFO = 'aes-gcm-key';
+const AES_GCM_IV_LENGTH = 12;
+
+/**
+ * Derive an AES-256-GCM key from a secret string using HKDF.
+ */
+async function deriveAesKey(secret: string): Promise<CryptoKey> {
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    'HKDF',
+    false,
+    ['deriveKey']
+  );
+
+  return crypto.subtle.deriveKey(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: encoder.encode(WEBHOOK_HKDF_SALT),
+      info: encoder.encode(WEBHOOK_HKDF_INFO),
+    },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+/**
+ * Encrypt a webhook config JSON string using AES-256-GCM.
+ * Returns base64-encoded ciphertext with 12-byte IV prepended.
+ */
+export async function encryptWebhookConfig(
+  config: string,
+  secret: string
+): Promise<string> {
+  const key = await deriveAesKey(secret);
+  const iv = new Uint8Array(AES_GCM_IV_LENGTH);
+  crypto.getRandomValues(iv);
+
+  const encoder = new TextEncoder();
+  const plaintext = encoder.encode(config);
+
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    plaintext
+  );
+
+  // Prepend IV to ciphertext
+  const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+  combined.set(iv, 0);
+  combined.set(new Uint8Array(ciphertext), iv.length);
+
+  // Build binary string in chunks to avoid stack overflow on large payloads
+  let binaryStr = '';
+  for (let i = 0; i < combined.length; i++) {
+    binaryStr += String.fromCharCode(combined[i]!);
+  }
+  return btoa(binaryStr);
+}
+
+/**
+ * Decrypt a base64-encoded ciphertext (IV + ciphertext) back to the original string.
+ */
+export async function decryptWebhookConfig(
+  encoded: string,
+  secret: string
+): Promise<string> {
+  const key = await deriveAesKey(secret);
+
+  const combined = Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0));
+  const iv = combined.slice(0, AES_GCM_IV_LENGTH);
+  const ciphertext = combined.slice(AES_GCM_IV_LENGTH);
+
+  const plaintext = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    ciphertext
+  );
+
+  return new TextDecoder().decode(plaintext);
+}

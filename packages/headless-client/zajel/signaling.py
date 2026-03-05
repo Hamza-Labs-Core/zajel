@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import secrets
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine, Optional
 
@@ -177,9 +178,11 @@ class SignalingClient:
 
         self._public_key_b64 = public_key_b64
         self._pq_public_key_b64 = pq_public_key_b64
-        logger.info("Connecting to %s with code %s", self.url, self.pairing_code)
+        t0 = time.monotonic()
+        logger.info("[T+0ms] connect() start — url=%s code=%s", self.url, self.pairing_code)
         self._ws = await websockets.connect(self.url)
         self._connected.set()
+        logger.info("[T+%dms] WebSocket open", int((time.monotonic() - t0) * 1000))
 
         # Start message receiver
         self._receive_task = asyncio.create_task(self._receive_loop())
@@ -195,17 +198,21 @@ class SignalingClient:
         if pq_public_key_b64:
             register_msg["pqPublicKey"] = pq_public_key_b64
         await self._send(register_msg)
+        logger.info("[T+%dms] register sent", int((time.monotonic() - t0) * 1000))
 
         # Wait for 'registered' response so redirect tasks can be created
         try:
             await asyncio.wait_for(self._registered.wait(), timeout=10)
+            logger.info("[T+%dms] registered confirmed", int((time.monotonic() - t0) * 1000))
         except asyncio.TimeoutError:
-            logger.warning("Timed out waiting for registered response from %s", self.url)
+            logger.warning("[T+%dms] TIMEOUT waiting for registered response from %s",
+                           int((time.monotonic() - t0) * 1000), self.url)
 
         # Start heartbeat
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
-        logger.info("Connected and registered as %s", self.pairing_code)
+        elapsed = int((time.monotonic() - t0) * 1000)
+        logger.info("[T+%dms] connect() done — registered as %s", elapsed, self.pairing_code)
         return self.pairing_code
 
     async def disconnect(self) -> None:
@@ -238,8 +245,12 @@ class SignalingClient:
         """
         if endpoint in self._redirect_connections:
             return  # Already connected
+        t0 = time.monotonic()
         try:
+            logger.info("[T+0ms] connect_to_redirect() start — %s", endpoint)
             ws = await websockets.connect(endpoint)
+            logger.info("[T+%dms] redirect WebSocket open — %s",
+                        int((time.monotonic() - t0) * 1000), endpoint)
             await self._send({
                 "type": "register",
                 "pairingCode": self.pairing_code,
@@ -253,19 +264,25 @@ class SignalingClient:
                 raw = await asyncio.wait_for(ws.recv(), timeout=5)
                 resp = json.loads(raw)
                 if resp.get("type") == "registered":
-                    logger.info("Registration confirmed on redirect server %s", endpoint)
+                    logger.info("[T+%dms] redirect registered confirmed — %s",
+                                int((time.monotonic() - t0) * 1000), endpoint)
                 else:
                     # Not the expected response — route it through normal handling
+                    logger.info("[T+%dms] redirect got unexpected response type=%s — %s",
+                                int((time.monotonic() - t0) * 1000), resp.get("type"), endpoint)
                     await self._handle_message(resp, source_ws=ws)
             except asyncio.TimeoutError:
-                logger.warning("Timed out waiting for registered response from redirect %s", endpoint)
+                logger.warning("[T+%dms] TIMEOUT waiting for registered on redirect %s",
+                               int((time.monotonic() - t0) * 1000), endpoint)
 
             # Start receiving messages from this redirect connection
             task = asyncio.create_task(self._redirect_receive_loop(endpoint, ws))
             self._redirect_connections[endpoint] = (ws, task)
-            logger.info("Registered on redirect server %s", endpoint)
+            elapsed = int((time.monotonic() - t0) * 1000)
+            logger.info("[T+%dms] connect_to_redirect() done — %s", elapsed, endpoint)
         except Exception as e:
-            logger.warning("Failed to connect to redirect %s: %s", endpoint, e)
+            elapsed = int((time.monotonic() - t0) * 1000)
+            logger.warning("[T+%dms] FAILED connect_to_redirect %s: %s", elapsed, endpoint, e)
 
     async def _redirect_receive_loop(self, endpoint: str, ws: ClientConnection) -> None:
         """Receive messages from a redirect server and route to main handlers."""
@@ -306,6 +323,9 @@ class SignalingClient:
         This mirrors the Flutter app + MultiServerBob behaviour: the code
         might be registered on a different server in the federation.
         """
+        t0 = time.monotonic()
+        logger.info("[T+0ms] pair_with() start — target=%s", target_code)
+
         msg: dict[str, Any] = {
             "type": "pair_request",
             "targetCode": target_code,
@@ -320,11 +340,16 @@ class SignalingClient:
         for endpoint, (ws, _task) in self._redirect_connections.items():
             ws_list.append((endpoint, ws))
 
+        logger.info("[T+%dms] trying %d connection(s): %s",
+                    int((time.monotonic() - t0) * 1000), len(ws_list),
+                    [label for label, _ in ws_list])
+
         for label, ws in ws_list:
             self._pair_error_event.clear()
             self._last_pair_error = None
             await self._send(msg, ws=ws)
-            logger.info("Sent pair request to %s via %s", target_code, label)
+            logger.info("[T+%dms] pair_request sent via %s",
+                        int((time.monotonic() - t0) * 1000), label)
 
             # Wait briefly for pair_error; if none comes, the request was
             # accepted by this server and wait_for_pair_match will complete.
@@ -334,13 +359,18 @@ class SignalingClient:
                 await asyncio.wait_for(self._pair_error_event.wait(), timeout=2)
             except asyncio.TimeoutError:
                 # No error within 2s — request is being processed
+                logger.info("[T+%dms] pair_with() accepted on %s (no error in 2s)",
+                            int((time.monotonic() - t0) * 1000), label)
                 return
 
             # Got pair_error — try next connection
-            logger.info("pair_error on %s: %s, trying next", label, self._last_pair_error)
+            logger.warning("[T+%dms] pair_error on %s: %s",
+                           int((time.monotonic() - t0) * 1000), label, self._last_pair_error)
 
         # All connections returned pair_error
-        logger.info("Sent pair request to %s (exhausted all connections)", target_code)
+        elapsed = int((time.monotonic() - t0) * 1000)
+        logger.warning("[T+%dms] pair_with() EXHAUSTED all connections for target=%s",
+                       elapsed, target_code)
 
     async def respond_to_pair(self, target_code: str, accept: bool) -> None:
         """Accept or reject an incoming pair request."""
@@ -361,6 +391,9 @@ class SignalingClient:
         Also monitors for pair_error to fail fast instead of waiting for
         the full timeout when the target code doesn't exist on this server.
         """
+        t0 = time.monotonic()
+        logger.info("[T+0ms] wait_for_pair_match() start — timeout=%.0fs", timeout)
+
         match_task = asyncio.create_task(self._pair_matches.get())
         error_task = asyncio.create_task(self._pair_error_event.wait())
 
@@ -373,14 +406,19 @@ class SignalingClient:
         for task in pending:
             task.cancel()
 
+        elapsed = int((time.monotonic() - t0) * 1000)
+
         if not done:
+            logger.error("[T+%dms] wait_for_pair_match() TIMEOUT after %.0fs", elapsed, timeout)
             raise asyncio.TimeoutError("Timed out waiting for pair match")
 
         completed = done.pop()
         if completed is error_task:
             self._pair_error_event.clear()
+            logger.error("[T+%dms] wait_for_pair_match() PAIR_ERROR: %s", elapsed, self._last_pair_error)
             raise RuntimeError(f"Pair error: {self._last_pair_error}")
 
+        logger.info("[T+%dms] wait_for_pair_match() SUCCESS — matched", elapsed)
         return completed.result()
 
     # ── WebRTC Signaling ─────────────────────────────────────

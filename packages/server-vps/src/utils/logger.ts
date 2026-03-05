@@ -120,12 +120,16 @@ class Logger {
     return this.config.redactSensitive ? redactServerId(id) : id;
   }
 
+  private timestamp(): string {
+    return new Date().toISOString();
+  }
+
   debug(message: string, meta?: Record<string, unknown>): void {
     if (this.shouldLog('debug')) {
       if (meta) {
-        console.debug(`[DEBUG] ${message}`, meta);
+        console.debug(`${this.timestamp()} [DEBUG] ${message}`, meta);
       } else {
-        console.debug(`[DEBUG] ${message}`);
+        console.debug(`${this.timestamp()} [DEBUG] ${message}`);
       }
     }
   }
@@ -133,9 +137,9 @@ class Logger {
   info(message: string, meta?: Record<string, unknown>): void {
     if (this.shouldLog('info')) {
       if (meta) {
-        console.log(`[INFO] ${message}`, meta);
+        console.log(`${this.timestamp()} [INFO] ${message}`, meta);
       } else {
-        console.log(`[INFO] ${message}`);
+        console.log(`${this.timestamp()} [INFO] ${message}`);
       }
     }
   }
@@ -143,9 +147,9 @@ class Logger {
   warn(message: string, meta?: Record<string, unknown>): void {
     if (this.shouldLog('warn')) {
       if (meta) {
-        console.warn(`[WARN] ${message}`, meta);
+        console.warn(`${this.timestamp()} [WARN] ${message}`, meta);
       } else {
-        console.warn(`[WARN] ${message}`);
+        console.warn(`${this.timestamp()} [WARN] ${message}`);
       }
     }
   }
@@ -153,13 +157,13 @@ class Logger {
   error(message: string, error?: unknown, meta?: Record<string, unknown>): void {
     if (this.shouldLog('error')) {
       if (error && meta) {
-        console.error(`[ERROR] ${message}`, error, meta);
+        console.error(`${this.timestamp()} [ERROR] ${message}`, error, meta);
       } else if (error) {
-        console.error(`[ERROR] ${message}`, error);
+        console.error(`${this.timestamp()} [ERROR] ${message}`, error);
       } else if (meta) {
-        console.error(`[ERROR] ${message}`, meta);
+        console.error(`${this.timestamp()} [ERROR] ${message}`, meta);
       } else {
-        console.error(`[ERROR] ${message}`);
+        console.error(`${this.timestamp()} [ERROR] ${message}`);
       }
     }
   }
@@ -184,7 +188,7 @@ class Logger {
       Object.entries(redactedCodes).filter(([, v]) => v !== undefined)
     );
 
-    this.debug(`[Pairing] ${event}`, filteredCodes);
+    this.info(`[Pairing] ${event}`, filteredCodes);
   }
 
   /**

@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../config/environment.dart';
 import 'preferences_providers.dart';
 
 // ── Auto-Delete Messages ──────────────────────────────────
@@ -114,3 +115,36 @@ final activeScreenProvider = StateProvider<ActiveScreen>((ref) {
 
 /// Tracks whether the app is in the foreground (resumed).
 final appInForegroundProvider = StateProvider<bool>((ref) => true);
+
+// ── Diagnostics Opt-In ──────────────────────────────────
+
+/// Whether diagnostics collection (crash reports, performance metrics) is enabled.
+///
+/// Defaults to OFF in production builds and ON in QA/dev builds.
+/// The user can explicitly toggle this; the stored preference takes precedence
+/// over the environment default.
+final diagnosticsEnabledProvider =
+    StateNotifierProvider<DiagnosticsEnabledNotifier, bool>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return DiagnosticsEnabledNotifier(prefs);
+});
+
+class DiagnosticsEnabledNotifier extends StateNotifier<bool> {
+  final SharedPreferences _prefs;
+  static const _key = 'diagnosticsEnabled';
+
+  DiagnosticsEnabledNotifier(this._prefs)
+      : super(_prefs.getBool(_key) ?? _defaultValue());
+
+  static bool _defaultValue() {
+    // QA and dev builds default to ON
+    if (Environment.isQA || Environment.isDev) return true;
+    // Production defaults to OFF
+    return false;
+  }
+
+  Future<void> setEnabled(bool enabled) async {
+    state = enabled;
+    await _prefs.setBool(_key, enabled);
+  }
+}

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zajel/features/attestation/widgets/force_update_dialog.dart';
 import 'package:zajel/features/updater/models/update_state.dart';
+import 'package:zajel/features/updater/providers/update_providers.dart';
 
 void main() {
   group('ForceUpdateDialog', () {
@@ -13,24 +15,27 @@ void main() {
       String? storeName,
       String? storeDeepLink,
       String? storeWebUrl,
-      Future<void> Function()? onDownloadAndInstall,
-      String? fallbackUrl,
-      UpdateState? updateState,
       TargetPlatform platform = TargetPlatform.linux,
+      UpdateState? updateState,
+      bool supportsAutoUpdate = false,
     }) {
-      return MaterialApp(
-        theme: ThemeData(platform: platform),
-        home: ForceUpdateDialog(
-          updateUrl: updateUrl,
-          requiredVersion: requiredVersion,
-          isBlocked: isBlocked,
-          isStoreManaged: isStoreManaged,
-          storeName: storeName,
-          storeDeepLink: storeDeepLink,
-          storeWebUrl: storeWebUrl,
-          onDownloadAndInstall: onDownloadAndInstall,
-          fallbackUrl: fallbackUrl,
-          updateState: updateState,
+      return ProviderScope(
+        overrides: [
+          if (updateState != null)
+            updateStateProvider.overrideWithValue(updateState),
+          supportsAutoUpdateProvider.overrideWithValue(supportsAutoUpdate),
+        ],
+        child: MaterialApp(
+          theme: ThemeData(platform: platform),
+          home: ForceUpdateDialog(
+            updateUrl: updateUrl,
+            requiredVersion: requiredVersion,
+            isBlocked: isBlocked,
+            isStoreManaged: isStoreManaged,
+            storeName: storeName,
+            storeDeepLink: storeDeepLink,
+            storeWebUrl: storeWebUrl,
+          ),
         ),
       );
     }
@@ -114,8 +119,7 @@ void main() {
           (tester) async {
         await tester.pumpWidget(buildDialog(
           requiredVersion: '2.0.0',
-          onDownloadAndInstall: () async {},
-          fallbackUrl: 'https://github.com/test/releases/latest',
+          supportsAutoUpdate: true,
           platform: TargetPlatform.linux,
         ));
         await tester.pump();
@@ -131,7 +135,7 @@ void main() {
           (tester) async {
         await tester.pumpWidget(buildDialog(
           requiredVersion: '2.0.0',
-          onDownloadAndInstall: () async {},
+          supportsAutoUpdate: true,
           platform: TargetPlatform.windows,
         ));
         await tester.pump();
@@ -143,7 +147,7 @@ void main() {
           (tester) async {
         await tester.pumpWidget(buildDialog(
           requiredVersion: '2.0.0',
-          onDownloadAndInstall: () async {},
+          supportsAutoUpdate: true,
           platform: TargetPlatform.macOS,
         ));
         await tester.pump();
@@ -183,7 +187,7 @@ void main() {
       testWidgets('shows downloading state with progress', (tester) async {
         await tester.pumpWidget(buildDialog(
           requiredVersion: '2.0.0',
-          onDownloadAndInstall: () async {},
+          supportsAutoUpdate: true,
           updateState: UpdateState.downloading(
             version: '2.0.0',
             progress: 0.45,
@@ -202,7 +206,7 @@ void main() {
       testWidgets('shows verifying state', (tester) async {
         await tester.pumpWidget(buildDialog(
           requiredVersion: '2.0.0',
-          onDownloadAndInstall: () async {},
+          supportsAutoUpdate: true,
           updateState: UpdateState.verifying(version: '2.0.0'),
           platform: TargetPlatform.linux,
         ));
@@ -216,7 +220,7 @@ void main() {
       testWidgets('shows installing state', (tester) async {
         await tester.pumpWidget(buildDialog(
           requiredVersion: '2.0.0',
-          onDownloadAndInstall: () async {},
+          supportsAutoUpdate: true,
           updateState: UpdateState.launchingUpdater(version: '2.0.0'),
           platform: TargetPlatform.linux,
         ));
@@ -235,8 +239,7 @@ void main() {
       testWidgets('shows error state with retry button', (tester) async {
         await tester.pumpWidget(buildDialog(
           requiredVersion: '2.0.0',
-          onDownloadAndInstall: () async {},
-          fallbackUrl: 'https://github.com/test/releases/latest',
+          supportsAutoUpdate: true,
           updateState: UpdateState.failed(
             errorMessage: 'Download interrupted. Check your connection.',
           ),
@@ -253,10 +256,11 @@ void main() {
         expect(find.text('Download Manually'), findsOneWidget);
       });
 
-      testWidgets('shows error state without fallback URL', (tester) async {
+      testWidgets('shows error state without auto-update support',
+          (tester) async {
         await tester.pumpWidget(buildDialog(
           requiredVersion: '2.0.0',
-          onDownloadAndInstall: () async {},
+          supportsAutoUpdate: false,
           updateState: UpdateState.failed(
             errorMessage: 'Checksum verification failed.',
           ),
@@ -266,14 +270,14 @@ void main() {
 
         expect(find.text('Checksum verification failed.'), findsOneWidget);
         expect(find.text('Retry'), findsOneWidget);
-        // No fallback URL, so no "Download Manually" button
+        // No auto-update support, so no "Download Manually" fallback
         expect(find.text('Download Manually'), findsNothing);
       });
 
       testWidgets('shows error icon', (tester) async {
         await tester.pumpWidget(buildDialog(
           requiredVersion: '2.0.0',
-          onDownloadAndInstall: () async {},
+          supportsAutoUpdate: true,
           updateState: UpdateState.failed(
             errorMessage: 'Error occurred.',
           ),

@@ -1,0 +1,42 @@
+{
+  // Zajel Log Processor Worker
+  // Cron-triggered worker for error pattern analysis and GitHub issue creation
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "zajel-log-processor",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-01-01",
+
+  // Cron trigger every 15 minutes
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
+
+  // Shared D1 database (same as diagnostics-cf)
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "zajel-diagnostics",
+      "database_id": "placeholder-d1-id",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // R2 bucket for fetching sample reports
+  "r2_buckets": [
+    {
+      "binding": "REPORTS_BUCKET",
+      "bucket_name": "zajel-diagnostics"
+    }
+  ],
+
+  // Workers AI binding
+  "ai": {
+    "binding": "AI"
+  },
+
+  // Production vars
+  "vars": {
+    "GITHUB_REPO": "anthropics/zajel",
+    "ENVIRONMENT": "production"
+  }
+}
