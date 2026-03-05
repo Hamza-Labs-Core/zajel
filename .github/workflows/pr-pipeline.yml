@@ -1470,7 +1470,8 @@ jobs:
 
             # Install certbot with IP address support (>= 5.3.0) in isolated venv
             echo "Installing/upgrading certbot..."
-            sudo apt-get update -qq
+            # apt-get update can fail transiently (mirror sync, CDN issues) — don't abort
+            sudo apt-get update -qq || echo "WARNING: apt-get update failed (transient mirror issue), continuing with existing cache"
             sudo apt-get install -y -qq python3-venv
             sudo python3 -m venv /opt/certbot-venv
             sudo /opt/certbot-venv/bin/pip install --upgrade pip certbot
