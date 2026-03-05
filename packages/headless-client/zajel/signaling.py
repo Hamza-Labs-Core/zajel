@@ -246,6 +246,20 @@ class SignalingClient:
                 "publicKey": self._public_key_b64,
             }, ws=ws)
 
+            # Wait for the server to confirm registration before returning.
+            # Without this, pair_with() can race ahead and get "Not registered"
+            # because the server hasn't processed the register message yet.
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                resp = json.loads(raw)
+                if resp.get("type") == "registered":
+                    logger.info("Registration confirmed on redirect server %s", endpoint)
+                else:
+                    # Not the expected response — route it through normal handling
+                    await self._handle_message(resp, source_ws=ws)
+            except asyncio.TimeoutError:
+                logger.warning("Timed out waiting for registered response from redirect %s", endpoint)
+
             # Start receiving messages from this redirect connection
             task = asyncio.create_task(self._redirect_receive_loop(endpoint, ws))
             self._redirect_connections[endpoint] = (ws, task)

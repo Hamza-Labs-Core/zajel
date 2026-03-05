@@ -381,9 +381,33 @@ class HeadlessBob:
         """Register our pairing code on an additional signaling server."""
         self._run(self._client.register_on_server(endpoint))
 
-    def pair_with(self, code: str):
-        self._connected_peer = self._run(self._client.pair_with(code))
-        return self._connected_peer
+    def pair_with(self, code: str, retries: int = 3, delay: float = 3.0):
+        """Pair with a peer, retrying on transient signaling errors.
+
+        The VPS signaling server can return "Not registered" or
+        "Pair request could not be processed" if the server hasn't
+        fully processed registration or is cleaning up stale state
+        from a previous test phase.
+        """
+        last_err = None
+        for attempt in range(1, retries + 1):
+            try:
+                self._connected_peer = self._run(self._client.pair_with(code))
+                return self._connected_peer
+            except Exception as e:
+                last_err = e
+                err_msg = str(e)
+                if "Not registered" in err_msg or "could not be processed" in err_msg:
+                    logging.warning(
+                        "pair_with attempt %d/%d failed (transient): %s",
+                        attempt, retries, err_msg,
+                    )
+                    if attempt < retries:
+                        import time
+                        time.sleep(delay)
+                        continue
+                raise
+        raise last_err
 
     def pair_with_async(self, code: str):
         """Start pairing in background, returns a Future."""
