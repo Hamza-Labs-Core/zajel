@@ -20,6 +20,7 @@ class TestConnectionStates:
     """Test suite for connection state transitions and edge cases."""
 
     @pytest.mark.single_device
+    @pytest.mark.requires_signaling
     def test_online_after_launch(self, alice, app_helper):
         """Fresh launch → navigate to connect → 'Online' status on home screen."""
         helper = app_helper(alice)

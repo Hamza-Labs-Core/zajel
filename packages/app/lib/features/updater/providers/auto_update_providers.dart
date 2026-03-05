@@ -75,9 +75,10 @@ class BackgroundDownloadSettingsNotifier extends StateNotifier<bool> {
 /// The idle detector tracks user activity and determines when the app
 /// has been idle long enough for an auto-update to proceed.
 final idleDetectorProvider = ChangeNotifierProvider<IdleDetector>((ref) {
-  final detector = IdleDetector();
-  ref.onDispose(() => detector.dispose());
-  return detector;
+  // ChangeNotifierProvider automatically disposes the ChangeNotifier —
+  // do NOT add ref.onDispose(() => detector.dispose()) here as that
+  // causes a double-dispose assertion error.
+  return IdleDetector();
 });
 
 // ── Updater Launcher ──────────────────────────────────
