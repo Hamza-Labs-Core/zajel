@@ -1471,22 +1471,56 @@ jobs:
             # Obtain TLS certificate for IP address (Let's Encrypt, 6-day short-lived)
             CERT_NAME="zajel-vps"
             CERT_DIR="/etc/letsencrypt/live/${CERT_NAME}"
-            if [ ! -f "${CERT_DIR}/fullchain.pem" ]; then
-              echo "Obtaining TLS certificate for ${PUBLIC_IP}..."
+
+            obtain_cert() {
+              echo "Obtaining new TLS certificate for ${PUBLIC_IP}..."
+              # Ensure port 80 is free for HTTP-01 challenge
+              sudo fuser -k 80/tcp 2>/dev/null || true
               sudo certbot certonly --standalone --non-interactive \
                 --agree-tos -m "${CERTBOT_EMAIL}" \
                 --ip-address "${PUBLIC_IP}" \
                 --preferred-profile shortlived \
                 --cert-name "${CERT_NAME}"
+            }
+
+            NEED_NEW_CERT=false
+            if [ ! -f "${CERT_DIR}/fullchain.pem" ]; then
+              NEED_NEW_CERT=true
             else
-              echo "TLS certificate exists, attempting renewal..."
-              sudo certbot renew --quiet --cert-name "${CERT_NAME}" || true
+              # Check if existing cert is valid for at least 1 hour
+              if ! sudo openssl x509 -checkend 3600 -noout -in "${CERT_DIR}/fullchain.pem" 2>/dev/null; then
+                echo "WARNING: TLS certificate is expired or expiring within 1 hour"
+                NEED_NEW_CERT=true
+              else
+                echo "TLS certificate exists and is valid, attempting renewal..."
+                if ! sudo certbot renew --cert-name "${CERT_NAME}"; then
+                  echo "WARNING: certbot renew failed — will force re-issue"
+                  NEED_NEW_CERT=true
+                fi
+              fi
             fi
 
+            if [ "$NEED_NEW_CERT" = true ]; then
+              # Delete old cert if it exists (force clean re-issue)
+              if [ -d "${CERT_DIR}" ]; then
+                echo "Deleting old certificate to force re-issue..."
+                sudo certbot delete --cert-name "${CERT_NAME}" --non-interactive 2>/dev/null || true
+              fi
+              obtain_cert
+            fi
+
+            # Final validation: cert must exist and be valid
             if [ ! -f "${CERT_DIR}/fullchain.pem" ]; then
               echo "ERROR: Failed to obtain TLS certificate for ${PUBLIC_IP}"
               exit 1
             fi
+            if ! sudo openssl x509 -checkend 300 -noout -in "${CERT_DIR}/fullchain.pem"; then
+              echo "ERROR: TLS certificate is expired or invalid after renewal"
+              sudo openssl x509 -dates -noout -in "${CERT_DIR}/fullchain.pem"
+              exit 1
+            fi
+            echo "TLS certificate valid:"
+            sudo openssl x509 -dates -subject -noout -in "${CERT_DIR}/fullchain.pem"
 
             TLS_CERT="${CERT_DIR}/fullchain.pem"
             TLS_KEY="${CERT_DIR}/privkey.pem"
@@ -1499,7 +1533,8 @@ jobs:
             echo "TLS configured: cert=${TLS_CERT}"
 
             # Setup auto-renewal cron (6-day certs need frequent renewal)
-            echo "0 3 */3 * * root certbot renew --quiet --deploy-hook 'pm2 restart zajel-server-qa'" \
+            # Uses --pre-hook to free port 80 for standalone HTTP-01 challenge
+            echo "0 3 */3 * * root certbot renew --deploy-hook 'pm2 restart zajel-server-qa' --pre-hook 'fuser -k 80/tcp 2>/dev/null || true' 2>&1 | logger -t certbot-renew" \
               | sudo tee /etc/cron.d/zajel-cert-renew > /dev/null
 
             # Create deployment directory
@@ -1559,12 +1594,12 @@ jobs:
             pm2 start start-qa.sh --name zajel-server-qa --interpreter bash
             pm2 save
 
-            # Health check
+            # Health check — use public IP (not localhost) so TLS cert is verified
             sleep 5
             HEALTHY=false
             for i in {1..6}; do
-              if curl -sf -k "https://localhost:8443/health" | grep -q "healthy"; then
-                echo "Server healthy (${PUBLIC_ENDPOINT})"
+              if curl -sf "https://${PUBLIC_IP}:8443/health" | grep -q "healthy"; then
+                echo "Server healthy with valid TLS (${PUBLIC_ENDPOINT})"
                 HEALTHY=true
                 break
               fi
@@ -1573,14 +1608,21 @@ jobs:
             done
 
             if [ "$HEALTHY" = false ]; then
-              echo "Health check failed"
+              echo "Health check failed — checking if it's a TLS issue..."
+              # Diagnose: is the app running but TLS broken?
+              if curl -sf -k "https://localhost:8443/health" | grep -q "healthy"; then
+                echo "ERROR: Server is running but TLS verification fails (cert may be invalid for ${PUBLIC_IP})"
+                sudo openssl x509 -dates -subject -noout -in "${TLS_CERT}" 2>/dev/null
+              else
+                echo "ERROR: Server is not responding at all"
+              fi
               pm2 logs zajel-server-qa --lines 50 --nostream
               exit 1
             fi
 
             # Verify bootstrap registration (server should self-register on startup)
             sleep 5
-            SERVER_ID=$(curl -sf -k "https://localhost:8443/health" | python3 -c "import sys,json; print(json.load(sys.stdin).get('serverId',''))" 2>/dev/null || true)
+            SERVER_ID=$(curl -sf "https://${PUBLIC_IP}:8443/health" | python3 -c "import sys,json; print(json.load(sys.stdin).get('serverId',''))" 2>/dev/null || true)
             BOOTSTRAP_SERVERS=$(curl -sf "${BOOTSTRAP_URL}/servers" 2>/dev/null || echo '{"servers":[]}')
 
             if echo "$BOOTSTRAP_SERVERS" | grep -q "${SERVER_ID}"; then
