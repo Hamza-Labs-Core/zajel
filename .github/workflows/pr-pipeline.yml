@@ -1475,15 +1475,23 @@ jobs:
             # Kill anything on port 80 — certbot standalone needs it for HTTP-01
             free_port_80() {
               echo "Freeing port 80 for certbot..."
-              sudo fuser -k 80/tcp 2>/dev/null || true
-              # Also stop common services that bind port 80
-              sudo systemctl stop nginx 2>/dev/null || true
-              sudo systemctl stop apache2 2>/dev/null || true
+              # Stop and disable common web servers that auto-restart via systemd
+              for svc in nginx apache2 httpd caddy lighttpd; do
+                sudo systemctl stop "$svc" 2>/dev/null || true
+                sudo systemctl disable "$svc" 2>/dev/null || true
+              done
+              # Kill any remaining process on port 80 (SIGKILL)
+              sudo fuser -k -9 80/tcp 2>/dev/null || true
+              sleep 2
+              # Second pass — processes may have respawned
+              sudo fuser -k -9 80/tcp 2>/dev/null || true
               sleep 1
               # Verify port 80 is free
               if sudo fuser 80/tcp 2>/dev/null; then
-                echo "WARNING: Port 80 still in use after cleanup"
-                sudo fuser -v 80/tcp 2>/dev/null || true
+                echo "WARNING: Port 80 still in use — identifying process:"
+                sudo lsof -i :80 2>/dev/null || sudo ss -tlnp 'sport = :80' 2>/dev/null || true
+              else
+                echo "Port 80 is free"
               fi
             }
 
@@ -1549,8 +1557,8 @@ jobs:
             echo "TLS configured: cert=${TLS_CERT}"
 
             # Setup auto-renewal cron (6-day certs need frequent renewal)
-            # --pre-hook kills port 80 users + stops nginx/apache for standalone HTTP-01
-            echo "0 3 */3 * * root certbot renew --pre-hook 'fuser -k 80/tcp 2>/dev/null; systemctl stop nginx 2>/dev/null; systemctl stop apache2 2>/dev/null; sleep 1' --deploy-hook 'pm2 restart zajel-server-qa' 2>&1 | logger -t certbot-renew" \
+            # Pre-command disables web servers and kills port 80 for standalone HTTP-01
+            echo '0 3 */3 * * root for s in nginx apache2 httpd caddy; do systemctl stop $s 2>/dev/null; systemctl disable $s 2>/dev/null; done; fuser -k -9 80/tcp 2>/dev/null; sleep 2; certbot renew --deploy-hook "pm2 restart zajel-server-qa" 2>&1 | logger -t certbot-renew' \
               | sudo tee /etc/cron.d/zajel-cert-renew > /dev/null
 
             # Create deployment directory
