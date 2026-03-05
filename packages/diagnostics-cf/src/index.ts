@@ -19,6 +19,8 @@ import { handleHealth } from './handlers/health.js';
 import { handleReport } from './handlers/report.js';
 import { handleHeartbeat } from './handlers/heartbeat.js';
 import { handleServerMetricsPush } from './handlers/server-push.js';
+import { handleSecurityEventsPush } from './handlers/security-events-push.js';
+import { handleServerLogsPush } from './handlers/server-logs-push.js';
 import { aggregateVersionHistory } from './aggregation-scheduled.js';
 import { aggregateConnectionTypes } from './aggregation.js';
 
@@ -58,6 +60,10 @@ export default {
         response = await handleHeartbeat(request, env, ctx);
       } else if (path === '/diagnostics/server-metrics' && method === 'POST') {
         response = await handleServerMetricsPush(request, env, ctx);
+      } else if (path === '/diagnostics/security-events' && method === 'POST') {
+        response = await handleSecurityEventsPush(request, env, ctx);
+      } else if (path === '/diagnostics/server-logs' && method === 'POST') {
+        response = await handleServerLogsPush(request, env, ctx);
       } else {
         return jsonResponse(
           { success: false, error: 'Not found' },

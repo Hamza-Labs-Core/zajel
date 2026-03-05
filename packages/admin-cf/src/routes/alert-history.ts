@@ -29,6 +29,8 @@ function toAlertHistoryEntry(row: AlertHistoryRow): AlertHistoryEntry {
     triggeredAt: row.triggered_at,
     message: row.message,
     channelsNotified,
+    deliveryStatus: row.delivery_status ?? 'sent',
+    deliveryError: row.delivery_error ?? null,
     acknowledgedAt: row.acknowledged_at,
     acknowledgedBy: row.acknowledged_by,
   };

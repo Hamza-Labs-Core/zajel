@@ -16,6 +16,7 @@ import type {
 } from '../types.js';
 import { requireAuth, requireSuperAdmin } from './auth.js';
 import { dispatchWebhook, dispatchEmail } from './notification-dispatch.js';
+import { encryptWebhookConfig, decryptWebhookConfig } from '../crypto.js';
 
 // ─── Helpers ────────────────────────────────────
 
@@ -34,15 +35,32 @@ const VALID_SEVERITIES = new Set(['info', 'warning', 'critical']);
 
 /**
  * Map a D1 row to a NotificationConfigEntry.
+ * If the config is encrypted (prefixed with "enc:"), decrypts it using the provided secret.
  */
-function rowToConfigEntry(row: Record<string, unknown>): NotificationConfigEntry {
+async function rowToConfigEntry(
+  row: Record<string, unknown>,
+  jwtSecret?: string
+): Promise<NotificationConfigEntry> {
   let config: WebhookConfig | EmailConfig | DashboardConfig = { soundEnabled: false, severityFilter: [] };
-  const rawConfig = row['config'];
+  let rawConfig = row['config'] as string | undefined;
+
   if (rawConfig && typeof rawConfig === 'string') {
-    try {
-      config = JSON.parse(rawConfig) as WebhookConfig | EmailConfig | DashboardConfig;
-    } catch {
-      // Malformed JSON -- use default
+    // Decrypt encrypted webhook configs
+    if (rawConfig.startsWith('enc:') && jwtSecret) {
+      try {
+        rawConfig = await decryptWebhookConfig(rawConfig.slice(4), jwtSecret);
+      } catch {
+        // Decryption failed — treat as opaque
+        rawConfig = undefined;
+      }
+    }
+
+    if (rawConfig) {
+      try {
+        config = JSON.parse(rawConfig) as WebhookConfig | EmailConfig | DashboardConfig;
+      } catch {
+        // Malformed JSON -- use default
+      }
     }
   }
 
@@ -146,8 +164,10 @@ export async function handleGetNotificationConfig(
        LIMIT 100`
     ).all();
 
-    const channels: NotificationConfigEntry[] = (result.results || []).map(
-      (row) => rowToConfigEntry(row as Record<string, unknown>)
+    const channels: NotificationConfigEntry[] = await Promise.all(
+      (result.results || []).map(
+        (row) => rowToConfigEntry(row as Record<string, unknown>, env.ZAJEL_ADMIN_JWT_SECRET)
+      )
     );
 
     const data: NotificationConfigData = {
@@ -241,7 +261,13 @@ export async function handleUpdateNotificationConfig(
 
     const now = Date.now();
     const username = authResult.username;
-    const configJson = JSON.stringify(config);
+    let configJson = JSON.stringify(config);
+
+    // Encrypt webhook config at rest if secret is available
+    if (channelType === 'webhook' && env.ZAJEL_ADMIN_JWT_SECRET) {
+      const encrypted = await encryptWebhookConfig(configJson, env.ZAJEL_ADMIN_JWT_SECRET);
+      configJson = `enc:${encrypted}`;
+    }
 
     // Batch upsert + re-fetch in single roundtrip
     const [, selectResult] = await env.DIAGNOSTICS_DB.batch([
@@ -262,7 +288,7 @@ export async function handleUpdateNotificationConfig(
 
     const updatedRow = (selectResult as D1Result).results?.[0] ?? null;
     const channel = updatedRow
-      ? rowToConfigEntry(updatedRow as Record<string, unknown>)
+      ? await rowToConfigEntry(updatedRow as Record<string, unknown>, env.ZAJEL_ADMIN_JWT_SECRET)
       : null;
 
     return jsonResponse({
@@ -332,7 +358,7 @@ export async function handleTestNotification(
       );
     }
 
-    const entry = rowToConfigEntry(configRow as Record<string, unknown>);
+    const entry = await rowToConfigEntry(configRow as Record<string, unknown>, env.ZAJEL_ADMIN_JWT_SECRET);
 
     if (!entry.enabled) {
       return jsonResponse(

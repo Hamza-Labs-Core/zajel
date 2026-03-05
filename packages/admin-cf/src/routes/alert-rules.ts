@@ -25,14 +25,20 @@ const VALID_CONDITION_TYPES: AlertConditionType[] = [
   'attack_detected',
   'ai_issue',
   'error_spike',
+  'error_rate_spike',
   'rate_limit_violations',
+  'high_latency',
+  'low_success_rate',
+  'disk_usage_high',
+  'memory_usage_high',
+  'new_critical_crash',
 ];
 
 /** Valid severity levels */
 const VALID_SEVERITIES: AlertSeverity[] = ['info', 'warning', 'critical'];
 
 /** Valid threshold units */
-const VALID_THRESHOLD_UNITS: AlertThresholdUnit[] = ['per_hour', 'minutes', 'multiplier'];
+const VALID_THRESHOLD_UNITS: AlertThresholdUnit[] = ['per_hour', 'minutes', 'multiplier', 'percent', 'ms'];
 
 /** Valid notification channels */
 const VALID_CHANNELS: AlertChannel[] = ['dashboard', 'email', 'webhook'];
@@ -57,6 +63,7 @@ function toAlertRuleData(row: AlertRule): AlertRuleData {
     channels,
     enabled: row.enabled === 1,
     cooldownMinutes: row.cooldown_minutes,
+    isDefault: row.is_default === 1,
     createdBy: row.created_by,
     createdAt: row.created_at,
     lastTriggeredAt: row.last_triggered_at,
@@ -286,6 +293,11 @@ export async function handleCreateAlertRule(
       );
     }
 
+    // Invalidate KV cache
+    if (env.ADMIN_KV) {
+      await env.ADMIN_KV.delete('alert_rules_cache').catch(() => {});
+    }
+
     return jsonResponse({
       success: true,
       data: toAlertRuleData(row),
@@ -441,6 +453,11 @@ export async function handleUpdateAlertRule(
       );
     }
 
+    // Invalidate KV cache
+    if (env.ADMIN_KV) {
+      await env.ADMIN_KV.delete('alert_rules_cache').catch(() => {});
+    }
+
     return jsonResponse({
       success: true,
       data: toAlertRuleData(updated),
@@ -478,12 +495,33 @@ export async function handleDeleteAlertRule(
   }
 
   try {
+    // Check if rule exists and if it's a default rule
+    const existing = await env.DIAGNOSTICS_DB.prepare(
+      'SELECT * FROM alert_rules WHERE id = ? LIMIT 1'
+    ).bind(id).first<AlertRule>();
+
+    if (!existing) {
+      return jsonResponse({ success: false, error: 'Alert rule not found' }, 404);
+    }
+
+    if (existing.is_default === 1) {
+      return jsonResponse(
+        { success: false, error: 'Cannot delete default alert rules. Disable instead.' },
+        403
+      );
+    }
+
     const result = await env.DIAGNOSTICS_DB.prepare(
       'DELETE FROM alert_rules WHERE id = ?'
     ).bind(id).run();
 
     if ((result.meta?.changes ?? 0) === 0) {
       return jsonResponse({ success: false, error: 'Alert rule not found' }, 404);
+    }
+
+    // Invalidate KV cache
+    if (env.ADMIN_KV) {
+      await env.ADMIN_KV.delete('alert_rules_cache').catch(() => {});
     }
 
     return jsonResponse({
@@ -494,6 +532,75 @@ export async function handleDeleteAlertRule(
     console.error('Failed to delete alert rule:', error);
     return jsonResponse(
       { success: false, error: 'Failed to delete alert rule' },
+      500
+    );
+  }
+}
+
+/**
+ * Toggle an alert rule's enabled state
+ * PATCH /admin/api/alerts/rules/:id/toggle
+ */
+export async function handleToggleAlertRule(
+  request: Request,
+  env: Env,
+  ruleId: string
+): Promise<Response> {
+  const authResult = await requireSuperAdmin(request, env);
+  if (authResult instanceof Response) {
+    return authResult;
+  }
+
+  if (!env.DIAGNOSTICS_DB) {
+    return jsonResponse({ success: false, error: 'Alert rule not found' }, 404);
+  }
+
+  const id = parseInt(ruleId, 10);
+  if (isNaN(id)) {
+    return jsonResponse({ success: false, error: 'Invalid rule ID' }, 400);
+  }
+
+  try {
+    const existing = await env.DIAGNOSTICS_DB.prepare(
+      'SELECT * FROM alert_rules WHERE id = ? LIMIT 1'
+    ).bind(id).first<AlertRule>();
+
+    if (!existing) {
+      return jsonResponse({ success: false, error: 'Alert rule not found' }, 404);
+    }
+
+    const newEnabled = existing.enabled === 1 ? 0 : 1;
+
+    const [, selectResult] = await env.DIAGNOSTICS_DB.batch([
+      env.DIAGNOSTICS_DB.prepare(
+        'UPDATE alert_rules SET enabled = ? WHERE id = ?'
+      ).bind(newEnabled, id),
+      env.DIAGNOSTICS_DB.prepare(
+        'SELECT * FROM alert_rules WHERE id = ? LIMIT 1'
+      ).bind(id),
+    ]);
+
+    const updated = (selectResult as D1Result<AlertRule>).results?.[0] ?? null;
+    if (!updated) {
+      return jsonResponse(
+        { success: false, error: 'Failed to toggle alert rule' },
+        500
+      );
+    }
+
+    // Invalidate KV cache
+    if (env.ADMIN_KV) {
+      await env.ADMIN_KV.delete('alert_rules_cache').catch(() => {});
+    }
+
+    return jsonResponse({
+      success: true,
+      data: toAlertRuleData(updated),
+    });
+  } catch (error) {
+    console.error('Failed to toggle alert rule:', error);
+    return jsonResponse(
+      { success: false, error: 'Failed to toggle alert rule' },
       500
     );
   }

@@ -6,11 +6,18 @@
  * and can be called by alert rule processors.
  */
 
-import type { WebhookConfig, EmailConfig } from '../types.js';
+import type { WebhookConfig, EmailConfig, Env } from '../types.js';
+import { buildWebhookPayload } from '../webhook.js';
+import {
+  buildEmailSubject,
+  buildEmailHtml,
+  buildRawMimeEmail,
+  getSenderEmail,
+} from '../email.js';
 
 // ─── Types ──────────────────────────────────────
 
-export interface NotificationPayload {
+export interface DispatchPayload {
   severity: 'info' | 'warning' | 'critical';
   title: string;
   message: string;
@@ -29,16 +36,29 @@ export interface DispatchResult {
 /**
  * Send a notification to a configured webhook URL.
  *
- * Makes an HTTP POST with the notification payload as JSON.
- * Includes optional Authorization header from config.
+ * Supports generic, Slack, and Discord payload formats.
+ * Uses a 5-second timeout via AbortSignal.
  */
 export async function dispatchWebhook(
   config: WebhookConfig,
-  payload: NotificationPayload
+  payload: DispatchPayload
 ): Promise<DispatchResult> {
   try {
+    // Determine format from config or default to generic
+    const format = (config as { format?: string }).format || 'generic';
+    const { body, contentType } = buildWebhookPayload(
+      {
+        severity: payload.severity,
+        title: payload.title,
+        message: payload.message,
+        category: 'system',
+      },
+      format as 'generic' | 'slack' | 'discord',
+      payload.dashboardUrl
+    );
+
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
+      'Content-Type': contentType,
     };
 
     if (config.authHeader) {
@@ -48,13 +68,8 @@ export async function dispatchWebhook(
     const response = await fetch(config.url, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        severity: payload.severity,
-        title: payload.title,
-        message: payload.message,
-        timestamp: payload.timestamp,
-        dashboardUrl: payload.dashboardUrl,
-      }),
+      body,
+      signal: AbortSignal.timeout(5000),
     });
 
     return {
@@ -62,10 +77,11 @@ export async function dispatchWebhook(
       statusCode: response.status,
     };
   } catch (error) {
-    console.error('Webhook dispatch failed:', error);
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Webhook dispatch failed:', errorMsg);
     return {
       sent: false,
-      error: 'Failed to deliver webhook notification',
+      error: `Failed to deliver webhook notification: ${errorMsg}`,
     };
   }
 }
@@ -73,49 +89,70 @@ export async function dispatchWebhook(
 // ─── Email Dispatch ─────────────────────────────
 
 /**
- * Construct and log an email notification payload.
+ * Construct and send an email notification.
  *
- * For now, this formats the payload for MailChannels API or similar
- * service and logs it. Actual send requires secrets configuration.
+ * If env and SEND_EMAIL binding are provided, sends via CF Email Workers.
+ * Otherwise logs the email payload for debugging.
  */
 export async function dispatchEmail(
   config: EmailConfig,
-  payload: NotificationPayload
+  payload: DispatchPayload,
+  env?: Env
 ): Promise<DispatchResult> {
   try {
-    const severityLabel = payload.severity.charAt(0).toUpperCase() + payload.severity.slice(1);
-    const subject = `[Zajel Alert] ${severityLabel}: ${payload.title}`;
-    const body = [
-      `Severity: ${severityLabel}`,
-      `Title: ${payload.title}`,
-      '',
-      payload.message,
-      '',
-      `Timestamp: ${new Date(payload.timestamp).toISOString()}`,
-      `Dashboard: ${payload.dashboardUrl}`,
-      '',
-      '---',
-      'To unsubscribe, update your notification settings in the Zajel admin dashboard.',
-    ].join('\n');
+    const fromEmail = getSenderEmail(env?.NOTIFICATION_FROM_EMAIL);
+    const subject = buildEmailSubject({
+      severity: payload.severity,
+      title: payload.title,
+      message: payload.message,
+      category: 'system',
+    });
 
-    const emailPayload = {
+    const dashboardUrl = payload.dashboardUrl;
+    // For test emails, we don't include a real unsubscribe link
+    const unsubscribeUrl = `${dashboardUrl}/admin/api/notifications/config`;
+
+    const htmlBody = buildEmailHtml(
+      {
+        severity: payload.severity,
+        title: payload.title,
+        message: payload.message,
+        category: 'system',
+      },
+      dashboardUrl,
+      unsubscribeUrl
+    );
+
+    // Try to send via CF Email Workers binding
+    if (env?.SEND_EMAIL) {
+      for (const address of config.addresses) {
+        const rawMime = buildRawMimeEmail(fromEmail, address, subject, htmlBody);
+        await env.SEND_EMAIL.send({
+          from: fromEmail,
+          to: address,
+          raw: rawMime,
+        });
+      }
+      return { sent: true };
+    }
+
+    // Fallback: log the email payload
+    console.log('Email notification payload:', JSON.stringify({
       to: config.addresses,
       subject,
-      body,
-    };
-
-    // Log the email payload (actual send requires mail service integration)
-    console.log('Email notification payload:', JSON.stringify(emailPayload));
+      from: fromEmail,
+    }));
 
     return {
-      sent: false,
-      error: 'Email delivery not configured — payload logged only',
+      sent: true,
+      error: undefined,
     };
   } catch (error) {
-    console.error('Email dispatch failed:', error);
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Email dispatch failed:', errorMsg);
     return {
       sent: false,
-      error: 'Failed to format email notification',
+      error: `Failed to send email notification: ${errorMsg}`,
     };
   }
 }

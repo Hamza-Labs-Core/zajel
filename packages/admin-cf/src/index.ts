@@ -29,6 +29,7 @@ import {
   handleCreateAlertRule,
   handleUpdateAlertRule,
   handleDeleteAlertRule,
+  handleToggleAlertRule,
 } from './routes/alert-rules.js';
 import {
   handleListAlertHistory,
@@ -46,9 +47,12 @@ import {
   handleTestNotification,
 } from './routes/notification-config.js';
 import { handleLogDiagnosticCorrelation } from './routes/log-correlation.js';
+import { handleUnsubscribe } from './routes/unsubscribe.js';
+import { evaluateAlertRules } from './alert-engine.js';
 
-// Re-export Durable Object
+// Re-export Durable Objects
 export { AdminUsersDO } from './admin-users-do.js';
+export { NotificationDO } from './notification-do.js';
 
 // Rate limiting state (per worker instance)
 const rateLimitMap = new Map<string, { count: number; windowStart: number }>();
@@ -88,6 +92,63 @@ export default {
             timestamp: new Date().toISOString(),
           }
         }, 200, corsHeaders);
+      }
+
+      // ─── Internal notify endpoint (no auth, worker-to-worker) ──
+      if (path === '/admin/internal/notify' && method === 'POST') {
+        if (!env.NOTIFICATION_DO) {
+          return jsonResponse(
+            { success: false, error: 'NOTIFICATION_DO binding not configured' },
+            500,
+            corsHeaders
+          );
+        }
+        const doId = env.NOTIFICATION_DO.idFromName('notifications');
+        const stub = env.NOTIFICATION_DO.get(doId);
+        const doResponse = await stub.fetch(new Request('http://do/notify', {
+          method: 'POST',
+          body: request.body,
+          headers: { 'Content-Type': 'application/json' },
+        }));
+        const newHeaders = new Headers(doResponse.headers);
+        for (const [key, value] of Object.entries(corsHeaders)) {
+          newHeaders.set(key, value);
+        }
+        return new Response(doResponse.body, {
+          status: doResponse.status,
+          headers: newHeaders,
+        });
+      }
+
+      // ─── WebSocket upgrade for real-time notifications ──
+      if (path === '/admin/api/notifications/ws' && method === 'GET') {
+        const upgradeHeader = request.headers.get('Upgrade');
+        if (upgradeHeader !== 'websocket') {
+          return jsonResponse(
+            { success: false, error: 'Expected WebSocket upgrade' },
+            426,
+            corsHeaders
+          );
+        }
+        if (!env.NOTIFICATION_DO) {
+          return jsonResponse(
+            { success: false, error: 'NOTIFICATION_DO binding not configured' },
+            500,
+            corsHeaders
+          );
+        }
+        // Forward the full request to the DO (token is in query params)
+        const doId = env.NOTIFICATION_DO.idFromName('notifications');
+        const stub = env.NOTIFICATION_DO.get(doId);
+        return stub.fetch(new Request(new URL('/ws' + new URL(request.url).search, 'http://do'), {
+          method: 'GET',
+          headers: request.headers,
+        }));
+      }
+
+      // ─── Unsubscribe endpoint (no auth required, JWT in query) ──
+      if (path === '/admin/api/notifications/unsubscribe' && method === 'GET') {
+        return handleUnsubscribe(request, env);
       }
 
       // Check if ZAJEL_ADMIN_JWT_SECRET is configured
@@ -178,6 +239,9 @@ export default {
       } else if (path.match(/^\/admin\/api\/alerts\/rules\/\d+$/) && method === 'DELETE') {
         const ruleId = path.substring('/admin/api/alerts/rules/'.length);
         response = await handleDeleteAlertRule(request, env, ruleId);
+      } else if (path.match(/^\/admin\/api\/alerts\/rules\/\d+\/toggle$/) && method === 'PATCH') {
+        const ruleId = path.match(/^\/admin\/api\/alerts\/rules\/(\d+)\/toggle$/)![1];
+        response = await handleToggleAlertRule(request, env, ruleId);
       } else if (path === '/admin/api/alerts/history' && method === 'GET') {
         response = await handleListAlertHistory(request, env);
       } else if (path.match(/^\/admin\/api\/alerts\/history\/\d+\/acknowledge$/) && method === 'POST') {
@@ -252,6 +316,26 @@ export default {
         corsHeaders
       );
     }
+  },
+
+  // Cron trigger handler -- evaluates alert rules every 5 minutes.
+  // Configured via wrangler.jsonc triggers.crons (every 5 min schedule).
+  async scheduled(
+    _event: ScheduledEvent,
+    env: Env,
+    ctx: ExecutionContext
+  ): Promise<void> {
+    ctx.waitUntil(
+      evaluateAlertRules(env).then((results) => {
+        if (results.length > 0) {
+          console.log(`Alert engine fired ${results.length} alert(s):`,
+            results.map(r => `[${r.severity}] ${r.ruleName}: ${r.message}`).join('; ')
+          );
+        }
+      }).catch((error) => {
+        console.error('Alert engine cron failed:', error);
+      })
+    );
   },
 };
 

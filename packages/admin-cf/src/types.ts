@@ -72,6 +72,30 @@ export interface Env {
   BOOTSTRAP_SERVICE?: ServiceBinding;
   /** D1 binding for the diagnostics database (error_aggregates table) */
   DIAGNOSTICS_DB?: D1Database;
+  /** Durable Object namespace for real-time notifications (US-8.1) */
+  NOTIFICATION_DO?: DurableObjectNamespace;
+  /** Cloudflare Email Workers binding for sending email (US-8.2) */
+  SEND_EMAIL?: SendEmail;
+  /** KV namespace for cooldown state (email/webhook) */
+  ADMIN_KV?: KVNamespace;
+  /** Sender email address for notifications (default: notifications@zajel.hamzalabs.dev) */
+  NOTIFICATION_FROM_EMAIL?: string;
+}
+
+/**
+ * Cloudflare Email Workers SendEmail binding interface
+ */
+export interface SendEmail {
+  send(message: EmailMessage): Promise<void>;
+}
+
+/**
+ * Cloudflare EmailMessage interface for constructing email messages
+ */
+export interface EmailMessage {
+  readonly from: string;
+  readonly to: string;
+  readonly raw: ReadableStream | string;
 }
 
 /**
@@ -855,9 +879,15 @@ export type AlertConditionType =
   | 'attack_detected'
   | 'ai_issue'
   | 'error_spike'
-  | 'rate_limit_violations';
+  | 'error_rate_spike'
+  | 'rate_limit_violations'
+  | 'high_latency'
+  | 'low_success_rate'
+  | 'disk_usage_high'
+  | 'memory_usage_high'
+  | 'new_critical_crash';
 
-export type AlertThresholdUnit = 'per_hour' | 'minutes' | 'multiplier';
+export type AlertThresholdUnit = 'per_hour' | 'minutes' | 'multiplier' | 'percent' | 'ms';
 export type AlertSeverity = 'info' | 'warning' | 'critical';
 export type AlertChannel = 'dashboard' | 'email' | 'webhook';
 
@@ -872,6 +902,7 @@ export interface AlertRule {
   channels: string;
   enabled: number;
   cooldown_minutes: number;
+  is_default: number;
   created_by: string;
   created_at: number;
   last_triggered_at: number | null;
@@ -888,6 +919,7 @@ export interface AlertRuleData {
   channels: AlertChannel[];
   enabled: boolean;
   cooldownMinutes: number;
+  isDefault: boolean;
   createdBy: string;
   createdAt: number;
   lastTriggeredAt: number | null;
@@ -927,6 +959,8 @@ export interface AlertHistoryRow {
   triggered_at: number;
   message: string;
   channels_notified: string;
+  delivery_status: string | null;
+  delivery_error: string | null;
   acknowledged_at: number | null;
   acknowledged_by: string | null;
 }
@@ -938,6 +972,8 @@ export interface AlertHistoryEntry {
   triggeredAt: number;
   message: string;
   channelsNotified: AlertChannel[];
+  deliveryStatus: string | null;
+  deliveryError: string | null;
   acknowledgedAt: number | null;
   acknowledgedBy: string | null;
 }
@@ -945,6 +981,24 @@ export interface AlertHistoryEntry {
 export interface AlertHistoryListData {
   entries: AlertHistoryEntry[];
   total: number;
+}
+
+/** Result from evaluating a single alert condition */
+export interface ConditionResult {
+  triggered: boolean;
+  message: string;
+  metricValue?: number;
+}
+
+/** Result from the alert engine evaluating a rule that fired */
+export interface AlertEvalResult {
+  ruleId: number;
+  ruleName: string;
+  conditionType: AlertConditionType;
+  severity: AlertSeverity;
+  channels: AlertChannel[];
+  message: string;
+  metricValue?: number;
 }
 
 // ─── Notifications (US-8.1, US-8.2, US-8.3) ──
@@ -1001,4 +1055,80 @@ export interface NotificationConfigEntry {
 export interface NotificationConfigData {
   channels: NotificationConfigEntry[];
   lastUpdated: number;
+}
+
+// ─── Real-Time Notifications (US-8.1, US-8.2, US-8.3) ──
+
+/** Notification payload sent by internal services to NotificationDO */
+export interface NotificationPayload {
+  severity: 'critical' | 'warning' | 'info';
+  title: string;
+  message: string;
+  category: 'error_rate' | 'server_offline' | 'ai_issue' | 'security' | 'system';
+  link?: string;
+  ruleId?: number;
+  source?: string;
+}
+
+/** Notification as stored in DO storage */
+export interface StoredNotification {
+  id: string;
+  severity: 'critical' | 'warning' | 'info';
+  title: string;
+  message: string;
+  category: string;
+  link?: string;
+  timestamp: number;
+  readBy: string[];
+}
+
+/** WebSocket messages sent to dashboard clients */
+export type NotificationWsMessage =
+  | { type: 'notification'; data: StoredNotification }
+  | { type: 'notification_list'; data: StoredNotification[]; unreadCount: number }
+  | { type: 'read_ack'; id: string };
+
+/** WebSocket messages received from dashboard clients */
+export type NotificationClientMessage =
+  | { type: 'mark_read'; id: string }
+  | { type: 'mark_all_read' };
+
+/** WebSocket attachment persisted across hibernation */
+export interface WsSessionAttachment {
+  userId: string;
+  username: string;
+  role: 'admin' | 'super-admin';
+  connectedAt: number;
+}
+
+/** Webhook payload format */
+export type WebhookFormat = 'generic' | 'slack' | 'discord';
+
+/** Extended webhook channel config with format and label */
+export interface WebhookChannelConfig {
+  url: string;
+  authHeader?: string;
+  label?: string;
+  format: WebhookFormat;
+  severityFilter: string[];
+  cooldownMinutes: number;
+}
+
+/** Extended email channel config */
+export interface EmailChannelConfig {
+  address: string;
+  severityFilter: string[];
+  cooldownMinutes: number;
+}
+
+/** Webhook retry entry stored in DO storage */
+export interface WebhookRetry {
+  webhookConfigId: number;
+  url: string;
+  authHeader?: string;
+  format: WebhookFormat;
+  payload: NotificationPayload;
+  firstAttemptAt: number;
+  httpStatus?: number;
+  errorMessage?: string;
 }
