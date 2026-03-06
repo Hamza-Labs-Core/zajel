@@ -1689,9 +1689,9 @@ jobs:
           URL="${{ vars.VPS_QA_WS_URL }}"
           # Validate pre-set URL is actually reachable
           if [ -n "$URL" ]; then
-            PROBE_HOST=$(echo "$URL" | sed 's|wss://||;s|:.*||;s|/.*||')
-            if ! timeout 10 curl -sf "https://${PROBE_HOST}/health" >/dev/null 2>&1; then
-              echo "::warning::VPS_QA_WS_URL ($URL) not reachable — falling back to probe"
+            PROBE_URL=$(echo "$URL" | sed 's|^wss://|https://|;s|^ws://|http://|')
+            if ! timeout 10 curl -sf "${PROBE_URL}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS_QA_WS_URL ($URL) not reachable at ${PROBE_URL}/health — falling back to probe"
               URL=""
             fi
           fi
@@ -1894,9 +1894,9 @@ jobs:
           SINGLE_RESULT=0
           PHASE_B_MARKER="single_device and not headless and not windows and not linux"
           if [ -n "$SIGNALING_URL" ]; then
-            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||;s|/.*||')
-            if ! timeout 10 curl -sf "https://${VPS_HOST}/health" >/dev/null 2>&1; then
-              echo "::warning::VPS not reachable at ${VPS_HOST} — excluding requires_signaling from Phase B"
+            VPS_PROBE=$(echo "$SIGNALING_URL" | sed 's|^wss://|https://|;s|^ws://|http://|')
+            if ! timeout 10 curl -sf "${VPS_PROBE}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS not reachable at ${VPS_PROBE} — excluding requires_signaling from Phase B"
               SIGNALING_URL=""
             fi
           fi
@@ -1912,9 +1912,9 @@ jobs:
           # Re-probe VPS before signaling tests (may have gone down since initial probe)
           PROTOCOL_RESULT=0
           if [ -n "$SIGNALING_URL" ]; then
-            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||;s|/.*||')
-            if ! timeout 10 curl -sf "https://${VPS_HOST}/health" >/dev/null 2>&1; then
-              echo "::warning::VPS no longer reachable at ${VPS_HOST} — skipping signaling tests"
+            VPS_PROBE=$(echo "$SIGNALING_URL" | sed 's|^wss://|https://|;s|^ws://|http://|')
+            if ! timeout 10 curl -sf "${VPS_PROBE}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS no longer reachable at ${VPS_PROBE} — skipping signaling tests"
               SIGNALING_URL=""
             fi
           fi
@@ -2185,9 +2185,9 @@ jobs:
           URL="${{ vars.VPS_QA_WS_URL }}"
           # Validate pre-set URL is actually reachable
           if [ -n "$URL" ]; then
-            PROBE_HOST=$(echo "$URL" | sed 's|wss://||;s|:.*||;s|/.*||')
-            if ! timeout 10 curl -sf "https://${PROBE_HOST}/health" >/dev/null 2>&1; then
-              echo "::warning::VPS_QA_WS_URL ($URL) not reachable — falling back to probe"
+            PROBE_URL=$(echo "$URL" | sed 's|^wss://|https://|;s|^ws://|http://|')
+            if ! timeout 10 curl -sf "${PROBE_URL}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS_QA_WS_URL ($URL) not reachable at ${PROBE_URL}/health — falling back to probe"
               URL=""
             fi
           fi
@@ -2232,9 +2232,9 @@ jobs:
           # Re-probe VPS before signaling tests (may have gone down since initial probe)
           SIGNALING_RESULT=0
           if [ -n "$SIGNALING_URL" ]; then
-            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||;s|/.*||')
-            if ! timeout 10 curl -sf "https://${VPS_HOST}/health" >/dev/null 2>&1; then
-              echo "::warning::VPS no longer reachable at ${VPS_HOST} — skipping signaling tests"
+            VPS_PROBE=$(echo "$SIGNALING_URL" | sed 's|^wss://|https://|;s|^ws://|http://|')
+            if ! timeout 10 curl -sf "${VPS_PROBE}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS no longer reachable at ${VPS_PROBE} — skipping signaling tests"
               SIGNALING_URL=""
             fi
           fi
@@ -2348,9 +2348,9 @@ jobs:
           URL="${{ vars.VPS_QA_WS_URL }}"
           # Validate pre-set URL is actually reachable
           if [ -n "$URL" ]; then
-            PROBE_HOST=$(echo "$URL" | sed 's|wss://||;s|:.*||;s|/.*||')
-            if ! timeout 10 curl -sf "https://${PROBE_HOST}/health" >/dev/null 2>&1; then
-              echo "::warning::VPS_QA_WS_URL ($URL) not reachable — falling back to probe"
+            PROBE_URL=$(echo "$URL" | sed 's|^wss://|https://|;s|^ws://|http://|')
+            if ! timeout 10 curl -sf "${PROBE_URL}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS_QA_WS_URL ($URL) not reachable at ${PROBE_URL}/health — falling back to probe"
               URL=""
             fi
           fi
@@ -2473,9 +2473,9 @@ jobs:
           URL="${{ vars.VPS_QA_WS_URL }}"
           # Validate pre-set URL is actually reachable
           if [ -n "$URL" ]; then
-            PROBE_HOST=$(echo "$URL" | sed 's|wss://||;s|:.*||;s|/.*||')
-            if ! timeout 10 curl -sf "https://${PROBE_HOST}/health" >/dev/null 2>&1; then
-              echo "::warning::VPS_QA_WS_URL ($URL) not reachable — falling back to probe"
+            PROBE_URL=$(echo "$URL" | sed 's|^wss://|https://|;s|^ws://|http://|')
+            if ! timeout 10 curl -sf "${PROBE_URL}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS_QA_WS_URL ($URL) not reachable at ${PROBE_URL}/health — falling back to probe"
               URL=""
             fi
           fi
@@ -2518,9 +2518,9 @@ jobs:
           # Re-probe VPS before signaling tests (may have gone down since initial probe)
           SIGNALING_RESULT=0
           if [ -n "$SIGNALING_URL" ]; then
-            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||;s|/.*||')
-            if ! timeout 10 curl -sf "https://${VPS_HOST}/health" >/dev/null 2>&1; then
-              echo "::warning::VPS no longer reachable at ${VPS_HOST} — skipping signaling tests"
+            VPS_PROBE=$(echo "$SIGNALING_URL" | sed 's|^wss://|https://|;s|^ws://|http://|')
+            if ! timeout 10 curl -sf "${VPS_PROBE}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS no longer reachable at ${VPS_PROBE} — skipping signaling tests"
               SIGNALING_URL=""
             fi
           fi
