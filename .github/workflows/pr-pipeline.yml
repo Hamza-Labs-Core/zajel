@@ -1473,11 +1473,43 @@ jobs:
             #   - TLS certificates
             # QA just swaps the Node.js process on port 9000.
 
+            # Repair nginx if cert paths are broken
+            # nginx config expects certs at /etc/letsencrypt/live/PUBLIC_IP/
+            # but they may be at /etc/letsencrypt/live/zajel-vps/ from old deploys
+            NGINX_CONF="/etc/nginx/sites-available/zajel"
+            if [ -f "$NGINX_CONF" ]; then
+              CERT_PATH=$(grep -oP 'ssl_certificate\s+\K/etc/letsencrypt/live/[^/]+' "$NGINX_CONF" | head -1)
+              if [ -n "$CERT_PATH" ] && [ ! -d "$CERT_PATH" ]; then
+                echo "WARNING: nginx cert path $CERT_PATH does not exist"
+                # Find the actual cert directory
+                ACTUAL_CERT=""
+                for candidate in /etc/letsencrypt/live/zajel-vps /etc/letsencrypt/live/*/; do
+                  candidate="${candidate%/}"
+                  if [ -f "${candidate}/fullchain.pem" ]; then
+                    ACTUAL_CERT="$candidate"
+                    break
+                  fi
+                done
+                if [ -n "$ACTUAL_CERT" ]; then
+                  echo "Found certs at $ACTUAL_CERT — creating symlink to $CERT_PATH"
+                  sudo ln -sfn "$ACTUAL_CERT" "$CERT_PATH"
+                  echo "Symlink created. Testing nginx config..."
+                  sudo nginx -t 2>&1
+                else
+                  echo "ERROR: No valid certificates found anywhere in /etc/letsencrypt/live/"
+                  sudo ls -la /etc/letsencrypt/live/ 2>/dev/null || true
+                fi
+              fi
+            fi
+
             # Verify nginx is running (set up by prod deploy)
             if ! sudo systemctl is-active --quiet nginx; then
-              echo "WARNING: nginx not running — prod deploy may not have run yet"
-              echo "Attempting to start nginx..."
-              sudo systemctl start nginx || echo "WARNING: Could not start nginx"
+              echo "WARNING: nginx not running — attempting to start..."
+              sudo nginx -t 2>&1 && sudo systemctl start nginx || {
+                echo "ERROR: nginx config test failed — cannot start nginx"
+                sudo nginx -t 2>&1 || true
+                exit 1
+              }
             fi
 
             # Create deployment directory
@@ -1552,16 +1584,21 @@ jobs:
             done
 
             if [ "$HEALTHY" = false ]; then
-              echo "Health check failed — diagnosing..."
-              # Check if Node.js is running on localhost:9000
-              if curl -sf "http://localhost:9000/health" | grep -q "healthy"; then
-                echo "ERROR: Node.js is healthy on :9000 but nginx is not proxying"
-                sudo nginx -t 2>&1 || true
-                sudo systemctl status nginx --no-pager || true
-              else
-                echo "ERROR: Node.js server is not responding on :9000"
-                pm2 logs zajel-server-qa --lines 50 --nostream
-              fi
+              echo "=== Health check failed — full diagnostics ==="
+              echo "--- pm2 status ---"
+              pm2 list || true
+              echo "--- Node.js direct check ---"
+              curl -sf "http://localhost:9000/health" && echo "" || echo "Node.js NOT responding on :9000"
+              echo "--- nginx status ---"
+              sudo systemctl status nginx --no-pager 2>&1 || true
+              echo "--- nginx config test ---"
+              sudo nginx -t 2>&1 || true
+              echo "--- nginx error log (last 20 lines) ---"
+              sudo tail -20 /var/log/nginx/zajel-error.log 2>/dev/null || true
+              echo "--- cert directories ---"
+              sudo ls -la /etc/letsencrypt/live/ 2>/dev/null || echo "No /etc/letsencrypt/live/"
+              echo "--- pm2 logs ---"
+              pm2 logs zajel-server-qa --lines 30 --nostream 2>/dev/null || true
               exit 1
             fi
 
