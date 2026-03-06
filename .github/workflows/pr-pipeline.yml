@@ -1686,16 +1686,8 @@ jobs:
 
       - name: Resolve signaling URL
         run: |
-          URL="${{ vars.VPS_QA_WS_URL }}"
-          # Validate pre-set URL is actually reachable
-          if [ -n "$URL" ]; then
-            PROBE_URL=$(echo "$URL" | sed 's|^wss://|https://|;s|^ws://|http://|')
-            if ! timeout 10 curl -sf "${PROBE_URL}/health" >/dev/null 2>&1; then
-              echo "::warning::VPS_QA_WS_URL ($URL) not reachable at ${PROBE_URL}/health — falling back to probe"
-              URL=""
-            fi
-          fi
-          if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
+          URL=""
+          if [ -n "${{ vars.QA_VPS_IP }}" ]; then
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
@@ -2182,16 +2174,8 @@ jobs:
 
       - name: Resolve signaling URL
         run: |
-          URL="${{ vars.VPS_QA_WS_URL }}"
-          # Validate pre-set URL is actually reachable
-          if [ -n "$URL" ]; then
-            PROBE_URL=$(echo "$URL" | sed 's|^wss://|https://|;s|^ws://|http://|')
-            if ! timeout 10 curl -sf "${PROBE_URL}/health" >/dev/null 2>&1; then
-              echo "::warning::VPS_QA_WS_URL ($URL) not reachable at ${PROBE_URL}/health — falling back to probe"
-              URL=""
-            fi
-          fi
-          if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
+          URL=""
+          if [ -n "${{ vars.QA_VPS_IP }}" ]; then
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
@@ -2345,16 +2329,8 @@ jobs:
       - name: Resolve signaling URL
         shell: bash
         run: |
-          URL="${{ vars.VPS_QA_WS_URL }}"
-          # Validate pre-set URL is actually reachable
-          if [ -n "$URL" ]; then
-            PROBE_URL=$(echo "$URL" | sed 's|^wss://|https://|;s|^ws://|http://|')
-            if ! timeout 10 curl -sf "${PROBE_URL}/health" >/dev/null 2>&1; then
-              echo "::warning::VPS_QA_WS_URL ($URL) not reachable at ${PROBE_URL}/health — falling back to probe"
-              URL=""
-            fi
-          fi
-          if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
+          URL=""
+          if [ -n "${{ vars.QA_VPS_IP }}" ]; then
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
@@ -2470,16 +2446,8 @@ jobs:
 
       - name: Resolve signaling URL
         run: |
-          URL="${{ vars.VPS_QA_WS_URL }}"
-          # Validate pre-set URL is actually reachable
-          if [ -n "$URL" ]; then
-            PROBE_URL=$(echo "$URL" | sed 's|^wss://|https://|;s|^ws://|http://|')
-            if ! timeout 10 curl -sf "${PROBE_URL}/health" >/dev/null 2>&1; then
-              echo "::warning::VPS_QA_WS_URL ($URL) not reachable at ${PROBE_URL}/health — falling back to probe"
-              URL=""
-            fi
-          fi
-          if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
+          URL=""
+          if [ -n "${{ vars.QA_VPS_IP }}" ]; then
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
