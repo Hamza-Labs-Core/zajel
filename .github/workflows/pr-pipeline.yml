@@ -1437,14 +1437,12 @@ jobs:
           BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL }}
           ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
           SERVER_REGISTRY_SECRET: ${{ secrets.SERVER_REGISTRY_SECRET }}
-          CERTBOT_EMAIL: ${{ vars.CERTBOT_EMAIL || 'admin@hamzalabs.dev' }}
-          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
         with:
           host: ${{ vars.QA_VPS_IP }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          envs: APP_VERSION,BOOTSTRAP_URL,ZAJEL_ADMIN_JWT_SECRET,SERVER_REGISTRY_SECRET,CERTBOT_EMAIL,VPS_PORT
+          envs: APP_VERSION,BOOTSTRAP_URL,ZAJEL_ADMIN_JWT_SECRET,SERVER_REGISTRY_SECRET
           script: |
             set -e
 
@@ -1469,18 +1467,17 @@ jobs:
             fi
             echo "Public IP: ${PUBLIC_IP}"
 
-            # === Setup firewall (same as prod: only 22/80/443) ===
-            if [ -f /opt/zajel/server-vps-qa/deploy/setup-firewall.sh ]; then
-              echo "=== Configuring firewall ==="
-              bash /opt/zajel/server-vps-qa/deploy/setup-firewall.sh "${VPS_PORT:-22}"
-            fi
+            # QA shares VPS with prod. Prod deploy already set up:
+            #   - Firewall (22/80/443)
+            #   - nginx (443 → localhost:9000)
+            #   - TLS certificates
+            # QA just swaps the Node.js process on port 9000.
 
-            # === Setup nginx + TLS (same as prod: nginx on 443 → Node.js on 9000) ===
-            if [ -f /opt/zajel/server-vps-qa/deploy/setup-nginx.sh ]; then
-              echo "=== Setting up nginx ==="
-              bash /opt/zajel/server-vps-qa/deploy/setup-nginx.sh "$PUBLIC_IP" "${CERTBOT_EMAIL}"
-            else
-              echo "WARNING: nginx setup script not found"
+            # Verify nginx is running (set up by prod deploy)
+            if ! sudo systemctl is-active --quiet nginx; then
+              echo "WARNING: nginx not running — prod deploy may not have run yet"
+              echo "Attempting to start nginx..."
+              sudo systemctl start nginx || echo "WARNING: Could not start nginx"
             fi
 
             # Create deployment directory
@@ -1492,7 +1489,7 @@ jobs:
             # Install dependencies
             npm ci --omit=dev
 
-            # QA uses same architecture as prod: nginx (443) → Node.js (127.0.0.1:9000)
+            # QA reuses prod's nginx (443 → localhost:9000)
             PUBLIC_ENDPOINT="wss://${PUBLIC_IP}"
 
             # Validate required env vars from CI
@@ -1503,7 +1500,7 @@ jobs:
               exit 1
             fi
 
-            # Create QA startup script (same as prod: localhost:9000, no in-process TLS)
+            # Create QA startup script (localhost:9000, behind prod's nginx)
             cat > start-qa.sh << EOF
             #!/bin/bash
             export ZAJEL_HOST=127.0.0.1
@@ -1532,14 +1529,16 @@ jobs:
 
             mkdir -p data-qa
 
-            # Stop existing QA server
+            # Stop prod server to free port 9000, then start QA server
+            pm2 delete zajel-server 2>/dev/null || true
             pm2 delete zajel-server-qa 2>/dev/null || true
+            sleep 1
 
-            # Start QA server
+            # Start QA server on port 9000 (behind nginx)
             pm2 start start-qa.sh --name zajel-server-qa --interpreter bash
             pm2 save
 
-            # Health check via nginx (port 443) — same as prod
+            # Health check via nginx (port 443)
             sleep 5
             HEALTHY=false
             for i in {1..6}; do
@@ -1651,6 +1650,14 @@ jobs:
       - name: Resolve signaling URL
         run: |
           URL="${{ vars.VPS_QA_WS_URL }}"
+          # Validate pre-set URL is actually reachable
+          if [ -n "$URL" ]; then
+            PROBE_HOST=$(echo "$URL" | sed 's|wss://||;s|:.*||;s|/.*||')
+            if ! timeout 10 curl -sf "https://${PROBE_HOST}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS_QA_WS_URL ($URL) not reachable — falling back to probe"
+              URL=""
+            fi
+          fi
           if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
@@ -2139,6 +2146,14 @@ jobs:
       - name: Resolve signaling URL
         run: |
           URL="${{ vars.VPS_QA_WS_URL }}"
+          # Validate pre-set URL is actually reachable
+          if [ -n "$URL" ]; then
+            PROBE_HOST=$(echo "$URL" | sed 's|wss://||;s|:.*||;s|/.*||')
+            if ! timeout 10 curl -sf "https://${PROBE_HOST}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS_QA_WS_URL ($URL) not reachable — falling back to probe"
+              URL=""
+            fi
+          fi
           if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
@@ -2294,6 +2309,14 @@ jobs:
         shell: bash
         run: |
           URL="${{ vars.VPS_QA_WS_URL }}"
+          # Validate pre-set URL is actually reachable
+          if [ -n "$URL" ]; then
+            PROBE_HOST=$(echo "$URL" | sed 's|wss://||;s|:.*||;s|/.*||')
+            if ! timeout 10 curl -sf "https://${PROBE_HOST}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS_QA_WS_URL ($URL) not reachable — falling back to probe"
+              URL=""
+            fi
+          fi
           if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
@@ -2411,6 +2434,14 @@ jobs:
       - name: Resolve signaling URL
         run: |
           URL="${{ vars.VPS_QA_WS_URL }}"
+          # Validate pre-set URL is actually reachable
+          if [ -n "$URL" ]; then
+            PROBE_HOST=$(echo "$URL" | sed 's|wss://||;s|:.*||;s|/.*||')
+            if ! timeout 10 curl -sf "https://${PROBE_HOST}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS_QA_WS_URL ($URL) not reachable — falling back to probe"
+              URL=""
+            fi
+          fi
           if [ -z "$URL" ] && [ -n "${{ vars.QA_VPS_IP }}" ]; then
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
