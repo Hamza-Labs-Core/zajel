@@ -1426,11 +1426,11 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          source: "packages/server-vps/dist/*,packages/server-vps/package*.json,packages/server-vps/migrations/*"
+          source: "packages/server-vps/dist/*,packages/server-vps/package*.json,packages/server-vps/migrations/*,packages/server-vps/deploy/*"
           target: "/opt/zajel/server-vps-qa"
           strip_components: 2
 
-      - name: Start server
+      - name: Setup infrastructure and start server
         uses: appleboy/ssh-action@v1.0.3
         env:
           APP_VERSION: ${{ needs.tag-prerelease.outputs.version }}
@@ -1438,12 +1438,13 @@ jobs:
           ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
           SERVER_REGISTRY_SECRET: ${{ secrets.SERVER_REGISTRY_SECRET }}
           CERTBOT_EMAIL: ${{ vars.CERTBOT_EMAIL || 'admin@hamzalabs.dev' }}
+          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
         with:
           host: ${{ vars.QA_VPS_IP }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          envs: APP_VERSION,BOOTSTRAP_URL,ZAJEL_ADMIN_JWT_SECRET,SERVER_REGISTRY_SECRET,CERTBOT_EMAIL
+          envs: APP_VERSION,BOOTSTRAP_URL,ZAJEL_ADMIN_JWT_SECRET,SERVER_REGISTRY_SECRET,CERTBOT_EMAIL,VPS_PORT
           script: |
             set -e
 
@@ -1468,110 +1469,19 @@ jobs:
             fi
             echo "Public IP: ${PUBLIC_IP}"
 
-            # Install certbot with IP address support (>= 5.3.0) in isolated venv
-            echo "Installing/upgrading certbot..."
-            # apt-get update can fail transiently (mirror sync, CDN issues) — don't abort
-            sudo apt-get update -qq || echo "WARNING: apt-get update failed (transient mirror issue), continuing with existing cache"
-            sudo apt-get install -y -qq python3-venv
-            sudo python3 -m venv /opt/certbot-venv
-            sudo /opt/certbot-venv/bin/pip install --upgrade pip certbot
-            sudo ln -sf /opt/certbot-venv/bin/certbot /usr/local/bin/certbot
+            # === Setup firewall (same as prod: only 22/80/443) ===
+            if [ -f /opt/zajel/server-vps-qa/deploy/setup-firewall.sh ]; then
+              echo "=== Configuring firewall ==="
+              bash /opt/zajel/server-vps-qa/deploy/setup-firewall.sh "${VPS_PORT:-22}"
+            fi
 
-            echo "Certbot version: $(certbot --version 2>&1)"
-
-            # Obtain TLS certificate for IP address (Let's Encrypt, 6-day short-lived)
-            CERT_NAME="zajel-vps"
-            CERT_DIR="/etc/letsencrypt/live/${CERT_NAME}"
-
-            # Free port 80 — certbot standalone needs it for HTTP-01 challenge
-            # A pm2-managed Node process binds port 80 and auto-restarts on kill.
-            # Must stop pm2 first, then kill stragglers.
-            free_port_80() {
-              echo "Freeing port 80 for certbot..."
-              # Stop ALL pm2 processes (they auto-restart killed processes)
-              pm2 stop all 2>/dev/null || true
-              sleep 1
-              # Stop common web servers
-              for svc in nginx apache2 httpd caddy lighttpd; do
-                sudo systemctl stop "$svc" 2>/dev/null || true
-              done
-              # Kill any remaining process on port 80
-              sudo fuser -k -9 80/tcp 2>/dev/null || true
-              sleep 1
-              # Verify port 80 is free
-              if sudo fuser 80/tcp 2>/dev/null; then
-                echo "WARNING: Port 80 still in use:"
-                sudo lsof -i :80 2>/dev/null || true
-              else
-                echo "Port 80 is free"
-              fi
-            }
-
-            obtain_cert() {
-              echo "Obtaining new TLS certificate for ${PUBLIC_IP}..."
-              free_port_80
-              sudo certbot certonly --standalone --non-interactive \
-                --agree-tos -m "${CERTBOT_EMAIL}" \
-                --ip-address "${PUBLIC_IP}" \
-                --preferred-profile shortlived \
-                --cert-name "${CERT_NAME}"
-            }
-
-            NEED_NEW_CERT=false
-            if [ ! -f "${CERT_DIR}/fullchain.pem" ]; then
-              NEED_NEW_CERT=true
+            # === Setup nginx + TLS (same as prod: nginx on 443 → Node.js on 9000) ===
+            if [ -f /opt/zajel/server-vps-qa/deploy/setup-nginx.sh ]; then
+              echo "=== Setting up nginx ==="
+              bash /opt/zajel/server-vps-qa/deploy/setup-nginx.sh "$PUBLIC_IP" "${CERTBOT_EMAIL}"
             else
-              # Check if existing cert is valid for at least 1 hour
-              if ! sudo openssl x509 -checkend 3600 -noout -in "${CERT_DIR}/fullchain.pem" 2>/dev/null; then
-                echo "WARNING: TLS certificate is expired or expiring within 1 hour"
-                NEED_NEW_CERT=true
-              else
-                echo "TLS certificate exists and is valid, attempting renewal..."
-                # Free port 80 before renewal too (standalone authenticator needs it)
-                free_port_80
-                if ! sudo certbot renew --cert-name "${CERT_NAME}"; then
-                  echo "WARNING: certbot renew failed — will force re-issue"
-                  NEED_NEW_CERT=true
-                fi
-              fi
+              echo "WARNING: nginx setup script not found"
             fi
-
-            if [ "$NEED_NEW_CERT" = true ]; then
-              # Delete old cert if it exists (force clean re-issue)
-              if [ -d "${CERT_DIR}" ]; then
-                echo "Deleting old certificate to force re-issue..."
-                sudo certbot delete --cert-name "${CERT_NAME}" --non-interactive 2>/dev/null || true
-              fi
-              obtain_cert
-            fi
-
-            # Final validation: cert must exist and be valid
-            if [ ! -f "${CERT_DIR}/fullchain.pem" ]; then
-              echo "ERROR: Failed to obtain TLS certificate for ${PUBLIC_IP}"
-              exit 1
-            fi
-            if ! sudo openssl x509 -checkend 300 -noout -in "${CERT_DIR}/fullchain.pem"; then
-              echo "ERROR: TLS certificate is expired or invalid after renewal"
-              sudo openssl x509 -dates -noout -in "${CERT_DIR}/fullchain.pem"
-              exit 1
-            fi
-            echo "TLS certificate valid:"
-            sudo openssl x509 -dates -subject -noout -in "${CERT_DIR}/fullchain.pem"
-
-            TLS_CERT="${CERT_DIR}/fullchain.pem"
-            TLS_KEY="${CERT_DIR}/privkey.pem"
-
-            # Ensure the server user can read the certs
-            sudo chmod 0755 /etc/letsencrypt/live /etc/letsencrypt/archive
-            sudo chmod 0644 /etc/letsencrypt/archive/${CERT_NAME}/fullchain*.pem
-            sudo chmod 0640 /etc/letsencrypt/archive/${CERT_NAME}/privkey*.pem
-            sudo chown root:$(id -gn) /etc/letsencrypt/archive/${CERT_NAME}/privkey*.pem
-            echo "TLS configured: cert=${TLS_CERT}"
-
-            # Setup auto-renewal cron (6-day certs need frequent renewal)
-            # Stops pm2 (which has a process on port 80) before certbot standalone
-            echo '0 3 */3 * * root pm2 stop all 2>/dev/null; sleep 1; fuser -k -9 80/tcp 2>/dev/null; sleep 1; certbot renew 2>&1 | logger -t certbot-renew; pm2 start all 2>/dev/null' \
-              | sudo tee /etc/cron.d/zajel-cert-renew > /dev/null
 
             # Create deployment directory
             sudo mkdir -p /opt/zajel/server-vps-qa
@@ -1582,7 +1492,8 @@ jobs:
             # Install dependencies
             npm ci --omit=dev
 
-            PUBLIC_ENDPOINT="wss://${PUBLIC_IP}:8443"
+            # QA uses same architecture as prod: nginx (443) → Node.js (127.0.0.1:9000)
+            PUBLIC_ENDPOINT="wss://${PUBLIC_IP}"
 
             # Validate required env vars from CI
             echo "BOOTSTRAP_URL=${BOOTSTRAP_URL}"
@@ -1592,11 +1503,11 @@ jobs:
               exit 1
             fi
 
-            # Create QA startup script with env vars
+            # Create QA startup script (same as prod: localhost:9000, no in-process TLS)
             cat > start-qa.sh << EOF
             #!/bin/bash
-            export ZAJEL_HOST=0.0.0.0
-            export ZAJEL_PORT=8443
+            export ZAJEL_HOST=127.0.0.1
+            export ZAJEL_PORT=9000
             export ZAJEL_KEY_PATH=./data-qa/server.key
             export ZAJEL_DB_PATH=./data-qa/zajel.db
             export ZAJEL_PUBLIC_ENDPOINT=${PUBLIC_ENDPOINT}
@@ -1605,8 +1516,6 @@ jobs:
             export ZAJEL_REGISTRY_SECRET=${SERVER_REGISTRY_SECRET}
             export ZAJEL_ADMIN_JWT_SECRET=${ZAJEL_ADMIN_JWT_SECRET}
             export ZAJEL_CF_ADMIN_URL=https://admin.zajel.qa.hamzalabs.dev
-            export ZAJEL_TLS_CERT=${TLS_CERT}
-            export ZAJEL_TLS_KEY=${TLS_KEY}
             export NODE_ENV=qa
             export APP_VERSION=${APP_VERSION}
             cd /opt/zajel/server-vps-qa
@@ -1630,12 +1539,12 @@ jobs:
             pm2 start start-qa.sh --name zajel-server-qa --interpreter bash
             pm2 save
 
-            # Health check — use public IP (not localhost) so TLS cert is verified
+            # Health check via nginx (port 443) — same as prod
             sleep 5
             HEALTHY=false
             for i in {1..6}; do
-              if curl -sf "https://${PUBLIC_IP}:8443/health" | grep -q "healthy"; then
-                echo "Server healthy with valid TLS (${PUBLIC_ENDPOINT})"
+              if curl -sf "https://${PUBLIC_IP}/health" | grep -q "healthy"; then
+                echo "Server healthy via nginx (${PUBLIC_ENDPOINT})"
                 HEALTHY=true
                 break
               fi
@@ -1644,21 +1553,22 @@ jobs:
             done
 
             if [ "$HEALTHY" = false ]; then
-              echo "Health check failed — checking if it's a TLS issue..."
-              # Diagnose: is the app running but TLS broken?
-              if curl -sf -k "https://localhost:8443/health" | grep -q "healthy"; then
-                echo "ERROR: Server is running but TLS verification fails (cert may be invalid for ${PUBLIC_IP})"
-                sudo openssl x509 -dates -subject -noout -in "${TLS_CERT}" 2>/dev/null
+              echo "Health check failed — diagnosing..."
+              # Check if Node.js is running on localhost:9000
+              if curl -sf "http://localhost:9000/health" | grep -q "healthy"; then
+                echo "ERROR: Node.js is healthy on :9000 but nginx is not proxying"
+                sudo nginx -t 2>&1 || true
+                sudo systemctl status nginx --no-pager || true
               else
-                echo "ERROR: Server is not responding at all"
+                echo "ERROR: Node.js server is not responding on :9000"
+                pm2 logs zajel-server-qa --lines 50 --nostream
               fi
-              pm2 logs zajel-server-qa --lines 50 --nostream
               exit 1
             fi
 
             # Verify bootstrap registration (server should self-register on startup)
             sleep 5
-            SERVER_ID=$(curl -sf "https://${PUBLIC_IP}:8443/health" | python3 -c "import sys,json; print(json.load(sys.stdin).get('serverId',''))" 2>/dev/null || true)
+            SERVER_ID=$(curl -sf "https://${PUBLIC_IP}/health" | python3 -c "import sys,json; print(json.load(sys.stdin).get('serverId',''))" 2>/dev/null || true)
             BOOTSTRAP_SERVERS=$(curl -sf "${BOOTSTRAP_URL}/servers" 2>/dev/null || echo '{"servers":[]}')
 
             if echo "$BOOTSTRAP_SERVERS" | grep -q "${SERVER_ID}"; then
@@ -1745,13 +1655,13 @@ jobs:
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
-              echo "Probing VPS at $ip:8443 (WSS)..."
-              if timeout 10 curl -sf "https://${ip}:8443/health" >/dev/null 2>&1; then
-                URL="wss://${ip}:8443"
-                echo "Reachable and healthy: $ip:8443"
+              echo "Probing VPS at $ip:443 (WSS)..."
+              if timeout 10 curl -sf "https://${ip}/health" >/dev/null 2>&1; then
+                URL="wss://${ip}"
+                echo "Reachable and healthy: $ip:443"
                 break
               else
-                echo "Not reachable: $ip:8443"
+                echo "Not reachable: $ip:443"
               fi
             done
           fi
@@ -1940,10 +1850,9 @@ jobs:
           SINGLE_RESULT=0
           PHASE_B_MARKER="single_device and not headless and not windows and not linux"
           if [ -n "$SIGNALING_URL" ]; then
-            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||')
-            VPS_PORT=$(echo "$SIGNALING_URL" | sed 's|.*:||')
-            if ! timeout 10 curl -sf "https://${VPS_HOST}:${VPS_PORT}/health" >/dev/null 2>&1; then
-              echo "::warning::VPS not reachable at ${VPS_HOST}:${VPS_PORT} — excluding requires_signaling from Phase B"
+            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||;s|/.*||')
+            if ! timeout 10 curl -sf "https://${VPS_HOST}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS not reachable at ${VPS_HOST} — excluding requires_signaling from Phase B"
               SIGNALING_URL=""
             fi
           fi
@@ -1959,10 +1868,9 @@ jobs:
           # Re-probe VPS before signaling tests (may have gone down since initial probe)
           PROTOCOL_RESULT=0
           if [ -n "$SIGNALING_URL" ]; then
-            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||')
-            VPS_PORT=$(echo "$SIGNALING_URL" | sed 's|.*:||')
-            if ! timeout 10 curl -sf "https://${VPS_HOST}:${VPS_PORT}/health" >/dev/null 2>&1; then
-              echo "::warning::VPS no longer reachable at ${VPS_HOST}:${VPS_PORT} — skipping signaling tests"
+            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||;s|/.*||')
+            if ! timeout 10 curl -sf "https://${VPS_HOST}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS no longer reachable at ${VPS_HOST} — skipping signaling tests"
               SIGNALING_URL=""
             fi
           fi
@@ -2235,13 +2143,13 @@ jobs:
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
-              echo "Probing VPS at $ip:8443 (WSS)..."
-              if timeout 10 curl -sf "https://${ip}:8443/health" >/dev/null 2>&1; then
-                URL="wss://${ip}:8443"
-                echo "Reachable and healthy: $ip:8443"
+              echo "Probing VPS at $ip:443 (WSS)..."
+              if timeout 10 curl -sf "https://${ip}/health" >/dev/null 2>&1; then
+                URL="wss://${ip}"
+                echo "Reachable and healthy: $ip:443"
                 break
               else
-                echo "Not reachable: $ip:8443"
+                echo "Not reachable: $ip:443"
               fi
             done
           fi
@@ -2272,10 +2180,9 @@ jobs:
           # Re-probe VPS before signaling tests (may have gone down since initial probe)
           SIGNALING_RESULT=0
           if [ -n "$SIGNALING_URL" ]; then
-            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||')
-            VPS_PORT=$(echo "$SIGNALING_URL" | sed 's|.*:||')
-            if ! timeout 10 curl -sf "https://${VPS_HOST}:${VPS_PORT}/health" >/dev/null 2>&1; then
-              echo "::warning::VPS no longer reachable at ${VPS_HOST}:${VPS_PORT} — skipping signaling tests"
+            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||;s|/.*||')
+            if ! timeout 10 curl -sf "https://${VPS_HOST}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS no longer reachable at ${VPS_HOST} — skipping signaling tests"
               SIGNALING_URL=""
             fi
           fi
@@ -2391,13 +2298,13 @@ jobs:
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
-              echo "Probing VPS at $ip:8443 (WSS)..."
-              if timeout 10 curl -sf "https://${ip}:8443/health" >/dev/null 2>&1; then
-                URL="wss://${ip}:8443"
-                echo "Reachable and healthy: $ip:8443"
+              echo "Probing VPS at $ip:443 (WSS)..."
+              if timeout 10 curl -sf "https://${ip}/health" >/dev/null 2>&1; then
+                URL="wss://${ip}"
+                echo "Reachable and healthy: $ip:443"
                 break
               else
-                echo "Not reachable: $ip:8443"
+                echo "Not reachable: $ip:443"
               fi
             done
           fi
@@ -2508,13 +2415,13 @@ jobs:
             IFS=',' read -ra IPS <<< "${{ vars.QA_VPS_IP }}"
             for ip in "${IPS[@]}"; do
               ip=$(echo "$ip" | tr -d ' ')
-              echo "Probing VPS at $ip:8443 (WSS)..."
-              if timeout 10 curl -sf "https://${ip}:8443/health" >/dev/null 2>&1; then
-                URL="wss://${ip}:8443"
-                echo "Reachable and healthy: $ip:8443"
+              echo "Probing VPS at $ip:443 (WSS)..."
+              if timeout 10 curl -sf "https://${ip}/health" >/dev/null 2>&1; then
+                URL="wss://${ip}"
+                echo "Reachable and healthy: $ip:443"
                 break
               else
-                echo "Not reachable: $ip:8443"
+                echo "Not reachable: $ip:443"
               fi
             done
           fi
@@ -2543,10 +2450,9 @@ jobs:
           # Re-probe VPS before signaling tests (may have gone down since initial probe)
           SIGNALING_RESULT=0
           if [ -n "$SIGNALING_URL" ]; then
-            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||')
-            VPS_PORT=$(echo "$SIGNALING_URL" | sed 's|.*:||')
-            if ! timeout 10 curl -sf "https://${VPS_HOST}:${VPS_PORT}/health" >/dev/null 2>&1; then
-              echo "::warning::VPS no longer reachable at ${VPS_HOST}:${VPS_PORT} — skipping signaling tests"
+            VPS_HOST=$(echo "$SIGNALING_URL" | sed 's|wss://||;s|:.*||;s|/.*||')
+            if ! timeout 10 curl -sf "https://${VPS_HOST}/health" >/dev/null 2>&1; then
+              echo "::warning::VPS no longer reachable at ${VPS_HOST} — skipping signaling tests"
               SIGNALING_URL=""
             fi
           fi
