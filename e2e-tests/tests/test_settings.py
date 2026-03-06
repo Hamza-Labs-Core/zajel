@@ -99,10 +99,9 @@ class TestSettings:
         start_y = int(screen_size['height'] * 0.6)
 
         found_status = False
-        # On Pixel 6 (~859dp usable), "External Connections" is at ~492dp
-        # and should be visible without scrolling. Try with a longer timeout
-        # first, then scroll with smaller increments as fallback.
-        for attempt in range(4):
+        # "External Connections" is the 7th section — far down on mobile.
+        # Use larger scroll increments and more attempts to reach it.
+        for attempt in range(8):
             find_timeout = 5 if attempt == 0 else 2
             for status_text in ['External Connections', 'Connected',
                                 'Connecting', 'Pairing Code']:
@@ -114,9 +113,9 @@ class TestSettings:
                     pass
             if found_status:
                 break
-            # Small scroll (~150dp) to avoid overshooting past the section
-            small_end_y = int(screen_size['height'] * 0.45)
-            alice.swipe(center_x, start_y, center_x, small_end_y, 500)
+            # Scroll ~30% of screen height per attempt
+            end_y = int(screen_size['height'] * 0.3)
+            alice.swipe(center_x, start_y, center_x, end_y, 500)
             time.sleep(1)
 
         assert found_status, \
