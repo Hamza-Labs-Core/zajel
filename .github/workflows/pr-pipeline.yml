@@ -1403,6 +1403,8 @@ jobs:
       github.event.inputs.force_build == 'true'
     runs-on: ubuntu-latest
     environment: qa
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -1439,6 +1441,8 @@ jobs:
       github.event.inputs.force_build == 'true'
     runs-on: ubuntu-latest
     environment: qa
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
