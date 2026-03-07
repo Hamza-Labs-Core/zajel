@@ -10,7 +10,7 @@
     {
       "binding": "DB",
       "database_name": "zajel-diagnostics",
-      "database_id": "placeholder-d1-id",
+      "database_id": "50053b5e-b18f-40c7-abab-4d2e58bc9f7d",
       "migrations_dir": "migrations"
     }
   ],
@@ -27,7 +27,7 @@
   "kv_namespaces": [
     {
       "binding": "RATE_LIMIT_KV",
-      "id": "placeholder-kv-id"
+      "id": "4771816fd0cc469383de67257280c516"
     }
   ],
 
@@ -62,7 +62,7 @@
         {
           "binding": "DB",
           "database_name": "zajel-diagnostics-qa",
-          "database_id": "placeholder-d1-qa-id",
+          "database_id": "5093d39a-2f31-4e7f-981b-a39f9523bded",
           "migrations_dir": "migrations"
         }
       ],
@@ -75,7 +75,7 @@
       "kv_namespaces": [
         {
           "binding": "RATE_LIMIT_KV",
-          "id": "placeholder-kv-qa-id"
+          "id": "7da4b66fae594a0e9e5af8ef1e0d698d"
         }
       ],
       "ratelimits": [

@@ -81,6 +81,8 @@ jobs:
       server_vps: ${{ steps.filter.outputs.server_vps }}
       admin: ${{ steps.filter.outputs.admin }}
       website: ${{ steps.filter.outputs.website }}
+      diagnostics: ${{ steps.filter.outputs.diagnostics }}
+      log_processor: ${{ steps.filter.outputs.log_processor }}
       ci: ${{ steps.filter.outputs.ci }}
     steps:
       - uses: actions/checkout@v4
@@ -97,6 +99,10 @@ jobs:
               - 'packages/admin-cf/**'
             website:
               - 'packages/website/**'
+            diagnostics:
+              - 'packages/diagnostics-cf/**'
+            log_processor:
+              - 'packages/log-processor-cf/**'
             ci:
               - '.github/workflows/pr-pipeline.yml'
 
@@ -107,6 +113,8 @@ jobs:
           echo "  server_vps: ${{ steps.filter.outputs.server_vps }}"
           echo "  admin:      ${{ steps.filter.outputs.admin }}"
           echo "  website:    ${{ steps.filter.outputs.website }}"
+          echo "  diagnostics: ${{ steps.filter.outputs.diagnostics }}"
+          echo "  log_processor: ${{ steps.filter.outputs.log_processor }}"
           echo "  ci:         ${{ steps.filter.outputs.ci }}"
           echo "  force:      ${{ github.event.inputs.force_build || 'false' }}"
           echo ""
@@ -1034,7 +1042,7 @@ jobs:
     name: "✓ Phase 3: Build & Deploy"
     # Note: deploy-vps removed from dependencies - VPS deployment failures should not block pipeline
     # E2E tests now run on GitHub Actions runners with hardware-accelerated emulators
-    needs: [build-android, build-ios, build-linux, build-macos, build-windows, build-web, deploy-cf-signaling, deploy-cf-admin, deploy-cf-website]
+    needs: [build-android, build-ios, build-linux, build-macos, build-windows, build-web, deploy-cf-signaling, deploy-cf-admin, deploy-cf-website, deploy-cf-diagnostics, deploy-cf-log-processor]
     if: |
       always() &&
       needs.build-android.result == 'success' &&
@@ -1045,7 +1053,9 @@ jobs:
       needs.build-web.result == 'success' &&
       (needs.deploy-cf-signaling.result == 'success' || needs.deploy-cf-signaling.result == 'skipped') &&
       (needs.deploy-cf-admin.result == 'success' || needs.deploy-cf-admin.result == 'skipped') &&
-      (needs.deploy-cf-website.result == 'success' || needs.deploy-cf-website.result == 'skipped')
+      (needs.deploy-cf-website.result == 'success' || needs.deploy-cf-website.result == 'skipped') &&
+      (needs.deploy-cf-diagnostics.result == 'success' || needs.deploy-cf-diagnostics.result == 'skipped') &&
+      (needs.deploy-cf-log-processor.result == 'success' || needs.deploy-cf-log-processor.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - run: echo "All builds and deployments completed"
@@ -1269,6 +1279,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Apply diagnostics D1 migrations (QA)
+        working-directory: packages/diagnostics-cf
+        run: npx wrangler d1 migrations apply DB --env qa
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Apply log-processor D1 migrations (QA)
+        working-directory: packages/log-processor-cf
+        run: npx wrangler d1 migrations apply DB --env qa
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       - name: Sync JWT secret to CF Worker
         working-directory: packages/admin-cf
         run: printf '%s' "$ZAJEL_ADMIN_JWT_SECRET" | npx wrangler secret put ZAJEL_ADMIN_JWT_SECRET -c wrangler.jsonc --env qa
@@ -1369,6 +1393,78 @@ jobs:
             sleep 5
           done
           echo "Warning: Health check failed, continuing anyway"
+
+  deploy-cf-diagnostics:
+    name: Deploy CF Diagnostics
+    needs: [tag-prerelease, detect-changes]
+    if: |
+      needs.detect-changes.outputs.diagnostics == 'true' ||
+      needs.detect-changes.outputs.ci == 'true' ||
+      github.event.inputs.force_build == 'true'
+    runs-on: ubuntu-latest
+    environment: qa
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply D1 migrations (QA)
+        working-directory: packages/diagnostics-cf
+        run: npx wrangler d1 migrations apply DB --env qa
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy diagnostics worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/diagnostics-cf
+          command: deploy -c wrangler.jsonc --env qa
+
+  deploy-cf-log-processor:
+    name: Deploy CF Log Processor
+    needs: [tag-prerelease, detect-changes]
+    if: |
+      needs.detect-changes.outputs.log_processor == 'true' ||
+      needs.detect-changes.outputs.ci == 'true' ||
+      github.event.inputs.force_build == 'true'
+    runs-on: ubuntu-latest
+    environment: qa
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply D1 migrations (QA)
+        working-directory: packages/log-processor-cf
+        run: npx wrangler d1 migrations apply DB --env qa
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy log processor worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/log-processor-cf
+          command: deploy -c wrangler.jsonc --env qa
 
   deploy-vps:
     name: Deploy QA VPS
