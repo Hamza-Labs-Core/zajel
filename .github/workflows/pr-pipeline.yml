@@ -2463,8 +2463,10 @@ jobs:
           $signalingResult = 0
           $sigUrl = $env:SIGNALING_URL
           if ($sigUrl) {
-            $vpsHost = ($sigUrl -replace 'wss://','' -replace ':.*','')
-            $vpsPort = ($sigUrl -replace '.*:','')
+            # Parse host from wss://HOST or wss://HOST:PORT
+            $uri = [System.Uri]$sigUrl
+            $vpsHost = $uri.Host
+            $vpsPort = if ($uri.Port -gt 0 -and $uri.Port -ne 443) { $uri.Port } else { 443 }
             try {
               $response = Invoke-WebRequest -Uri "https://${vpsHost}:${vpsPort}/health" -TimeoutSec 10 -SkipCertificateCheck -ErrorAction Stop
               Write-Host "VPS health check passed"
@@ -2482,7 +2484,7 @@ jobs:
             pytest tests\test_signaling_headless.py -v -s --timeout=120
             $signalingResult = $LASTEXITCODE
           } else {
-            Write-Host "=== Skipping signaling tests (SIGNALING_URL not set) ==="
+            Write-Host "::warning::No signaling tests ran (SIGNALING_URL not set)"
           }
 
           if ($signalingResult -ne 0) {
@@ -2567,22 +2569,20 @@ jobs:
           echo "SIGNALING_URL=$URL" >> "$GITHUB_ENV"
           echo "Resolved SIGNALING_URL=${URL:-<empty>}"
 
-      - name: Run macOS E2E tests
+      - name: Run macOS desktop UI tests
+        continue-on-error: true
         env:
           ZAJEL_TEST_PLATFORM: macos
           ZAJEL_APP_PATH: ${{ github.workspace }}/macos-app/zajel.app
-          SIGNALING_URL: ${{ env.SIGNALING_URL }}
           E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-artifacts/e2e
         run: |
-          # ── Desktop UI tests (NSAccessibility + real cursor) ──
-          echo "=== Running macOS desktop UI tests ==="
           cd ${{ github.workspace }}/e2e-tests
-          python3 -m pytest tests/test_desktop_ui.py -v -s --timeout=120 || {
-            echo "::warning::macOS desktop UI tests failed (non-blocking while support is stabilized)"
-            true
-          }
+          python3 -m pytest tests/test_desktop_ui.py -v -s --timeout=120
 
-          # ── Signaling protocol tests ──
+      - name: Run macOS signaling tests
+        env:
+          SIGNALING_URL: ${{ env.SIGNALING_URL }}
+        run: |
           # Re-probe VPS before signaling tests (may have gone down since initial probe)
           SIGNALING_RESULT=0
           if [ -n "$SIGNALING_URL" ]; then
@@ -2593,16 +2593,16 @@ jobs:
             fi
           fi
           if [ -n "$SIGNALING_URL" ]; then
-            echo ""
             echo "=== Running signaling tests ==="
+            cd ${{ github.workspace }}/e2e-tests
             python3 -m pytest tests/test_signaling_headless.py -v -s --timeout=120
             SIGNALING_RESULT=$?
           else
-            echo "=== Skipping signaling tests (SIGNALING_URL not set) ==="
+            echo "::warning::No signaling tests ran (SIGNALING_URL not set)"
           fi
 
           [ $SIGNALING_RESULT -ne 0 ] && echo "FAILED: Signaling tests" && exit 1
-          echo "All macOS E2E tests passed."
+          echo "All macOS signaling E2E tests passed."
 
       - name: Upload test artifacts
         if: always()
