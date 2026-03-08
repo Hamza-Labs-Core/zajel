@@ -1770,7 +1770,10 @@ jobs:
       - name: Install Appium
         run: |
           npm install -g appium
-          appium driver install uiautomator2@6.9.3
+          appium driver install uiautomator2
+          # Symlink global appium into driver home so appium-android-driver
+          # can resolve 'appium/driver' via Node module walk-up
+          ln -sf "$(npm root -g)/appium" ~/.appium/node_modules/appium
 
       - name: Setup Python
         uses: actions/setup-python@v5
