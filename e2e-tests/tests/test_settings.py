@@ -82,6 +82,10 @@ class TestSettings:
     @pytest.mark.requires_signaling
     def test_connection_status_shown(self, alice, app_helper):
         """Settings shows connection status ('Connected' or 'Connecting...')."""
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+
         helper = app_helper(alice)
         helper.wait_for_app_ready()
 
@@ -90,29 +94,33 @@ class TestSettings:
         helper.navigate_to_settings()
 
         # The External Connections section is the 7th section — scroll down.
-        # Use smaller scroll increments (~15% of screen) to avoid
-        # overshooting the section, and search for all status texts
-        # on every attempt (with short 1s timeouts).
+        # Use a single compound XPath to search all status texts at once
+        # (avoids 5× timeout per scroll attempt).
         screen_size = alice.get_window_size()
         center_x = int(screen_size['width'] * 0.5)
-        start_y = int(screen_size['height'] * 0.55)
-        end_y = int(screen_size['height'] * 0.4)
+        start_y = int(screen_size['height'] * 0.7)
+        end_y = int(screen_size['height'] * 0.3)
+
+        compound_xpath = (
+            "//*["
+            "contains(@content-desc, 'External Connections') or "
+            "contains(@content-desc, 'Connected') or "
+            "contains(@content-desc, 'Connecting') or "
+            "contains(@content-desc, 'Pairing Code') or "
+            "contains(@content-desc, 'Bootstrap Server')]"
+        )
 
         found_status = False
-        status_texts = ['External Connections', 'Connected',
-                        'Connecting', 'Pairing Code',
-                        'Bootstrap Server']
-        for attempt in range(12):
-            for status_text in status_texts:
-                try:
-                    helper._find(status_text, timeout=1)
-                    found_status = True
-                    break
-                except Exception:
-                    pass
-            if found_status:
+        for attempt in range(8):
+            try:
+                WebDriverWait(alice, 2).until(
+                    EC.presence_of_element_located((By.XPATH, compound_xpath))
+                )
+                found_status = True
                 break
-            alice.swipe(center_x, start_y, center_x, end_y, 500)
+            except Exception:
+                pass
+            alice.swipe(center_x, start_y, center_x, end_y, 800)
             time.sleep(0.5)
 
         assert found_status, \
@@ -126,19 +134,20 @@ class TestSettings:
 
         helper.navigate_to_settings()
 
-        # Scroll down to find View Logs (it's in the Debugging section)
+        # Scroll down to find View Logs (it's in the Debugging section,
+        # near the bottom of the settings screen).
         screen_size = alice.get_window_size()
         center_x = int(screen_size['width'] * 0.5)
-        start_y = int(screen_size['height'] * 0.8)
-        end_y = int(screen_size['height'] * 0.2)
+        start_y = int(screen_size['height'] * 0.7)
+        end_y = int(screen_size['height'] * 0.3)
 
-        for _ in range(3):
+        for _ in range(6):
             try:
                 helper._find("View Logs", timeout=3)
                 break
             except Exception:
-                alice.swipe(center_x, start_y, center_x, end_y, 500)
-                time.sleep(1)
+                alice.swipe(center_x, start_y, center_x, end_y, 800)
+                time.sleep(0.5)
 
         helper.tap_settings_option("View Logs")
 
@@ -187,10 +196,10 @@ class TestSettings:
         # Scroll to bottom to find 'Clear All Data'
         screen_size = alice_driver.get_window_size()
         center_x = int(screen_size['width'] * 0.5)
-        start_y = int(screen_size['height'] * 0.8)
-        end_y = int(screen_size['height'] * 0.2)
+        start_y = int(screen_size['height'] * 0.7)
+        end_y = int(screen_size['height'] * 0.3)
 
-        for _ in range(5):
+        for _ in range(6):
             try:
                 alice._find("Clear All Data", timeout=3)
                 break
