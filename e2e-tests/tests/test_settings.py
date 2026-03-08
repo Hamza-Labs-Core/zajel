@@ -90,34 +90,30 @@ class TestSettings:
         helper.navigate_to_settings()
 
         # The External Connections section is the 7th section — scroll down.
+        # Use smaller scroll increments (~15% of screen) to avoid
+        # overshooting the section, and search for all status texts
+        # on every attempt (with short 1s timeouts).
         screen_size = alice.get_window_size()
         center_x = int(screen_size['width'] * 0.5)
-        start_y = int(screen_size['height'] * 0.6)
+        start_y = int(screen_size['height'] * 0.55)
+        end_y = int(screen_size['height'] * 0.4)
 
         found_status = False
-        # Use short find timeouts (1s) to stay well under the 120s
-        # pytest-timeout. Search for the section header first; on the
-        # final attempt also check for status text variants.
         status_texts = ['External Connections', 'Connected',
-                        'Connecting', 'Pairing Code']
-        for attempt in range(8):
-            find_timeout = 3 if attempt == 0 else 1
-            # On early attempts, only look for the section header
-            # to keep per-iteration cost low (~1s vs ~4s).
-            texts = status_texts if attempt >= 6 else status_texts[:1]
-            for status_text in texts:
+                        'Connecting', 'Pairing Code',
+                        'Bootstrap Server']
+        for attempt in range(12):
+            for status_text in status_texts:
                 try:
-                    helper._find(status_text, timeout=find_timeout)
+                    helper._find(status_text, timeout=1)
                     found_status = True
                     break
                 except Exception:
                     pass
             if found_status:
                 break
-            # Scroll ~30% of screen height per attempt
-            end_y = int(screen_size['height'] * 0.3)
             alice.swipe(center_x, start_y, center_x, end_y, 500)
-            time.sleep(1)
+            time.sleep(0.5)
 
         assert found_status, \
             "Settings should show connection status section"
