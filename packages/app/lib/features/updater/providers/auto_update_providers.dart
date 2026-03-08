@@ -68,6 +68,36 @@ class BackgroundDownloadSettingsNotifier extends StateNotifier<bool> {
   }
 }
 
+// ── Pre-Release Channel ──────────────────────────────────
+
+/// Whether the user has opted in to receiving pre-release updates.
+///
+/// Default: false (stable channel). When enabled, the update checker
+/// queries `/releases` (list) instead of `/releases/latest` to include
+/// pre-release builds.
+///
+/// Persisted to SharedPreferences under the key `includePrereleases`.
+final includePrereleasesProvider =
+    StateNotifierProvider<IncludePrereleasesNotifier, bool>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return IncludePrereleasesNotifier(prefs);
+});
+
+/// StateNotifier for the pre-release channel preference.
+class IncludePrereleasesNotifier extends StateNotifier<bool> {
+  final SharedPreferences _prefs;
+  static const _key = 'includePrereleases';
+
+  IncludePrereleasesNotifier(this._prefs)
+      : super(_prefs.getBool(_key) ?? false);
+
+  /// Enable or disable pre-release updates.
+  Future<void> setEnabled(bool enabled) async {
+    state = enabled;
+    await _prefs.setBool(_key, enabled);
+  }
+}
+
 // ── Idle Detector ──────────────────────────────────
 
 /// Provider for the [IdleDetector] singleton.
