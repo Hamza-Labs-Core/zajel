@@ -79,32 +79,33 @@ class TestSettings:
         assert persisted, "Display name should persist after app restart"
 
     @pytest.mark.single_device
+    @pytest.mark.requires_signaling
     def test_connection_status_shown(self, alice, app_helper):
         """Settings shows connection status ('Connected' or 'Connecting...')."""
         helper = app_helper(alice)
         helper.wait_for_app_ready()
 
-        # Navigate to connect first to trigger signaling connection
-        helper.navigate_to_connect()
-        time.sleep(5)
-        helper.go_back_to_home()
-
+        # The app auto-connects to signaling on startup (no need to
+        # navigate to the Connect screen first).
         helper.navigate_to_settings()
 
-        # The External Connections section may be below the fold — scroll down
-        # Use small scroll increments to avoid overshooting past the section
+        # The External Connections section is the 7th section — scroll down.
         screen_size = alice.get_window_size()
         center_x = int(screen_size['width'] * 0.5)
         start_y = int(screen_size['height'] * 0.6)
 
         found_status = False
-        # On Pixel 6 (~859dp usable), "External Connections" is at ~492dp
-        # and should be visible without scrolling. Try with a longer timeout
-        # first, then scroll with smaller increments as fallback.
-        for attempt in range(4):
-            find_timeout = 5 if attempt == 0 else 2
-            for status_text in ['External Connections', 'Connected',
-                                'Connecting', 'Pairing Code']:
+        # Use short find timeouts (1s) to stay well under the 120s
+        # pytest-timeout. Search for the section header first; on the
+        # final attempt also check for status text variants.
+        status_texts = ['External Connections', 'Connected',
+                        'Connecting', 'Pairing Code']
+        for attempt in range(8):
+            find_timeout = 3 if attempt == 0 else 1
+            # On early attempts, only look for the section header
+            # to keep per-iteration cost low (~1s vs ~4s).
+            texts = status_texts if attempt >= 6 else status_texts[:1]
+            for status_text in texts:
                 try:
                     helper._find(status_text, timeout=find_timeout)
                     found_status = True
@@ -113,9 +114,9 @@ class TestSettings:
                     pass
             if found_status:
                 break
-            # Small scroll (~150dp) to avoid overshooting past the section
-            small_end_y = int(screen_size['height'] * 0.45)
-            alice.swipe(center_x, start_y, center_x, small_end_y, 500)
+            # Scroll ~30% of screen height per attempt
+            end_y = int(screen_size['height'] * 0.3)
+            alice.swipe(center_x, start_y, center_x, end_y, 500)
             time.sleep(1)
 
         assert found_status, \

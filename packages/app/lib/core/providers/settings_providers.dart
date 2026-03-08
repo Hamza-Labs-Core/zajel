@@ -2,6 +2,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/environment.dart';
+import '../diagnostics/diagnostics_service.dart';
+import '../diagnostics/error_tracker.dart';
 import 'preferences_providers.dart';
 
 // ── Auto-Delete Messages ──────────────────────────────────
@@ -148,3 +150,30 @@ class DiagnosticsEnabledNotifier extends StateNotifier<bool> {
     await _prefs.setBool(_key, enabled);
   }
 }
+
+// ── Diagnostics Service ──────────────────────────────────
+
+/// Provider for the [DiagnosticsService] singleton.
+///
+/// The service is only created when a diagnostics URL is configured.
+/// It starts/stops automatically based on [diagnosticsEnabledProvider].
+final diagnosticsServiceProvider = Provider<DiagnosticsService?>((ref) {
+  if (!Environment.hasDiagnosticsUrl) return null;
+
+  final enabled = ref.watch(diagnosticsEnabledProvider);
+
+  final service = DiagnosticsService(
+    errorTracker: ErrorTracker(
+      isEnabled: () => ref.read(diagnosticsEnabledProvider),
+    ),
+    diagnosticsUrl: Environment.diagnosticsUrl,
+  );
+
+  if (enabled) {
+    service.start();
+  }
+
+  ref.onDispose(() => service.dispose());
+
+  return service;
+});

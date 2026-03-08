@@ -260,20 +260,50 @@ class SignalingClient:
             # Wait for the server to confirm registration before returning.
             # Without this, pair_with() can race ahead and get "Not registered"
             # because the server hasn't processed the register message yet.
-            try:
-                raw = await asyncio.wait_for(ws.recv(), timeout=5)
-                resp = json.loads(raw)
-                if resp.get("type") == "registered":
-                    logger.info("[T+%dms] redirect registered confirmed — %s",
-                                int((time.monotonic() - t0) * 1000), endpoint)
-                else:
-                    # Not the expected response — route it through normal handling
-                    logger.info("[T+%dms] redirect got unexpected response type=%s — %s",
-                                int((time.monotonic() - t0) * 1000), resp.get("type"), endpoint)
-                    await self._handle_message(resp, source_ws=ws)
-            except asyncio.TimeoutError:
-                logger.warning("[T+%dms] TIMEOUT waiting for registered on redirect %s",
-                               int((time.monotonic() - t0) * 1000), endpoint)
+            #
+            # The VPS always sends server_info (and optionally attest_request)
+            # immediately on connection — before processing our register message.
+            # We must loop past those pre-registration messages until we see
+            # 'registered' or 'error', or until the timeout fires.
+            # Messages that arrive before registration (server_info, pong, etc.)
+            # are routed through normal handling rather than dropped.
+            # Messages that we do NOT expect pre-registration (pair_error, etc.)
+            # are also routed so they are not lost.
+            pre_registration_types = {"server_info", "pong", "attest_challenge"}
+            deadline = asyncio.get_event_loop().time() + 5
+            while True:
+                remaining_timeout = deadline - asyncio.get_event_loop().time()
+                if remaining_timeout <= 0:
+                    logger.warning("[T+%dms] TIMEOUT waiting for registered on redirect %s",
+                                   int((time.monotonic() - t0) * 1000), endpoint)
+                    break
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=remaining_timeout)
+                    resp = json.loads(raw)
+                    resp_type = resp.get("type")
+                    if resp_type == "registered":
+                        logger.info("[T+%dms] redirect registered confirmed — %s",
+                                    int((time.monotonic() - t0) * 1000), endpoint)
+                        break
+                    elif resp_type == "error":
+                        logger.warning("[T+%dms] redirect registration error: %s — %s",
+                                       int((time.monotonic() - t0) * 1000),
+                                       resp.get("message"), endpoint)
+                        await self._handle_message(resp, source_ws=ws)
+                        break
+                    else:
+                        # Pre-registration message (e.g. server_info) — route
+                        # through normal handling and keep waiting
+                        logger.info("[T+%dms] redirect pre-registration message type=%s — %s",
+                                    int((time.monotonic() - t0) * 1000), resp_type, endpoint)
+                        await self._handle_message(resp, source_ws=ws)
+                        if resp_type not in pre_registration_types:
+                            # Unexpected message before registered — stop waiting
+                            break
+                except asyncio.TimeoutError:
+                    logger.warning("[T+%dms] TIMEOUT waiting for registered on redirect %s",
+                                   int((time.monotonic() - t0) * 1000), endpoint)
+                    break
 
             # Start receiving messages from this redirect connection
             task = asyncio.create_task(self._redirect_receive_loop(endpoint, ws))

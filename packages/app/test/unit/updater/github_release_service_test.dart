@@ -646,6 +646,211 @@ void main() {
       });
     });
 
+    group('prerelease channel', () {
+      test('includePrerelease=false uses /releases/latest endpoint', () async {
+        Uri? requestUrl;
+
+        final mockClient = http_testing.MockClient((request) async {
+          requestUrl = request.url;
+          return http.Response(
+            jsonEncode(_validReleaseJson()),
+            200,
+            headers: {'etag': '"abc"'},
+          );
+        });
+
+        final service = GitHubReleaseService(client: mockClient);
+        // includePrerelease defaults to false
+        await service.fetchLatestRelease();
+
+        expect(requestUrl!.path, endsWith('/releases/latest'));
+
+        service.dispose();
+      });
+
+      test('includePrerelease=true uses /releases list endpoint', () async {
+        Uri? requestUrl;
+
+        final mockClient = http_testing.MockClient((request) async {
+          requestUrl = request.url;
+          return http.Response(
+            jsonEncode([
+              _validReleaseJson(
+                tagName: 'v1.3.0-beta.1',
+                name: 'Zajel v1.3.0 Beta 1',
+                prerelease: true,
+              ),
+              _validReleaseJson(
+                tagName: 'v1.2.0',
+                name: 'Zajel v1.2.0',
+              ),
+            ]),
+            200,
+            headers: {'etag': '"abc"'},
+          );
+        });
+
+        final service = GitHubReleaseService(client: mockClient);
+        service.includePrerelease = true;
+        final release = await service.fetchLatestRelease();
+
+        expect(requestUrl!.path, endsWith('/releases'));
+        expect(requestUrl!.queryParameters['per_page'], '10');
+        // Returns the first non-draft release (which is the prerelease)
+        expect(release.tagName, 'v1.3.0-beta.1');
+        expect(release.prerelease, true);
+
+        service.dispose();
+      });
+
+      test('includePrerelease=true skips draft releases', () async {
+        final mockClient = http_testing.MockClient((request) async {
+          return http.Response(
+            jsonEncode([
+              _validReleaseJson(
+                tagName: 'v1.4.0-draft',
+                name: 'Zajel v1.4.0 Draft',
+                draft: true,
+              ),
+              _validReleaseJson(
+                tagName: 'v1.3.0-beta.1',
+                name: 'Zajel v1.3.0 Beta 1',
+                prerelease: true,
+              ),
+            ]),
+            200,
+            headers: {'etag': '"abc"'},
+          );
+        });
+
+        final service = GitHubReleaseService(client: mockClient);
+        service.includePrerelease = true;
+        final release = await service.fetchLatestRelease();
+
+        expect(release.tagName, 'v1.3.0-beta.1');
+
+        service.dispose();
+      });
+
+      test('switching includePrerelease invalidates cache', () async {
+        var requestCount = 0;
+
+        final mockClient = http_testing.MockClient((request) async {
+          requestCount++;
+          if (request.url.path.endsWith('/releases/latest')) {
+            return http.Response(
+              jsonEncode(_validReleaseJson(tagName: 'v1.2.0')),
+              200,
+              headers: {'etag': '"stable-etag"'},
+            );
+          }
+          return http.Response(
+            jsonEncode([
+              _validReleaseJson(
+                tagName: 'v1.3.0-beta.1',
+                prerelease: true,
+              ),
+            ]),
+            200,
+            headers: {'etag': '"prerelease-etag"'},
+          );
+        });
+
+        final service = GitHubReleaseService(client: mockClient);
+
+        // Fetch stable (cached)
+        final stable = await service.fetchLatestRelease();
+        expect(stable.tagName, 'v1.2.0');
+        expect(requestCount, 1);
+
+        // Within cache window — no new request
+        await service.fetchLatestRelease();
+        expect(requestCount, 1);
+
+        // Switch to prerelease — cache invalidated, new request
+        service.includePrerelease = true;
+        final prerelease = await service.fetchLatestRelease();
+        expect(prerelease.tagName, 'v1.3.0-beta.1');
+        expect(requestCount, 2);
+
+        service.dispose();
+      });
+
+      test('includePrerelease=true throws when all releases are drafts',
+          () async {
+        final mockClient = http_testing.MockClient((request) async {
+          return http.Response(
+            jsonEncode([
+              _validReleaseJson(
+                tagName: 'v1.4.0-draft',
+                draft: true,
+              ),
+            ]),
+            200,
+            headers: {'etag': '"abc"'},
+          );
+        });
+
+        final service = GitHubReleaseService(client: mockClient);
+        service.includePrerelease = true;
+
+        expect(
+          () => service.fetchLatestRelease(),
+          throwsA(isA<GitHubApiException>().having(
+            (e) => e.message,
+            'message',
+            'No suitable release found in releases list',
+          )),
+        );
+
+        service.dispose();
+      });
+
+      test('includePrerelease=true handles empty releases list', () async {
+        final mockClient = http_testing.MockClient((request) async {
+          return http.Response(
+            jsonEncode([]),
+            200,
+            headers: {'etag': '"abc"'},
+          );
+        });
+
+        final service = GitHubReleaseService(client: mockClient);
+        service.includePrerelease = true;
+
+        expect(
+          () => service.fetchLatestRelease(),
+          throwsA(isA<GitHubApiException>()),
+        );
+
+        service.dispose();
+      });
+
+      test('no-op when setting same includePrerelease value', () async {
+        var requestCount = 0;
+
+        final mockClient = http_testing.MockClient((request) async {
+          requestCount++;
+          return http.Response(
+            jsonEncode(_validReleaseJson()),
+            200,
+            headers: {'etag': '"abc"'},
+          );
+        });
+
+        final service = GitHubReleaseService(client: mockClient);
+        await service.fetchLatestRelease();
+        expect(requestCount, 1);
+
+        // Setting same value shouldn't invalidate cache
+        service.includePrerelease = false;
+        await service.fetchLatestRelease();
+        expect(requestCount, 1); // Still cached
+
+        service.dispose();
+      });
+    });
+
     group('ETag caching', () {
       test('stores ETag from response', () async {
         final mockClient = http_testing.MockClient((request) async {

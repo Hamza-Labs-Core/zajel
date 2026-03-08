@@ -30,6 +30,9 @@ class GitHubReleaseService {
 
   final http.Client _client;
 
+  // Pre-release channel
+  bool _includePrerelease = false;
+
   // ETag caching
   String? _lastETag;
   GitHubRelease? _cachedRelease;
@@ -40,6 +43,20 @@ class GitHubReleaseService {
 
   GitHubReleaseService({http.Client? client})
       : _client = client ?? http.Client();
+
+  /// Whether to include pre-release builds when checking for updates.
+  ///
+  /// When changed, invalidates the ETag cache since the endpoint changes.
+  set includePrerelease(bool value) {
+    if (_includePrerelease == value) return;
+    _includePrerelease = value;
+    // Invalidate cache — different endpoint means different ETag
+    _lastETag = null;
+    _cachedRelease = null;
+    _lastCheckedAt = null;
+  }
+
+  bool get includePrerelease => _includePrerelease;
 
   /// The cached release, if any.
   GitHubRelease? get cachedRelease => _cachedRelease;
@@ -88,36 +105,93 @@ class GitHubReleaseService {
       );
     }
 
+    if (_includePrerelease) {
+      return _fetchFromReleasesList();
+    }
+    return _fetchFromLatest();
+  }
+
+  /// Fetch from `/releases/latest` (stable channel, excludes prereleases).
+  Future<GitHubRelease> _fetchFromLatest() async {
     final url = Uri.parse(
       'https://api.github.com/repos/$owner/$repo/releases/latest',
     );
+    final response = await _sendRequest(url);
+    return _handleSingleReleaseResponse(response);
+  }
 
-    final headers = <String, String>{
-      'Accept': 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'Zajel-Desktop-Updater/1.0',
-    };
-
-    // Add ETag for conditional request
-    if (_lastETag != null) {
-      headers['If-None-Match'] = _lastETag!;
-    }
-
-    logger.info(_tag, 'Fetching latest release from $url');
-
-    final response =
-        await _client.get(url, headers: headers).timeout(_requestTimeout);
+  /// Fetch from `/releases?per_page=10` and return the first non-draft release.
+  Future<GitHubRelease> _fetchFromReleasesList() async {
+    final url = Uri.parse(
+      'https://api.github.com/repos/$owner/$repo/releases?per_page=10',
+    );
+    final response = await _sendRequest(url);
 
     // Track rate limit headers on all responses
     _trackRateLimit(response);
 
     switch (response.statusCode) {
       case 200:
-        // Parse the response
+        final list = jsonDecode(response.body) as List<dynamic>;
+        for (final item in list) {
+          final json = item as Map<String, dynamic>;
+          final release = GitHubRelease.fromJson(json);
+          if (!release.draft) {
+            _cachedRelease = release;
+            _lastCheckedAt = DateTime.now();
+            _lastETag = response.headers['etag'];
+            logger.info(_tag,
+                'Fetched release (prerelease channel): ${release.tagName}');
+            return release;
+          }
+        }
+        throw const GitHubApiException(
+          statusCode: 200,
+          message: 'No suitable release found in releases list',
+        );
+
+      case 304:
+        logger.info(_tag, 'Releases list unchanged (304 Not Modified)');
+        _lastCheckedAt = DateTime.now();
+        if (_cachedRelease != null) {
+          return _cachedRelease!;
+        }
+        throw const GitHubApiException(
+          statusCode: 304,
+          message: 'Received 304 but no cached release available',
+        );
+
+      default:
+        return _handleErrorResponse(response);
+    }
+  }
+
+  /// Send a GET request with standard headers and ETag.
+  Future<http.Response> _sendRequest(Uri url) async {
+    final headers = <String, String>{
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'Zajel-Desktop-Updater/1.0',
+    };
+
+    if (_lastETag != null) {
+      headers['If-None-Match'] = _lastETag!;
+    }
+
+    logger.info(_tag, 'Fetching release from $url');
+
+    return _client.get(url, headers: headers).timeout(_requestTimeout);
+  }
+
+  /// Handle a single-object release response (from `/releases/latest`).
+  GitHubRelease _handleSingleReleaseResponse(http.Response response) {
+    _trackRateLimit(response);
+
+    switch (response.statusCode) {
+      case 200:
         final json = jsonDecode(response.body) as Map<String, dynamic>;
         final release = GitHubRelease.fromJson(json);
 
-        // Cache the response and ETag
         _cachedRelease = release;
         _lastCheckedAt = DateTime.now();
         _lastETag = response.headers['etag'];
@@ -126,20 +200,25 @@ class GitHubReleaseService {
         return release;
 
       case 304:
-        // Not Modified — use cached release
         logger.info(_tag, 'Release unchanged (304 Not Modified)');
         _lastCheckedAt = DateTime.now();
         if (_cachedRelease != null) {
           return _cachedRelease!;
         }
-        // Shouldn't happen, but handle gracefully
         throw const GitHubApiException(
           statusCode: 304,
           message: 'Received 304 but no cached release available',
         );
 
+      default:
+        return _handleErrorResponse(response);
+    }
+  }
+
+  /// Handle 403, 404, and other error responses.
+  Never _handleErrorResponse(http.Response response) {
+    switch (response.statusCode) {
       case 403:
-        // Check if this is rate limiting
         final remaining = response.headers['x-ratelimit-remaining'];
         if (remaining == '0') {
           final resetStr = response.headers['x-ratelimit-reset'];
