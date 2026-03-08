@@ -32,7 +32,13 @@ async function fetchFromBootstrap(
     // Use service binding — the URL is ignored for routing but must be valid
     return env.BOOTSTRAP_SERVICE.fetch(
       new Request(`https://bootstrap-internal${path}`, {
-        headers: { 'Accept': 'application/json' },
+        headers: {
+          'Accept': 'application/json',
+          // Service binding requests don't pass through Cloudflare's edge,
+          // so CF-Connecting-IP is absent. The bootstrap server requires it
+          // for rate limiting. Use a sentinel value for internal calls.
+          'CF-Connecting-IP': '127.0.0.1',
+        },
       })
     );
   }

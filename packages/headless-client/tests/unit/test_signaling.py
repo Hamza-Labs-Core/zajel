@@ -1,6 +1,8 @@
 """Tests for signaling client message parsing."""
 
 import asyncio
+import contextlib
+import json
 import time
 
 import pytest
@@ -271,6 +273,125 @@ class TestRedirectHandling:
 
         # Should only send to main (which accepted)
         assert len(sent_messages) == 1
+
+    @pytest.mark.asyncio
+    async def test_connect_to_redirect_waits_past_server_info(self):
+        """connect_to_redirect must wait for 'registered' even when server sends
+        'server_info' first.
+
+        The VPS always sends server_info immediately on connection (before
+        processing the register message).  If connect_to_redirect() treats the
+        first message as the registration confirmation it will return before the
+        server has stored the pairing code, causing subsequent pair_request
+        messages to get "Not registered" errors.
+        """
+        client = SignalingClient("wss://localhost:9999")
+        client._public_key_b64 = "dGVzdGtleQ=="  # valid base64 for "testkey"
+
+        class FakeWs:
+            """Simulates a VPS WebSocket that sends server_info before registered."""
+
+            def __init__(self):
+                self._messages = asyncio.Queue()
+                # Queue server_info first, then registered — exactly what VPS does
+                self._messages.put_nowait(json.dumps({
+                    "type": "server_info",
+                    "serverId": "vps-1",
+                    "endpoint": "wss://65.21.54.26:8443",
+                    "region": None,
+                }))
+                self._messages.put_nowait(json.dumps({
+                    "type": "registered",
+                    "pairingCode": client.pairing_code,
+                    "serverId": "vps-1",
+                }))
+
+            async def send(self, data):
+                pass  # swallow the register message
+
+            async def recv(self):
+                # Simulate network latency between messages
+                await asyncio.sleep(0.01)
+                return await self._messages.get()
+
+            async def close(self):
+                pass
+
+            async def __aiter__(self):
+                # Never yields — keeps receive loop alive until cancelled
+                while True:
+                    await asyncio.sleep(999)
+
+        fake_ws = FakeWs()
+
+        async def fake_connect(endpoint, **kwargs):
+            return fake_ws
+
+        # Patch websockets.connect used by connect_to_redirect
+        import sys
+        sig_module = sys.modules["zajel.signaling"]
+        original_connect = sig_module.websockets.connect
+        sig_module.websockets.connect = fake_connect
+
+        try:
+            await client.connect_to_redirect("wss://65.21.54.26:8443")
+        finally:
+            sig_module.websockets.connect = original_connect
+            # Cancel the receive task to avoid ResourceWarning
+            if "wss://65.21.54.26:8443" in client._redirect_connections:
+                _, task = client._redirect_connections["wss://65.21.54.26:8443"]
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+        # The redirect connection must be registered AFTER receiving 'registered',
+        # not after receiving 'server_info'. If the bug is present,
+        # connect_to_redirect() returns as soon as server_info arrives and the
+        # registration is NOT confirmed — meaning pair_request sent immediately
+        # after will hit "Not registered" on the server.
+        #
+        # We verify this by checking that connect_to_redirect() correctly waited
+        # for the 'registered' message: the FakeWs queues server_info then
+        # registered, so if we only consumed server_info the registered
+        # message would still be in the queue.
+        remaining = fake_ws._messages.qsize()
+        assert remaining == 0, (
+            f"connect_to_redirect() exited after server_info without waiting for "
+            f"'registered'. {remaining} message(s) still in queue. "
+            "This is the race condition that causes 'Not registered' errors when "
+            "pair_request is sent immediately after connect_to_redirect() returns."
+        )
+
+
+class TestEnsureRegistered:
+    """Tests for the ensure_registered recovery mechanism."""
+
+    @pytest.mark.asyncio
+    async def test_ensure_registered_sends_register_and_waits(self):
+        """ensure_registered should re-send register and wait for confirmation."""
+        client = SignalingClient("ws://localhost:9999")
+        client._public_key_b64 = "dGVzdGtleQ=="
+        client.pairing_code = "TESTCODE"
+
+        sent_messages = []
+
+        async def mock_send(msg, ws=None):
+            sent_messages.append(msg)
+            # Simulate server responding with 'registered' after a short delay
+            if msg.get("type") == "register":
+                await asyncio.sleep(0.01)
+                client._registered.set()
+
+        client._send = mock_send
+        # Mark as connected so _send doesn't complain
+        client._connected.set()
+
+        await client.ensure_registered()
+
+        assert len(sent_messages) == 1
+        assert sent_messages[0]["type"] == "register"
+        assert sent_messages[0]["pairingCode"] == "TESTCODE"
+        assert client._registered.is_set()
 
 
 class TestChunkRequestMeta:

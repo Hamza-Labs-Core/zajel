@@ -260,20 +260,50 @@ class SignalingClient:
             # Wait for the server to confirm registration before returning.
             # Without this, pair_with() can race ahead and get "Not registered"
             # because the server hasn't processed the register message yet.
-            try:
-                raw = await asyncio.wait_for(ws.recv(), timeout=5)
-                resp = json.loads(raw)
-                if resp.get("type") == "registered":
-                    logger.info("[T+%dms] redirect registered confirmed — %s",
-                                int((time.monotonic() - t0) * 1000), endpoint)
-                else:
-                    # Not the expected response — route it through normal handling
-                    logger.info("[T+%dms] redirect got unexpected response type=%s — %s",
-                                int((time.monotonic() - t0) * 1000), resp.get("type"), endpoint)
-                    await self._handle_message(resp, source_ws=ws)
-            except asyncio.TimeoutError:
-                logger.warning("[T+%dms] TIMEOUT waiting for registered on redirect %s",
-                               int((time.monotonic() - t0) * 1000), endpoint)
+            #
+            # The VPS always sends server_info (and optionally attest_request)
+            # immediately on connection — before processing our register message.
+            # We must loop past those pre-registration messages until we see
+            # 'registered' or 'error', or until the timeout fires.
+            # Messages that arrive before registration (server_info, pong, etc.)
+            # are routed through normal handling rather than dropped.
+            # Messages that we do NOT expect pre-registration (pair_error, etc.)
+            # are also routed so they are not lost.
+            pre_registration_types = {"server_info", "pong", "attest_challenge"}
+            deadline = asyncio.get_event_loop().time() + 5
+            while True:
+                remaining_timeout = deadline - asyncio.get_event_loop().time()
+                if remaining_timeout <= 0:
+                    logger.warning("[T+%dms] TIMEOUT waiting for registered on redirect %s",
+                                   int((time.monotonic() - t0) * 1000), endpoint)
+                    break
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=remaining_timeout)
+                    resp = json.loads(raw)
+                    resp_type = resp.get("type")
+                    if resp_type == "registered":
+                        logger.info("[T+%dms] redirect registered confirmed — %s",
+                                    int((time.monotonic() - t0) * 1000), endpoint)
+                        break
+                    elif resp_type == "error":
+                        logger.warning("[T+%dms] redirect registration error: %s — %s",
+                                       int((time.monotonic() - t0) * 1000),
+                                       resp.get("message"), endpoint)
+                        await self._handle_message(resp, source_ws=ws)
+                        break
+                    else:
+                        # Pre-registration message (e.g. server_info) — route
+                        # through normal handling and keep waiting
+                        logger.info("[T+%dms] redirect pre-registration message type=%s — %s",
+                                    int((time.monotonic() - t0) * 1000), resp_type, endpoint)
+                        await self._handle_message(resp, source_ws=ws)
+                        if resp_type not in pre_registration_types:
+                            # Unexpected message before registered — stop waiting
+                            break
+                except asyncio.TimeoutError:
+                    logger.warning("[T+%dms] TIMEOUT waiting for registered on redirect %s",
+                                   int((time.monotonic() - t0) * 1000), endpoint)
+                    break
 
             # Start receiving messages from this redirect connection
             task = asyncio.create_task(self._redirect_receive_loop(endpoint, ws))
@@ -312,6 +342,28 @@ class SignalingClient:
                 pass
         self._redirect_connections.clear()
         self._peer_to_ws.clear()
+
+    async def ensure_registered(self) -> None:
+        """Re-send the register message and wait for confirmation.
+
+        Used as a recovery mechanism when the server responds with
+        'Not registered' during pair_with retries.
+        """
+        if self._public_key_b64 is None:
+            raise RuntimeError("Cannot re-register: no stored public key")
+
+        self._registered.clear()
+        await self._send({
+            "type": "register",
+            "pairingCode": self.pairing_code,
+            "publicKey": self._public_key_b64,
+        })
+
+        try:
+            await asyncio.wait_for(self._registered.wait(), timeout=10)
+            logger.info("Re-registration confirmed for %s", self.pairing_code)
+        except asyncio.TimeoutError:
+            logger.warning("Re-registration TIMEOUT for %s", self.pairing_code)
 
     # ── Pairing ──────────────────────────────────────────────
 
@@ -644,13 +696,22 @@ class SignalingClient:
             logger.error("Heartbeat error: %s", e)
 
     async def _reconnect(self) -> None:
-        """Reconnect to the signaling server and re-register."""
+        """Reconnect to the signaling server and re-register.
+
+        Waits for the 'registered' response before returning so that
+        subsequent pair_with() calls don't race ahead of registration.
+        """
         if self._public_key_b64 is None:
             raise RuntimeError("Cannot reconnect: no stored public key")
 
-        logger.info("Reconnecting to %s...", self.url)
+        t0 = time.monotonic()
+        logger.info("[T+0ms] _reconnect() start — %s", self.url)
         self._ws = await websockets.connect(self.url)
         self._connected.set()
+        logger.info("[T+%dms] WebSocket reconnected", int((time.monotonic() - t0) * 1000))
+
+        # Clear registered event so we can wait for the new confirmation
+        self._registered.clear()
 
         # Re-register with the same pairing code
         await self._send({
@@ -658,13 +719,25 @@ class SignalingClient:
             "pairingCode": self.pairing_code,
             "publicKey": self._public_key_b64,
         })
+        logger.info("[T+%dms] register sent", int((time.monotonic() - t0) * 1000))
+
+        # Wait for 'registered' response — without this, pair_with() can
+        # send pair_request before the server has processed registration,
+        # resulting in "Not registered. Send register message first."
+        try:
+            await asyncio.wait_for(self._registered.wait(), timeout=10)
+            logger.info("[T+%dms] registered confirmed", int((time.monotonic() - t0) * 1000))
+        except asyncio.TimeoutError:
+            logger.warning("[T+%dms] TIMEOUT waiting for registered on reconnect",
+                           int((time.monotonic() - t0) * 1000))
 
         # Restart heartbeat
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
-        logger.info("Reconnected and re-registered as %s", self.pairing_code)
+        elapsed = int((time.monotonic() - t0) * 1000)
+        logger.info("[T+%dms] _reconnect() done — re-registered as %s", elapsed, self.pairing_code)
 
     async def _receive_loop(self) -> None:
         backoff = 1

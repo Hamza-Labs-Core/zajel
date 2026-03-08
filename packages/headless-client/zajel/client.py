@@ -458,6 +458,10 @@ class ZajelHeadlessClient:
 
         logger.info("Disconnected")
 
+    async def ensure_registered(self) -> None:
+        """Re-send the register message and wait for confirmation."""
+        await self._signaling.ensure_registered()
+
     # ── Pairing ──────────────────────────────────────────────
 
     async def pair_with(self, target_code: str) -> ConnectedPeer:
