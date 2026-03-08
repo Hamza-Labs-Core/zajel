@@ -343,6 +343,28 @@ class SignalingClient:
         self._redirect_connections.clear()
         self._peer_to_ws.clear()
 
+    async def ensure_registered(self) -> None:
+        """Re-send the register message and wait for confirmation.
+
+        Used as a recovery mechanism when the server responds with
+        'Not registered' during pair_with retries.
+        """
+        if self._public_key_b64 is None:
+            raise RuntimeError("Cannot re-register: no stored public key")
+
+        self._registered.clear()
+        await self._send({
+            "type": "register",
+            "pairingCode": self.pairing_code,
+            "publicKey": self._public_key_b64,
+        })
+
+        try:
+            await asyncio.wait_for(self._registered.wait(), timeout=10)
+            logger.info("Re-registration confirmed for %s", self.pairing_code)
+        except asyncio.TimeoutError:
+            logger.warning("Re-registration TIMEOUT for %s", self.pairing_code)
+
     # ── Pairing ──────────────────────────────────────────────
 
     async def pair_with(self, target_code: str, proposed_name: Optional[str] = None) -> None:
@@ -674,13 +696,22 @@ class SignalingClient:
             logger.error("Heartbeat error: %s", e)
 
     async def _reconnect(self) -> None:
-        """Reconnect to the signaling server and re-register."""
+        """Reconnect to the signaling server and re-register.
+
+        Waits for the 'registered' response before returning so that
+        subsequent pair_with() calls don't race ahead of registration.
+        """
         if self._public_key_b64 is None:
             raise RuntimeError("Cannot reconnect: no stored public key")
 
-        logger.info("Reconnecting to %s...", self.url)
+        t0 = time.monotonic()
+        logger.info("[T+0ms] _reconnect() start — %s", self.url)
         self._ws = await websockets.connect(self.url)
         self._connected.set()
+        logger.info("[T+%dms] WebSocket reconnected", int((time.monotonic() - t0) * 1000))
+
+        # Clear registered event so we can wait for the new confirmation
+        self._registered.clear()
 
         # Re-register with the same pairing code
         await self._send({
@@ -688,13 +719,25 @@ class SignalingClient:
             "pairingCode": self.pairing_code,
             "publicKey": self._public_key_b64,
         })
+        logger.info("[T+%dms] register sent", int((time.monotonic() - t0) * 1000))
+
+        # Wait for 'registered' response — without this, pair_with() can
+        # send pair_request before the server has processed registration,
+        # resulting in "Not registered. Send register message first."
+        try:
+            await asyncio.wait_for(self._registered.wait(), timeout=10)
+            logger.info("[T+%dms] registered confirmed", int((time.monotonic() - t0) * 1000))
+        except asyncio.TimeoutError:
+            logger.warning("[T+%dms] TIMEOUT waiting for registered on reconnect",
+                           int((time.monotonic() - t0) * 1000))
 
         # Restart heartbeat
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
-        logger.info("Reconnected and re-registered as %s", self.pairing_code)
+        elapsed = int((time.monotonic() - t0) * 1000)
+        logger.info("[T+%dms] _reconnect() done — re-registered as %s", elapsed, self.pairing_code)
 
     async def _receive_loop(self) -> None:
         backoff = 1

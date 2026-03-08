@@ -366,6 +366,38 @@ class TestRedirectHandling:
         )
 
 
+class TestEnsureRegistered:
+    """Tests for the ensure_registered recovery mechanism."""
+
+    @pytest.mark.asyncio
+    async def test_ensure_registered_sends_register_and_waits(self):
+        """ensure_registered should re-send register and wait for confirmation."""
+        client = SignalingClient("ws://localhost:9999")
+        client._public_key_b64 = "dGVzdGtleQ=="
+        client.pairing_code = "TESTCODE"
+
+        sent_messages = []
+        original_send = client._send
+
+        async def mock_send(msg, ws=None):
+            sent_messages.append(msg)
+            # Simulate server responding with 'registered' after a short delay
+            if msg.get("type") == "register":
+                await asyncio.sleep(0.01)
+                client._registered.set()
+
+        client._send = mock_send
+        # Mark as connected so _send doesn't complain
+        client._connected.set()
+
+        await client.ensure_registered()
+
+        assert len(sent_messages) == 1
+        assert sent_messages[0]["type"] == "register"
+        assert sent_messages[0]["pairingCode"] == "TESTCODE"
+        assert client._registered.is_set()
+
+
 class TestChunkRequestMeta:
     """Tests for chunk_request_meta signaling support."""
 
