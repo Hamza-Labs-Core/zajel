@@ -1,6 +1,7 @@
 """Tests for signaling client message parsing."""
 
 import asyncio
+import contextlib
 import json
 import time
 
@@ -284,11 +285,8 @@ class TestRedirectHandling:
         server has stored the pairing code, causing subsequent pair_request
         messages to get "Not registered" errors.
         """
-        import asyncio
         client = SignalingClient("wss://localhost:9999")
         client._public_key_b64 = "dGVzdGtleQ=="  # valid base64 for "testkey"
-
-        registered_confirmed = asyncio.Event()
 
         class FakeWs:
             """Simulates a VPS WebSocket that sends server_info before registered."""
@@ -330,7 +328,8 @@ class TestRedirectHandling:
             return fake_ws
 
         # Patch websockets.connect used by connect_to_redirect
-        import zajel.signaling as sig_module
+        import sys
+        sig_module = sys.modules["zajel.signaling"]
         original_connect = sig_module.websockets.connect
         sig_module.websockets.connect = fake_connect
 
@@ -342,10 +341,8 @@ class TestRedirectHandling:
             if "wss://65.21.54.26:8443" in client._redirect_connections:
                 _, task = client._redirect_connections["wss://65.21.54.26:8443"]
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
 
         # The redirect connection must be registered AFTER receiving 'registered',
         # not after receiving 'server_info'. If the bug is present,
@@ -377,7 +374,6 @@ class TestEnsureRegistered:
         client.pairing_code = "TESTCODE"
 
         sent_messages = []
-        original_send = client._send
 
         async def mock_send(msg, ws=None):
             sent_messages.append(msg)

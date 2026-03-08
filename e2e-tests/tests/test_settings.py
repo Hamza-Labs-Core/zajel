@@ -8,6 +8,7 @@ needs a paired peer to verify it gets removed.
 
 import time
 import pytest
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 from config import P2P_CONNECTION_TIMEOUT
 
@@ -118,8 +119,8 @@ class TestSettings:
                 )
                 found_status = True
                 break
-            except Exception:
-                pass
+            except (TimeoutException, NoSuchElementException):
+                pass  # element not visible yet — scroll and retry
             alice.swipe(center_x, start_y, center_x, end_y, 800)
             time.sleep(0.5)
 
