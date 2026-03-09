@@ -51,6 +51,54 @@ void main() {
     });
   });
 
+  group('IncludePrereleasesNotifier', () {
+    late SharedPreferences prefs;
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      prefs = await SharedPreferences.getInstance();
+    });
+
+    test('defaults to false', () {
+      final notifier = IncludePrereleasesNotifier(prefs);
+      expect(notifier.state, isFalse);
+    });
+
+    test('loads saved state from prefs', () async {
+      await prefs.setBool('includePrereleases', true);
+      final notifier = IncludePrereleasesNotifier(prefs);
+      expect(notifier.state, isTrue);
+    });
+
+    test('setEnabled persists true to prefs', () async {
+      final notifier = IncludePrereleasesNotifier(prefs);
+      await notifier.setEnabled(true);
+
+      expect(notifier.state, isTrue);
+      expect(prefs.getBool('includePrereleases'), isTrue);
+    });
+
+    test('setEnabled persists false to prefs', () async {
+      final notifier = IncludePrereleasesNotifier(prefs);
+      await notifier.setEnabled(true);
+      await notifier.setEnabled(false);
+
+      expect(notifier.state, isFalse);
+      expect(prefs.getBool('includePrereleases'), isFalse);
+    });
+
+    test('toggle on and off', () async {
+      final notifier = IncludePrereleasesNotifier(prefs);
+      expect(notifier.state, isFalse);
+
+      await notifier.setEnabled(true);
+      expect(notifier.state, isTrue);
+
+      await notifier.setEnabled(false);
+      expect(notifier.state, isFalse);
+    });
+  });
+
   group('BackgroundDownloadSettingsNotifier', () {
     late SharedPreferences prefs;
 

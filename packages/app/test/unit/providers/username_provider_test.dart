@@ -67,7 +67,7 @@ void main() {
 
       // Initialize a real crypto service with SharedPreferences for stableId
       final crypto =
-          CryptoService(secureStorage: FakeSecureStorage(), prefs: prefs);
+          CryptoService(secureStorage: FakeCachedSecureStorage(), prefs: prefs);
       await crypto.initialize();
       final expectedTag = CryptoService.tagFromStableId(crypto.stableId);
 
@@ -87,7 +87,8 @@ void main() {
       final prefs = await SharedPreferences.getInstance();
 
       // An uninitialized CryptoService will throw on publicKeyBase64
-      final uninitCrypto = CryptoService(secureStorage: FakeSecureStorage());
+      final uninitCrypto =
+          CryptoService(secureStorage: FakeCachedSecureStorage());
 
       final container = ProviderContainer(
         overrides: [
@@ -106,7 +107,7 @@ void main() {
       final prefs = await SharedPreferences.getInstance();
 
       final crypto =
-          CryptoService(secureStorage: FakeSecureStorage(), prefs: prefs);
+          CryptoService(secureStorage: FakeCachedSecureStorage(), prefs: prefs);
       await crypto.initialize();
       final tag = CryptoService.tagFromStableId(crypto.stableId);
 

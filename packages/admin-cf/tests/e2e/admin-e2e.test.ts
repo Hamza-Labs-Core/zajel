@@ -184,7 +184,21 @@ describe('Auth Flow', () => {
 
     const body = (await res.json()) as ApiResponse;
     expect(body.success).toBe(false);
-    expect(body.error).toBe('Missing authorization header');
+    expect(body.error).toBe('Missing authorization');
+  });
+
+  it('GET /admin/api/auth/verify succeeds with cookie auth', async () => {
+    const res = await fetch(`${client['baseUrl']}/admin/api/auth/verify`, {
+      method: 'GET',
+      headers: {
+        Cookie: `zajel_admin_token=${client.getToken()}`,
+      },
+    });
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as ApiResponse<VerifyData>;
+    expect(body.success).toBe(true);
+    expect(body.data?.username).toBe(SUPER_ADMIN_CREDS.username);
   });
 
   it('GET /admin/api/auth/verify fails with invalid token', async () => {

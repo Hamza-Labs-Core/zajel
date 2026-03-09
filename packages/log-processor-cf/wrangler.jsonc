@@ -16,7 +16,7 @@
     {
       "binding": "DB",
       "database_name": "zajel-diagnostics",
-      "database_id": "placeholder-d1-id",
+      "database_id": "50053b5e-b18f-40c7-abab-4d2e58bc9f7d",
       "migrations_dir": "migrations"
     }
   ],
@@ -36,7 +36,32 @@
 
   // Production vars
   "vars": {
-    "GITHUB_REPO": "anthropics/zajel",
+    "GITHUB_REPO": "Hamza-Labs-Core/zajel",
     "ENVIRONMENT": "production"
+  },
+
+  // QA Environment
+  "env": {
+    "qa": {
+      "name": "zajel-log-processor-qa",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "zajel-diagnostics-qa",
+          "database_id": "5093d39a-2f31-4e7f-981b-a39f9523bded",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "REPORTS_BUCKET",
+          "bucket_name": "zajel-diagnostics-qa"
+        }
+      ],
+      "vars": {
+        "GITHUB_REPO": "Hamza-Labs-Core/zajel",
+        "ENVIRONMENT": "qa"
+      }
+    }
   }
 }

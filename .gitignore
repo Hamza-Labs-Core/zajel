@@ -1,3 +1,6 @@
+# Generated images (hosted on Cloudflare Images)
+generated_imgs/
+
 # Miscellaneous
 *.class
 *.log
