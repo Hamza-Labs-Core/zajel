@@ -343,14 +343,33 @@ class GitHubReleaseService {
   ///
   /// Strips leading "v" prefix, pre-release suffixes, and build metadata.
   static int compareVersions(String a, String b) {
-    final aParts = parseVersion(a);
-    final bParts = parseVersion(b);
+    final aParsed = parseVersion(a);
+    final bParsed = parseVersion(b);
 
+    // Compare major.minor.patch
     for (var i = 0; i < 3; i++) {
-      final diff = aParts[i] - bParts[i];
+      final diff = aParsed[i] - bParsed[i];
       if (diff != 0) return diff;
     }
-    return 0;
+
+    // Semver parts are equal — compare pre-release/build suffix.
+    // e.g., "1.6.1-build.0477" vs "1.6.1-build.0478"
+    final aSuffix = _extractSuffix(a);
+    final bSuffix = _extractSuffix(b);
+
+    // No suffix on either side — truly equal
+    if (aSuffix == null && bSuffix == null) return 0;
+    // Release (no suffix) is newer than pre-release
+    if (aSuffix == null) return 1;
+    if (bSuffix == null) return -1;
+
+    // Both have suffixes — compare the numeric build number if present
+    final aBuild = _extractBuildNumber(aSuffix);
+    final bBuild = _extractBuildNumber(bSuffix);
+    if (aBuild != null && bBuild != null) return aBuild - bBuild;
+
+    // Fall back to lexicographic comparison
+    return aSuffix.compareTo(bSuffix);
   }
 
   /// Parse a version string into [major, minor, patch].
@@ -371,6 +390,24 @@ class GitHubReleaseService {
       parts.length > 1 ? (int.tryParse(parts[1]) ?? 0) : 0,
       parts.length > 2 ? (int.tryParse(parts[2]) ?? 0) : 0,
     ];
+  }
+
+  /// Extract the pre-release/build suffix after the first "-".
+  /// Returns null if no suffix exists.
+  static String? _extractSuffix(String version) {
+    var v = version;
+    if (v.startsWith('v')) v = v.substring(1);
+    final idx = v.indexOf('-');
+    if (idx == -1) return null;
+    return v.substring(idx + 1);
+  }
+
+  /// Extract the trailing numeric build number from a suffix.
+  /// e.g., "build.0477" -> 477, "beta.2" -> 2
+  static int? _extractBuildNumber(String suffix) {
+    final match = RegExp(r'(\d+)$').firstMatch(suffix);
+    if (match == null) return null;
+    return int.tryParse(match.group(1)!);
   }
 
   /// Strip basic markdown formatting from release notes and truncate

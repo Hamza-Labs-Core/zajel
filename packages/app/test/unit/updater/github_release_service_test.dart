@@ -512,10 +512,23 @@ void main() {
         expect(GitHubReleaseService.compareVersions('v1.2.0', '1.2.0'), 0);
       });
 
-      test('strips pre-release suffix', () {
+      test('pre-release is older than release', () {
         expect(
           GitHubReleaseService.compareVersions('1.2.0-beta', '1.2.0'),
-          0,
+          lessThan(0),
+        );
+      });
+
+      test('compares build numbers in pre-release suffix', () {
+        expect(
+          GitHubReleaseService.compareVersions(
+              '1.6.1-build.0477', '1.6.1-build.0478'),
+          lessThan(0),
+        );
+        expect(
+          GitHubReleaseService.compareVersions(
+              '1.6.1-build.0478', '1.6.1-build.0477'),
+          greaterThan(0),
         );
       });
 
