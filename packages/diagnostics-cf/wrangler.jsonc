@@ -49,6 +49,11 @@
     "local_protocol": "http"
   },
 
+  // Secrets (set via: wrangler secret put SERVER_METRICS_SECRET)
+  // SERVER_METRICS_SECRET must be the same value as ZAJEL_ADMIN_JWT_SECRET
+  // used by the VPS servers and the admin-cf worker. This is a shared secret
+  // for authenticating VPS server pushes (metrics, logs, security events).
+
   // Production vars
   "vars": {
     "ENVIRONMENT": "production"

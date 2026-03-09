@@ -1424,6 +1424,14 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      - name: Sync server metrics secret (shared with VPS ZAJEL_ADMIN_JWT_SECRET)
+        working-directory: packages/diagnostics-cf
+        run: printf '%s' "$ZAJEL_ADMIN_JWT_SECRET" | npx wrangler secret put SERVER_METRICS_SECRET -c wrangler.jsonc --env qa
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
+
       - name: Deploy diagnostics worker
         uses: cloudflare/wrangler-action@v3
         with:
@@ -1537,12 +1545,13 @@ jobs:
           BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL }}
           ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
           SERVER_REGISTRY_SECRET: ${{ secrets.SERVER_REGISTRY_SECRET }}
+          ZAJEL_DIAGNOSTICS_URL: ${{ vars.ZAJEL_DIAGNOSTICS_URL_QA }}
         with:
           host: ${{ vars.QA_VPS_IP }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          envs: APP_VERSION,BOOTSTRAP_URL,ZAJEL_ADMIN_JWT_SECRET,SERVER_REGISTRY_SECRET
+          envs: APP_VERSION,BOOTSTRAP_URL,ZAJEL_ADMIN_JWT_SECRET,SERVER_REGISTRY_SECRET,ZAJEL_DIAGNOSTICS_URL
           script: |
             set -e
 
@@ -1645,6 +1654,8 @@ jobs:
             export ZAJEL_REGISTRY_SECRET=${SERVER_REGISTRY_SECRET}
             export ZAJEL_ADMIN_JWT_SECRET=${ZAJEL_ADMIN_JWT_SECRET}
             export ZAJEL_CF_ADMIN_URL=https://admin.zajel.qa.hamzalabs.dev
+            export ZAJEL_DIAGNOSTICS_URL=${ZAJEL_DIAGNOSTICS_URL}
+            export DIAGNOSTICS_PUSH_SECRET=${ZAJEL_ADMIN_JWT_SECRET}
             export NODE_ENV=qa
             export APP_VERSION=${APP_VERSION}
             cd /opt/zajel/server-vps-qa

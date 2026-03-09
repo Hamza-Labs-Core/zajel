@@ -248,17 +248,12 @@ export class FederationManager extends EventEmitter {
       metadata: { region: peer.region },
     };
 
-    // Suppress transport.connect() triggered by the member-join event chain.
-    // membership.upsert() → member-join → setupGossipEvents handler would
-    // call transport.connect(), but we don't want that here — the peer will
-    // connect to us (incoming) or gossip periodic sync will trigger it later.
-    this.suppressTransportConnect = true;
-    try {
-      // Add to gossip membership (triggers member-join → ring.addNode)
-      this.gossip.getMembership().upsert(entry);
-    } finally {
-      this.suppressTransportConnect = false;
-    }
+    // Add to gossip membership (triggers member-join → ring.addNode).
+    // Let the member-join handler call transport.connect() so both sides
+    // actively try to connect. The connection tiebreaker in
+    // handleIncomingConnection() handles the case where both sides
+    // connect simultaneously.
+    this.gossip.getMembership().upsert(entry);
 
     // Ensure ring has the node (member-join handler also adds, but be safe)
     this.ring.addNode({

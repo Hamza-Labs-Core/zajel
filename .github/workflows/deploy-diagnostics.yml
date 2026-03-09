@@ -33,6 +33,14 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      - name: Sync server metrics secret (shared with VPS ZAJEL_ADMIN_JWT_SECRET)
+        working-directory: packages/diagnostics-cf
+        run: printf '%s' "$ZAJEL_ADMIN_JWT_SECRET" | npx wrangler secret put SERVER_METRICS_SECRET -c wrangler.jsonc
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
+
       - name: Deploy diagnostics worker
         uses: cloudflare/wrangler-action@v3
         with:
