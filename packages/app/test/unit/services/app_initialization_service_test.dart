@@ -73,6 +73,7 @@ void main() {
 
     AppInitializationService buildService() {
       return AppInitializationService(
+        initializeSecureStorage: () async {},
         initializeCrypto: () async {
           cryptoInitialized = true;
         },
@@ -171,6 +172,7 @@ void main() {
 
       test('returns false and logs error when crypto init fails', () async {
         service = AppInitializationService(
+          initializeSecureStorage: () async {},
           initializeCrypto: () async => throw Exception('Crypto failed'),
           initializeMessageStorage: () async {
             messageStorageInitialized = true;
@@ -215,6 +217,7 @@ void main() {
 
       test('returns false when message storage init fails', () async {
         service = AppInitializationService(
+          initializeSecureStorage: () async {},
           initializeCrypto: () async => cryptoInitialized = true,
           initializeMessageStorage: () async =>
               throw Exception('DB init failed'),

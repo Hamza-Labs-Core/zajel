@@ -31,7 +31,8 @@ final channelCryptoServiceProvider = Provider<ChannelCryptoService>((ref) {
 ///
 /// Requires [initialize] to be called before use (typically at app startup).
 final channelStorageServiceProvider = Provider<ChannelStorageService>((ref) {
-  final service = ChannelStorageService();
+  final secureStorage = ref.watch(cachedSecureStorageProvider);
+  final service = ChannelStorageService(secureStorage: secureStorage);
   ref.onDispose(() => service.close());
   return service;
 });

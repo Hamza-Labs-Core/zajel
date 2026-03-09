@@ -146,6 +146,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
 
   void _buildServices() {
     _initService = AppInitializationService(
+      initializeSecureStorage: () =>
+          ref.read(cachedSecureStorageProvider).initialize(),
       initializeCrypto: () => ref.read(cryptoServiceProvider).initialize(),
       initializeMessageStorage: () =>
           ref.read(messageStorageProvider).initialize(),

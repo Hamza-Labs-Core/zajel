@@ -25,6 +25,9 @@ class SignalingConnectResult {
 class AppInitializationService {
   static const _tag = 'AppInitializationService';
 
+  // --- Secure storage ---
+  final Future<void> Function() initializeSecureStorage;
+
   // --- Core service accessors (closures over ref.read) ---
   final Future<void> Function() initializeCrypto;
   final Future<void> Function() initializeMessageStorage;
@@ -59,6 +62,7 @@ class AppInitializationService {
   final Stream<SignalingConnectionState>? Function() getConnectionStateStream;
 
   AppInitializationService({
+    required this.initializeSecureStorage,
     required this.initializeCrypto,
     required this.initializeMessageStorage,
     required this.initializeChannelStorage,
@@ -88,6 +92,9 @@ class AppInitializationService {
   /// Returns true if initialization succeeded, false otherwise.
   Future<bool> initializeCore() async {
     try {
+      logger.info(_tag, 'Initializing secure storage...');
+      await initializeSecureStorage();
+
       logger.info(_tag, 'Initializing crypto service...');
       await initializeCrypto();
 
