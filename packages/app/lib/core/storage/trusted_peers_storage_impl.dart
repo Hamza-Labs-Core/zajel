@@ -1,41 +1,32 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-
+import 'cached_secure_storage.dart';
 import 'trusted_peers_storage.dart';
 
-/// Secure implementation of TrustedPeersStorage using flutter_secure_storage.
+/// Secure implementation of TrustedPeersStorage using CachedSecureStorage.
 ///
 /// Stores trusted peer data encrypted in the platform's secure storage:
 /// - iOS: Keychain
 /// - Android: EncryptedSharedPreferences / Keystore
-/// - Windows/Linux/macOS: libsecret / Keychain
+/// - Windows: DPAPI encrypted file
+/// - Linux/macOS: libsecret / Keychain
 class SecureTrustedPeersStorage implements TrustedPeersStorage {
   static const _peersKey = 'trusted_peers';
 
-  final FlutterSecureStorage _storage;
+  final CachedSecureStorage _storage;
   Map<String, TrustedPeer> _cache = {};
   bool _initialized = false;
 
-  SecureTrustedPeersStorage({FlutterSecureStorage? storage})
-      : _storage = storage ??
-            const FlutterSecureStorage(
-              aOptions: AndroidOptions(encryptedSharedPreferences: true),
-              iOptions:
-                  IOSOptions(accessibility: KeychainAccessibility.first_unlock),
-            );
+  SecureTrustedPeersStorage({CachedSecureStorage? storage})
+      : _storage = storage ?? CachedSecureStorage();
 
   /// Initialize and load from storage.
   Future<void> _ensureInitialized() async {
     if (_initialized) return;
 
     try {
-      // Timeout protects against libsecret/gnome-keyring hanging on headless
-      // Linux (D-Bus call blocks if keyring daemon is not reachable).
-      final json = await _storage
-          .read(key: _peersKey)
-          .timeout(const Duration(seconds: 10));
+      final json = await _storage.read(key: _peersKey);
       if (json != null) {
         final List<dynamic> list = jsonDecode(json);
         _cache = {
@@ -54,9 +45,7 @@ class SecureTrustedPeersStorage implements TrustedPeersStorage {
 
   Future<void> _persist() async {
     final list = _cache.values.map((p) => p.toJson()).toList();
-    await _storage
-        .write(key: _peersKey, value: jsonEncode(list))
-        .timeout(const Duration(seconds: 10));
+    await _storage.write(key: _peersKey, value: jsonEncode(list));
   }
 
   @override

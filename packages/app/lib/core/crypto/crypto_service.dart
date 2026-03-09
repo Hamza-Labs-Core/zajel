@@ -4,12 +4,12 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../constants.dart';
 import '../logging/logger_service.dart';
+import '../storage/cached_secure_storage.dart';
 import 'ml_kem_service.dart' if (dart.library.html) 'ml_kem_service_stub.dart';
 
 /// Cryptographic service implementing X25519 key exchange and ChaCha20-Poly1305 encryption.
@@ -28,7 +28,7 @@ class CryptoService {
   static const _sessionKeyPrefix = 'zajel_session_';
   static const _stableIdKey = 'zajel_stable_id';
 
-  final FlutterSecureStorage _secureStorage;
+  final CachedSecureStorage _secureStorage;
   final SharedPreferences? _prefs;
   final X25519 _x25519 = X25519();
   final Chacha20 _chacha20 = Chacha20.poly1305Aead();
@@ -54,11 +54,8 @@ class CryptoService {
   final Map<String, Uint8List> _peerMlKemPublicKeys = {};
   final Map<String, int> _peerProtocolVersions = {};
 
-  CryptoService({FlutterSecureStorage? secureStorage, SharedPreferences? prefs})
-      : _secureStorage = secureStorage ??
-            const FlutterSecureStorage(
-              aOptions: AndroidOptions(encryptedSharedPreferences: true),
-            ),
+  CryptoService({CachedSecureStorage? secureStorage, SharedPreferences? prefs})
+      : _secureStorage = secureStorage ?? CachedSecureStorage(),
         _prefs = prefs {
     _hkdf = Hkdf(
         hmac: Hmac.sha256(), outputLength: CryptoConstants.hkdfOutputLength);
@@ -879,11 +876,8 @@ class CryptoService {
 
   Future<void> _loadOrGenerateIdentityKeys() async {
     try {
-      // Timeout protects against libsecret/gnome-keyring hanging on headless
-      // Linux (D-Bus call blocks if keyring daemon is not reachable).
-      final privateKeyBase64 = await _secureStorage
-          .read(key: '${_keyPrefix}private')
-          .timeout(const Duration(seconds: 10));
+      final privateKeyBase64 =
+          await _secureStorage.read(key: '${_keyPrefix}private');
       if (privateKeyBase64 != null) {
         final privateKeyBytes = base64Decode(privateKeyBase64);
         _identityKeyPair = await _x25519.newKeyPairFromSeed(privateKeyBytes);
@@ -933,12 +927,10 @@ class CryptoService {
 
     // Try to load persisted keys
     try {
-      final pubB64 = await _secureStorage
-          .read(key: '${_keyPrefix}mlkem_public')
-          .timeout(const Duration(seconds: 5));
-      final secB64 = await _secureStorage
-          .read(key: '${_keyPrefix}mlkem_secret')
-          .timeout(const Duration(seconds: 5));
+      final pubB64 =
+          await _secureStorage.read(key: '${_keyPrefix}mlkem_public');
+      final secB64 =
+          await _secureStorage.read(key: '${_keyPrefix}mlkem_secret');
 
       if (pubB64 != null && secB64 != null) {
         _mlKemPublicKey = Uint8List.fromList(base64Decode(pubB64));
@@ -1033,9 +1025,8 @@ class CryptoService {
   /// prevent MITM attacks during WebRTC signaling.
   Future<void> _loadOrGenerateSigningKeys() async {
     try {
-      final signingKeyBase64 = await _secureStorage
-          .read(key: '${_keyPrefix}signing_private')
-          .timeout(const Duration(seconds: 10));
+      final signingKeyBase64 =
+          await _secureStorage.read(key: '${_keyPrefix}signing_private');
       if (signingKeyBase64 != null) {
         final signingKeyBytes = base64Decode(signingKeyBase64);
         _signingKeyPair = await _ed25519.newKeyPairFromSeed(signingKeyBytes);
@@ -1061,24 +1052,20 @@ class CryptoService {
     if (_signingKeyPair == null) return;
 
     final privateKeyBytes = await _signingKeyPair!.extractPrivateKeyBytes();
-    await _secureStorage
-        .write(
-          key: '${_keyPrefix}signing_private',
-          value: base64Encode(privateKeyBytes),
-        )
-        .timeout(const Duration(seconds: 10));
+    await _secureStorage.write(
+      key: '${_keyPrefix}signing_private',
+      value: base64Encode(privateKeyBytes),
+    );
   }
 
   Future<void> _persistIdentityKeys() async {
     if (_identityKeyPair == null) return;
 
     final privateKeyBytes = await _identityKeyPair!.extractPrivateKeyBytes();
-    await _secureStorage
-        .write(
-          key: '${_keyPrefix}private',
-          value: base64Encode(privateKeyBytes),
-        )
-        .timeout(const Duration(seconds: 10));
+    await _secureStorage.write(
+      key: '${_keyPrefix}private',
+      value: base64Encode(privateKeyBytes),
+    );
   }
 
   Future<void> _storeSessionKey(String peerId, SecretKey sessionKey) async {

@@ -2433,6 +2433,45 @@ function serveDashboard(): Response {
         return '<div class="network-metrics-section"><h3>Network Success Rates</h3><div class="loading"><div class="spinner"></div></div></div>';
       }
 
+      // When API returns raw metrics (no pre-computed aggregates), show empty state
+      if (!nd.current) {
+        var emptyMetrics = (nd.metrics || []);
+        if (emptyMetrics.length === 0) {
+          return '<div class="network-metrics-section"><h3>Network Success Rates</h3>'
+            + '<div style="color:var(--text-secondary);font-size:0.875rem;padding:2rem 0;text-align:center">No network metrics collected yet</div></div>';
+        }
+        // Compute aggregates from raw metric rows
+        var totalSigSuccess = 0, totalSigFail = 0, totalWrtcSuccess = 0, totalWrtcFail = 0;
+        var totalRelay = 0, totalDirect = 0, latencySum = 0, latencyCount = 0;
+        var platformMap = {};
+        var uniquePlatforms = [];
+        var uniqueVersions = [];
+        emptyMetrics.forEach(function(m) {
+          totalSigSuccess += (m.signaling_success_count || 0);
+          totalSigFail += (m.signaling_failure_count || 0);
+          totalWrtcSuccess += (m.webrtc_success_count || 0);
+          totalWrtcFail += (m.webrtc_failure_count || 0);
+          totalRelay += (m.relay_usage_count || 0);
+          totalDirect += (m.direct_p2p_count || 0);
+          if (m.avg_latency_ms != null) { latencySum += m.avg_latency_ms; latencyCount++; }
+          if (m.platform && uniquePlatforms.indexOf(m.platform) === -1) uniquePlatforms.push(m.platform);
+          if (m.app_version && uniqueVersions.indexOf(m.app_version) === -1) uniqueVersions.push(m.app_version);
+        });
+        var sigAttempts = totalSigSuccess + totalSigFail;
+        var wrtcAttempts = totalWrtcSuccess + totalWrtcFail;
+        nd.current = {
+          signalingSuccessRate: sigAttempts > 0 ? (totalSigSuccess / sigAttempts) * 100 : null,
+          signalingAttempts: sigAttempts,
+          webrtcSuccessRate: wrtcAttempts > 0 ? (totalWrtcSuccess / wrtcAttempts) * 100 : null,
+          webrtcAttempts: wrtcAttempts,
+          avgLatencyMs: latencyCount > 0 ? latencySum / latencyCount : null,
+        };
+        nd.distribution = { relayCount: totalRelay, directP2pCount: totalDirect };
+        nd.filters = { platforms: uniquePlatforms, versions: uniqueVersions };
+        nd.platformBreakdown = [];
+        nd.trends = { latency: [] };
+      }
+
       var filters = nd.filters || { platforms: [], versions: [] };
 
       // Filter bar
@@ -2535,6 +2574,39 @@ function serveDashboard(): Response {
         return '<div style="margin-top:2rem"><h3 style="margin-bottom:1rem;font-size:1rem;font-weight:600">Federation Health</h3><div style="color:var(--text-secondary);font-size:0.875rem">Loading federation data...</div></div>';
       }
       var fed = state.federationData;
+
+      // When API returns raw data (no pre-computed aggregates), compute from raw rows
+      if (!fed.health) {
+        var currentRows = fed.current || [];
+        var historyRows = fed.history || [];
+        if (currentRows.length === 0 && historyRows.length === 0) {
+          return '<div style="margin-top:2rem"><h3 style="margin-bottom:1rem;font-size:1rem;font-weight:600">Federation Health</h3>'
+            + '<div style="color:var(--text-secondary);font-size:0.875rem;padding:2rem 0;text-align:center">No federation data collected yet</div></div>';
+        }
+        // Compute aggregates from raw rows
+        var totalAlive = 0, totalMembers = 0, latencies = [];
+        currentRows.forEach(function(r) {
+          totalAlive += (r.alive_members || 0);
+          totalMembers += (r.total_members || 0);
+          if (r.gossip_latency_ms != null) latencies.push(r.gossip_latency_ms);
+        });
+        latencies.sort(function(a, b) { return a - b; });
+        var failedNodes = totalMembers - totalAlive;
+        fed.health = failedNodes === 0 ? 'healthy' : failedNodes <= totalMembers * 0.5 ? 'degraded' : 'critical';
+        fed.summary = { aliveNodes: totalAlive, suspectNodes: 0, failedNodes: failedNodes, totalNodes: totalMembers, regions: {} };
+        fed.gossipLatency = {
+          p50Ms: latencies.length > 0 ? latencies[Math.floor(latencies.length * 0.5)] : null,
+          p95Ms: latencies.length > 0 ? latencies[Math.floor(latencies.length * 0.95)] : null,
+          p99Ms: latencies.length > 0 ? latencies[Math.floor(latencies.length * 0.99)] : null,
+          pingCount: latencies.length,
+        };
+        fed.syncCompleteness = totalMembers > 0 ? Math.round((totalAlive / totalMembers) * 100) : 0;
+        fed.perServer = currentRows.map(function(r) {
+          return { serverId: r.server_id, region: '', aliveMembers: r.alive_members || 0, totalMembers: r.total_members || 0, gossipRttP50Ms: r.gossip_latency_ms, gossipRttP95Ms: null, lastSeen: r.timestamp };
+        });
+        fed.availabilityHistory = [];
+      }
+
       var healthColor = fed.health === 'healthy' ? 'var(--success)' : fed.health === 'degraded' ? 'var(--warning)' : 'var(--danger)';
       var healthBg = fed.health === 'healthy' ? 'rgba(34,197,94,0.15)' : fed.health === 'degraded' ? 'rgba(234,179,8,0.15)' : 'rgba(239,68,68,0.15)';
       function fmtMs(v) { return v !== null && v !== undefined ? v.toFixed(1) + ' ms' : 'N/A'; }
