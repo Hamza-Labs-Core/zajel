@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/providers/app_providers.dart';
+import '../../core/storage/trusted_peers_storage.dart';
 import '../../shared/widgets/compose_bar.dart';
 import '../../shared/widgets/message_list_view.dart';
 import 'models/channel.dart';
@@ -627,98 +628,55 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
 
   Future<void> _showAddAdminDialog(
       BuildContext context, Channel channel) async {
-    final publicKeyController = TextEditingController();
-    final labelController = TextEditingController();
-    final formKey = GlobalKey<FormState>();
+    final trustedPeers =
+        await ref.read(trustedPeersStorageProvider).getAllPeers();
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Add Admin'),
-        content: Form(
-          key: formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Enter the admin\'s Ed25519 public key (base64) and a display name.',
-                style: TextStyle(fontSize: 13),
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: publicKeyController,
-                decoration: const InputDecoration(
-                  labelText: 'Public Key (base64)',
-                  hintText: 'Paste Ed25519 public key...',
-                  border: OutlineInputBorder(),
-                ),
-                maxLines: 2,
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Public key is required';
-                  }
-                  // Basic base64 validation
-                  try {
-                    final decoded =
-                        base64Decode(value.trim().replaceAll('\n', ''));
-                    if (decoded.length != 32) {
-                      return 'Key must be 32 bytes (Ed25519)';
-                    }
-                  } catch (_) {
-                    return 'Invalid base64 encoding';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: labelController,
-                decoration: const InputDecoration(
-                  labelText: 'Display Name',
-                  hintText: 'e.g. "Alice" or "Moderator"',
-                  border: OutlineInputBorder(),
-                ),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Display name is required';
-                  }
-                  return null;
-                },
-              ),
-            ],
-          ),
+    // Filter: must have a signing key, must not already be an admin
+    final existingAdminKeys =
+        channel.manifest.adminKeys.map((a) => a.key).toSet();
+    final eligible = trustedPeers
+        .where((p) =>
+            p.signingPublicKey != null &&
+            p.signingPublicKey!.isNotEmpty &&
+            !existingAdminKeys.contains(p.signingPublicKey) &&
+            p.signingPublicKey != channel.manifest.ownerKey)
+        .toList();
+
+    if (!context.mounted) return;
+
+    if (eligible.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content:
+              Text('No eligible contacts. Contacts need to reconnect first '
+                  'to share their signing key.'),
+          duration: Duration(seconds: 4),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              if (formKey.currentState!.validate()) {
-                Navigator.pop(dialogContext, true);
-              }
-            },
-            child: const Text('Add Admin'),
-          ),
-        ],
+      );
+      return;
+    }
+
+    final selected = await showDialog<TrustedPeer>(
+      context: context,
+      builder: (dialogContext) => _AdminPeerPickerDialog(
+        peers: eligible,
       ),
     );
 
-    if (confirmed == true && mounted) {
+    if (selected != null && mounted) {
       try {
         final adminService = ref.read(adminManagementServiceProvider);
         await adminService.appointAdmin(
           channel: channel,
-          adminPublicKey: publicKeyController.text.trim().replaceAll('\n', ''),
-          adminLabel: labelController.text.trim(),
+          adminPublicKey: selected.signingPublicKey!,
+          adminLabel: selected.alias ?? selected.displayName,
         );
         ref.invalidate(channelByIdProvider(widget.channelId));
         if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-                'Admin "${labelController.text.trim()}" added successfully'),
+            content:
+                Text('Admin "${selected.alias ?? selected.displayName}" added'),
             duration: const Duration(seconds: 3),
           ),
         );
@@ -732,9 +690,6 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
         );
       }
     }
-
-    publicKeyController.dispose();
-    labelController.dispose();
   }
 
   Future<void> _showRemoveAdminConfirmation(
@@ -999,6 +954,86 @@ class _AdminManagementSheet extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Dialog that shows trusted contacts for selecting a channel admin.
+class _AdminPeerPickerDialog extends StatefulWidget {
+  final List<TrustedPeer> peers;
+
+  const _AdminPeerPickerDialog({required this.peers});
+
+  @override
+  State<_AdminPeerPickerDialog> createState() => _AdminPeerPickerDialogState();
+}
+
+class _AdminPeerPickerDialogState extends State<_AdminPeerPickerDialog> {
+  String _search = '';
+
+  List<TrustedPeer> get _filtered {
+    if (_search.isEmpty) return widget.peers;
+    final q = _search.toLowerCase();
+    return widget.peers
+        .where((p) =>
+            p.displayName.toLowerCase().contains(q) ||
+            (p.alias?.toLowerCase().contains(q) ?? false) ||
+            (p.username?.toLowerCase().contains(q) ?? false))
+        .toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Select Admin'),
+      content: SizedBox(
+        width: double.maxFinite,
+        height: 400,
+        child: Column(
+          children: [
+            TextField(
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search),
+                hintText: 'Search contacts...',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              onChanged: (v) => setState(() => _search = v),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: _filtered.isEmpty
+                  ? const Center(child: Text('No matching contacts'))
+                  : ListView.builder(
+                      itemCount: _filtered.length,
+                      itemBuilder: (context, index) {
+                        final peer = _filtered[index];
+                        return ListTile(
+                          leading: CircleAvatar(
+                            child: Text(
+                              (peer.alias ?? peer.displayName)
+                                  .substring(0, 1)
+                                  .toUpperCase(),
+                            ),
+                          ),
+                          title: Text(peer.alias ?? peer.displayName),
+                          subtitle: peer.username != null
+                              ? Text(peer.username!)
+                              : null,
+                          onTap: () => Navigator.pop(context, peer),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+      ],
     );
   }
 }
