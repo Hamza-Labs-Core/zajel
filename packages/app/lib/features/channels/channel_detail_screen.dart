@@ -609,9 +609,13 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
       isScrollControlled: true,
       builder: (sheetContext) => _AdminManagementSheet(
         channel: channel,
-        onAddAdmin: () async {
+        onAddAdmin: () {
           Navigator.pop(sheetContext);
-          await _showAddAdminDialog(context, channel);
+          // Use addPostFrameCallback to ensure the sheet is fully dismissed
+          // before showing the dialog, avoiding context lifecycle issues.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _showAddAdminDialog(context, channel);
+          });
         },
         onRemoveAdmin: (admin) async {
           Navigator.pop(sheetContext);
