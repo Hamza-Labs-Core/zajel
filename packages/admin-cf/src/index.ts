@@ -1813,7 +1813,7 @@ function serveDashboard(): Response {
             <div class="server-card" data-endpoint="\${escapeHtml(server.endpoint)}">
               <div class="server-header">
                 <span class="server-name">\${escapeHtml(server.id)}</span>
-                <span class="status-badge status-\${escapeHtml(server.status)}">\${escapeHtml(server.status.toUpperCase())}</span>
+                <span class="status-badge status-\${escapeHtml(server.status || 'unknown')}">\${escapeHtml((server.status || 'unknown').toUpperCase())}</span>
               </div>
               <div class="server-region">📍 \${escapeHtml(server.region)}</div>
               <div class="server-stats">
@@ -1939,7 +1939,7 @@ function serveDashboard(): Response {
             <div class="stat-title">Regression Alerts</div>
           </div>
           <div class="stat-card">
-            <div class="stat-value \${severityClass}">\${escapeHtml(summary.highestSeverity.toUpperCase())}</div>
+            <div class="stat-value \${severityClass}">\${escapeHtml((summary.highestSeverity || 'none').toUpperCase())}</div>
             <div class="stat-title">Top Severity</div>
           </div>
         </div>
@@ -2298,9 +2298,11 @@ function serveDashboard(): Response {
           var isStale = (Date.now() - server.lastSeen) > 300000;
           var cpuColor = cpuPct > 90 ? 'var(--danger)' : cpuPct > 70 ? 'var(--warning)' : 'var(--success)';
           var connColor = (m.connectionsTotal||0) > 5000 ? 'var(--danger)' : (m.connectionsTotal||0) > 1000 ? 'var(--warning)' : 'var(--success)';
-          html += '<div class="metrics-server-card health-'+escapeHtml(server.status)+'" data-server-id="'+escapeHtml(server.serverId)+'">';
-          html += '<div class="metrics-card-header"><span class="server-name">'+escapeHtml(server.serverId)+'</span><span class="status-badge status-'+escapeHtml(server.status)+'">'+escapeHtml(server.status.toUpperCase())+'</span></div>';
-          html += '<div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.5rem">'+escapeHtml(server.region)+(isStale?' <span class="stale-indicator">STALE</span>':'')+'</div>';
+          var sStatus = server.status || 'unknown';
+          var sRegion = server.region || 'unknown';
+          html += '<div class="metrics-server-card health-'+escapeHtml(sStatus)+'" data-server-id="'+escapeHtml(server.serverId)+'">';
+          html += '<div class="metrics-card-header"><span class="server-name">'+escapeHtml(server.serverId)+'</span><span class="status-badge status-'+escapeHtml(sStatus)+'">'+escapeHtml(sStatus.toUpperCase())+'</span></div>';
+          html += '<div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.5rem">'+escapeHtml(sRegion)+(isStale?' <span class="stale-indicator">STALE</span>':'')+'</div>';
           html += '<div class="metrics-bars">';
           html += '<div class="metrics-bar-row"><div class="metrics-bar-label"><span>CPU</span><span>'+cpuPct.toFixed(1)+'%</span></div><div class="metrics-bar-track"><div class="metrics-bar-fill" style="width:'+Math.min(100,cpuPct)+'%;background:'+cpuColor+'"></div></div></div>';
           html += '<div class="metrics-bar-row"><div class="metrics-bar-label"><span>Memory</span><span>'+memMb.toFixed(0)+' MB</span></div><div class="metrics-bar-track"><div class="metrics-bar-fill" style="width:'+Math.min(100,(memMb/512)*100)+'%;background:var(--accent)"></div></div></div>';
