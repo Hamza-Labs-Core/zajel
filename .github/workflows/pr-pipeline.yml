@@ -1545,13 +1545,12 @@ jobs:
           BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL }}
           ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
           SERVER_REGISTRY_SECRET: ${{ secrets.SERVER_REGISTRY_SECRET }}
-          ZAJEL_DIAGNOSTICS_URL: ${{ vars.ZAJEL_DIAGNOSTICS_URL_QA }}
         with:
           host: ${{ vars.QA_VPS_IP }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          envs: APP_VERSION,BOOTSTRAP_URL,ZAJEL_ADMIN_JWT_SECRET,SERVER_REGISTRY_SECRET,ZAJEL_DIAGNOSTICS_URL
+          envs: APP_VERSION,BOOTSTRAP_URL,ZAJEL_ADMIN_JWT_SECRET,SERVER_REGISTRY_SECRET
           script: |
             set -e
 
@@ -1654,7 +1653,7 @@ jobs:
             export ZAJEL_REGISTRY_SECRET=${SERVER_REGISTRY_SECRET}
             export ZAJEL_ADMIN_JWT_SECRET=${ZAJEL_ADMIN_JWT_SECRET}
             export ZAJEL_CF_ADMIN_URL=https://admin.zajel.qa.hamzalabs.dev
-            export ZAJEL_DIAGNOSTICS_URL=${ZAJEL_DIAGNOSTICS_URL}
+            export ZAJEL_DIAGNOSTICS_URL=https://diagnostics.zajel.qa.hamzalabs.dev
             export DIAGNOSTICS_PUSH_SECRET=${ZAJEL_ADMIN_JWT_SECRET}
             export NODE_ENV=qa
             export APP_VERSION=${APP_VERSION}

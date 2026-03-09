@@ -54,6 +54,11 @@
   // used by the VPS servers and the admin-cf worker. This is a shared secret
   // for authenticating VPS server pushes (metrics, logs, security events).
 
+  // Custom domain
+  "routes": [
+    { "pattern": "diagnostics.zajel.hamzalabs.dev", "custom_domain": true }
+  ],
+
   // Production vars
   "vars": {
     "ENVIRONMENT": "production"
@@ -92,6 +97,9 @@
             "period": 60
           }
         }
+      ],
+      "routes": [
+        { "pattern": "diagnostics.zajel.qa.hamzalabs.dev", "custom_domain": true }
       ],
       "vars": {
         "ENVIRONMENT": "qa"
