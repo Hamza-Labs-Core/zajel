@@ -248,12 +248,14 @@ export class FederationManager extends EventEmitter {
       metadata: { region: peer.region },
     };
 
-    // Add to gossip membership (triggers member-join → ring.addNode).
-    // Let the member-join handler call transport.connect() so both sides
-    // actively try to connect. The connection tiebreaker in
-    // handleIncomingConnection() handles the case where both sides
-    // connect simultaneously.
-    this.gossip.getMembership().upsert(entry);
+    // Suppress the member-join transport.connect() during upsert — we'll
+    // connect manually with a short delay to give the peer time to start.
+    this.suppressTransportConnect = true;
+    try {
+      this.gossip.getMembership().upsert(entry);
+    } finally {
+      this.suppressTransportConnect = false;
+    }
 
     // Ensure ring has the node (member-join handler also adds, but be safe)
     this.ring.addNode({
@@ -263,6 +265,16 @@ export class FederationManager extends EventEmitter {
       status: 'alive',
       metadata: entry.metadata,
     });
+
+    // Connect after a short delay so the peer has time to start listening.
+    // Without this, both servers simultaneously try to connect during startup
+    // before either is ready, causing handshake timeouts on slow CI.
+    const jitter = Math.random() * 2000;
+    setTimeout(() => {
+      this.transport.connect(entry).catch((err) => {
+        console.warn(`[Federation] Initial connect to ${entry.serverId} failed:`, err);
+      });
+    }, 1000 + jitter);
   }
 
   /**
