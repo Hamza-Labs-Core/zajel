@@ -10,6 +10,8 @@ import '../config/environment.dart';
 import '../logging/logger_service.dart';
 import 'diagnostics_models.dart';
 import 'error_tracker.dart';
+import 'network_tracker.dart';
+import 'performance_tracker.dart';
 import 'scrubber.dart';
 
 /// Orchestrates diagnostics collection and upload.
@@ -24,7 +26,7 @@ class DiagnosticsService {
   static const _tag = 'DiagnosticsService';
 
   /// Interval between report uploads (drain errors and POST).
-  static const Duration reportInterval = Duration(minutes: 10);
+  static const Duration reportInterval = Duration(minutes: 5);
 
   /// Interval between heartbeats.
   static const Duration heartbeatInterval = Duration(minutes: 5);
@@ -33,6 +35,8 @@ class DiagnosticsService {
   static const Duration _httpTimeout = Duration(seconds: 10);
 
   final ErrorTracker _errorTracker;
+  final PerformanceTracker _performanceTracker;
+  final NetworkTracker _networkTracker;
   final String _diagnosticsUrl;
   final http.Client _httpClient;
   final _logger = LoggerService.instance;
@@ -49,17 +53,15 @@ class DiagnosticsService {
   /// Whether the service is currently enabled.
   bool _enabled = false;
 
-  /// Callback to get the current connection type.
-  String Function()? getConnectionType;
-
-  /// Callback to get network metrics.
-  Map<String, dynamic> Function()? getNetworkMetrics;
-
   DiagnosticsService({
     required ErrorTracker errorTracker,
     required String diagnosticsUrl,
+    PerformanceTracker? performanceTracker,
+    NetworkTracker? networkTracker,
     http.Client? httpClient,
   })  : _errorTracker = errorTracker,
+        _performanceTracker = performanceTracker ?? PerformanceTracker(),
+        _networkTracker = networkTracker ?? NetworkTracker(),
         _diagnosticsUrl = diagnosticsUrl,
         _httpClient = httpClient ?? http.Client() {
     _sessionHash = _generateSessionHash();
@@ -71,12 +73,20 @@ class DiagnosticsService {
   /// The error tracker managed by this service.
   ErrorTracker get errorTracker => _errorTracker;
 
+  /// The performance tracker managed by this service.
+  PerformanceTracker get performanceTracker => _performanceTracker;
+
+  /// The network tracker managed by this service.
+  NetworkTracker get networkTracker => _networkTracker;
+
   /// Start collecting and uploading diagnostics.
   void start() {
     if (_enabled) return;
     _enabled = true;
 
     _errorTracker.start();
+    _performanceTracker.start();
+    _networkTracker.start();
     _reportTimer = Timer.periodic(reportInterval, (_) => _uploadReport());
     _heartbeatTimer =
         Timer.periodic(heartbeatInterval, (_) => _sendHeartbeat());
@@ -93,6 +103,8 @@ class DiagnosticsService {
     _enabled = false;
 
     _errorTracker.stop();
+    _performanceTracker.stop();
+    _networkTracker.stop();
     _reportTimer?.cancel();
     _reportTimer = null;
     _heartbeatTimer?.cancel();
@@ -130,9 +142,19 @@ class DiagnosticsService {
       'locale': Platform.localeName,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
       'errors': scrubbedErrors.map((e) => e.toJson()).toList(),
-      if (getConnectionType != null) 'connectionType': getConnectionType!(),
-      if (getNetworkMetrics != null) 'network': getNetworkMetrics!(),
     };
+
+    // Include performance metrics if available
+    final perfMetrics = _performanceTracker.getMetrics();
+    if (perfMetrics != null) {
+      report['performance'] = perfMetrics.toJson();
+    }
+
+    // Include network metrics if available
+    final netMetrics = _networkTracker.getMetrics();
+    if (netMetrics != null) {
+      report['network'] = netMetrics.toJson();
+    }
 
     try {
       final response = await _httpClient
@@ -164,11 +186,15 @@ class DiagnosticsService {
   Future<void> _sendHeartbeat() async {
     if (!_enabled) return;
 
+    final netMetrics = _networkTracker.getMetrics();
     final body = {
       'sessionHash': _sessionHash,
       'platform': _platformName,
       'appVersion': _appVersion,
-      if (getConnectionType != null) 'connectionType': getConnectionType!(),
+      if (netMetrics?.signalingConnectSuccessRate != null)
+        'connectionType': (netMetrics!.signalingConnectSuccessRate! > 0)
+            ? 'connected'
+            : 'disconnected',
     };
 
     try {

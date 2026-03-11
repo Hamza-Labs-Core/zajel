@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config/environment.dart';
 import '../diagnostics/diagnostics_service.dart';
 import '../diagnostics/error_tracker.dart';
+import '../logging/log_upload_service.dart';
 import 'preferences_providers.dart';
 
 // ── Auto-Delete Messages ──────────────────────────────────
@@ -166,6 +167,30 @@ final diagnosticsServiceProvider = Provider<DiagnosticsService?>((ref) {
     errorTracker: ErrorTracker(
       isEnabled: () => ref.read(diagnosticsEnabledProvider),
     ),
+    diagnosticsUrl: Environment.diagnosticsUrl,
+  );
+
+  if (enabled) {
+    service.start();
+  }
+
+  ref.onDispose(() => service.dispose());
+
+  return service;
+});
+
+// ── Log Upload Service ──────────────────────────────────
+
+/// Provider for the [LogUploadService] singleton.
+///
+/// Only created when a diagnostics URL is configured.
+/// Starts/stops automatically based on [diagnosticsEnabledProvider].
+final logUploadServiceProvider = Provider<LogUploadService?>((ref) {
+  if (!Environment.hasDiagnosticsUrl) return null;
+
+  final enabled = ref.watch(diagnosticsEnabledProvider);
+
+  final service = LogUploadService(
     diagnosticsUrl: Environment.diagnosticsUrl,
   );
 

@@ -9,6 +9,7 @@
  * Endpoints:
  * - POST /diagnostics/report    - Submit a diagnostic report
  * - POST /diagnostics/heartbeat - Client heartbeat for active counting
+ * - POST /diagnostics/app-logs  - Submit app log entries
  * - GET  /diagnostics/health    - Health check
  */
 
@@ -21,8 +22,10 @@ import { handleHeartbeat } from './handlers/heartbeat.js';
 import { handleServerMetricsPush } from './handlers/server-push.js';
 import { handleSecurityEventsPush } from './handlers/security-events-push.js';
 import { handleServerLogsPush } from './handlers/server-logs-push.js';
+import { handleAppLogsPush } from './handlers/app-logs-push.js';
 import { aggregateVersionHistory } from './aggregation-scheduled.js';
 import { aggregateConnectionTypes } from './aggregation.js';
+import { runCleanup } from './cleanup.js';
 
 export default {
   async fetch(
@@ -64,6 +67,8 @@ export default {
         response = await handleSecurityEventsPush(request, env, ctx);
       } else if (path === '/diagnostics/server-logs' && method === 'POST') {
         response = await handleServerLogsPush(request, env, ctx);
+      } else if (path === '/diagnostics/app-logs' && method === 'POST') {
+        response = await handleAppLogsPush(request, env, ctx);
       } else {
         return jsonResponse(
           { success: false, error: 'Not found' },
@@ -101,6 +106,14 @@ export default {
       console.log('Connection type aggregation completed');
     } catch (error) {
       console.error('Connection type aggregation failed:', error);
+    }
+
+    try {
+      const cleanupResults = await runCleanup(env.DB);
+      const totalDeleted = cleanupResults.reduce((sum, r) => sum + r.deleted, 0);
+      console.log(`Cleanup completed: ${totalDeleted} total rows deleted across ${cleanupResults.length} tasks`);
+    } catch (error) {
+      console.error('Cleanup failed:', error);
     }
   },
 };

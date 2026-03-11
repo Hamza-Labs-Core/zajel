@@ -31,11 +31,23 @@
     }
   ],
 
-  // Service binding to the bootstrap server (avoids CF-to-CF 530 errors)
+  // Service bindings (avoids CF-to-CF 530 errors)
   "services": [
     {
       "binding": "BOOTSTRAP_SERVICE",
       "service": "zajel-signaling"
+    },
+    {
+      "binding": "DIAGNOSTICS_SERVICE",
+      "service": "zajel-diagnostics"
+    }
+  ],
+
+  // R2 bucket for diagnostics data
+  "r2_buckets": [
+    {
+      "binding": "DIAGNOSTICS_R2",
+      "bucket_name": "zajel-diagnostics"
     }
   ],
 
@@ -105,11 +117,22 @@
           }
         ]
       },
-      // Service binding for QA (references the QA bootstrap worker)
+      // Service bindings for QA
       "services": [
         {
           "binding": "BOOTSTRAP_SERVICE",
           "service": "zajel-signaling-qa"
+        },
+        {
+          "binding": "DIAGNOSTICS_SERVICE",
+          "service": "zajel-diagnostics-qa"
+        }
+      ],
+      // R2 bucket for QA diagnostics data
+      "r2_buckets": [
+        {
+          "binding": "DIAGNOSTICS_R2",
+          "bucket_name": "zajel-diagnostics-qa"
         }
       ],
       // D1 database for QA diagnostics data

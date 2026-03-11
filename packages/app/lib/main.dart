@@ -409,6 +409,10 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     // The provider handles start/stop based on user opt-in preference.
     ref.read(diagnosticsServiceProvider);
 
+    // Eagerly start log upload service (deduped log streaming to diagnostics-cf).
+    // Also gated on the same diagnostics opt-in preference.
+    ref.read(logUploadServiceProvider);
+
     _setupPeerStatusNotifications();
     _setupVoipCallListener();
     unawaited(_syncAndroidSecureFlag());

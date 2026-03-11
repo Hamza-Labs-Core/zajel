@@ -7,6 +7,8 @@
  * Based on OWASP guidelines and CWE-532 prevention strategies.
  */
 
+import type { LogBuffer as AdminLogBuffer, LogSeverity as AdminLogSeverity } from '../admin/log-buffer.js';
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 /** A buffered log entry awaiting push to diagnostics-cf. */
@@ -129,6 +131,9 @@ class Logger {
   /** Whether a push is currently in-flight (prevents overlapping pushes). */
   private pushing = false;
 
+  /** Optional admin LogBuffer for local log querying via REST API. */
+  private adminLogBuffer: AdminLogBuffer | null = null;
+
   constructor(config: Partial<LoggerConfig> = {}) {
     const nodeEnv = process.env['NODE_ENV'] || 'development';
     const isProduction = nodeEnv === 'production';
@@ -143,6 +148,39 @@ class Logger {
 
   private shouldLog(level: LogLevel): boolean {
     return LOG_LEVELS[level] >= LOG_LEVELS[this.config.level];
+  }
+
+  /**
+   * Set an admin LogBuffer so log entries are also written there
+   * for querying via the admin REST API.
+   */
+  setLogBuffer(buffer: AdminLogBuffer): void {
+    this.adminLogBuffer = buffer;
+  }
+
+  /**
+   * Forward a log entry to the admin LogBuffer (if wired).
+   */
+  private forwardToAdminBuffer(severity: LogLevel, message: string, meta?: Record<string, unknown>): void {
+    if (!this.adminLogBuffer) return;
+
+    // Map LogLevel to AdminLogSeverity (they overlap for debug/info/warn/error)
+    const adminSeverity: AdminLogSeverity = severity as AdminLogSeverity;
+
+    // Extract category from bracket prefix
+    let category = 'general';
+    const bracketMatch = message.match(/^\[([^\]]+)\]\s*/);
+    if (bracketMatch) {
+      category = bracketMatch[1]!.toLowerCase();
+    }
+
+    this.adminLogBuffer.add({
+      timestamp: Date.now(),
+      severity: adminSeverity,
+      category,
+      message,
+      metadata: meta,
+    });
   }
 
   // ─── Log Buffer & Push ─────────────────────────────
@@ -303,6 +341,7 @@ class Logger {
         console.debug(`${this.timestamp()} [DEBUG] ${message}`);
       }
       this.bufferEntry('debug', message, meta);
+      this.forwardToAdminBuffer('debug', message, meta);
     }
   }
 
@@ -314,6 +353,7 @@ class Logger {
         console.log(`${this.timestamp()} [INFO] ${message}`);
       }
       this.bufferEntry('info', message, meta);
+      this.forwardToAdminBuffer('info', message, meta);
     }
   }
 
@@ -325,6 +365,7 @@ class Logger {
         console.warn(`${this.timestamp()} [WARN] ${message}`);
       }
       this.bufferEntry('warn', message, meta);
+      this.forwardToAdminBuffer('warn', message, meta);
     }
   }
 
@@ -348,6 +389,7 @@ class Logger {
         errorMeta['errorMessage'] = String(error);
       }
       this.bufferEntry('error', message, Object.keys(errorMeta).length > 0 ? errorMeta : undefined);
+      this.forwardToAdminBuffer('error', message, Object.keys(errorMeta).length > 0 ? errorMeta : undefined);
     }
   }
 

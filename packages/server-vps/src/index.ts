@@ -463,6 +463,12 @@ export async function createZajelServer(
   });
   adminModuleRef = adminModule;
 
+  // Wire logger to also write to the admin LogBuffer so the log query
+  // REST endpoints can serve in-memory log entries.
+  if (adminModule.logBuffer) {
+    logger.setLogBuffer(adminModule.logBuffer);
+  }
+
   if (config.admin.jwtSecret) {
     console.log('[Zajel] Admin dashboard enabled at /admin/');
   }

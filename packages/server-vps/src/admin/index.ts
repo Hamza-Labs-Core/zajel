@@ -17,9 +17,11 @@ import { AdminRoutes } from './routes.js';
 import { AdminWebSocketHandler } from './websocket.js';
 import { verifyJwt, extractToken } from './auth.js';
 import type { AdminConfig } from './types.js';
+import { LogBuffer } from './log-buffer.js';
 
 export interface AdminModule {
   metricsCollector: MetricsCollector;
+  logBuffer: LogBuffer;
   routes: AdminRoutes;
   wsHandler: AdminWebSocketHandler;
   handleRequest: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -62,8 +64,12 @@ export function createAdminModule(options: CreateAdminModuleOptions): AdminModul
     config.metricsHistorySeconds
   );
 
+  // Create in-memory log buffer for local log querying
+  const logBuffer = new LogBuffer();
+
   // Create routes handler
   const routes = new AdminRoutes(metricsCollector, config);
+  routes.setLogBuffer(logBuffer);
 
   // Create WebSocket server for admin connections
   const adminWss = new WebSocketServer({ noServer: true });
@@ -76,6 +82,7 @@ export function createAdminModule(options: CreateAdminModuleOptions): AdminModul
 
   return {
     metricsCollector,
+    logBuffer,
     routes,
     wsHandler,
 
@@ -135,6 +142,7 @@ export function createAdminModule(options: CreateAdminModuleOptions): AdminModul
      */
     shutdown(): void {
       wsHandler.shutdown();
+      logBuffer.stopFlush();
       adminWss.close();
       console.log('[Admin] Dashboard module shut down');
     },
@@ -160,6 +168,7 @@ function createDisabledModule(): AdminModule {
 
   return {
     metricsCollector: noopCollector as unknown as MetricsCollector,
+    logBuffer: new LogBuffer(),
     routes: null as unknown as AdminRoutes,
     wsHandler: null as unknown as AdminWebSocketHandler,
     handleRequest: async () => false,
