@@ -258,7 +258,7 @@ function TrendsChart({ data }: { data: TrendsData }) {
 
   // Build stacked areas from bottom to top
   const areas: Array<{ d: string; color: string; label: string }> = [];
-  const baselines: number[][] = Array.from({ length: n }, () => [0]);
+  // cumulative array tracks stacked baseline per data point
 
   const cumulative = new Array(n).fill(0);
 

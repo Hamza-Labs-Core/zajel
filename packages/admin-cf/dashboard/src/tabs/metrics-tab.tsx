@@ -5,7 +5,7 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { api, formatMetricValue, formatUptime, fmtMs } from '../api';
 import { Card, CardGrid } from '../components/card';
-import { LineChart, Gauge, DonutChart, MiniLine, AreaChart } from '../components/chart';
+import { LineChart, Gauge, DonutChart, AreaChart } from '../components/chart';
 
 // ── Types ──
 

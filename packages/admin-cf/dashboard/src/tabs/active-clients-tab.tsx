@@ -4,7 +4,7 @@
  */
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { api } from '../api';
-import { Card, CardGrid } from '../components/card';
+// Card/CardGrid available if needed for future stat cards
 import { DonutChart, BarChart } from '../components/chart';
 
 interface ActiveData { totalActive: number; byPlatform: Record<string, number> }

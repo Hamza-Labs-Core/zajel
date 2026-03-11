@@ -3,7 +3,7 @@
  * and inlines all referenced CSS and JS files to produce a single self-contained HTML.
  * Then generates a TypeScript module that exports the HTML as a string constant.
  */
-import { readFileSync, writeFileSync, readdirSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 

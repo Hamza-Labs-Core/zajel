@@ -17,7 +17,7 @@ import {
   fetchR2StackTraces,
 } from '../../src/pipeline.js';
 import type { Env, ProcessingRunResult, ErrorCluster } from '../../src/types.js';
-import { MAX_CLUSTERS_PER_RUN, MAX_NEW_ISSUES_PER_RUN, ERROR_THRESHOLD, LOG_CLUSTER_THRESHOLD } from '../../src/types.js';
+import { MAX_NEW_ISSUES_PER_RUN } from '../../src/types.js';
 
 // ─────────────────────────────────────────────
 // Test Fixtures and Helpers

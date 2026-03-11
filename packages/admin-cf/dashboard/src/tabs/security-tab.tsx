@@ -6,7 +6,7 @@ import { useState, useEffect, useCallback } from 'preact/hooks';
 import { api } from '../api';
 import { Card, CardGrid } from '../components/card';
 import { BarChart, MiniLine } from '../components/chart';
-import { DataTable, type Column } from '../components/table';
+
 
 interface RateLimitViolation {
   timestamp: string;
