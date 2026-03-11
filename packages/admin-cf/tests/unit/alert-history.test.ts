@@ -495,22 +495,22 @@ describe('Alert History API', () => {
 
   describe('CORS headers', () => {
     it('history responses include CORS headers', async () => {
-      const env = createMockEnv();
+      const env = createMockEnv({ ADMIN_ALLOWED_ORIGINS: 'http://localhost' });
       const req = new Request('http://localhost/admin/api/alerts/history', {
-        headers: { Authorization: `Bearer ${superAdminToken}` },
+        headers: { Authorization: `Bearer ${superAdminToken}`, Origin: 'http://localhost' },
       });
       const res = await worker.fetch(req, env);
-      expect(res.headers.get('access-control-allow-origin')).toBe('*');
+      expect(res.headers.get('access-control-allow-origin')).toBe('http://localhost');
     });
 
     it('acknowledge responses include CORS headers', async () => {
-      const env = createMockEnv();
+      const env = createMockEnv({ ADMIN_ALLOWED_ORIGINS: 'http://localhost' });
       const req = new Request('http://localhost/admin/api/alerts/history/1/acknowledge', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${superAdminToken}` },
+        headers: { Authorization: `Bearer ${superAdminToken}`, Origin: 'http://localhost' },
       });
       const res = await worker.fetch(req, env);
-      expect(res.headers.get('access-control-allow-origin')).toBe('*');
+      expect(res.headers.get('access-control-allow-origin')).toBe('http://localhost');
     });
   });
 });

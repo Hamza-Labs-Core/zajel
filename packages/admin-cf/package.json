@@ -11,8 +11,8 @@
     "test": "vitest run",
     "test:e2e": "vitest run tests/e2e/",
     "test:watch": "vitest",
-    "build:dashboard": "vite build",
-    "dev:dashboard": "vite"
+    "build:dashboard": "vite build --config dashboard/vite.config.ts && node scripts/inline-dashboard.mjs",
+    "dev:dashboard": "vite --config dashboard/vite.config.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250210.0",

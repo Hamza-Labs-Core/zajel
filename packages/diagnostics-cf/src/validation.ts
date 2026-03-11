@@ -5,7 +5,7 @@
  */
 
 import type { DiagnosticReport, DiagnosticError, PerformanceMetrics, NetworkMetrics } from './types.js';
-import { VALID_PLATFORMS, VALID_ERROR_CATEGORIES, VALID_CONNECTION_TYPES } from './types.js';
+import { VALID_PLATFORMS, VALID_ERROR_CATEGORIES, VALID_CONNECTION_TYPES, VALID_ENVIRONMENTS } from './types.js';
 
 /** Hex pattern for SHA-256 hash (64 hex characters). */
 const SESSION_HASH_PATTERN = /^[0-9a-f]{64}$/i;
@@ -98,6 +98,16 @@ export function validateReport(body: unknown): ValidationResult {
     }
     if (!VALID_CONNECTION_TYPES.includes(obj['connectionType'] as typeof VALID_CONNECTION_TYPES[number])) {
       return { valid: false, error: `Field 'connectionType' must be one of: ${VALID_CONNECTION_TYPES.join(', ')}` };
+    }
+  }
+
+  // Validate optional environment
+  if (obj['environment'] !== undefined && obj['environment'] !== null) {
+    if (typeof obj['environment'] !== 'string') {
+      return { valid: false, error: "Field 'environment' must be a string" };
+    }
+    if (!VALID_ENVIRONMENTS.includes(obj['environment'] as typeof VALID_ENVIRONMENTS[number])) {
+      return { valid: false, error: `Field 'environment' must be one of: ${VALID_ENVIRONMENTS.join(', ')}` };
     }
   }
 

@@ -76,6 +76,19 @@ class AutoUpdateSettings extends ConsumerWidget {
                 }
               : null,
         ),
+        SwitchListTile(
+          secondary: const Icon(Icons.science_outlined),
+          title: const Text('Pre-release channel'),
+          subtitle: const Text(
+            'Get early access to new features (may be unstable)',
+          ),
+          value: ref.watch(includePrereleasesProvider),
+          onChanged: (value) {
+            ref.read(includePrereleasesProvider.notifier).setEnabled(value);
+            // Clear cached check result so next check uses the new channel
+            ref.read(updateCheckResultProvider.notifier).state = null;
+          },
+        ),
       ],
     );
   }
