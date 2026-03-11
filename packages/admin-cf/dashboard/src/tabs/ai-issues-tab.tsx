@@ -98,15 +98,15 @@ export function AiIssuesTab() {
       {/* Cost Monitoring */}
       {costs && (
         <CardGrid>
-          <Card title="Total Tokens Used" value={costs.totalTokensUsed.toLocaleString()} />
-          <Card title="Total Runs" value={costs.totalRuns} />
-          <Card title="Estimated Cost" value={`$${costs.estimatedCostUsd.toFixed(4)}`} valueColor="var(--warning)" />
+          <Card title="Total Tokens Used" value={(costs.totalTokensUsed ?? 0).toLocaleString()} />
+          <Card title="Total Runs" value={costs.totalRuns ?? 0} />
+          <Card title="Estimated Cost" value={`$${(costs.estimatedCostUsd ?? 0).toFixed(4)}`} valueColor="var(--warning)" />
           <Card title="Total Issues" value={issues?.total ?? 0} />
         </CardGrid>
       )}
 
       {/* Cost by Day */}
-      {costs && costs.byDay.length > 0 && (
+      {costs && costs.byDay && costs.byDay.length > 0 && (
         <div class="panel">
           <h3>Cost by Day</h3>
           <table class="data-table">
@@ -128,7 +128,7 @@ export function AiIssuesTab() {
       {/* Issues Table */}
       <div class="panel">
         <h3>Issues ({issues?.total ?? 0})</h3>
-        {issues && issues.issues.length > 0 ? (
+        {issues && issues.issues && issues.issues.length > 0 ? (
           <div>
             {issues.issues.map(issue => (
               <div key={issue.id} style={{ borderBottom: '1px solid var(--border)' }}>

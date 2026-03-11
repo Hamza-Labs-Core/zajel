@@ -1,5 +1,8 @@
 /**
- * Main App component with tab routing and auth state.
+ * Main App component with hash-based tab routing and auth state.
+ *
+ * Each tab gets its own URL via hash routing (e.g., #/servers, #/errors).
+ * This lets users bookmark tabs and use browser back/forward navigation.
  */
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { api, getToken, setToken } from './api';
@@ -33,11 +36,34 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]['id'];
 
+const VALID_TABS = new Set<string>(TABS.map(t => t.id));
+
+function getTabFromHash(): TabId {
+  const hash = window.location.hash.replace(/^#\/?/, '');
+  return VALID_TABS.has(hash) ? (hash as TabId) : 'servers';
+}
+
+function setHashRoute(tab: TabId) {
+  window.location.hash = `#/${tab}`;
+}
+
 export function App() {
   const [user, setUser] = useState<User | null>(null);
-  const [activeTab, setActiveTab] = useState<TabId>('servers');
+  const [activeTab, setActiveTab] = useState<TabId>(getTabFromHash);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Sync tab state with hash changes (browser back/forward)
+  useEffect(() => {
+    const onHashChange = () => setActiveTab(getTabFromHash());
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  const navigateTab = useCallback((tab: TabId) => {
+    setHashRoute(tab);
+    setActiveTab(tab);
+  }, []);
 
   // Verify existing token on mount
   useEffect(() => {
@@ -143,13 +169,14 @@ export function App() {
 
       <div class="tabs">
         {TABS.map(tab => (
-          <div
+          <a
             key={tab.id}
+            href={`#/${tab.id}`}
             class={`tab${activeTab === tab.id ? ' active' : ''}`}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={(e) => { e.preventDefault(); navigateTab(tab.id); }}
           >
             {tab.label}
-          </div>
+          </a>
         ))}
       </div>
 

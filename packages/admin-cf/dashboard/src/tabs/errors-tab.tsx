@@ -128,7 +128,7 @@ export function ErrorsTab() {
     {
       key: 'platforms',
       label: 'Platforms',
-      render: (row) => <>{(row.platforms || []).join(', ')}</>,
+      render: (row) => <>{(Array.isArray(row.platforms) ? row.platforms : []).join(', ')}</>,
     },
     {
       key: 'firstSeen',

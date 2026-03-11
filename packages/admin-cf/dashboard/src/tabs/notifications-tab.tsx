@@ -79,7 +79,7 @@ export function NotificationsTab() {
     ]);
     if (cfg.success && cfg.data) {
       setConfig(cfg.data);
-      setEditEmails(cfg.data.emailAddresses.join(', '));
+      setEditEmails((cfg.data.emailAddresses || []).join(', '));
       setEditSeverity(cfg.data.emailSeverityFilter || 'medium');
       setEditWebhookUrl(cfg.data.webhookUrl || '');
       setEditWebhookFormat(cfg.data.webhookFormat || 'json');
@@ -144,8 +144,8 @@ export function NotificationsTab() {
 
       <CardGrid>
         <Card title="Unread Notifications" value={unread} valueColor={unread > 0 ? 'var(--warning)' : 'var(--success)'} />
-        <Card title="Alert Rules" value={rules?.rules.length ?? 0} />
-        <Card title="Alerts Fired (recent)" value={history?.history.length ?? 0} />
+        <Card title="Alert Rules" value={rules?.rules?.length ?? 0} />
+        <Card title="Alerts Fired (recent)" value={history?.history?.length ?? 0} />
         <Card title="Config Status" value={config?.enabled ? 'Enabled' : 'Disabled'} valueColor={config?.enabled ? 'var(--success)' : 'var(--text-secondary)'} />
       </CardGrid>
 
@@ -216,7 +216,7 @@ export function NotificationsTab() {
       {/* Alert Rules Table */}
       <div class="panel">
         <h3>Alert Rules</h3>
-        {rules && rules.rules.length > 0 ? (
+        {rules && rules.rules && rules.rules.length > 0 ? (
           <table class="data-table">
             <thead><tr><th>Name</th><th>Metric</th><th>Condition</th><th>Severity</th><th>Cooldown</th><th>Enabled</th></tr></thead>
             <tbody>
@@ -245,7 +245,7 @@ export function NotificationsTab() {
       {/* Alert History */}
       <div class="panel">
         <h3>Alert History</h3>
-        {history && history.history.length > 0 ? (
+        {history && history.history && history.history.length > 0 ? (
           <table class="data-table">
             <thead><tr><th>Rule</th><th>Severity</th><th>Message</th><th>Fired</th><th>Status</th></tr></thead>
             <tbody>
@@ -276,7 +276,7 @@ export function NotificationsTab() {
           <h3>Recent Notifications</h3>
           {unread > 0 && <button class="secondary" style={{ fontSize: '0.75rem' }} onClick={markAllRead}>Mark All Read</button>}
         </div>
-        {notifications && notifications.notifications.length > 0 ? (
+        {notifications && notifications.notifications && notifications.notifications.length > 0 ? (
           <div>
             {notifications.notifications.map(n => (
               <div key={n.id} style={{

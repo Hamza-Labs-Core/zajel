@@ -199,7 +199,7 @@ export function ServerHealthTab() {
           </div>
         </div>
 
-        {logs && logs.logs.length > 0 ? (
+        {logs && logs.logs && logs.logs.length > 0 ? (
           <div style={{ maxHeight: 400, overflowY: 'auto', fontSize: '0.8rem', fontFamily: 'monospace' }}>
             {logs.logs.map((log, i) => (
               <div key={i} style={{ padding: '0.4rem 0.6rem', borderBottom: '1px solid var(--border)', display: 'flex', gap: '0.75rem' }}>
@@ -235,7 +235,7 @@ export function ServerHealthTab() {
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                   Region: {node.region}
                 </div>
-                {node.connections.length > 0 && (
+                {node.connections && node.connections.length > 0 && (
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
                     Connected to: {node.connections.join(', ')}
                   </div>

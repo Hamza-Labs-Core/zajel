@@ -157,7 +157,7 @@ export function SecurityTab() {
                 <tr key={i}>
                   <td style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>{c.ip}</td>
                   <td><span style={{ color: c.violationCount > 100 ? 'var(--danger)' : c.violationCount > 10 ? 'var(--warning)' : 'var(--text-primary)', fontWeight: 600 }}>{c.violationCount}</span></td>
-                  <td>{c.categories.map(cat => <span key={cat} class={`badge badge-${cat === 'rate_limit' ? 'degraded' : 'critical'}`} style={{ marginRight: '0.25rem' }}>{cat}</span>)}</td>
+                  <td>{(c.categories || []).map(cat => <span key={cat} class={`badge badge-${cat === 'rate_limit' ? 'degraded' : 'critical'}`} style={{ marginRight: '0.25rem' }}>{cat}</span>)}</td>
                   <td>{new Date(c.lastSeen).toLocaleString()}</td>
                 </tr>
               ))}

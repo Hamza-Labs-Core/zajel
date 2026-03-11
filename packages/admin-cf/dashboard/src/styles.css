@@ -114,6 +114,8 @@ button.secondary:hover { background: var(--bg-card); }
   border: 1px solid transparent;
   white-space: nowrap;
   user-select: none;
+  text-decoration: none;
+  color: inherit;
 }
 .tab:hover { background: var(--bg-card); }
 .tab.active { border-color: var(--accent); background: var(--bg-card); }
