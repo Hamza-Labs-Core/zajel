@@ -16,7 +16,7 @@ interface AppMetric {
   current: AppMetricCurrent;
   dataPoints: Array<{ timeBucket: string; p50: number | null; p95: number | null; p99: number | null }>;
 }
-interface AppMetricsData { metrics: AppMetric[]; filters: { platforms: string[]; versions: string[] } }
+interface AppMetricsData { metrics: AppMetric[] | Record<string, unknown>[]; filters?: { platforms: string[]; versions: string[] }; range?: string }
 
 interface ServerMetricEntry {
   serverId: string;
@@ -29,10 +29,55 @@ interface ServerMetricEntry {
     uptimeSeconds: number; entropyActiveCodes: number;
   };
 }
-interface ServerMetricsData { servers: ServerMetricEntry[]; aggregate: Record<string, number> }
+interface ServerMetricsData { servers: ServerMetricEntry[] | RawServerEntry[]; aggregate?: Record<string, number> }
+
+/** Raw shape returned by the API (flat fields from D1). */
+interface RawServerEntry {
+  serverId: string;
+  region: string;
+  health?: string;
+  cpu?: number;
+  memoryMb?: number;
+  connections?: { total?: number; relay?: number; signaling?: number };
+  activeCodes?: number;
+  messageRatePerSec?: number;
+  uptimeSeconds?: number;
+  timestamp?: number;
+  // Fallback: nested metrics shape
+  status?: string;
+  lastSeen?: number;
+  metrics?: ServerMetricEntry['metrics'];
+}
+
+/** Normalize a server entry from the API into the dashboard shape. */
+function normalizeServer(raw: RawServerEntry): ServerMetricEntry {
+  // If it already has .metrics, it's the expected shape
+  if (raw.metrics) {
+    return raw as ServerMetricEntry;
+  }
+  // Otherwise, map from flat API shape
+  return {
+    serverId: raw.serverId,
+    region: raw.region || '',
+    status: raw.health || raw.status || 'unknown',
+    lastSeen: raw.timestamp || raw.lastSeen || 0,
+    metrics: {
+      cpuPercent: raw.cpu || 0,
+      memoryMb: raw.memoryMb || 0,
+      connectionsTotal: raw.connections?.total || 0,
+      connectionsRelay: raw.connections?.relay || 0,
+      messageRatePerMinute: (raw.messageRatePerSec || 0) * 60,
+      federationAliveMembers: 0,
+      federationTotalMembers: 0,
+      uptimeSeconds: raw.uptimeSeconds || 0,
+      entropyActiveCodes: raw.activeCodes || 0,
+    },
+  };
+}
 interface ServerDetailData {
   serverId: string; region: string;
-  history: Array<{ timestamp: number; cpuPercent: number; memoryMb: number; connectionsTotal: number; messageRatePerMinute: number }>;
+  history: Array<{ timestamp: number; cpuPercent?: number; cpu_percent?: number; memoryMb?: number; memory_mb?: number; connectionsTotal?: number; connections_total?: number; messageRatePerMinute?: number; message_rate_per_second?: number }>;
+  current?: Record<string, unknown>;
 }
 
 interface NetworkMetricsData {
@@ -117,8 +162,18 @@ export function MetricsTab() {
   }, [fedRange]);
 
   const loadDetail = useCallback(async (serverId: string) => {
-    const res = await api<ServerDetailData>(`/admin/api/metrics/server/${encodeURIComponent(serverId)}?range=${encodeURIComponent(smRange)}`);
-    if (res.success && res.data) setServerDetail(res.data);
+    const res = await api<Record<string, unknown>>(`/admin/api/metrics/server/${encodeURIComponent(serverId)}?range=${encodeURIComponent(smRange)}`);
+    if (res.success && res.data) {
+      const d = res.data;
+      // API may return { current: { serverId, region, ... }, history: [...] }
+      // Normalize to { serverId, region, history }
+      const cur = (d.current || {}) as Record<string, unknown>;
+      setServerDetail({
+        serverId: (d.serverId || cur.serverId || serverId) as string,
+        region: (d.region || cur.region || '') as string,
+        history: (d.history || []) as ServerDetailData['history'],
+      });
+    }
   }, [smRange]);
 
   useEffect(() => {
@@ -142,13 +197,69 @@ export function MetricsTab() {
 
 // ── App Metrics Section ──
 
+/** Raw D1 row from /admin/api/metrics/app */
+interface RawAppMetricRow {
+  time_bucket?: string;
+  timeBucket?: string;
+  platform?: string;
+  app_version?: string;
+  metric_name?: string;
+  metricName?: string;
+  p50: number | null;
+  p95: number | null;
+  p99: number | null;
+  sample_count?: number;
+  unit?: string;
+}
+
+/** Normalize raw D1 rows into the grouped AppMetric[] shape. */
+function normalizeAppMetrics(data: AppMetricsData): { metrics: AppMetric[]; filters: { platforms: string[]; versions: string[] } } {
+  // If data.metrics already has the expected shape (has .metricName, .current, .dataPoints)
+  const raw = data.metrics as unknown[];
+  if (raw.length > 0 && typeof (raw[0] as Record<string, unknown>)['metricName'] === 'string' && (raw[0] as Record<string, unknown>)['current']) {
+    return { metrics: data.metrics as AppMetric[], filters: data.filters || { platforms: [], versions: [] } };
+  }
+
+  // Otherwise it's raw D1 rows — group by metric_name
+  const rows = raw as RawAppMetricRow[];
+  const platforms = new Set<string>();
+  const versions = new Set<string>();
+  const grouped = new Map<string, { unit: string; points: Array<{ timeBucket: string; p50: number | null; p95: number | null; p99: number | null }> }>();
+
+  for (const row of rows) {
+    const name = row.metric_name || row.metricName || 'unknown';
+    const bucket = row.time_bucket || row.timeBucket || '';
+    if (row.platform) platforms.add(row.platform);
+    if (row.app_version) versions.add(row.app_version);
+    if (!grouped.has(name)) {
+      const unit = name === 'startup_time' ? 'ms' : name === 'frame_rate' ? 'fps' : name === 'memory' ? 'MB' : '';
+      grouped.set(name, { unit, points: [] });
+    }
+    grouped.get(name)!.points.push({ timeBucket: bucket, p50: row.p50, p95: row.p95, p99: row.p99 });
+  }
+
+  const metrics: AppMetric[] = [];
+  for (const [name, { unit, points }] of grouped) {
+    // Current = last data point
+    const last = points.length > 0 ? points[points.length - 1]! : { p50: null, p95: null, p99: null };
+    metrics.push({ metricName: name, unit, current: { p50: last.p50, p95: last.p95, p99: last.p99 }, dataPoints: points });
+  }
+
+  return {
+    metrics,
+    filters: {
+      platforms: Array.from(platforms).sort(),
+      versions: Array.from(versions).sort(),
+    },
+  };
+}
+
 function AppMetricsSection({ data, range, setRange, platform, setPlatform, version, setVersion }: {
   data: AppMetricsData | null; range: string; setRange: (v: string) => void;
   platform: string; setPlatform: (v: string) => void; version: string; setVersion: (v: string) => void;
 }) {
   if (!data) return <div class="loading"><div class="spinner" /></div>;
-  const filters = data.filters || { platforms: [], versions: [] };
-  const metrics = data.metrics || [];
+  const { metrics, filters } = normalizeAppMetrics(data);
 
   return (
     <div>
@@ -232,14 +343,14 @@ function ServerMetricsSection({ data, detail, loadDetail, onBack, smRange, setSm
               onClick={() => { setSmRange(r); loadDetail(detail.serverId); }}>{r}</button>
           ))}
         </div>
-        {detail.history.length === 0 ? (
+        {(detail.history || []).length === 0 ? (
           <div class="empty-state"><p>No historical data for this time range.</p></div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            <div class="panel"><h3>CPU Usage (%)</h3><AreaChart data={detail.history.map(h => ({ timestamp: h.timestamp, value: h.cpuPercent }))} color="#ef4444" maxForced={100} /></div>
-            <div class="panel"><h3>Memory (MB)</h3><AreaChart data={detail.history.map(h => ({ timestamp: h.timestamp, value: h.memoryMb }))} color="#3b82f6" /></div>
-            <div class="panel"><h3>Connections</h3><AreaChart data={detail.history.map(h => ({ timestamp: h.timestamp, value: h.connectionsTotal }))} color="#22c55e" /></div>
-            <div class="panel"><h3>Message Rate (msgs/min)</h3><AreaChart data={detail.history.map(h => ({ timestamp: h.timestamp, value: h.messageRatePerMinute }))} color="#eab308" /></div>
+            <div class="panel"><h3>CPU Usage (%)</h3><AreaChart data={detail.history.map(h => ({ timestamp: h.timestamp, value: h.cpuPercent ?? h.cpu_percent ?? 0 }))} color="#ef4444" maxForced={100} /></div>
+            <div class="panel"><h3>Memory (MB)</h3><AreaChart data={detail.history.map(h => ({ timestamp: h.timestamp, value: h.memoryMb ?? h.memory_mb ?? 0 }))} color="#3b82f6" /></div>
+            <div class="panel"><h3>Connections</h3><AreaChart data={detail.history.map(h => ({ timestamp: h.timestamp, value: h.connectionsTotal ?? h.connections_total ?? 0 }))} color="#22c55e" /></div>
+            <div class="panel"><h3>Message Rate (msgs/min)</h3><AreaChart data={detail.history.map(h => ({ timestamp: h.timestamp, value: (h.messageRatePerMinute ?? (h.message_rate_per_second ?? 0) * 60) }))} color="#eab308" /></div>
           </div>
         )}
       </div>
@@ -247,14 +358,35 @@ function ServerMetricsSection({ data, detail, loadDetail, onBack, smRange, setSm
   }
 
   if (!data) return <div class="loading"><div class="spinner" /></div>;
-  const agg = data.aggregate || {};
-  const servers = data.servers || [];
+  const rawServers = data.servers || [];
+  const servers = rawServers.map(s => normalizeServer(s as RawServerEntry));
+
+  // Compute aggregates from server data (API may not provide them)
+  const agg = data.aggregate || (() => {
+    let healthy = 0, degraded = 0, offline = 0, totalConn = 0, totalMsgs = 0;
+    for (const s of servers) {
+      if (s.status === 'healthy') healthy++;
+      else if (s.status === 'degraded') degraded++;
+      else offline++;
+      totalConn += s.metrics.connectionsTotal;
+      totalMsgs += s.metrics.messageRatePerMinute;
+    }
+    return { totalServers: servers.length, healthyServers: healthy, degradedServers: degraded, offlineServers: offline, totalConnections: totalConn, totalThroughput: totalMsgs };
+  })();
+
+  /** Truncate long server IDs (e.g. ed25519:5vVf4WU...) for display. */
+  const shortId = (id: string) => {
+    if (id.length <= 20) return id;
+    const colonIdx = id.indexOf(':');
+    if (colonIdx >= 0) return id.slice(colonIdx + 1, colonIdx + 9) + '...';
+    return id.slice(0, 12) + '...';
+  };
 
   return (
     <div style={{ marginTop: '2rem' }}>
       <h3 style={{ marginBottom: '1rem', fontSize: '1rem', fontWeight: 600 }}>Server Metrics</h3>
       <CardGrid>
-        <Card title="Total Servers" value={agg['totalServers'] || 0} />
+        <Card title="Total Servers" value={agg['totalServers'] || servers.length} />
         <Card title="Healthy" value={agg['healthyServers'] || 0} valueColor="var(--success)" />
         <Card title="Degraded" value={agg['degradedServers'] || 0} valueColor="var(--warning)" />
         <Card title="Offline" value={agg['offlineServers'] || 0} valueColor="var(--danger)" />
@@ -266,7 +398,7 @@ function ServerMetricsSection({ data, detail, loadDetail, onBack, smRange, setSm
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(320px,1fr))', gap: '1rem' }}>
           {servers.map(s => {
-            const m = s.metrics || {} as ServerMetricEntry['metrics'];
+            const m = s.metrics;
             const cpuPct = m.cpuPercent || 0;
             const memMb = m.memoryMb || 0;
             const isStale = (Date.now() - s.lastSeen) > 300_000;
@@ -276,7 +408,7 @@ function ServerMetricsSection({ data, detail, loadDetail, onBack, smRange, setSm
               <div key={s.serverId} class="server-card" style={{ borderWidth: 2, borderColor: s.status === 'healthy' ? 'var(--success)' : s.status === 'degraded' ? 'var(--warning)' : 'var(--danger)' }}
                 onClick={() => loadDetail(s.serverId)}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                  <span style={{ fontWeight: 600 }}>{s.serverId}</span>
+                  <span style={{ fontWeight: 600 }} title={s.serverId}>{shortId(s.serverId)}</span>
                   <span class={`badge badge-${s.status}`}>{(s.status || 'unknown').toUpperCase()}</span>
                 </div>
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>

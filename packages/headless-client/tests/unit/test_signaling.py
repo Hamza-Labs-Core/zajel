@@ -1,6 +1,7 @@
 """Tests for signaling client message parsing."""
 
 import asyncio
+import contextlib
 import json
 import time
 
@@ -340,10 +341,8 @@ class TestRedirectHandling:
             if "wss://65.21.54.26:8443" in client._redirect_connections:
                 _, task = client._redirect_connections["wss://65.21.54.26:8443"]
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass  # expected after task.cancel()
 
         # The redirect connection must be registered AFTER receiving 'registered',
         # not after receiving 'server_info'. If the bug is present,
