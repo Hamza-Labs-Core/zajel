@@ -16,7 +16,7 @@ class FakeChannelStorageService extends ChannelStorageService {
   final Map<String, Channel> channels = {};
   final Map<String, List<Chunk>> chunks = {};
 
-  FakeChannelStorageService() : super(secureStorage: FakeSecureStorage());
+  FakeChannelStorageService() : super(secureStorage: FakeCachedSecureStorage());
 
   @override
   Future<void> initialize() async {}

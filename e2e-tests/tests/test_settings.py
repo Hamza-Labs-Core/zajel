@@ -8,6 +8,7 @@ needs a paired peer to verify it gets removed.
 
 import time
 import pytest
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 from config import P2P_CONNECTION_TIMEOUT
 
@@ -79,44 +80,49 @@ class TestSettings:
         assert persisted, "Display name should persist after app restart"
 
     @pytest.mark.single_device
+    @pytest.mark.requires_signaling
     def test_connection_status_shown(self, alice, app_helper):
         """Settings shows connection status ('Connected' or 'Connecting...')."""
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+
         helper = app_helper(alice)
         helper.wait_for_app_ready()
 
-        # Navigate to connect first to trigger signaling connection
-        helper.navigate_to_connect()
-        time.sleep(5)
-        helper.go_back_to_home()
-
+        # The app auto-connects to signaling on startup (no need to
+        # navigate to the Connect screen first).
         helper.navigate_to_settings()
 
-        # The External Connections section may be below the fold — scroll down
-        # Use small scroll increments to avoid overshooting past the section
+        # The External Connections section is the 7th section — scroll down.
+        # Use a single compound XPath to search all status texts at once
+        # (avoids 5× timeout per scroll attempt).
         screen_size = alice.get_window_size()
         center_x = int(screen_size['width'] * 0.5)
-        start_y = int(screen_size['height'] * 0.6)
+        start_y = int(screen_size['height'] * 0.7)
+        end_y = int(screen_size['height'] * 0.3)
+
+        compound_xpath = (
+            "//*["
+            "contains(@content-desc, 'External Connections') or "
+            "contains(@content-desc, 'Connected') or "
+            "contains(@content-desc, 'Connecting') or "
+            "contains(@content-desc, 'Pairing Code') or "
+            "contains(@content-desc, 'Bootstrap Server')]"
+        )
 
         found_status = False
-        # On Pixel 6 (~859dp usable), "External Connections" is at ~492dp
-        # and should be visible without scrolling. Try with a longer timeout
-        # first, then scroll with smaller increments as fallback.
-        for attempt in range(4):
-            find_timeout = 5 if attempt == 0 else 2
-            for status_text in ['External Connections', 'Connected',
-                                'Connecting', 'Pairing Code']:
-                try:
-                    helper._find(status_text, timeout=find_timeout)
-                    found_status = True
-                    break
-                except Exception:
-                    pass
-            if found_status:
+        for attempt in range(8):
+            try:
+                WebDriverWait(alice, 2).until(
+                    EC.presence_of_element_located((By.XPATH, compound_xpath))
+                )
+                found_status = True
                 break
-            # Small scroll (~150dp) to avoid overshooting past the section
-            small_end_y = int(screen_size['height'] * 0.45)
-            alice.swipe(center_x, start_y, center_x, small_end_y, 500)
-            time.sleep(1)
+            except (TimeoutException, NoSuchElementException):
+                pass  # element not visible yet — scroll and retry
+            alice.swipe(center_x, start_y, center_x, end_y, 800)
+            time.sleep(0.5)
 
         assert found_status, \
             "Settings should show connection status section"
@@ -129,19 +135,20 @@ class TestSettings:
 
         helper.navigate_to_settings()
 
-        # Scroll down to find View Logs (it's in the Debugging section)
+        # Scroll down to find View Logs (it's in the Debugging section,
+        # near the bottom of the settings screen).
         screen_size = alice.get_window_size()
         center_x = int(screen_size['width'] * 0.5)
-        start_y = int(screen_size['height'] * 0.8)
-        end_y = int(screen_size['height'] * 0.2)
+        start_y = int(screen_size['height'] * 0.7)
+        end_y = int(screen_size['height'] * 0.3)
 
-        for _ in range(3):
+        for _ in range(6):
             try:
                 helper._find("View Logs", timeout=3)
                 break
             except Exception:
-                alice.swipe(center_x, start_y, center_x, end_y, 500)
-                time.sleep(1)
+                alice.swipe(center_x, start_y, center_x, end_y, 800)
+                time.sleep(0.5)
 
         helper.tap_settings_option("View Logs")
 
@@ -190,10 +197,10 @@ class TestSettings:
         # Scroll to bottom to find 'Clear All Data'
         screen_size = alice_driver.get_window_size()
         center_x = int(screen_size['width'] * 0.5)
-        start_y = int(screen_size['height'] * 0.8)
-        end_y = int(screen_size['height'] * 0.2)
+        start_y = int(screen_size['height'] * 0.7)
+        end_y = int(screen_size['height'] * 0.3)
 
-        for _ in range(5):
+        for _ in range(6):
             try:
                 alice._find("Clear All Data", timeout=3)
                 break

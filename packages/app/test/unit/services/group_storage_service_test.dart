@@ -62,10 +62,10 @@ void main() {
   databaseFactory = databaseFactoryFfi;
 
   late GroupStorageService service;
-  late FakeSecureStorage secureStorage;
+  late FakeCachedSecureStorage secureStorage;
 
   setUp(() async {
-    secureStorage = FakeSecureStorage();
+    secureStorage = FakeCachedSecureStorage();
 
     // Open an in-memory database with the same schema the service uses,
     // then inject it via the @visibleForTesting constructor.

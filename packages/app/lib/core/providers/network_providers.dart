@@ -130,10 +130,12 @@ final peerReconnectionServiceProvider =
 final deviceLinkServiceProvider = Provider<DeviceLinkService>((ref) {
   final cryptoService = ref.watch(cryptoServiceProvider);
   final webrtcService = ref.watch(webrtcServiceProvider);
+  final secureStorage = ref.watch(cachedSecureStorageProvider);
 
   final service = DeviceLinkService(
     cryptoService: cryptoService,
     webrtcService: webrtcService,
+    secureStorage: secureStorage,
   );
   ref.onDispose(() => service.dispose());
   return service;
