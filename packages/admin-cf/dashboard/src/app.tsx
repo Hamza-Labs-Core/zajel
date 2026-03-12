@@ -4,6 +4,7 @@
  * Each tab gets its own URL via hash routing (e.g., #/servers, #/errors).
  * This lets users bookmark tabs and use browser back/forward navigation.
  */
+import { Component } from 'preact';
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { api, getToken, setToken } from './api';
 import { ServersTab } from './tabs/servers-tab';
@@ -215,19 +216,53 @@ function LoginForm({ onLogin, error }: { onLogin: (u: string, p: string) => void
   );
 }
 
+// ── Error Boundary ──
+
+class TabErrorBoundary extends Component<{ tab: string; children: any }, { error: string | null }> {
+  state = { error: null as string | null };
+
+  static getDerivedStateFromError(err: Error) {
+    return { error: err.message || 'Something went wrong' };
+  }
+
+  componentDidUpdate(prevProps: { tab: string }) {
+    if (prevProps.tab !== this.props.tab && this.state.error) {
+      this.setState({ error: null });
+    }
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div class="panel" style={{ textAlign: 'center', padding: '3rem 2rem' }}>
+          <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>!</div>
+          <h3 style={{ marginBottom: '0.5rem' }}>This tab encountered an error</h3>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1rem' }}>{this.state.error}</p>
+          <button onClick={() => this.setState({ error: null })}>Retry</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // ── Tab Content Router ──
 
 function TabContent({ tab, user }: { tab: TabId; user: User }) {
-  switch (tab) {
-    case 'servers': return <ServersTab />;
-    case 'users': return <UsersTab user={user} />;
-    case 'errors': return <ErrorsTab />;
-    case 'metrics': return <MetricsTab />;
-    case 'clients': return <ActiveClientsTab />;
-    case 'health': return <ServerHealthTab />;
-    case 'security': return <SecurityTab />;
-    case 'ai-issues': return <AiIssuesTab />;
-    case 'notifications': return <NotificationsTab />;
-    default: return null;
-  }
+  const content = (() => {
+    switch (tab) {
+      case 'servers': return <ServersTab />;
+      case 'users': return <UsersTab user={user} />;
+      case 'errors': return <ErrorsTab />;
+      case 'metrics': return <MetricsTab />;
+      case 'clients': return <ActiveClientsTab />;
+      case 'health': return <ServerHealthTab />;
+      case 'security': return <SecurityTab />;
+      case 'ai-issues': return <AiIssuesTab />;
+      case 'notifications': return <NotificationsTab />;
+      default: return null;
+    }
+  })();
+
+  return <TabErrorBoundary tab={tab}>{content}</TabErrorBoundary>;
 }

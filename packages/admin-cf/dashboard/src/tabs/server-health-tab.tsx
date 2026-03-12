@@ -10,13 +10,20 @@ interface ServerHealth {
   serverId: string;
   region: string;
   status: string;
-  lastHeartbeat: string;
+  lastHeartbeat?: string;
+  lastSeen?: number;
   uptimeSeconds: number;
-  version: string;
+  version?: string;
+  cpuPercent?: number;
+  memoryMb?: number;
+  connectionsTotal?: number;
+  healthScore?: number;
+  endpoint?: string;
 }
 
 interface HealthData {
   servers: ServerHealth[];
+  lastUpdated?: number;
 }
 
 interface LogEntry {
@@ -36,21 +43,44 @@ interface TopologyNode {
   serverId: string;
   region: string;
   status: string;
-  connections: string[];
+  connections?: string[];
+  aliveMembers?: number;
+  totalMembers?: number;
+  endpoint?: string;
+}
+
+interface TopologyEdge {
+  source: string;
+  target: string;
+  latencyMs?: number;
 }
 
 interface TopologyData {
   nodes: TopologyNode[];
+  edges?: TopologyEdge[];
+  summary?: { totalNodes: number; aliveNodes: number; edgeCount: number; avgLatencyMs: number | null };
+}
+
+interface HeartbeatSegment {
+  startTime: number;
+  endTime: number;
+  status: string;
 }
 
 interface HeartbeatEntry {
   serverId: string;
-  timestamps: number[];
-  status: string;
+  region?: string;
+  segments?: HeartbeatSegment[];
+  timestamps?: number[];
+  uptimePercent?: number;
+  gapCount?: number;
+  status?: string;
 }
 
 interface HeartbeatData {
   servers: HeartbeatEntry[];
+  range?: string;
+  lastUpdated?: number;
 }
 
 export function ServerHealthTab() {
@@ -99,8 +129,13 @@ export function ServerHealthTab() {
   const degradedCt = servers.filter(s => s.status === 'degraded').length;
   const offlineCt = servers.filter(s => s.status === 'offline').length;
 
-  const statusColor = (status: string) =>
-    status === 'healthy' ? 'var(--success)' : status === 'degraded' ? 'var(--warning)' : 'var(--danger)';
+  const statusColor = (status: string) => {
+    switch (status) {
+      case 'healthy': case 'alive': return 'var(--success)';
+      case 'degraded': case 'suspect': return 'var(--warning)';
+      default: return 'var(--danger)';
+    }
+  };
 
   const levelColor = (level: string) => {
     switch (level.toLowerCase()) {
@@ -128,18 +163,20 @@ export function ServerHealthTab() {
       {/* Server status cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: '1rem', marginBottom: '2rem' }}>
         {servers.map(s => {
-          const freshMs = Date.now() - new Date(s.lastHeartbeat).getTime();
+          const lastSeenMs = s.lastSeen ? s.lastSeen : s.lastHeartbeat ? new Date(s.lastHeartbeat).getTime() : 0;
+          const freshMs = lastSeenMs ? Date.now() - lastSeenMs : Infinity;
           const freshLabel = freshMs < 60_000 ? 'just now' : freshMs < 300_000 ? `${Math.floor(freshMs / 60_000)}m ago` : 'stale';
           const freshColor = freshMs < 120_000 ? 'var(--success)' : freshMs < 300_000 ? 'var(--warning)' : 'var(--danger)';
+          const displayId = s.serverId.length > 20 ? s.serverId.slice(0, 12) + '...' + s.serverId.slice(-6) : s.serverId;
           return (
             <div key={s.serverId} class="panel" style={{ borderLeft: `4px solid ${statusColor(s.status)}` }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                <span style={{ fontWeight: 600 }}>{s.serverId}</span>
+                <span style={{ fontWeight: 600, fontSize: '0.85rem' }} title={s.serverId}>{displayId}</span>
                 <span class={`badge badge-${s.status}`}>{s.status.toUpperCase()}</span>
               </div>
               <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.25rem' }}>
-                <div>Region: {s.region}</div>
-                <div>Version: {s.version || 'unknown'}</div>
+                <div>Region: {s.region || 'unknown'}</div>
+                <div>Connections: {s.connectionsTotal ?? 'N/A'}</div>
                 <div>Heartbeat: <span style={{ color: freshColor }}>{freshLabel}</span></div>
                 <div>Uptime: {formatUptime(s.uptimeSeconds)}</div>
               </div>
@@ -152,17 +189,27 @@ export function ServerHealthTab() {
       {/* Heartbeat Freshness */}
       {heartbeats && heartbeats.servers && heartbeats.servers.length > 0 && (
         <div class="panel" style={{ marginBottom: '2rem' }}>
-          <h3>Heartbeat Freshness</h3>
+          <h3>Heartbeat Timeline</h3>
           <div style={{ marginTop: '1rem' }}>
             {heartbeats.servers.map(hb => {
-              const freshMs = hb.timestamps.length > 0 ? Date.now() - hb.timestamps[hb.timestamps.length - 1]! : Infinity;
+              // Support both old (timestamps[]) and new (segments[]) API shapes
+              let freshMs = Infinity;
+              let count = 0;
+              if (hb.segments && hb.segments.length > 0) {
+                freshMs = Date.now() - hb.segments[hb.segments.length - 1]!.endTime;
+                count = hb.segments.length;
+              } else if (hb.timestamps && hb.timestamps.length > 0) {
+                freshMs = Date.now() - hb.timestamps[hb.timestamps.length - 1]!;
+                count = hb.timestamps.length;
+              }
               const freshColor = freshMs < 120_000 ? 'var(--success)' : freshMs < 300_000 ? 'var(--warning)' : 'var(--danger)';
+              const displayId = hb.serverId.length > 20 ? hb.serverId.slice(0, 12) + '...' + hb.serverId.slice(-6) : hb.serverId;
               return (
                 <div key={hb.serverId} style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.5rem 0', borderBottom: '1px solid var(--border)' }}>
                   <span style={{ width: 10, height: 10, borderRadius: '50%', background: freshColor, flexShrink: 0 }} />
-                  <span style={{ fontWeight: 600, minWidth: 120 }}>{hb.serverId}</span>
+                  <span style={{ fontWeight: 600, minWidth: 120, fontSize: '0.85rem' }} title={hb.serverId}>{displayId}</span>
                   <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                    {hb.timestamps.length} heartbeats, last {freshMs < 60_000 ? 'just now' : `${Math.floor(freshMs / 60_000)}m ago`}
+                    {count} segments{hb.uptimePercent != null ? `, ${hb.uptimePercent.toFixed(1)}% uptime` : ''}, last {freshMs < 60_000 ? 'just now' : `${Math.floor(freshMs / 60_000)}m ago`}
                   </span>
                 </div>
               );

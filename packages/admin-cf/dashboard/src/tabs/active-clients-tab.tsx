@@ -8,9 +8,18 @@ import { api } from '../api';
 import { DonutChart, BarChart } from '../components/chart';
 
 interface ActiveData { totalActive: number; byPlatform: Record<string, number> }
-interface PlatformData { platforms: Array<{ platform: string; count: number; percentage: number }> }
-interface VersionData { versions: Array<{ version: string; count: number; percentage: number }> }
-interface ConnectionData { types: Array<{ type: string; count: number; percentage: number }> }
+
+// API returns: { platforms: [{platform, count, percentage}], totalActive, lastUpdated }
+interface PlatformEntry { platform: string; count: number; percentage: number }
+interface PlatformData { platforms: PlatformEntry[]; totalActive?: number; lastUpdated?: number }
+
+// API returns: { range, buckets: [{timestamp, counts}], versions: string[], lastUpdated }
+interface VersionBucket { timestamp: number; counts: Record<string, number> }
+interface VersionData { range?: string; buckets?: VersionBucket[]; versions?: string[]; lastUpdated?: number }
+
+// API returns: { current: [{connectionType, count, percentage}], trend: [...], totalActive, lastUpdated }
+interface ConnectionEntry { connectionType: string; count: number; percentage: number }
+interface ConnectionData { current?: ConnectionEntry[]; trend?: unknown[]; totalActive?: number; lastUpdated?: number }
 
 export function ActiveClientsTab() {
   const [active, setActive] = useState<ActiveData | null>(null);
@@ -46,6 +55,29 @@ export function ActiveClientsTab() {
     windows: '#eab308', web: '#06b6d4',
   };
 
+  // Normalize platforms array
+  const platformList = platforms?.platforms || [];
+
+  // Normalize connections — API returns `current` not `types`
+  const connectionList = connections?.current || [];
+
+  // Normalize versions — API returns buckets + version names, aggregate totals per version
+  const versionList: Array<{ version: string; count: number; percentage: number }> = [];
+  if (versions?.buckets && versions.versions) {
+    const totals: Record<string, number> = {};
+    for (const bucket of versions.buckets) {
+      for (const [ver, count] of Object.entries(bucket.counts)) {
+        totals[ver] = (totals[ver] || 0) + count;
+      }
+    }
+    const grandTotal = Object.values(totals).reduce((s, c) => s + c, 0) || 1;
+    for (const ver of versions.versions) {
+      const count = totals[ver] || 0;
+      versionList.push({ version: ver, count, percentage: (count / grandTotal) * 100 });
+    }
+    versionList.sort((a, b) => b.count - a.count);
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
@@ -65,14 +97,14 @@ export function ActiveClientsTab() {
         {/* Platform breakdown donut */}
         <div class="panel">
           <h3>Platform Breakdown</h3>
-          {platforms && platforms.platforms.length > 0 ? (
+          {platformList.length > 0 ? (
             <DonutChart
-              segments={platforms.platforms.map(p => ({
+              segments={platformList.map(p => ({
                 label: p.platform,
                 value: p.count,
                 color: platformColors[p.platform.toLowerCase()] || '#94a3b8',
               }))}
-              centerValue={String(platforms.platforms.reduce((s, p) => s + p.count, 0))}
+              centerValue={String(platformList.reduce((s, p) => s + p.count, 0))}
               centerLabel="total"
             />
           ) : (
@@ -83,14 +115,14 @@ export function ActiveClientsTab() {
         {/* Connection type distribution */}
         <div class="panel">
           <h3>Connection Types</h3>
-          {connections && connections.types.length > 0 ? (
+          {connectionList.length > 0 ? (
             <DonutChart
-              segments={connections.types.map(t => ({
-                label: t.type,
+              segments={connectionList.map(t => ({
+                label: t.connectionType,
                 value: t.count,
-                color: t.type === 'direct' ? '#3b82f6' : t.type === 'relay' ? '#f97316' : '#94a3b8',
+                color: t.connectionType === 'direct_p2p' ? '#3b82f6' : t.connectionType === 'relay' ? '#f97316' : '#94a3b8',
               }))}
-              centerValue={String(connections.types.reduce((s, t) => s + t.count, 0))}
+              centerValue={String(connectionList.reduce((s, t) => s + t.count, 0))}
               centerLabel="connections"
             />
           ) : (
@@ -102,10 +134,10 @@ export function ActiveClientsTab() {
       {/* Version adoption */}
       <div class="panel" style={{ marginTop: '1.5rem' }}>
         <h3>Version Adoption</h3>
-        {versions && versions.versions.length > 0 ? (
+        {versionList.length > 0 ? (
           <div>
             <BarChart
-              items={versions.versions.slice(0, 10).map(v => ({
+              items={versionList.slice(0, 10).map(v => ({
                 label: v.version,
                 value: v.count,
                 color: '#3b82f6',
@@ -114,7 +146,7 @@ export function ActiveClientsTab() {
             <table class="data-table" style={{ marginTop: '1rem' }}>
               <thead><tr><th>Version</th><th>Count</th><th>Percentage</th></tr></thead>
               <tbody>
-                {versions.versions.map(v => (
+                {versionList.map(v => (
                   <tr key={v.version}>
                     <td style={{ fontWeight: 600 }}>{v.version}</td>
                     <td>{v.count}</td>
