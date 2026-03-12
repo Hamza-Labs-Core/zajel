@@ -59,7 +59,7 @@ jobs:
           path: deploy
 
       - name: Setup server environment
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.4
         with:
           host: ${{ vars.VPS_SERVERS }}
           username: ${{ secrets.VPS_USER }}
@@ -88,7 +88,7 @@ jobs:
             sudo chown -R $USER:$USER /opt/zajel
 
       - name: Prepare deployment
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.4
         with:
           host: ${{ vars.VPS_SERVERS }}
           username: ${{ secrets.VPS_USER }}
@@ -114,7 +114,7 @@ jobs:
           strip_components: 1
 
       - name: Setup infrastructure (nginx, firewall, fail2ban)
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.4
         with:
           host: ${{ vars.VPS_SERVERS }}
           username: ${{ secrets.VPS_USER }}
@@ -161,7 +161,7 @@ jobs:
             fi
 
       - name: Start server
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.4
         env:
           ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
         with:

@@ -1515,7 +1515,7 @@ jobs:
           npm run build
 
       - name: Acquire deployment lock
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.4
         with:
           host: ${{ vars.QA_VPS_IP }}
           username: ${{ secrets.VPS_USER }}
@@ -1548,7 +1548,7 @@ jobs:
           strip_components: 2
 
       - name: Setup infrastructure and start server
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.4
         env:
           APP_VERSION: ${{ needs.tag-prerelease.outputs.version }}
           BOOTSTRAP_URL: ${{ vars.QA_BOOTSTRAP_URL }}
@@ -1741,7 +1741,7 @@ jobs:
 
       - name: Release deployment lock
         if: always()
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.4
         with:
           host: ${{ vars.QA_VPS_IP }}
           username: ${{ secrets.VPS_USER }}
@@ -2112,7 +2112,7 @@ jobs:
         if: always()
         timeout-minutes: 1
         continue-on-error: true
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.4
         with:
           host: ${{ vars.QA_VPS_IP }}
           username: ${{ secrets.VPS_USER }}
