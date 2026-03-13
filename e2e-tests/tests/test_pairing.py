@@ -32,6 +32,7 @@ class TestPairing:
         assert alice.current_activity is not None
 
     @pytest.mark.single_device
+    @pytest.mark.requires_signaling
     def test_can_get_pairing_code(self, alice, app_helper):
         """Test navigating to Connect screen and getting a pairing code."""
         helper = app_helper(alice)
@@ -104,6 +105,7 @@ class TestPairing:
 
     @pytest.mark.slow
     @pytest.mark.single_device
+    @pytest.mark.requires_signaling
     def test_invalid_pairing_code_handled(self, alice, app_helper):
         """Test that entering an invalid pairing code shows error."""
         helper = app_helper(alice)

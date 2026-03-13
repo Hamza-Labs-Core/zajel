@@ -11,10 +11,10 @@ import '../../mocks/mocks.dart';
 
 void main() {
   group('AttestationService', () {
-    late FakeSecureStorage secureStorage;
+    late FakeCachedSecureStorage secureStorage;
 
     setUp(() {
-      secureStorage = FakeSecureStorage();
+      secureStorage = FakeCachedSecureStorage();
     });
 
     AttestationService createService({
