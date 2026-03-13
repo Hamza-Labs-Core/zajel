@@ -1225,14 +1225,6 @@ jobs:
         working-directory: packages/server
         run: npm ci
 
-      - name: Sync registry secret to CF Worker
-        working-directory: packages/server
-        run: printf '%s' "$SERVER_REGISTRY_SECRET" | npx wrangler secret put SERVER_REGISTRY_SECRET -c wrangler.jsonc --env qa
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          SERVER_REGISTRY_SECRET: ${{ secrets.SERVER_REGISTRY_SECRET }}
-
       - name: Deploy signaling server
         id: deploy-signaling
         uses: cloudflare/wrangler-action@v3
@@ -1241,6 +1233,14 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: packages/server
           command: deploy -c wrangler.jsonc --env qa
+
+      - name: Sync registry secret to CF Worker
+        working-directory: packages/server
+        run: printf '%s' "$SERVER_REGISTRY_SECRET" | npx wrangler secret put SERVER_REGISTRY_SECRET -c wrangler.jsonc --env qa
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SERVER_REGISTRY_SECRET: ${{ secrets.SERVER_REGISTRY_SECRET }}
 
       - name: Verify deployment
         run: |
@@ -1302,14 +1302,6 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Sync JWT secret to CF Worker
-        working-directory: packages/admin-cf
-        run: printf '%s' "$ZAJEL_ADMIN_JWT_SECRET" | npx wrangler secret put ZAJEL_ADMIN_JWT_SECRET -c wrangler.jsonc --env qa
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
-
       - name: Deploy admin dashboard
         id: deploy-admin
         uses: cloudflare/wrangler-action@v3
@@ -1320,6 +1312,14 @@ jobs:
           command: deploy -c wrangler.jsonc --env qa
         env:
           APP_VERSION: ${{ env.VERSION }}
+
+      - name: Sync JWT secret to CF Worker
+        working-directory: packages/admin-cf
+        run: printf '%s' "$ZAJEL_ADMIN_JWT_SECRET" | npx wrangler secret put ZAJEL_ADMIN_JWT_SECRET -c wrangler.jsonc --env qa
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
 
       - name: Verify deployment
         run: |
@@ -1433,14 +1433,6 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Sync server metrics secret (shared with VPS ZAJEL_ADMIN_JWT_SECRET)
-        working-directory: packages/diagnostics-cf
-        run: printf '%s' "$ZAJEL_ADMIN_JWT_SECRET" | npx wrangler secret put SERVER_METRICS_SECRET -c wrangler.jsonc --env qa
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
-
       - name: Deploy diagnostics worker
         uses: cloudflare/wrangler-action@v3
         with:
@@ -1448,6 +1440,14 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: packages/diagnostics-cf
           command: deploy -c wrangler.jsonc --env qa
+
+      - name: Sync server metrics secret (shared with VPS ZAJEL_ADMIN_JWT_SECRET)
+        working-directory: packages/diagnostics-cf
+        run: printf '%s' "$ZAJEL_ADMIN_JWT_SECRET" | npx wrangler secret put SERVER_METRICS_SECRET -c wrangler.jsonc --env qa
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ZAJEL_ADMIN_JWT_SECRET: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
 
   deploy-cf-log-processor:
     name: Deploy CF Log Processor
