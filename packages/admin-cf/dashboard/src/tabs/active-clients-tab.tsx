@@ -7,7 +7,7 @@ import { api } from '../api';
 // Card/CardGrid available if needed for future stat cards
 import { DonutChart, BarChart } from '../components/chart';
 
-interface ActiveData { totalActive: number; byPlatform: Record<string, number> }
+interface ActiveData { activeCount: number; totalActive?: number; sparkline?: Array<{ timestamp: number; count: number }>; lastUpdated?: number }
 
 // API returns: { platforms: [{platform, count, percentage}], totalActive, lastUpdated }
 interface PlatformEntry { platform: string; count: number; percentage: number }
@@ -88,7 +88,7 @@ export function ActiveClientsTab() {
       {/* Big number */}
       <div class="panel" style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
         <div style={{ fontSize: '4rem', fontWeight: 700, color: 'var(--accent)' }}>
-          {active?.totalActive ?? 0}
+          {active?.activeCount ?? active?.totalActive ?? 0}
         </div>
         <div style={{ fontSize: '1rem', color: 'var(--text-secondary)' }}>Total Active Clients</div>
       </div>
