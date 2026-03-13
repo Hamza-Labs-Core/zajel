@@ -263,14 +263,20 @@ class UpdateSettingsSection extends ConsumerWidget {
       logger.error('UpdateSettings', 'Updater binary not found', e);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Update failed: ${e.message}')),
+          SnackBar(
+            content: Text('Update failed: ${e.message}'),
+            duration: const Duration(seconds: 5),
+          ),
         );
       }
     } catch (e) {
       logger.error('UpdateSettings', 'Failed to launch updater', e);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Update failed: $e')),
+          SnackBar(
+            content: Text('Update failed: $e'),
+            duration: const Duration(seconds: 5),
+          ),
         );
       }
     }
