@@ -262,12 +262,18 @@ void main() {
 
       // Scroll down to reveal sections below the fold (ListView lazy rendering).
       // The Updates section (desktop-only) pushes later sections off-screen.
-      await tester.drag(find.byType(ListView), const Offset(0, -300));
+      // Use larger offsets to account for varying screen sizes on CI.
+      await tester.drag(find.byType(ListView), const Offset(0, -400));
       await _pumpFrames(tester);
       expect(find.text('Privacy & Security'), findsOneWidget);
 
-      await tester.drag(find.byType(ListView), const Offset(0, -300));
+      await tester.drag(find.byType(ListView), const Offset(0, -400));
       await _pumpFrames(tester);
+      if (find.text('External Connections').evaluate().isEmpty) {
+        // One more scroll in case screen is smaller
+        await tester.drag(find.byType(ListView), const Offset(0, -400));
+        await _pumpFrames(tester);
+      }
       expect(find.text('External Connections'), findsOneWidget);
     });
 

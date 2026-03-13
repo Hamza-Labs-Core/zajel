@@ -6,8 +6,10 @@
  */
 
 import type { Env, ErrorCluster, AiAnalysis } from './types.js';
+import type { RegressionInfo } from './regression.js';
 import {
   AI_MODEL,
+  FALLBACK_AI_MODEL,
   VALID_SEVERITIES,
   VALID_COMPONENTS,
   VALID_AFFECTED_ESTIMATES,
@@ -15,8 +17,9 @@ import {
 
 /**
  * Build the AI prompt for analyzing an error cluster.
+ * Optionally includes regression detection context.
  */
-export function buildPrompt(cluster: ErrorCluster, timeWindow: string): string {
+export function buildPrompt(cluster: ErrorCluster, timeWindow: string, regression?: RegressionInfo): string {
   const sampleMessages = cluster.sampleMessages
     .map((msg, i) => `${i + 1}. ${msg}`)
     .join('\n');
@@ -42,7 +45,14 @@ ${sampleMessages}
 
 Sample Stack Traces:
 ${sampleStackTraces || 'No stack traces available'}
-
+${regression ? `
+REGRESSION DETECTED:
+- Current error rate: ${regression.currentRate} errors/hour
+- Baseline rate (24h avg): ${regression.baselineRate.toFixed(2)} errors/hour
+- Rate multiplier: ${regression.multiplier}x baseline
+- New in version ${regression.latestVersion}: ${regression.isNewInVersion ? 'YES' : 'NO'}
+- This error is flagged as a regression. Set is_regression to true.
+` : ''}
 Provide your analysis in this exact JSON format:
 {
   "title": "Brief issue title (max 80 chars)",
@@ -137,57 +147,110 @@ export function parseAiResponse(rawText: string): AiAnalysis | null {
 }
 
 /**
+ * Extract response text and token usage from an AI response.
+ * Returns null if the response format is unexpected.
+ */
+function extractAiResponse(
+  response: unknown,
+): { responseText: string; tokensUsed: number } | null {
+  let responseText: string;
+  let tokensUsed = 0;
+
+  if (typeof response === 'string') {
+    responseText = response;
+  } else if (
+    typeof response === 'object' &&
+    response !== null &&
+    'response' in response &&
+    typeof (response as Record<string, unknown>).response === 'string'
+  ) {
+    responseText = (response as Record<string, unknown>).response as string;
+    // Extract token usage from metadata if available
+    if ('usage' in response && typeof (response as Record<string, unknown>).usage === 'object' && (response as Record<string, unknown>).usage !== null) {
+      const usage = (response as Record<string, unknown>).usage as Record<string, unknown>;
+      const inputTokens =
+        typeof usage['prompt_tokens'] === 'number' ? usage['prompt_tokens'] : 0;
+      const outputTokens =
+        typeof usage['completion_tokens'] === 'number'
+          ? usage['completion_tokens']
+          : 0;
+      tokensUsed = inputTokens + outputTokens;
+    }
+  } else {
+    return null;
+  }
+
+  // Treat empty response text as a failure
+  if (responseText.trim().length === 0) {
+    return null;
+  }
+
+  return { responseText, tokensUsed };
+}
+
+/**
  * Analyze an error cluster using Workers AI.
  *
  * Returns an AiAnalysis object, or null if the AI call fails or
  * returns malformed output (graceful degradation).
+ *
+ * If the primary model fails or returns empty, retries once with
+ * the fallback model.
  */
 export async function analyzeWithAi(
   env: Env,
   cluster: ErrorCluster,
   timeWindow: string,
-): Promise<{ analysis: AiAnalysis | null; tokensUsed: number }> {
-  const prompt = buildPrompt(cluster, timeWindow);
+  regression?: RegressionInfo,
+): Promise<{ analysis: AiAnalysis | null; tokensUsed: number; modelUsed: string }> {
+  const prompt = buildPrompt(cluster, timeWindow, regression);
 
+  // Try primary model first
+  const primaryResult = await tryAiModel(env, AI_MODEL, prompt);
+  if (primaryResult && primaryResult.analysis) {
+    return { ...primaryResult, modelUsed: AI_MODEL };
+  }
+
+  // Primary failed or returned empty/unparseable — try fallback
+  console.log(`Primary AI model failed, retrying with fallback model: ${FALLBACK_AI_MODEL}`);
+  const fallbackResult = await tryAiModel(env, FALLBACK_AI_MODEL, prompt);
+  if (fallbackResult) {
+    return { ...fallbackResult, modelUsed: FALLBACK_AI_MODEL };
+  }
+
+  // Both models failed
+  return {
+    analysis: null,
+    tokensUsed: primaryResult?.tokensUsed ?? 0,
+    modelUsed: AI_MODEL,
+  };
+}
+
+/**
+ * Attempt to run a single AI model and parse the response.
+ * Returns null if the model call throws.
+ */
+async function tryAiModel(
+  env: Env,
+  model: string,
+  prompt: string,
+): Promise<{ analysis: AiAnalysis | null; tokensUsed: number } | null> {
   try {
-    const response = await env.AI.run(AI_MODEL as BaseAiTextGenerationModels, {
+    const response = await env.AI.run(model as BaseAiTextGenerationModels, {
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 512,
     });
 
-    // Workers AI returns either a string or an object with 'response' field
-    let responseText: string;
-    let tokensUsed = 0;
-
-    if (typeof response === 'string') {
-      responseText = response;
-    } else if (
-      typeof response === 'object' &&
-      response !== null &&
-      'response' in response &&
-      typeof response.response === 'string'
-    ) {
-      responseText = response.response;
-      // Extract token usage from metadata if available
-      if ('usage' in response && typeof response.usage === 'object' && response.usage !== null) {
-        const usage = response.usage as Record<string, unknown>;
-        const inputTokens =
-          typeof usage['prompt_tokens'] === 'number' ? usage['prompt_tokens'] : 0;
-        const outputTokens =
-          typeof usage['completion_tokens'] === 'number'
-            ? usage['completion_tokens']
-            : 0;
-        tokensUsed = inputTokens + outputTokens;
-      }
-    } else {
-      console.error('Unexpected AI response format:', typeof response);
+    const extracted = extractAiResponse(response);
+    if (!extracted) {
+      console.error(`Unexpected AI response format from ${model}:`, typeof response);
       return { analysis: null, tokensUsed: 0 };
     }
 
-    const analysis = parseAiResponse(responseText);
-    return { analysis, tokensUsed };
+    const analysis = parseAiResponse(extracted.responseText);
+    return { analysis, tokensUsed: extracted.tokensUsed };
   } catch (error) {
-    console.error('Workers AI call failed:', error);
-    return { analysis: null, tokensUsed: 0 };
+    console.error(`Workers AI call failed (${model}):`, error);
+    return null;
   }
 }

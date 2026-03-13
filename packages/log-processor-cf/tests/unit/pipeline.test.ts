@@ -12,9 +12,12 @@ import {
   getLastRunTimestamp,
   queryErrorClusters,
   recordProcessingRun,
+  queryRelatedLogs,
+  queryLogClusters,
+  fetchR2StackTraces,
 } from '../../src/pipeline.js';
-import type { Env, ProcessingRunResult } from '../../src/types.js';
-import { MAX_CLUSTERS_PER_RUN, MAX_NEW_ISSUES_PER_RUN, ERROR_THRESHOLD } from '../../src/types.js';
+import type { Env, ProcessingRunResult, ErrorCluster } from '../../src/types.js';
+import { MAX_NEW_ISSUES_PER_RUN } from '../../src/types.js';
 
 // ─────────────────────────────────────────────
 // Test Fixtures and Helpers
@@ -78,7 +81,7 @@ function makeMockEnv(options: {
         if (sql.includes('processing_runs')) {
           return lastRunRow;
         }
-        if (sql.includes('issue_tracking')) {
+        if (sql.includes('issue_tracking') && sql.includes('SELECT')) {
           return issueTrackingRow;
         }
         return null;
@@ -86,6 +89,9 @@ function makeMockEnv(options: {
       all: vi.fn().mockImplementation(async () => {
         if (sql.includes('error_aggregates')) {
           return { success: true, results: errorRows };
+        }
+        if (sql.includes('server_logs') || sql.includes('app_logs')) {
+          return { success: true, results: [] };
         }
         return { success: true, results: [] };
       }),
@@ -104,6 +110,7 @@ function makeMockEnv(options: {
       ok: false,
       status: 500,
       text: () => Promise.resolve('Internal Server Error'),
+      headers: new Headers({ 'X-RateLimit-Remaining': '100', 'X-RateLimit-Reset': '1700000000' }),
     });
   } else {
     globalThis.fetch = vi.fn().mockResolvedValue({
@@ -113,12 +120,16 @@ function makeMockEnv(options: {
           number: Math.floor(Math.random() * 1000),
           html_url: 'https://github.com/owner/repo/issues/1',
         }),
+      headers: new Headers({ 'X-RateLimit-Remaining': '100', 'X-RateLimit-Reset': '1700000000' }),
     });
   }
 
   return {
     DB: { prepare } as unknown as D1Database,
-    REPORTS_BUCKET: {} as R2Bucket,
+    REPORTS_BUCKET: {
+      list: vi.fn().mockResolvedValue({ objects: [] }),
+      get: vi.fn().mockResolvedValue(null),
+    } as unknown as R2Bucket,
     AI: { run: aiRun } as unknown as Ai,
     GITHUB_TOKEN: 'ghp_test',
     GITHUB_REPO: 'owner/repo',
@@ -441,6 +452,7 @@ describe('runProcessingPipeline', () => {
           number: 1,
           html_url: 'https://github.com/owner/repo/issues/1',
         }),
+      headers: new Headers({ 'X-RateLimit-Remaining': '100', 'X-RateLimit-Reset': '1700000000' }),
     });
 
     const env: Env = {
@@ -506,6 +518,7 @@ describe('runProcessingPipeline', () => {
           number: 100,
           html_url: 'https://github.com/owner/repo/issues/100',
         }),
+      headers: new Headers({ 'X-RateLimit-Remaining': '100', 'X-RateLimit-Reset': '1700000000' }),
     });
 
     const env: Env = {
@@ -524,5 +537,403 @@ describe('runProcessingPipeline', () => {
     expect(result.issuesCreated).toBe(1); // Only the new one
     expect(result.issuesUpdated).toBe(1); // The existing open one
     expect(result.aiCallsMade).toBe(1); // Only for the new one
+  });
+});
+
+// ─────────────────────────────────────────────
+// queryRelatedLogs tests
+// ─────────────────────────────────────────────
+
+function makeCluster(overrides: Partial<ErrorCluster> = {}): ErrorCluster {
+  return {
+    errorSignature: 'net:timeout',
+    category: 'network',
+    totalCount: 15,
+    versions: ['1.0.0'],
+    platforms: ['android'],
+    sampleMessages: ['Timeout error'],
+    sampleStackTraces: ['at foo()'],
+    firstSeen: 1000000,
+    lastSeen: 2000000,
+    ...overrides,
+  };
+}
+
+describe('queryRelatedLogs', () => {
+  it('queries server_logs and app_logs with correct time window', async () => {
+    const serverLogRows = [
+      { timestamp: 800000, severity: 'error', category: 'Federation', message: 'Node unreachable' },
+      { timestamp: 900000, severity: 'warn', category: 'Network', message: 'High latency detected' },
+    ];
+
+    const prepareCalls: string[] = [];
+    const prepare = vi.fn().mockImplementation((sql: string) => {
+      prepareCalls.push(sql);
+      return {
+        bind: vi.fn().mockReturnThis(),
+        all: vi.fn().mockImplementation(async () => {
+          if (sql.includes('server_logs')) {
+            return { success: true, results: serverLogRows };
+          }
+          if (sql.includes('app_logs')) {
+            return { success: true, results: [] };
+          }
+          return { success: true, results: [] };
+        }),
+        first: vi.fn().mockResolvedValue(null),
+        run: vi.fn().mockResolvedValue({ success: true }),
+      };
+    });
+
+    const env: Env = {
+      DB: { prepare } as unknown as D1Database,
+      REPORTS_BUCKET: {} as R2Bucket,
+      AI: {} as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+
+    const cluster = makeCluster({ firstSeen: 1000000, lastSeen: 2000000 });
+    const result = await queryRelatedLogs(env, cluster);
+
+    expect(result.serverLogs).toHaveLength(2);
+    expect(result.serverLogs[0]!.message).toBe('Node unreachable');
+    expect(result.appLogs).toHaveLength(0);
+
+    // Verify window: firstSeen - 300000 to lastSeen + 60000
+    const serverLogQuery = prepareCalls.find((s) => s.includes('server_logs'));
+    expect(serverLogQuery).toBeDefined();
+  });
+
+  it('handles app_logs table not existing gracefully', async () => {
+    const prepare = vi.fn().mockImplementation((sql: string) => {
+      return {
+        bind: vi.fn().mockReturnThis(),
+        all: vi.fn().mockImplementation(async () => {
+          if (sql.includes('app_logs')) {
+            throw new Error('no such table: app_logs');
+          }
+          return { success: true, results: [] };
+        }),
+        first: vi.fn().mockResolvedValue(null),
+        run: vi.fn().mockResolvedValue({ success: true }),
+      };
+    });
+
+    const env: Env = {
+      DB: { prepare } as unknown as D1Database,
+      REPORTS_BUCKET: {} as R2Bucket,
+      AI: {} as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+
+    const cluster = makeCluster();
+    const result = await queryRelatedLogs(env, cluster);
+
+    expect(result.serverLogs).toHaveLength(0);
+    expect(result.appLogs).toHaveLength(0);
+  });
+
+  it('handles server_logs query failure gracefully', async () => {
+    const prepare = vi.fn().mockImplementation(() => ({
+      bind: vi.fn().mockReturnThis(),
+      all: vi.fn().mockRejectedValue(new Error('D1 error')),
+      first: vi.fn().mockResolvedValue(null),
+      run: vi.fn().mockResolvedValue({ success: true }),
+    }));
+
+    const env: Env = {
+      DB: { prepare } as unknown as D1Database,
+      REPORTS_BUCKET: {} as R2Bucket,
+      AI: {} as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+
+    const cluster = makeCluster();
+    const result = await queryRelatedLogs(env, cluster);
+
+    expect(result.serverLogs).toHaveLength(0);
+    expect(result.appLogs).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────
+// queryLogClusters tests
+// ─────────────────────────────────────────────
+
+describe('queryLogClusters', () => {
+  it('returns error clusters from grouped server_logs', async () => {
+    const logClusterRows = [
+      {
+        message_prefix: 'Federation sync failed for node',
+        category: 'Federation',
+        occurrence_count: 12,
+        min_timestamp: 1000000,
+        max_timestamp: 2000000,
+        sample_message: 'Federation sync failed for node abc-123',
+      },
+    ];
+
+    const prepare = vi.fn().mockImplementation((sql: string) => ({
+      bind: vi.fn().mockReturnThis(),
+      all: vi.fn().mockImplementation(async () => {
+        if (sql.includes('server_logs') && sql.includes('GROUP BY')) {
+          return { success: true, results: logClusterRows };
+        }
+        return { success: true, results: [] };
+      }),
+      first: vi.fn().mockResolvedValue(null),
+      run: vi.fn().mockResolvedValue({ success: true }),
+    }));
+
+    const env: Env = {
+      DB: { prepare } as unknown as D1Database,
+      REPORTS_BUCKET: {} as R2Bucket,
+      AI: {} as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+
+    const clusters = await queryLogClusters(env, Date.now() - 900000);
+
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0]!.errorSignature).toMatch(/^log:/);
+    expect(clusters[0]!.category).toBe('Federation');
+    expect(clusters[0]!.totalCount).toBe(12);
+    expect(clusters[0]!.sampleMessages[0]).toBe('Federation sync failed for node abc-123');
+    expect(clusters[0]!.firstSeen).toBe(1000000);
+    expect(clusters[0]!.lastSeen).toBe(2000000);
+  });
+
+  it('returns empty array when query fails', async () => {
+    const prepare = vi.fn().mockImplementation(() => ({
+      bind: vi.fn().mockReturnThis(),
+      all: vi.fn().mockRejectedValue(new Error('D1 error')),
+      first: vi.fn().mockResolvedValue(null),
+      run: vi.fn().mockResolvedValue({ success: true }),
+    }));
+
+    const env: Env = {
+      DB: { prepare } as unknown as D1Database,
+      REPORTS_BUCKET: {} as R2Bucket,
+      AI: {} as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+
+    const clusters = await queryLogClusters(env, Date.now() - 900000);
+    expect(clusters).toEqual([]);
+  });
+
+  it('returns empty array when no results', async () => {
+    const prepare = vi.fn().mockImplementation(() => ({
+      bind: vi.fn().mockReturnThis(),
+      all: vi.fn().mockResolvedValue({ success: true, results: [] }),
+      first: vi.fn().mockResolvedValue(null),
+      run: vi.fn().mockResolvedValue({ success: true }),
+    }));
+
+    const env: Env = {
+      DB: { prepare } as unknown as D1Database,
+      REPORTS_BUCKET: {} as R2Bucket,
+      AI: {} as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+
+    const clusters = await queryLogClusters(env, Date.now() - 900000);
+    expect(clusters).toEqual([]);
+  });
+
+  it('sanitizes error signature from message prefix', async () => {
+    const logClusterRows = [
+      {
+        message_prefix: 'Error: Connection reset by peer (ECONNRESET)',
+        category: 'Network',
+        occurrence_count: 8,
+        min_timestamp: 1000000,
+        max_timestamp: 2000000,
+        sample_message: 'Error: Connection reset by peer (ECONNRESET) on socket 5',
+      },
+    ];
+
+    const prepare = vi.fn().mockImplementation(() => ({
+      bind: vi.fn().mockReturnThis(),
+      all: vi.fn().mockResolvedValue({ success: true, results: logClusterRows }),
+      first: vi.fn().mockResolvedValue(null),
+      run: vi.fn().mockResolvedValue({ success: true }),
+    }));
+
+    const env: Env = {
+      DB: { prepare } as unknown as D1Database,
+      REPORTS_BUCKET: {} as R2Bucket,
+      AI: {} as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+
+    const clusters = await queryLogClusters(env, Date.now() - 900000);
+
+    expect(clusters[0]!.errorSignature).toMatch(/^log:/);
+    // Should not contain spaces or special chars
+    expect(clusters[0]!.errorSignature).not.toMatch(/\s/);
+    expect(clusters[0]!.errorSignature).not.toContain('(');
+  });
+});
+
+// ─────────────────────────────────────────────
+// fetchR2StackTraces tests
+// ─────────────────────────────────────────────
+
+describe('fetchR2StackTraces', () => {
+  it('fetches and extracts stack traces from R2 objects', async () => {
+    const mockObjects = [
+      {
+        key: 'report-1.json',
+      },
+      {
+        key: 'report-2.json',
+      },
+    ];
+
+    const cluster = makeCluster({ errorSignature: 'net:timeout', category: 'network' });
+
+    const mockBucket = {
+      list: vi.fn().mockResolvedValue({ objects: mockObjects }),
+      get: vi.fn().mockImplementation(async (key: string) => {
+        if (key === 'report-1.json') {
+          return {
+            text: () => Promise.resolve(JSON.stringify({
+              stack_trace: 'at NetworkService.connect()\nat main()',
+              category: 'network',
+            })),
+          };
+        }
+        if (key === 'report-2.json') {
+          return {
+            text: () => Promise.resolve(JSON.stringify({
+              stackTrace: 'at WebSocket.open()\nat init()',
+              error_signature: 'net:timeout',
+            })),
+          };
+        }
+        return null;
+      }),
+    };
+
+    const env: Env = {
+      DB: {} as D1Database,
+      REPORTS_BUCKET: mockBucket as unknown as R2Bucket,
+      AI: {} as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+
+    const traces = await fetchR2StackTraces(env, cluster);
+
+    expect(traces).toHaveLength(2);
+    expect(traces[0]).toContain('NetworkService.connect()');
+    expect(traces[1]).toContain('WebSocket.open()');
+  });
+
+  it('returns empty array when R2 bucket is empty', async () => {
+    const mockBucket = {
+      list: vi.fn().mockResolvedValue({ objects: [] }),
+    };
+
+    const env: Env = {
+      DB: {} as D1Database,
+      REPORTS_BUCKET: mockBucket as unknown as R2Bucket,
+      AI: {} as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+
+    const cluster = makeCluster();
+    const traces = await fetchR2StackTraces(env, cluster);
+    expect(traces).toEqual([]);
+  });
+
+  it('returns empty array when REPORTS_BUCKET is unavailable', async () => {
+    const env: Env = {
+      DB: {} as D1Database,
+      REPORTS_BUCKET: null as unknown as R2Bucket,
+      AI: {} as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+
+    const cluster = makeCluster();
+    const traces = await fetchR2StackTraces(env, cluster);
+    expect(traces).toEqual([]);
+  });
+
+  it('limits to 3 stack traces', async () => {
+    const mockObjects = Array.from({ length: 5 }, (_, i) => ({ key: `report-${i}.json` }));
+    const cluster = makeCluster({ errorSignature: 'net:timeout', category: 'network' });
+
+    const mockBucket = {
+      list: vi.fn().mockResolvedValue({ objects: mockObjects }),
+      get: vi.fn().mockImplementation(async () => ({
+        text: () => Promise.resolve(JSON.stringify({
+          stack_trace: 'at some.function()',
+          category: 'network',
+        })),
+      })),
+    };
+
+    const env: Env = {
+      DB: {} as D1Database,
+      REPORTS_BUCKET: mockBucket as unknown as R2Bucket,
+      AI: {} as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+
+    const traces = await fetchR2StackTraces(env, cluster);
+    expect(traces).toHaveLength(3);
+  });
+
+  it('handles R2 list failure gracefully', async () => {
+    const mockBucket = {
+      list: vi.fn().mockRejectedValue(new Error('R2 unavailable')),
+    };
+
+    const env: Env = {
+      DB: {} as D1Database,
+      REPORTS_BUCKET: mockBucket as unknown as R2Bucket,
+      AI: {} as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+
+    const cluster = makeCluster();
+    const traces = await fetchR2StackTraces(env, cluster);
+    expect(traces).toEqual([]);
+  });
+
+  it('skips malformed R2 objects', async () => {
+    const mockObjects = [{ key: 'bad-report.json' }];
+    const cluster = makeCluster({ category: 'network' });
+
+    const mockBucket = {
+      list: vi.fn().mockResolvedValue({ objects: mockObjects }),
+      get: vi.fn().mockResolvedValue({
+        text: () => Promise.resolve('not json'),
+      }),
+    };
+
+    const env: Env = {
+      DB: {} as D1Database,
+      REPORTS_BUCKET: mockBucket as unknown as R2Bucket,
+      AI: {} as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+
+    const traces = await fetchR2StackTraces(env, cluster);
+    expect(traces).toEqual([]);
   });
 });

@@ -1,9 +1,12 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/config/environment.dart';
 import '../../../core/logging/logger_service.dart';
 import '../models/update_check_result.dart';
+import '../models/update_state.dart';
 import '../providers/update_providers.dart';
 
 /// Settings section for checking and displaying update status.
@@ -121,20 +124,96 @@ class UpdateSettingsSection extends ConsumerWidget {
     final dateStr = _formatDate(result.publishedAt);
     final notes =
         result.releaseNotes.isNotEmpty ? '\n${result.releaseNotes}' : '';
+    final updateState = ref.watch(updateStateProvider);
+    final isDownloading = updateState.status == UpdateStatus.downloading;
+    final isVerifying = updateState.status == UpdateStatus.verifying;
+    final isReady = updateState.status == UpdateStatus.ready;
 
     return ListTile(
       leading: Icon(
-        Icons.system_update,
-        color: Theme.of(context).colorScheme.primary,
+        isReady ? Icons.check_circle : Icons.system_update,
+        color: isReady
+            ? Colors.green.shade700
+            : Theme.of(context).colorScheme.primary,
       ),
-      title: Text('Version ${result.latestVersion} available'),
-      subtitle: Text('Released $dateStr$notes'),
-      isThreeLine: result.releaseNotes.isNotEmpty,
-      trailing: OutlinedButton(
-        onPressed: () => _checkForUpdate(ref),
-        child: const Text('Check Now'),
+      title: Text(
+        isReady
+            ? 'Version ${result.latestVersion} ready to install'
+            : 'Version ${result.latestVersion} available',
       ),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Released $dateStr$notes'),
+          if (isDownloading) ...[
+            const SizedBox(height: 8),
+            LinearProgressIndicator(
+              value: (updateState.downloadProgress ?? 0),
+              minHeight: 4,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Downloading... ${((updateState.downloadProgress ?? 0) * 100).toInt()}%',
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+          ],
+          if (isVerifying) ...[
+            const SizedBox(height: 8),
+            const LinearProgressIndicator(minHeight: 4),
+            const SizedBox(height: 4),
+            Text(
+              'Verifying integrity...',
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+          ],
+        ],
+      ),
+      isThreeLine: true,
+      trailing: isDownloading || isVerifying
+          ? const SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : isReady
+              ? null
+              : FilledButton(
+                  onPressed: () => _downloadUpdate(ref),
+                  child: const Text('Update Now'),
+                ),
     );
+  }
+
+  Future<void> _downloadUpdate(WidgetRef ref) async {
+    try {
+      final releaseService = ref.read(githubReleaseServiceProvider);
+      final release = releaseService.cachedRelease;
+      if (release == null) {
+        // No cached release — re-check first
+        await _checkForUpdate(ref);
+        return;
+      }
+
+      final platformName = Platform.isWindows
+          ? 'windows'
+          : Platform.isMacOS
+              ? 'macos'
+              : 'linux';
+
+      final orchestrator = ref.read(updateOrchestratorProvider);
+      await orchestrator.checkAndPrepare(
+        release: release,
+        platformName: platformName,
+      );
+    } catch (e) {
+      logger.error('UpdateSettings', 'Failed to start download', e);
+    }
   }
 
   Widget _buildError(

@@ -62,23 +62,25 @@ class TestContacts:
 
         # Open the first contact (the paired peer)
         try:
-            alice.find_element(
+            contact = alice.find_element(
                 "xpath",
                 "//*[contains(@content-desc, 'Peer') or "
                 "contains(@content-desc, 'Anonymous')]"
-            ).click()
-            time.sleep(1)
-
-            # Set alias
-            alice_helper.set_peer_alias("Mom")
-            time.sleep(1)
-
-            # Go back to contacts and verify alias shows
-            alice.back()
-            time.sleep(1)
-            alice_helper._find("Mom", timeout=10)
+            )
         except Exception:
-            pytest.skip("Contact detail not accessible in current UI state")
+            pytest.skip("Contact element not found in current UI state")
+
+        contact.click()
+        time.sleep(1)
+
+        # Set alias
+        alice_helper.set_peer_alias("Mom")
+        time.sleep(1)
+
+        # Go back to contacts and verify alias shows
+        alice.back()
+        time.sleep(1)
+        alice_helper._find("Mom", timeout=10)
 
     def test_search_contacts(self, alice, bob):
         """Search contacts by name."""
@@ -108,26 +110,28 @@ class TestContacts:
         time.sleep(1)
 
         try:
-            alice.find_element(
+            contact = alice.find_element(
                 "xpath",
                 "//*[contains(@content-desc, 'Peer') or "
                 "contains(@content-desc, 'Anonymous')]"
-            ).click()
-            time.sleep(1)
-
-            alice_helper.set_peer_alias("TestAlias")
-            time.sleep(1)
-
-            # Restart Alice's app
-            alice.terminate_app(PACKAGE_NAME)
-            time.sleep(2)
-            alice.activate_app(PACKAGE_NAME)
-            alice_helper.wait_for_app_ready()
-            time.sleep(3)
-
-            # Navigate to contacts and verify alias persisted
-            alice_helper.navigate_to_contacts()
-            time.sleep(1)
-            alice_helper._find("TestAlias", timeout=10)
+            )
         except Exception:
-            pytest.skip("Contact alias persistence test requires accessible contact detail")
+            pytest.skip("Contact element not found in current UI state")
+
+        contact.click()
+        time.sleep(1)
+
+        alice_helper.set_peer_alias("TestAlias")
+        time.sleep(1)
+
+        # Restart Alice's app
+        alice.terminate_app(PACKAGE_NAME)
+        time.sleep(2)
+        alice.activate_app(PACKAGE_NAME)
+        alice_helper.wait_for_app_ready()
+        time.sleep(3)
+
+        # Navigate to contacts and verify alias persisted
+        alice_helper.navigate_to_contacts()
+        time.sleep(1)
+        alice_helper._find("TestAlias", timeout=10)
