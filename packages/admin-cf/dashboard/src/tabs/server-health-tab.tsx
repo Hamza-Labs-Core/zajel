@@ -27,9 +27,11 @@ interface HealthData {
 }
 
 interface LogEntry {
-  timestamp: string;
-  level: string;
-  server_id: string;
+  timestamp: string | number;
+  level?: string;
+  severity?: string;
+  server_id?: string;
+  serverId?: string;
   message: string;
   category?: string;
 }
@@ -137,8 +139,8 @@ export function ServerHealthTab() {
     }
   };
 
-  const levelColor = (level: string) => {
-    switch (level.toLowerCase()) {
+  const levelColor = (level?: string) => {
+    switch ((level || '').toLowerCase()) {
       case 'error': case 'fatal': return 'var(--danger)';
       case 'warn': case 'warning': return 'var(--warning)';
       case 'info': return 'var(--accent)';
@@ -253,11 +255,11 @@ export function ServerHealthTab() {
                 <span style={{ color: 'var(--text-secondary)', minWidth: 130, flexShrink: 0 }}>
                   {new Date(log.timestamp).toLocaleString()}
                 </span>
-                <span style={{ color: levelColor(log.level), minWidth: 50, fontWeight: 600, textTransform: 'uppercase', flexShrink: 0 }}>
-                  {log.level}
+                <span style={{ color: levelColor(log.severity || log.level), minWidth: 50, fontWeight: 600, textTransform: 'uppercase', flexShrink: 0 }}>
+                  {log.severity || log.level}
                 </span>
                 <span style={{ color: 'var(--text-secondary)', minWidth: 80, flexShrink: 0 }}>
-                  {log.server_id}
+                  {log.serverId || log.server_id}
                 </span>
                 <span style={{ wordBreak: 'break-all' }}>{log.message}</span>
               </div>
