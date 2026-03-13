@@ -7,7 +7,9 @@ import '../../../core/config/environment.dart';
 import '../../../core/logging/logger_service.dart';
 import '../models/update_check_result.dart';
 import '../models/update_state.dart';
+import '../providers/auto_update_providers.dart';
 import '../providers/update_providers.dart';
+import '../services/updater_launcher.dart';
 
 /// Settings section for checking and displaying update status.
 ///
@@ -182,7 +184,11 @@ class UpdateSettingsSection extends ConsumerWidget {
               child: CircularProgressIndicator(strokeWidth: 2),
             )
           : isReady
-              ? null
+              ? FilledButton.icon(
+                  onPressed: () => _launchInstall(context, ref, result),
+                  icon: const Icon(Icons.restart_alt),
+                  label: const Text('Install & Restart'),
+                )
               : FilledButton(
                   onPressed: () => _downloadUpdate(ref),
                   child: const Text('Update Now'),
@@ -213,6 +219,60 @@ class UpdateSettingsSection extends ConsumerWidget {
       );
     } catch (e) {
       logger.error('UpdateSettings', 'Failed to start download', e);
+    }
+  }
+
+  Future<void> _launchInstall(
+    BuildContext context,
+    WidgetRef ref,
+    UpdateCheckAvailable result,
+  ) async {
+    final orchestrator = ref.read(updateOrchestratorProvider);
+    final launcher = ref.read(updaterLauncherProvider);
+    final checksum = orchestrator.verifiedChecksum;
+
+    if (checksum == null) {
+      logger.error('UpdateSettings', 'No verified checksum available');
+      return;
+    }
+
+    final platformName = Platform.isWindows
+        ? 'windows'
+        : Platform.isMacOS
+            ? 'macos'
+            : 'linux';
+
+    // Resolve the staging directory for this version
+    final stagingBaseDir = await orchestrator.getStagingDir();
+    final stagingDir =
+        '$stagingBaseDir/zajel-${result.latestVersion}-$platformName';
+
+    try {
+      final launched = await launcher.launchUpdate(
+        targetVersion: result.latestVersion,
+        currentVersion: _currentVersion,
+        stagingDir: stagingDir,
+        checksumSha256: checksum,
+      );
+
+      if (launched) {
+        logger.info('UpdateSettings', 'Updater launched, exiting app');
+        exit(0);
+      }
+    } on UpdaterBinaryNotFoundException catch (e) {
+      logger.error('UpdateSettings', 'Updater binary not found', e);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Update failed: ${e.message}')),
+        );
+      }
+    } catch (e) {
+      logger.error('UpdateSettings', 'Failed to launch updater', e);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Update failed: $e')),
+        );
+      }
     }
   }
 
