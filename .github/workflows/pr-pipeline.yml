@@ -1148,6 +1148,13 @@ jobs:
 
           ls -la release-assets/
 
+      - name: Generate checksums
+        run: |
+          cd release-assets
+          sha256sum zajel-* > checksums.txt
+          echo "Generated checksums:"
+          cat checksums.txt
+
       - name: Cleanup stale draft pre-releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
