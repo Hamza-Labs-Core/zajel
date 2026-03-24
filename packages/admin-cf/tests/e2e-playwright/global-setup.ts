@@ -23,7 +23,7 @@ async function globalSetup() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username: ADMIN_USER, password: ADMIN_PASS }),
   });
-  const initBody = await initRes.json() as { success: boolean };
+  await initRes.json();
 
   // Login to get a JWT token
   const loginRes = await fetch(`${BASE_URL}/admin/api/auth/login`, {

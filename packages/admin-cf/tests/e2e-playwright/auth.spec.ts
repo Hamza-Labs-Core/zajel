@@ -1,4 +1,4 @@
-import { test, expect, ADMIN_USER, ADMIN_PASS, loginViaUI } from './fixtures.js';
+import { test, expect, ADMIN_USER, loginViaUI } from './fixtures.js';
 
 test.describe('Authentication', () => {
   test('shows login form when unauthenticated', async ({ page }) => {
