@@ -344,7 +344,7 @@ class SignalingClient:
         self._peer_to_ws.clear()
 
     async def ensure_registered(self) -> None:
-        """Re-send the register message and wait for confirmation.
+        """Re-send the register message on main and all redirect connections.
 
         Used as a recovery mechanism when the server responds with
         'Not registered' during pair_with retries.
@@ -352,18 +352,29 @@ class SignalingClient:
         if self._public_key_b64 is None:
             raise RuntimeError("Cannot re-register: no stored public key")
 
-        self._registered.clear()
-        await self._send({
+        reg_msg = {
             "type": "register",
             "pairingCode": self.pairing_code,
             "publicKey": self._public_key_b64,
-        })
+        }
+
+        # Re-register on main connection
+        self._registered.clear()
+        await self._send(reg_msg)
 
         try:
             await asyncio.wait_for(self._registered.wait(), timeout=10)
-            logger.info("Re-registration confirmed for %s", self.pairing_code)
+            logger.info("Re-registration confirmed on main for %s", self.pairing_code)
         except asyncio.TimeoutError:
-            logger.warning("Re-registration TIMEOUT for %s", self.pairing_code)
+            logger.warning("Re-registration TIMEOUT on main for %s", self.pairing_code)
+
+        # Re-register on all redirect connections
+        for endpoint, (ws, _task) in list(self._redirect_connections.items()):
+            try:
+                await self._send(reg_msg, ws=ws)
+                logger.info("Re-registration sent to redirect %s", endpoint)
+            except Exception as e:
+                logger.warning("Re-registration failed on redirect %s: %s", endpoint, e)
 
     # ── Pairing ──────────────────────────────────────────────
 
