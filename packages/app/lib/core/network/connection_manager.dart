@@ -429,11 +429,15 @@ class ConnectionManager {
     _peers[normalizedCode] = peer;
     _notifyPeersChanged();
 
-    // Request pairing (peer must approve before WebRTC starts)
-    // Using captured state.client - guaranteed non-null by pattern match
-    logger.info(
-        'ConnectionManager', 'Sending pair_request for code: $normalizedCode');
-    state.client.requestPairing(normalizedCode,
+    // Route pair_request through the redirect client that knows this peer,
+    // or fall back to the primary client for local-server pairing.
+    final targetClient = _peerToClient[normalizedCode];
+    final client = (targetClient != null && targetClient.isConnected)
+        ? targetClient
+        : state.client;
+    logger.info('ConnectionManager',
+        'Sending pair_request for code: $normalizedCode via ${client == state.client ? "primary" : "redirect"} server');
+    client.requestPairing(normalizedCode,
         proposedName: proposedName ?? _username);
   }
 
@@ -1456,13 +1460,16 @@ class ConnectionManager {
       switch (event) {
         case RendezvousResult(:final liveMatches, deadDrops: _):
           for (final match in liveMatches) {
+            _peerToClient[match.peerId] = client;
             _handleLiveMatch(match.peerId);
           }
         case RendezvousPartial(:final liveMatches, deadDrops: _, redirects: _):
           for (final match in liveMatches) {
+            _peerToClient[match.peerId] = client;
             _handleLiveMatch(match.peerId);
           }
         case RendezvousMatch(:final peerId, relayId: _, meetingPoint: _):
+          _peerToClient[peerId] = client;
           _handleLiveMatch(peerId);
       }
     });
