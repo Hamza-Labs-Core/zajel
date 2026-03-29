@@ -6,7 +6,7 @@
  * All external dependencies (D1, AI, GitHub) are mocked.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   runProcessingPipeline,
   getLastRunTimestamp,

@@ -8,7 +8,7 @@ import time
 import pytest
 from zajel.signaling import (
     generate_pairing_code, PAIRING_CODE_CHARS, PAIRING_CODE_LENGTH,
-    PairRequest, SignalingClient,
+    PairMatch, PairRequest, SignalingClient,
 )
 
 
@@ -64,7 +64,6 @@ class TestPairErrorFastFail:
     @pytest.mark.asyncio
     async def test_pair_match_still_works(self):
         """Normal pair_match should still be returned correctly."""
-        from zajel.signaling import PairMatch
         client = SignalingClient("ws://localhost:9999")
 
         match = PairMatch(peer_code="ABC123", peer_public_key="key", is_initiator=True)

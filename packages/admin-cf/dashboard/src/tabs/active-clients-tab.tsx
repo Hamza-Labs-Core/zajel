@@ -4,7 +4,6 @@
  */
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { api } from '../api';
-// Card/CardGrid available if needed for future stat cards
 import { DonutChart, BarChart } from '../components/chart';
 
 interface ActiveData { activeCount: number; totalActive?: number; sparkline?: Array<{ timestamp: number; count: number }>; lastUpdated?: number }
