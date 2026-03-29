@@ -32,6 +32,7 @@
 
 **Features**
 - [Desktop Auto-Updater](Desktop-Auto-Updater)
+- [Feature Flags](Feature-Reference#feature-flags-planned)
 
 **Development**
 - [Build and Deploy](Build-and-Deploy)
