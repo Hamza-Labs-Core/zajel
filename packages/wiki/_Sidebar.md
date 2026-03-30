@@ -21,6 +21,7 @@
 - [Privacy Model](Privacy-Model)
 - [App Attestation](App-Attestation)
 - [Security Hardening: DDoS Risk Analysis](Security-Hardening-DDoS)
+- [Messaging App Comparison](Messaging-App-Comparison)
 
 **Testing & CI**
 - [Testing Overview](Testing-Overview)
