@@ -365,32 +365,52 @@ class SignalingClient:
         confirmed = await self._try_register_on(self._ws, reg_msg, "main")
 
         if not confirmed and self._ws is not None:
-            # Main connection may be dead — reconnect
-            logger.info("Reconnecting main WebSocket to %s", self.url)
+            # Main connection is dead — reconnect
+            await self._reconnect_main(reg_msg)
+
+        # Re-register on all redirect connections; reconnect dead ones
+        for endpoint, (ws, task) in list(self._redirect_connections.items()):
+            ok = await self._try_register_on(ws, reg_msg, f"redirect {endpoint}")
+            if not ok:
+                await self._reconnect_redirect(endpoint, reg_msg)
+
+    async def _reconnect_main(self, reg_msg: dict) -> None:
+        """Tear down stale main WebSocket and reconnect."""
+        logger.info("Reconnecting main WebSocket to %s", self.url)
+        try:
+            if self._receive_task:
+                self._receive_task.cancel()
+            if self._heartbeat_task:
+                self._heartbeat_task.cancel()
             try:
-                # Tear down old connection
-                if self._receive_task:
-                    self._receive_task.cancel()
-                if self._heartbeat_task:
-                    self._heartbeat_task.cancel()
+                await self._ws.close()
+            except Exception:
+                pass
+
+            self._ws = await asyncio.wait_for(
+                websockets.connect(self.url), timeout=10
+            )
+            self._receive_task = asyncio.create_task(self._receive_loop())
+            self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+            await self._try_register_on(self._ws, reg_msg, "main (reconnected)")
+        except Exception as e:
+            logger.warning("Main reconnect failed: %s", e)
+
+    async def _reconnect_redirect(self, endpoint: str, reg_msg: dict) -> None:
+        """Tear down stale redirect connection and reconnect."""
+        logger.info("Reconnecting redirect WebSocket to %s", endpoint)
+        try:
+            old = self._redirect_connections.pop(endpoint, None)
+            if old:
+                old[1].cancel()
                 try:
-                    await self._ws.close()
+                    await old[0].close()
                 except Exception:
-                    pass  # Already dead
+                    pass
 
-                # Reconnect
-                self._ws = await asyncio.wait_for(
-                    websockets.connect(self.url), timeout=10
-                )
-                self._receive_task = asyncio.create_task(self._receive_loop())
-                self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-                confirmed = await self._try_register_on(self._ws, reg_msg, "main (reconnected)")
-            except Exception as e:
-                logger.warning("Reconnect failed: %s", e)
-
-        # Re-register on all redirect connections
-        for endpoint, (ws, _task) in list(self._redirect_connections.items()):
-            await self._try_register_on(ws, reg_msg, f"redirect {endpoint}")
+            await self.connect_to_redirect(endpoint)
+        except Exception as e:
+            logger.warning("Redirect reconnect to %s failed: %s", endpoint, e)
 
     async def _try_register_on(
         self, ws: "Optional[ClientConnection]", reg_msg: dict, label: str
