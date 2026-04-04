@@ -236,8 +236,11 @@ class TestCalls:
         alice.end_call()
         time.sleep(3)
 
-        # Both should be back in chat (can see message input)
-        assert alice.has_message("") or True  # Just verify no crash
+        # Verify Alice returns to chat/home (app didn't crash)
+        alice.go_back_to_home()
+        alice.wait_for_app_ready()
+        assert alice.is_peer_connected(), \
+            "Peer should still be listed after caller hangs up"
 
     def test_callee_hangs_up(self, device_pair, app_helper):
         """Bob (callee) ends call → both return to chat."""
@@ -254,5 +257,8 @@ class TestCalls:
         bob.end_call()
         time.sleep(3)
 
-        # Both should be back in chat — verify no crash
-        assert bob.has_message("") or True
+        # Verify Bob returns to chat/home (app didn't crash)
+        bob.go_back_to_home()
+        bob.wait_for_app_ready()
+        assert bob.is_peer_connected(), \
+            "Peer should still be listed after callee hangs up"

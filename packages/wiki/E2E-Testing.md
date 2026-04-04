@@ -243,3 +243,46 @@ On Android E2E failure, the following artifacts are collected:
 - **coturn logs**: `coturn.log`
 
 All artifacts are uploaded as `e2e-test-artifacts` with 3-day retention.
+
+---
+
+## Admin Dashboard Playwright E2E Tests
+
+In addition to the app-level E2E tests described above, the admin dashboard (`packages/admin-cf/`) has its own Playwright E2E test suite at `packages/admin-cf/tests/e2e-playwright/`. These tests validate the admin web UI and API endpoints using Chromium.
+
+### Quick Start
+
+```bash
+cd packages/admin-cf
+
+# Run against local wrangler dev server
+npm run test:playwright
+
+# Run against QA environment
+npm run test:playwright:qa
+```
+
+### Test Suite Overview
+
+The suite contains 85 tests across 12 spec files:
+
+| Spec | Description |
+|------|-------------|
+| `auth.spec.ts` | Login form, invalid credentials, session persistence, logout |
+| `navigation.spec.ts` | All 9 tabs render, hash-based routing, tab restore from URL |
+| `servers-tab.spec.ts` | VPS server list, health indicators |
+| `users-tab.spec.ts` | User list, role badges, management UI |
+| `errors-tab.spec.ts` | Error list, category filtering, severity, time ranges |
+| `metrics-tab.spec.ts` | App performance metrics (startup time, frame rate, memory) |
+| `active-clients-tab.spec.ts` | Active client counts, platform/version breakdown |
+| `server-health-tab.spec.ts` | Server health, CPU/memory, connections, log severity |
+| `security-tab.spec.ts` | Security events, rate limits, auth logs, anomalies |
+| `ai-issues-tab.spec.ts` | AI-generated issues, GitHub integration |
+| `notifications-tab.spec.ts` | Notification list, types, mark-as-read, alert rules |
+| `api-smoke.spec.ts` | Health, auth verify, server list, error summary, metrics APIs |
+
+### Authentication Strategy
+
+Tests use `addInitScript()` to inject the JWT token into `localStorage` before page JavaScript runs, avoiding the login rate limiter (5 requests/min/IP). A global setup phase authenticates once and caches the token to disk for all tests.
+
+For full details, see [Admin Dashboard > Playwright E2E Tests](Admin-Dashboard#playwright-e2e-tests).

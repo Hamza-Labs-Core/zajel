@@ -42,6 +42,11 @@ class UpdateManifest {
   /// Timestamp when the manifest was created.
   final DateTime timestamp;
 
+  /// Package format hint for the updater binary.
+  /// Values: "loose" (directory-based) or "appimage" (single-file replacement).
+  /// When null, the updater defaults to "loose" behavior.
+  final String? packageFormat;
+
   const UpdateManifest({
     required this.schemaVersion,
     required this.appPid,
@@ -54,6 +59,7 @@ class UpdateManifest {
     required this.platform,
     required this.checksumSha256,
     required this.timestamp,
+    this.packageFormat,
   });
 
   /// Creates a manifest from a JSON map.
@@ -150,6 +156,8 @@ class UpdateManifest {
       );
     }
 
+    final packageFormat = json['package_format'] as String?;
+
     return UpdateManifest(
       schemaVersion: schemaVersion,
       appPid: appPid,
@@ -162,6 +170,7 @@ class UpdateManifest {
       platform: platform,
       checksumSha256: checksumSha256,
       timestamp: timestamp,
+      packageFormat: packageFormat,
     );
   }
 
@@ -192,6 +201,7 @@ class UpdateManifest {
         'platform': platform,
         'checksum_sha256': checksumSha256,
         'timestamp': timestamp.toUtc().toIso8601String(),
+        if (packageFormat != null) 'package_format': packageFormat,
       };
 
   /// Writes this manifest as formatted JSON to a file on disk.
@@ -217,6 +227,7 @@ class UpdateManifest {
     String? platform,
     String? checksumSha256,
     DateTime? timestamp,
+    String? packageFormat,
   }) {
     return UpdateManifest(
       schemaVersion: schemaVersion ?? this.schemaVersion,
@@ -230,6 +241,7 @@ class UpdateManifest {
       platform: platform ?? this.platform,
       checksumSha256: checksumSha256 ?? this.checksumSha256,
       timestamp: timestamp ?? this.timestamp,
+      packageFormat: packageFormat ?? this.packageFormat,
     );
   }
 
@@ -238,6 +250,7 @@ class UpdateManifest {
       'v$schemaVersion, '
       '$appVersionCurrent -> $appVersionTarget, '
       'platform=$platform, '
+      '${packageFormat != null ? 'format=$packageFormat, ' : ''}'
       'pid=$appPid)';
 
   @override
@@ -255,7 +268,8 @@ class UpdateManifest {
           appExecutable == other.appExecutable &&
           platform == other.platform &&
           checksumSha256 == other.checksumSha256 &&
-          timestamp == other.timestamp;
+          timestamp == other.timestamp &&
+          packageFormat == other.packageFormat;
 
   @override
   int get hashCode => Object.hash(
@@ -270,5 +284,6 @@ class UpdateManifest {
         platform,
         checksumSha256,
         timestamp,
+        packageFormat,
       );
 }

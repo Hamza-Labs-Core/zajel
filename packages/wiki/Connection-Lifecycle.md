@@ -313,6 +313,19 @@ When a WebRTC connection attempt fails (ICE timeout, DTLS failure, or handshake 
 
 Previously, a failed connection could leave orphaned `RTCPeerConnection` objects consuming memory and port resources. The cleanup is performed in a `finally` block to ensure it runs even if an exception occurs during the connection attempt.
 
+### Cross-Server Pairing
+
+In a federated deployment, peers may be registered on different VPS servers. The DHT hash ring routes rendezvous registrations to the server(s) responsible for each meeting point hash. When a rendezvous match occurs on a redirect server (a server the client was redirected to for specific hashes), the pair request must be routed through that same redirect server -- not the client's primary server.
+
+**Problem**: `connectToPeer()` previously always sent `pair_request` through the primary signaling connection, even when the matched peer was discovered on a redirect server. The target server would reject the request because the peer was not in its local connection map.
+
+**Fix** (in `connection_manager.dart`):
+1. The `_peerToClient` map is populated from rendezvous matches and `pair_incoming` events arriving on redirect server connections
+2. `connectToPeer()` checks `_peerToClient` to find the correct signaling client for routing the `pair_request`
+3. If the peer was discovered on a redirect server, the request is sent through that redirect client
+
+**Headless client**: The Python headless client's `ensure_registered()` now re-sends the `register` message on all redirect connections during `pair_with()` retries, not just the main connection. This handles the case where a redirect server has lost registration state (e.g., after a restart).
+
 ### ICE Server Configuration Validation
 
 ICE server configurations (STUN/TURN) are validated before being used:

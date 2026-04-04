@@ -8,6 +8,8 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/logging/logger_service.dart';
 import '../../core/providers/app_providers.dart';
+import '../channels/providers/channel_providers.dart';
+import '../groups/providers/group_providers.dart';
 import '../updater/widgets/auto_update_settings.dart';
 import '../updater/widgets/update_settings_section.dart';
 
@@ -651,18 +653,41 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
 
     if (confirmed == true) {
+      // Clear all secure storage (identity keys, session keys, trusted peers,
+      // channel private keys, group sender keys, device links, attestation)
+      final secureStorage = ref.read(cachedSecureStorageProvider);
+      await secureStorage.deleteAll();
+
+      // Clear crypto in-memory state and regenerate fresh identity
       final cryptoService = ref.read(cryptoServiceProvider);
       await cryptoService.clearAllSessions();
       await cryptoService.regenerateIdentityKeys();
 
+      // Clear all SQLite databases
+      final messageStorage = ref.read(messageStorageProvider);
+      await messageStorage.deleteAllMessages();
+
+      final channelStorage = ref.read(channelStorageServiceProvider);
+      final channels = await channelStorage.getAllChannels();
+      for (final ch in channels) {
+        await channelStorage.deleteChannel(ch.id);
+      }
+
+      final groupStorage = ref.read(groupStorageServiceProvider);
+      final groups = await groupStorage.getAllGroups();
+      for (final g in groups) {
+        await groupStorage.deleteGroup(g.id);
+      }
+
+      // Clear SharedPreferences
       final prefs = await SharedPreferences.getInstance();
       await prefs.clear();
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('All data cleared'),
-          duration: Duration(seconds: 3),
+          content: Text('All data cleared. Please restart the app.'),
+          duration: Duration(seconds: 5),
         ),
       );
     }
