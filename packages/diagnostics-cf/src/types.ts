@@ -110,6 +110,12 @@ export interface NetworkMetrics {
 }
 
 /**
+ * Valid environment values for diagnostic reports.
+ */
+export const VALID_ENVIRONMENTS = ['production', 'qa'] as const;
+export type Environment = (typeof VALID_ENVIRONMENTS)[number];
+
+/**
  * Full diagnostic report payload (request body).
  */
 export interface DiagnosticReport {
@@ -124,6 +130,7 @@ export interface DiagnosticReport {
   performance?: PerformanceMetrics;
   network?: NetworkMetrics;
   connectionType?: ConnectionType;
+  environment?: Environment;
 }
 
 /**

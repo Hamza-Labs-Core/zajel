@@ -73,6 +73,8 @@ export class ServerConnectionManager extends EventEmitter {
   private config: ServerConnectionConfig;
   private connections: Map<string, PeerConnection> = new Map();
   private pendingOutgoing: Set<string> = new Set();
+  private reconnectTimers: Map<string, NodeJS.Timeout> = new Map();
+  private isShutdown = false;
   private wss: WebSocketServer | null = null;
 
   constructor(
@@ -103,6 +105,8 @@ export class ServerConnectionManager extends EventEmitter {
    * Connect to a peer server
    */
   async connect(entry: MembershipEntry): Promise<void> {
+    if (this.isShutdown) return;
+
     if (entry.serverId === this.identity.serverId) {
       return; // Don't connect to ourselves
     }
@@ -196,12 +200,20 @@ export class ServerConnectionManager extends EventEmitter {
    * Shutdown all connections
    */
   shutdown(): void {
+    this.isShutdown = true;
+
     for (const [serverId, conn] of this.connections) {
       this.cleanupConnection(serverId, conn);
       conn.ws.close(1001, 'Server shutting down');
     }
     this.connections.clear();
     this.pendingOutgoing.clear();
+
+    // Cancel all pending reconnect timers
+    for (const timer of this.reconnectTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.reconnectTimers.clear();
 
     if (this.wss) {
       this.wss.close();
@@ -505,6 +517,8 @@ export class ServerConnectionManager extends EventEmitter {
    * Schedule reconnection attempt
    */
   private scheduleReconnect(entry: MembershipEntry, attempt: number): void {
+    if (this.isShutdown) return;
+
     // Exponential backoff with jitter applied after clamping to prevent thundering herd
     const baseDelay = Math.min(
       this.config.reconnectInterval * Math.pow(2, attempt - 1),
@@ -512,7 +526,14 @@ export class ServerConnectionManager extends EventEmitter {
     );
     const delay = baseDelay + Math.random() * 1000;
 
-    setTimeout(async () => {
+    // Cancel any existing reconnect timer for this peer
+    const existing = this.reconnectTimers.get(entry.serverId);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(async () => {
+      this.reconnectTimers.delete(entry.serverId);
+      if (this.isShutdown) return;
+
       try {
         await this.connect(entry);
       } catch (error) {
@@ -530,6 +551,8 @@ export class ServerConnectionManager extends EventEmitter {
         }
       }
     }, delay);
+
+    this.reconnectTimers.set(entry.serverId, timer);
   }
 
   /**
