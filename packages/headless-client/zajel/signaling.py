@@ -339,7 +339,7 @@ class SignalingClient:
             try:
                 await ws.close()
             except Exception:
-                pass
+                pass  # Connection may already be closed
         self._redirect_connections.clear()
         self._peer_to_ws.clear()
 
@@ -385,7 +385,7 @@ class SignalingClient:
             try:
                 await self._ws.close()
             except Exception:
-                pass
+                pass  # Connection already dead — ignore close errors
 
             self._ws = await asyncio.wait_for(
                 websockets.connect(self.url), timeout=10
@@ -406,7 +406,7 @@ class SignalingClient:
                 try:
                     await old[0].close()
                 except Exception:
-                    pass
+                    pass  # Connection may already be closed
 
             await self.connect_to_redirect(endpoint)
         except Exception as e:
