@@ -348,6 +348,9 @@ class SignalingClient:
 
         Used as a recovery mechanism when the server responds with
         'Not registered' during pair_with retries.
+
+        If the main connection is dead (send fails or registration times out),
+        reconnects the WebSocket before giving up.
         """
         if self._public_key_b64 is None:
             raise RuntimeError("Cannot re-register: no stored public key")
@@ -359,22 +362,54 @@ class SignalingClient:
         }
 
         # Re-register on main connection
-        self._registered.clear()
-        await self._send(reg_msg)
+        confirmed = await self._try_register_on(self._ws, reg_msg, "main")
 
-        try:
-            await asyncio.wait_for(self._registered.wait(), timeout=10)
-            logger.info("Re-registration confirmed on main for %s", self.pairing_code)
-        except asyncio.TimeoutError:
-            logger.warning("Re-registration TIMEOUT on main for %s", self.pairing_code)
+        if not confirmed and self._ws is not None:
+            # Main connection may be dead — reconnect
+            logger.info("Reconnecting main WebSocket to %s", self.url)
+            try:
+                # Tear down old connection
+                if self._receive_task:
+                    self._receive_task.cancel()
+                if self._heartbeat_task:
+                    self._heartbeat_task.cancel()
+                try:
+                    await self._ws.close()
+                except Exception:
+                    pass  # Already dead
+
+                # Reconnect
+                self._ws = await asyncio.wait_for(
+                    websockets.connect(self.url), timeout=10
+                )
+                self._receive_task = asyncio.create_task(self._receive_loop())
+                self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+                confirmed = await self._try_register_on(self._ws, reg_msg, "main (reconnected)")
+            except Exception as e:
+                logger.warning("Reconnect failed: %s", e)
 
         # Re-register on all redirect connections
         for endpoint, (ws, _task) in list(self._redirect_connections.items()):
-            try:
-                await self._send(reg_msg, ws=ws)
-                logger.info("Re-registration sent to redirect %s", endpoint)
-            except Exception as e:
-                logger.warning("Re-registration failed on redirect %s: %s", endpoint, e)
+            await self._try_register_on(ws, reg_msg, f"redirect {endpoint}")
+
+    async def _try_register_on(
+        self, ws: "Optional[ClientConnection]", reg_msg: dict, label: str
+    ) -> bool:
+        """Send register on a single connection and wait for confirmation."""
+        if ws is None:
+            return False
+        try:
+            self._registered.clear()
+            await self._send(reg_msg, ws=ws)
+            await asyncio.wait_for(self._registered.wait(), timeout=5)
+            logger.info("Re-registration confirmed on %s for %s", label, self.pairing_code)
+            return True
+        except asyncio.TimeoutError:
+            logger.warning("Re-registration TIMEOUT on %s for %s", label, self.pairing_code)
+            return False
+        except Exception as e:
+            logger.warning("Re-registration failed on %s: %s", label, e)
+            return False
 
     # ── Pairing ──────────────────────────────────────────────
 

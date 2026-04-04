@@ -371,6 +371,8 @@ class TestEnsureRegistered:
         client = SignalingClient("ws://localhost:9999")
         client._public_key_b64 = "dGVzdGtleQ=="
         client.pairing_code = "TESTCODE"
+        # Set a fake ws so _try_register_on doesn't bail on ws=None
+        client._ws = object()
 
         sent_messages = []
 
@@ -382,7 +384,6 @@ class TestEnsureRegistered:
                 client._registered.set()
 
         client._send = mock_send
-        # Mark as connected so _send doesn't complain
         client._connected.set()
 
         await client.ensure_registered()
