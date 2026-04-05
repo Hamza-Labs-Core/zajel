@@ -12,7 +12,6 @@ import {
   Position,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import Dagre from "@dagrejs/dagre";
 import { Nav } from "~/components/Nav";
 import { Footer } from "~/components/Footer";
 
@@ -26,293 +25,272 @@ const darkFlowStyles = `
 .react-flow__controls button {
   background: #1e293b !important;
   border-color: #475569 !important;
-  color: #f8fafc !important;
   fill: #f8fafc !important;
 }
-.react-flow__controls button:hover {
-  background: #334155 !important;
-}
-.react-flow__controls button svg {
-  fill: #f8fafc !important;
-}
+.react-flow__controls button:hover { background: #334155 !important; }
+.react-flow__controls button svg { fill: #f8fafc !important; }
 .react-flow__minimap {
   background: #0f172a !important;
   border: 1px solid #475569 !important;
   border-radius: 8px !important;
 }
-.react-flow__minimap-mask {
-  fill: rgba(15, 23, 42, 0.7) !important;
-}
-.react-flow__minimap-node {
-  fill: #6366f1 !important;
-  stroke: #94a3b8 !important;
-  stroke-width: 1 !important;
-  rx: 4 !important;
-}
-.react-flow__edge-text {
-  fill: #94a3b8 !important;
-}
-.react-flow__edge-textbg {
-  fill: #0f172a !important;
-}
-.react-flow__panel {
-  margin: 8px !important;
-}
+.react-flow__minimap-mask { fill: rgba(15, 23, 42, 0.7) !important; }
+.react-flow__edge-text { fill: #94a3b8 !important; font-size: 11px !important; }
+.react-flow__edge-textbg { fill: #0f172a !important; }
+.react-flow__panel { margin: 8px !important; }
 `;
 
 export const meta: MetaFunction = () => [
   { title: "Architecture - Zajel" },
-  { name: "description", content: "Zajel system architecture — signaling, P2P, encryption, federation" },
+  {
+    name: "description",
+    content: "Zajel system architecture — signaling, P2P, encryption, federation",
+  },
 ];
 
-// ── Custom Node Components ──────────────────────────────────
+// ── Custom Nodes ──────────────────────────────────────────
 
-function DeviceNode({ data }: { data: { label: string; detail: string; icon: string } }) {
+const handles = (color: string) => (
+  <>
+    <Handle type="source" position={Position.Right} style={{ background: color }} />
+    <Handle type="target" position={Position.Left} style={{ background: color }} />
+    <Handle type="source" position={Position.Bottom} id="b" style={{ background: color }} />
+    <Handle type="target" position={Position.Top} id="t" style={{ background: color }} />
+  </>
+);
+
+function DeviceNode({ data }: { data: Record<string, string> }) {
   return (
-    <div style={{
-      background: "#1e293b", border: "2px solid #6366f1", borderRadius: 12,
-      padding: "16px 20px", color: "#f8fafc", minWidth: 180, textAlign: "center",
-    }}>
-      <Handle type="source" position={Position.Right} style={{ background: "#6366f1" }} />
-      <Handle type="target" position={Position.Left} style={{ background: "#6366f1" }} />
-      <Handle type="source" position={Position.Bottom} id="bottom" style={{ background: "#6366f1" }} />
-      <Handle type="target" position={Position.Top} id="top" style={{ background: "#6366f1" }} />
-      <div style={{ fontSize: 28, marginBottom: 6 }}>{data.icon}</div>
-      <div style={{ fontWeight: 700, fontSize: 14 }}>{data.label}</div>
-      <div style={{ color: "#94a3b8", fontSize: 11, marginTop: 4 }}>{data.detail}</div>
+    <div style={{ background: "#1e293b", border: "2px solid #6366f1", borderRadius: 12, padding: "14px 18px", color: "#f8fafc", width: 180, textAlign: "center" }}>
+      {handles("#6366f1")}
+      <div style={{ fontSize: 26 }}>{data.icon}</div>
+      <div style={{ fontWeight: 700, fontSize: 13 }}>{data.label}</div>
+      <div style={{ color: "#94a3b8", fontSize: 10, marginTop: 2 }}>{data.detail}</div>
+    </div>
+  );
+}
+function ServerNode({ data }: { data: Record<string, string> }) {
+  return (
+    <div style={{ background: "#0f172a", border: "2px solid #22c55e", borderRadius: 12, padding: "14px 18px", color: "#f8fafc", width: 190, textAlign: "center" }}>
+      {handles("#22c55e")}
+      <div style={{ fontSize: 26 }}>{data.icon}</div>
+      <div style={{ fontWeight: 700, fontSize: 13 }}>{data.label}</div>
+      <div style={{ color: "#94a3b8", fontSize: 10, marginTop: 2 }}>{data.detail}</div>
+    </div>
+  );
+}
+function CloudNode({ data }: { data: Record<string, string> }) {
+  return (
+    <div style={{ background: "#0f172a", border: "2px solid #eab308", borderRadius: 12, padding: "14px 18px", color: "#f8fafc", width: 200, textAlign: "center" }}>
+      {handles("#eab308")}
+      <div style={{ fontSize: 26 }}>{data.icon}</div>
+      <div style={{ fontWeight: 700, fontSize: 13 }}>{data.label}</div>
+      <div style={{ color: "#94a3b8", fontSize: 10, marginTop: 2 }}>{data.detail}</div>
+    </div>
+  );
+}
+function StepNode({ data }: { data: Record<string, string> }) {
+  const c = data.color || "#94a3b8";
+  return (
+    <div style={{ background: "#1e293b", border: `2px solid ${c}`, borderRadius: 8, padding: "10px 14px", color: "#f8fafc", width: 170, textAlign: "center" }}>
+      {handles(c)}
+      <div style={{ fontWeight: 700, fontSize: 12, color: c }}>{data.label}</div>
+      <div style={{ color: "#94a3b8", fontSize: 10, marginTop: 2 }}>{data.detail}</div>
     </div>
   );
 }
 
-function ServerNode({ data }: { data: { label: string; detail: string; icon: string } }) {
-  return (
-    <div style={{
-      background: "#0f172a", border: "2px solid #22c55e", borderRadius: 12,
-      padding: "16px 20px", color: "#f8fafc", minWidth: 200, textAlign: "center",
-    }}>
-      <Handle type="source" position={Position.Right} style={{ background: "#22c55e" }} />
-      <Handle type="target" position={Position.Left} style={{ background: "#22c55e" }} />
-      <Handle type="source" position={Position.Bottom} id="bottom" style={{ background: "#22c55e" }} />
-      <Handle type="target" position={Position.Top} id="top" style={{ background: "#22c55e" }} />
-      <div style={{ fontSize: 28, marginBottom: 6 }}>{data.icon}</div>
-      <div style={{ fontWeight: 700, fontSize: 14 }}>{data.label}</div>
-      <div style={{ color: "#94a3b8", fontSize: 11, marginTop: 4 }}>{data.detail}</div>
-    </div>
-  );
-}
+const nodeTypes: NodeTypes = { device: DeviceNode, server: ServerNode, cloud: CloudNode, step: StepNode };
+const measured = { width: 190, height: 80 };
 
-function CloudNode({ data }: { data: { label: string; detail: string; icon: string } }) {
-  return (
-    <div style={{
-      background: "#0f172a", border: "2px solid #eab308", borderRadius: 12,
-      padding: "16px 20px", color: "#f8fafc", minWidth: 200, textAlign: "center",
-    }}>
-      <Handle type="source" position={Position.Right} style={{ background: "#eab308" }} />
-      <Handle type="target" position={Position.Left} style={{ background: "#eab308" }} />
-      <Handle type="source" position={Position.Bottom} id="bottom" style={{ background: "#eab308" }} />
-      <Handle type="target" position={Position.Top} id="top" style={{ background: "#eab308" }} />
-      <div style={{ fontSize: 28, marginBottom: 6 }}>{data.icon}</div>
-      <div style={{ fontWeight: 700, fontSize: 14 }}>{data.label}</div>
-      <div style={{ color: "#94a3b8", fontSize: 11, marginTop: 4 }}>{data.detail}</div>
-    </div>
-  );
-}
+// ── Diagrams ──────────────────────────────────────────────
 
-function LayerNode({ data }: { data: { label: string; detail: string; color: string } }) {
-  return (
-    <div style={{
-      background: "#1e293b", border: `2px solid ${data.color}`, borderRadius: 8,
-      padding: "12px 16px", color: "#f8fafc", minWidth: 160, textAlign: "center",
-    }}>
-      <Handle type="source" position={Position.Right} style={{ background: data.color }} />
-      <Handle type="target" position={Position.Left} style={{ background: data.color }} />
-      <Handle type="source" position={Position.Bottom} id="bottom" style={{ background: data.color }} />
-      <Handle type="target" position={Position.Top} id="top" style={{ background: data.color }} />
-      <div style={{ fontWeight: 600, fontSize: 13, color: data.color }}>{data.label}</div>
-      <div style={{ color: "#94a3b8", fontSize: 10, marginTop: 3 }}>{data.detail}</div>
-    </div>
-  );
-}
-
-const nodeTypes: NodeTypes = {
-  device: DeviceNode,
-  server: ServerNode,
-  cloud: CloudNode,
-  layer: LayerNode,
-};
-
-// ── Auto Layout with Dagre ──────────────────────────────────
-
-const NODE_WIDTH = 200;
-const NODE_HEIGHT = 80;
-
-interface LayoutOptions {
-  direction?: "TB" | "LR";
-  spacing?: number;
-}
-
-function layoutDiagram(
-  nodes: Node[],
-  edges: Edge[],
-  options: LayoutOptions = {},
-): { nodes: Node[]; edges: Edge[] } {
-  const { direction = "LR", spacing = 60 } = options;
-
-  const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: direction, nodesep: spacing, ranksep: spacing * 1.5 });
-
-  for (const node of nodes) {
-    g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
-    // Set measured dimensions so MiniMap can render nodes
-    (node as any).measured = { width: NODE_WIDTH, height: NODE_HEIGHT };
-  }
-  for (const edge of edges) {
-    g.setEdge(edge.source, edge.target);
-  }
-
-  Dagre.layout(g);
-
-  const laidOut = nodes.map((node) => {
-    const pos = g.node(node.id);
-    return {
-      ...node,
-      position: { x: pos.x - NODE_WIDTH / 2, y: pos.y - NODE_HEIGHT / 2 },
-    };
-  });
-
-  return { nodes: laidOut, edges };
-}
-
-// ── Diagram Definitions ──────────────────────────────────────
-
-type DiagramKey = "overview" | "connection" | "encryption" | "federation";
+type DiagramKey = "overview" | "discovery" | "connection" | "encryption" | "federation";
 
 interface DiagramDef {
   title: string;
   description: string;
+  detail: string;
   nodes: Node[];
   edges: Edge[];
-  layout?: LayoutOptions;
 }
 
-const p = { x: 0, y: 0 }; // placeholder — dagre computes actual positions
+const edge = (id: string, src: string, tgt: string, label: string, color: string, opts?: Partial<Edge>): Edge => ({
+  id, source: src, target: tgt, label, style: { stroke: color }, type: "smoothstep", ...opts,
+});
+const anim = (id: string, src: string, tgt: string, label: string, color: string, opts?: Partial<Edge>): Edge => ({
+  ...edge(id, src, tgt, label, color, opts), animated: true,
+});
+const dash = (id: string, src: string, tgt: string, label: string, color: string, opts?: Partial<Edge>): Edge => ({
+  ...edge(id, src, tgt, label, color, opts), style: { stroke: color, strokeDasharray: "6 3" },
+});
 
 const diagrams: Record<DiagramKey, DiagramDef> = {
+  // ─── 1. SYSTEM OVERVIEW ───────────────────────────────
   overview: {
     title: "System Overview",
-    description: "How the main components interact — clients connect via signaling servers and communicate peer-to-peer.",
-    layout: { direction: "LR", spacing: 80 },
+    description: "The high-level architecture showing all major components and how they interact.",
+    detail: "Clients (mobile & desktop) discover VPS signaling servers via the Bootstrap CF Worker, then connect over WebSocket. Once paired, peers communicate directly via WebRTC data channels. VPS servers federate with each other using the SWIM gossip protocol. Cloudflare Workers handle server registry, diagnostics collection, and the admin dashboard.",
     nodes: [
-      { id: "phone", type: "device", position: p, data: { label: "Mobile App", detail: "Android / iOS", icon: "\uD83D\uDCF1" } },
-      { id: "desktop", type: "device", position: p, data: { label: "Desktop App", detail: "Windows / macOS / Linux", icon: "\uD83D\uDDA5\uFE0F" } },
-      { id: "vps1", type: "server", position: p, data: { label: "VPS Signaling", detail: "WebSocket + TURN relay", icon: "\uD83D\uDCE1" } },
-      { id: "vps2", type: "server", position: p, data: { label: "VPS Signaling", detail: "Federated via SWIM gossip", icon: "\uD83D\uDCE1" } },
-      { id: "bootstrap", type: "cloud", position: p, data: { label: "Bootstrap (CF Worker)", detail: "Server discovery + attestation", icon: "\u2601\uFE0F" } },
-      { id: "diagnostics", type: "cloud", position: p, data: { label: "Diagnostics (CF Worker)", detail: "Heartbeats + error reports", icon: "\uD83D\uDCCA" } },
-      { id: "admin", type: "cloud", position: p, data: { label: "Admin Dashboard", detail: "Monitoring + alerts", icon: "\uD83D\uDEE1\uFE0F" } },
-      { id: "peer", type: "device", position: p, data: { label: "Remote Peer", detail: "Any platform", icon: "\uD83D\uDC64" } },
+      // Left column: clients
+      { id: "mobile", type: "device", position: { x: 0, y: 0 }, measured, data: { label: "Mobile App", detail: "Android / iOS", icon: "\uD83D\uDCF1" } },
+      { id: "desktop", type: "device", position: { x: 0, y: 220 }, measured, data: { label: "Desktop App", detail: "Win / macOS / Linux", icon: "\uD83D\uDDA5\uFE0F" } },
+      // Center: signaling
+      { id: "vps1", type: "server", position: { x: 280, y: 0 }, measured, data: { label: "VPS Server 1", detail: "Signaling + TURN relay", icon: "\uD83D\uDCE1" } },
+      { id: "vps2", type: "server", position: { x: 280, y: 220 }, measured, data: { label: "VPS Server 2", detail: "Signaling + TURN relay", icon: "\uD83D\uDCE1" } },
+      // Right column: cloud services
+      { id: "bootstrap", type: "cloud", position: { x: 570, y: -60 }, measured, data: { label: "Bootstrap Registry", detail: "CF Worker \u2022 server discovery", icon: "\u2601\uFE0F" } },
+      { id: "diag", type: "cloud", position: { x: 570, y: 110 }, measured, data: { label: "Diagnostics", detail: "CF Worker \u2022 heartbeats + errors", icon: "\uD83D\uDCCA" } },
+      { id: "admin", type: "cloud", position: { x: 570, y: 280 }, measured, data: { label: "Admin Dashboard", detail: "CF Worker \u2022 monitoring", icon: "\uD83D\uDEE1\uFE0F" } },
+      // Bottom: P2P
+      { id: "peer", type: "device", position: { x: 140, y: 420 }, measured, data: { label: "Remote Peer", detail: "Direct P2P connection", icon: "\uD83D\uDD12" } },
     ],
     edges: [
-      { id: "e1", source: "phone", target: "vps1", label: "WSS", style: { stroke: "#6366f1" }, animated: true },
-      { id: "e2", source: "desktop", target: "vps2", label: "WSS", style: { stroke: "#6366f1" }, animated: true },
-      { id: "e3", source: "vps1", target: "vps2", label: "SWIM gossip", style: { stroke: "#22c55e", strokeDasharray: "5 5" } },
-      { id: "e4", source: "vps1", target: "bootstrap", label: "Register", style: { stroke: "#eab308" } },
-      { id: "e5", source: "vps2", target: "bootstrap", label: "Register", style: { stroke: "#eab308" } },
-      { id: "e6", source: "vps1", target: "diagnostics", style: { stroke: "#94a3b8", strokeDasharray: "3 3" } },
-      { id: "e7", source: "diagnostics", target: "admin", style: { stroke: "#94a3b8", strokeDasharray: "3 3" } },
-      { id: "e8", source: "phone", target: "peer", label: "WebRTC P2P", style: { stroke: "#ef4444", strokeWidth: 2 }, animated: true },
-      { id: "e9", source: "desktop", target: "peer", label: "WebRTC P2P", style: { stroke: "#ef4444", strokeWidth: 2 }, animated: true },
+      anim("e1", "mobile", "vps1", "WSS", "#6366f1"),
+      anim("e2", "desktop", "vps2", "WSS", "#6366f1"),
+      anim("e3", "mobile", "bootstrap", "GET /servers", "#eab308"),
+      dash("e4", "vps1", "vps2", "SWIM gossip", "#22c55e"),
+      edge("e5", "vps1", "bootstrap", "heartbeat", "#eab308"),
+      edge("e6", "vps2", "bootstrap", "heartbeat", "#eab308"),
+      dash("e7", "vps1", "diag", "metrics", "#94a3b8"),
+      dash("e8", "diag", "admin", "D1 + R2", "#94a3b8"),
+      anim("e9", "mobile", "peer", "WebRTC P2P", "#ef4444", { style: { stroke: "#ef4444", strokeWidth: 3 }, sourceHandle: "b", targetHandle: "t" }),
+      anim("e10", "desktop", "peer", "WebRTC P2P", "#ef4444", { style: { stroke: "#ef4444", strokeWidth: 3 }, sourceHandle: "b", targetHandle: "t" }),
     ],
   },
 
+  // ─── 2. BOOTSTRAP DISCOVERY ───────────────────────────
+  discovery: {
+    title: "Server Discovery",
+    description: "How clients find and connect to signaling servers via the bootstrap registry.",
+    detail: "On first launch, the app queries the Bootstrap CF Worker (GET /servers) which returns a list of healthy VPS servers with their WebSocket endpoints and regions. The app selects the best server (preferring the user's region) and connects via WSS. VPS servers register themselves with the bootstrap by sending periodic heartbeats containing their health metrics, connection count, and region.",
+    nodes: [
+      { id: "app", type: "device", position: { x: 0, y: 120 }, measured, data: { label: "Zajel App", detail: "First launch", icon: "\uD83D\uDCF1" } },
+      { id: "bs", type: "cloud", position: { x: 260, y: 0 }, measured, data: { label: "Bootstrap Registry", detail: "CF Worker + Durable Object", icon: "\u2601\uFE0F" } },
+      { id: "s1", type: "server", position: { x: 530, y: -40 }, measured, data: { label: "VPS Frankfurt", detail: "eu-central \u2022 healthy", icon: "\uD83C\uDDE9\uD83C\uDDEA" } },
+      { id: "s2", type: "server", position: { x: 530, y: 120 }, measured, data: { label: "VPS Helsinki", detail: "eu-north \u2022 healthy", icon: "\uD83C\uDDEB\uD83C\uDDEE" } },
+      { id: "s3", type: "server", position: { x: 530, y: 280 }, measured, data: { label: "VPS New York", detail: "us-east \u2022 healthy", icon: "\uD83C\uDDFA\uD83C\uDDF8" } },
+      // Response
+      { id: "select", type: "step", position: { x: 0, y: 310 }, measured, data: { label: "Select Best Server", detail: "Prefer user's region", color: "#22c55e" } },
+      { id: "connect", type: "step", position: { x: 260, y: 310 }, measured, data: { label: "WSS Connect", detail: "WebSocket + TLS", color: "#3b82f6" } },
+      { id: "register", type: "step", position: { x: 530, y: 420 }, measured, data: { label: "Register", detail: "Get pairing code A7X2M9", color: "#6366f1" } },
+    ],
+    edges: [
+      anim("d1", "app", "bs", "GET /servers", "#eab308"),
+      edge("d2", "s1", "bs", "heartbeat", "#22c55e"),
+      edge("d3", "s2", "bs", "heartbeat", "#22c55e"),
+      edge("d4", "s3", "bs", "heartbeat", "#22c55e"),
+      anim("d5", "app", "select", "", "#22c55e", { sourceHandle: "b", targetHandle: "t" }),
+      anim("d6", "select", "connect", "best server", "#22c55e"),
+      anim("d7", "connect", "s2", "WSS", "#3b82f6"),
+      anim("d8", "connect", "register", "", "#6366f1", { sourceHandle: "b", targetHandle: "t" }),
+    ],
+  },
+
+  // ─── 3. CONNECTION LIFECYCLE ──────────────────────────
   connection: {
     title: "Connection Lifecycle",
-    description: "The step-by-step flow from pairing code to encrypted P2P connection.",
-    layout: { direction: "LR", spacing: 50 },
+    description: "Step-by-step flow from first launch to encrypted P2P communication.",
+    detail: "After discovering servers (see Server Discovery), the app registers and receives a 6-character pairing code. To connect, one peer enters the other's code. The server forwards the request; both sides approve. An X25519 key exchange derives a shared secret, then WebRTC establishes a direct data channel encrypted with ChaCha20-Poly1305. For returning peers, the rendezvous system uses blinded tokens to auto-reconnect without re-entering codes.",
     nodes: [
-      { id: "start", type: "layer", position: p, data: { label: "1. Bootstrap", detail: "Discover signaling servers", color: "#eab308" } },
-      { id: "connect", type: "layer", position: p, data: { label: "2. Connect", detail: "WebSocket to VPS", color: "#3b82f6" } },
-      { id: "register", type: "layer", position: p, data: { label: "3. Register", detail: "Get pairing code", color: "#22c55e" } },
-      { id: "pair", type: "layer", position: p, data: { label: "4. Pair Request", detail: "Enter peer's code", color: "#a855f7" } },
-      { id: "approve", type: "layer", position: p, data: { label: "5. Approve", detail: "Both sides accept", color: "#a855f7" } },
-      { id: "exchange", type: "layer", position: p, data: { label: "6. Key Exchange", detail: "X25519 ECDH", color: "#ef4444" } },
-      { id: "webrtc", type: "layer", position: p, data: { label: "7. WebRTC Setup", detail: "ICE + DTLS", color: "#f97316" } },
-      { id: "datachannel", type: "layer", position: p, data: { label: "8. Data Channel", detail: "messages + files", color: "#f97316" } },
-      { id: "encrypted", type: "layer", position: p, data: { label: "9. E2E Encrypted", detail: "ChaCha20-Poly1305", color: "#22c55e" } },
+      // Row 1
+      { id: "s1", type: "step", position: { x: 0, y: 0 }, measured, data: { label: "1. Discover Servers", detail: "Bootstrap GET /servers", color: "#eab308" } },
+      { id: "s2", type: "step", position: { x: 220, y: 0 }, measured, data: { label: "2. WSS Connect", detail: "Connect to best VPS", color: "#3b82f6" } },
+      { id: "s3", type: "step", position: { x: 440, y: 0 }, measured, data: { label: "3. Register", detail: "Receive pairing code", color: "#22c55e" } },
+      // Row 2
+      { id: "s4", type: "step", position: { x: 0, y: 140 }, measured, data: { label: "4. Pair Request", detail: "Enter peer's code", color: "#a855f7" } },
+      { id: "s5", type: "step", position: { x: 220, y: 140 }, measured, data: { label: "5. Both Approve", detail: "Mutual consent", color: "#a855f7" } },
+      { id: "s6", type: "step", position: { x: 440, y: 140 }, measured, data: { label: "6. Key Exchange", detail: "X25519 ECDH", color: "#ef4444" } },
+      // Row 3
+      { id: "s7", type: "step", position: { x: 0, y: 280 }, measured, data: { label: "7. ICE + DTLS", detail: "WebRTC negotiation", color: "#f97316" } },
+      { id: "s8", type: "step", position: { x: 220, y: 280 }, measured, data: { label: "8. Data Channels", detail: '"messages" + "files"', color: "#f97316" } },
+      { id: "s9", type: "step", position: { x: 440, y: 280 }, measured, data: { label: "9. E2E Encrypted", detail: "ChaCha20-Poly1305", color: "#22c55e" } },
+      // Rendezvous side
+      { id: "rv", type: "step", position: { x: 660, y: 140 }, measured, data: { label: "Rendezvous", detail: "Auto-reconnect trusted peers", color: "#06b6d4" } },
     ],
     edges: [
-      { id: "c1", source: "start", target: "connect", animated: true, style: { stroke: "#eab308" } },
-      { id: "c2", source: "connect", target: "register", animated: true, style: { stroke: "#3b82f6" } },
-      { id: "c3", source: "register", target: "pair", animated: true, style: { stroke: "#22c55e" } },
-      { id: "c4", source: "pair", target: "approve", animated: true, style: { stroke: "#a855f7" } },
-      { id: "c5", source: "approve", target: "exchange", animated: true, style: { stroke: "#a855f7" } },
-      { id: "c6", source: "exchange", target: "webrtc", animated: true, style: { stroke: "#ef4444" } },
-      { id: "c7", source: "webrtc", target: "datachannel", animated: true, style: { stroke: "#f97316" } },
-      { id: "c8", source: "datachannel", target: "encrypted", animated: true, style: { stroke: "#f97316" } },
+      anim("c1", "s1", "s2", "", "#eab308"),
+      anim("c2", "s2", "s3", "", "#3b82f6"),
+      anim("c3", "s3", "s4", "", "#22c55e", { sourceHandle: "b", targetHandle: "t" }),
+      anim("c4", "s4", "s5", "", "#a855f7"),
+      anim("c5", "s5", "s6", "", "#a855f7"),
+      anim("c6", "s6", "s7", "", "#ef4444", { sourceHandle: "b", targetHandle: "t" }),
+      anim("c7", "s7", "s8", "", "#f97316"),
+      anim("c8", "s8", "s9", "", "#f97316"),
+      dash("c9", "s6", "rv", "trusted peers", "#06b6d4"),
+      dash("c10", "rv", "s7", "skip 1-6", "#06b6d4", { sourceHandle: "b", targetHandle: "t" }),
     ],
   },
 
+  // ─── 4. ENCRYPTION ────────────────────────────────────
   encryption: {
-    title: "Encryption Layers",
-    description: "Multiple layers of encryption protect every message from device to device.",
-    layout: { direction: "TB", spacing: 60 },
+    title: "Encryption Stack",
+    description: "Three independent layers protect every message end-to-end.",
+    detail: "Layer 1 (Application): Each message is signed with the sender's Ed25519 key, then encrypted with ChaCha20-Poly1305 using a session key derived via X25519 ECDH + HKDF-SHA256. Ephemeral keys provide forward secrecy. Layer 2 (Transport P2P): WebRTC DTLS encrypts the data channel between peers. Layer 3 (Transport Signaling): WSS/TLS 1.3 protects signaling traffic. An attacker must break all three layers to read a message.",
     nodes: [
-      { id: "plaintext", type: "layer", position: p, data: { label: "Plaintext Message", detail: "User's message content", color: "#f8fafc" } },
-      { id: "sign", type: "layer", position: p, data: { label: "Ed25519 Sign", detail: "Authentication", color: "#a855f7" } },
-      { id: "encrypt", type: "layer", position: p, data: { label: "ChaCha20-Poly1305", detail: "AEAD encryption", color: "#ef4444" } },
-      { id: "session", type: "layer", position: p, data: { label: "Session Key", detail: "X25519 ECDH derived", color: "#3b82f6" } },
-      { id: "hkdf", type: "layer", position: p, data: { label: "HKDF-SHA256", detail: "Key derivation", color: "#3b82f6" } },
-      { id: "ephemeral", type: "layer", position: p, data: { label: "Ephemeral Keys", detail: "Fresh per session", color: "#22c55e" } },
-      { id: "webrtc_dtls", type: "layer", position: p, data: { label: "WebRTC DTLS", detail: "Transport encryption", color: "#f97316" } },
-      { id: "tls", type: "layer", position: p, data: { label: "WSS / TLS 1.3", detail: "Signaling transport", color: "#f97316" } },
+      // Application layer
+      { id: "msg", type: "step", position: { x: 0, y: 0 }, measured, data: { label: "Plaintext", detail: "Message content", color: "#f8fafc" } },
+      { id: "sign", type: "step", position: { x: 220, y: 0 }, measured, data: { label: "Ed25519 Sign", detail: "Sender authentication", color: "#a855f7" } },
+      { id: "enc", type: "step", position: { x: 440, y: 0 }, measured, data: { label: "ChaCha20-Poly1305", detail: "AEAD encryption", color: "#ef4444" } },
+      // Key derivation
+      { id: "eph", type: "step", position: { x: 0, y: 170 }, measured, data: { label: "Ephemeral X25519", detail: "Fresh key per session", color: "#3b82f6" } },
+      { id: "ecdh", type: "step", position: { x: 220, y: 170 }, measured, data: { label: "ECDH Shared Secret", detail: "Diffie-Hellman exchange", color: "#3b82f6" } },
+      { id: "hkdf", type: "step", position: { x: 440, y: 170 }, measured, data: { label: "HKDF-SHA256", detail: "Derive session key + nonce", color: "#3b82f6" } },
+      // Transport layers
+      { id: "dtls", type: "step", position: { x: 110, y: 330 }, measured, data: { label: "WebRTC DTLS", detail: "P2P transport encryption", color: "#f97316" } },
+      { id: "tls", type: "step", position: { x: 330, y: 330 }, measured, data: { label: "TLS 1.3 (WSS)", detail: "Signaling transport", color: "#f97316" } },
     ],
     edges: [
-      { id: "enc1", source: "plaintext", target: "sign", label: "sign", style: { stroke: "#a855f7" } },
-      { id: "enc2", source: "sign", target: "encrypt", label: "encrypt", style: { stroke: "#ef4444" } },
-      { id: "enc3", source: "session", target: "hkdf", style: { stroke: "#3b82f6" } },
-      { id: "enc4", source: "hkdf", target: "ephemeral", style: { stroke: "#3b82f6" } },
-      { id: "enc5", source: "hkdf", target: "encrypt", label: "key", style: { stroke: "#3b82f6", strokeDasharray: "5 5" } },
-      { id: "enc6", source: "encrypt", target: "webrtc_dtls", style: { stroke: "#f97316" } },
-      { id: "enc7", source: "encrypt", target: "tls", style: { stroke: "#f97316", strokeDasharray: "3 3" } },
+      anim("k1", "msg", "sign", "sign", "#a855f7"),
+      anim("k2", "sign", "enc", "encrypt", "#ef4444"),
+      edge("k3", "eph", "ecdh", "", "#3b82f6"),
+      edge("k4", "ecdh", "hkdf", "", "#3b82f6"),
+      dash("k5", "hkdf", "enc", "session key", "#3b82f6", { sourceHandle: "t", targetHandle: "b" }),
+      edge("k6", "enc", "dtls", "", "#f97316", { sourceHandle: "b", targetHandle: "t" }),
+      edge("k7", "enc", "tls", "", "#f97316", { sourceHandle: "b", targetHandle: "t" }),
     ],
   },
 
+  // ─── 5. FEDERATION ────────────────────────────────────
   federation: {
     title: "Server Federation",
-    description: "VPS servers discover each other via the bootstrap registry and form a federated mesh using the SWIM gossip protocol.",
-    layout: { direction: "TB", spacing: 70 },
+    description: "VPS servers form a federated mesh for cross-server pairing and routing.",
+    detail: "Each VPS registers with the Bootstrap Registry via heartbeats. Servers discover each other and form a SWIM gossip mesh for membership, failure detection, and metadata propagation. A consistent hash ring (DHT) determines which servers are responsible for which pairing codes (replication factor = 3). When a client registers, the server computes redirect targets from the hash ring so the code is reachable from multiple servers. Federation enables cross-server pairing without a central coordinator.",
     nodes: [
-      { id: "bs", type: "cloud", position: p, data: { label: "Bootstrap Registry", detail: "CF Worker + Durable Object", icon: "\u2601\uFE0F" } },
-      { id: "s1", type: "server", position: p, data: { label: "VPS Frankfurt", detail: "eu-central", icon: "\uD83C\uDDE9\uD83C\uDDEA" } },
-      { id: "s2", type: "server", position: p, data: { label: "VPS Helsinki", detail: "eu-north", icon: "\uD83C\uDDEB\uD83C\uDDEE" } },
-      { id: "s3", type: "server", position: p, data: { label: "VPS New York", detail: "us-east", icon: "\uD83C\uDDFA\uD83C\uDDF8" } },
-      { id: "ring", type: "layer", position: p, data: { label: "DHT Hash Ring", detail: "Pairing code routing", color: "#a855f7" } },
+      { id: "bs", type: "cloud", position: { x: 250, y: 0 }, measured, data: { label: "Bootstrap Registry", detail: "Server list + health", icon: "\u2601\uFE0F" } },
+      { id: "s1", type: "server", position: { x: 0, y: 180 }, measured, data: { label: "VPS Frankfurt", detail: "eu-central", icon: "\uD83C\uDDE9\uD83C\uDDEA" } },
+      { id: "s2", type: "server", position: { x: 260, y: 180 }, measured, data: { label: "VPS Helsinki", detail: "eu-north", icon: "\uD83C\uDDEB\uD83C\uDDEE" } },
+      { id: "s3", type: "server", position: { x: 520, y: 180 }, measured, data: { label: "VPS New York", detail: "us-east", icon: "\uD83C\uDDFA\uD83C\uDDF8" } },
+      { id: "ring", type: "step", position: { x: 130, y: 370 }, measured, data: { label: "DHT Hash Ring", detail: "Pairing code \u2192 responsible servers", color: "#a855f7" } },
+      { id: "redirect", type: "step", position: { x: 390, y: 370 }, measured, data: { label: "Redirect Targets", detail: "Register code on 3 servers", color: "#06b6d4" } },
     ],
     edges: [
-      { id: "f1", source: "s1", target: "bs", label: "heartbeat", style: { stroke: "#eab308" } },
-      { id: "f2", source: "s2", target: "bs", label: "heartbeat", style: { stroke: "#eab308" } },
-      { id: "f3", source: "s3", target: "bs", label: "heartbeat", style: { stroke: "#eab308" } },
-      { id: "f4", source: "s1", target: "s2", label: "SWIM", style: { stroke: "#22c55e" }, animated: true },
-      { id: "f5", source: "s2", target: "s3", label: "SWIM", style: { stroke: "#22c55e" }, animated: true },
-      { id: "f6", source: "s1", target: "s3", label: "SWIM", style: { stroke: "#22c55e", strokeDasharray: "5 5" }, animated: true },
-      { id: "f7", source: "s1", target: "ring", style: { stroke: "#a855f7", strokeDasharray: "3 3" } },
-      { id: "f8", source: "s2", target: "ring", style: { stroke: "#a855f7", strokeDasharray: "3 3" } },
-      { id: "f9", source: "s3", target: "ring", style: { stroke: "#a855f7", strokeDasharray: "3 3" } },
+      edge("f1", "s1", "bs", "heartbeat", "#eab308", { sourceHandle: "t" }),
+      edge("f2", "s2", "bs", "heartbeat", "#eab308", { sourceHandle: "t" }),
+      edge("f3", "s3", "bs", "heartbeat", "#eab308", { sourceHandle: "t" }),
+      anim("f4", "s1", "s2", "SWIM", "#22c55e"),
+      anim("f5", "s2", "s3", "SWIM", "#22c55e"),
+      dash("f6", "s1", "s3", "SWIM", "#22c55e"),
+      dash("f7", "s1", "ring", "", "#a855f7", { sourceHandle: "b", targetHandle: "t" }),
+      dash("f8", "s2", "ring", "", "#a855f7", { sourceHandle: "b" }),
+      dash("f9", "s3", "ring", "", "#a855f7", { sourceHandle: "b", targetHandle: "t" }),
+      anim("f10", "ring", "redirect", "", "#06b6d4"),
     ],
   },
 };
 
-// ── Main Component ──────────────────────────────────────────
+// Set measured dimensions on all nodes for MiniMap rendering
+for (const d of Object.values(diagrams)) {
+  for (const n of d.nodes) {
+    (n as any).measured = measured;
+  }
+}
+
+// ── Component ────────────────────────────────────────────
 
 export default function Architecture() {
   const [active, setActive] = useState<DiagramKey>("overview");
   const diagram = diagrams[active];
-
-  // Apply dagre auto-layout, memoized per active diagram
-  const { nodes, edges } = useMemo(
-    () => layoutDiagram(diagram.nodes, diagram.edges, diagram.layout),
-    [active],
-  );
 
   return (
     <>
@@ -320,25 +298,23 @@ export default function Architecture() {
       <style dangerouslySetInnerHTML={{ __html: darkFlowStyles }} />
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: "2rem" }}>
         <h1 style={{ fontSize: "2.5rem", marginBottom: "0.5rem" }}>Architecture</h1>
-        <p style={{ color: "#94a3b8", marginBottom: "2rem" }}>
-          Interactive diagrams of Zajel's system design. Click a diagram to explore.
+        <p style={{ color: "#94a3b8", marginBottom: "2rem", maxWidth: 700 }}>
+          Zajel is a peer-to-peer encrypted messaging system built on WebRTC, federated
+          signaling servers, and Cloudflare Workers. Explore the interactive diagrams below.
         </p>
 
-        {/* Diagram selector */}
+        {/* Tab bar */}
         <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.5rem", flexWrap: "wrap" }}>
           {(Object.keys(diagrams) as DiagramKey[]).map((key) => (
             <button
               key={key}
               onClick={() => setActive(key)}
               style={{
-                padding: "0.5rem 1.25rem",
-                borderRadius: 8,
+                padding: "0.5rem 1.25rem", borderRadius: 8,
                 border: active === key ? "2px solid #6366f1" : "1px solid #475569",
                 background: active === key ? "#6366f1" : "#1e293b",
-                color: "#f8fafc",
-                cursor: "pointer",
-                fontWeight: active === key ? 700 : 400,
-                fontSize: 14,
+                color: "#f8fafc", cursor: "pointer",
+                fontWeight: active === key ? 700 : 400, fontSize: 14,
               }}
             >
               {diagrams[key].title}
@@ -347,25 +323,20 @@ export default function Architecture() {
         </div>
 
         {/* Description */}
-        <p style={{ color: "#94a3b8", marginBottom: "1rem", fontSize: 14 }}>
+        <h2 style={{ fontSize: "1.4rem", marginBottom: "0.5rem" }}>{diagram.title}</h2>
+        <p style={{ color: "#94a3b8", marginBottom: "0.75rem", fontSize: 14, maxWidth: 800 }}>
           {diagram.description}
         </p>
 
-        {/* React Flow diagram */}
-        <div style={{
-          height: 550,
-          borderRadius: 12,
-          border: "1px solid #334155",
-          background: "#0f172a",
-          overflow: "hidden",
-        }}>
+        {/* Diagram */}
+        <div style={{ height: 550, borderRadius: 12, border: "1px solid #334155", background: "#0f172a", overflow: "hidden" }}>
           <ReactFlow
             key={active}
-            nodes={nodes}
-            edges={edges}
+            nodes={diagram.nodes}
+            edges={diagram.edges}
             nodeTypes={nodeTypes}
             fitView
-            fitViewOptions={{ padding: 0.3 }}
+            fitViewOptions={{ padding: 0.2 }}
             proOptions={{ hideAttribution: true }}
             style={{ background: "#0f172a" }}
             defaultEdgeOptions={{ type: "smoothstep" }}
@@ -378,7 +349,7 @@ export default function Architecture() {
                   case "device": return "#6366f1";
                   case "server": return "#22c55e";
                   case "cloud": return "#eab308";
-                  case "layer": return (node.data as { color?: string }).color || "#94a3b8";
+                  case "step": return (node.data as Record<string, string>).color || "#94a3b8";
                   default: return "#475569";
                 }
               }}
@@ -387,16 +358,19 @@ export default function Architecture() {
           </ReactFlow>
         </div>
 
+        {/* Detailed explanation */}
+        <div style={{ marginTop: "1.5rem", padding: "1.25rem", background: "#1e293b", borderRadius: 10, border: "1px solid #334155" }}>
+          <h3 style={{ fontSize: "1rem", marginBottom: "0.5rem", color: "#f8fafc" }}>How it works</h3>
+          <p style={{ color: "#94a3b8", fontSize: 14, lineHeight: 1.7 }}>{diagram.detail}</p>
+        </div>
+
         {/* Legend */}
-        <div style={{
-          display: "flex", gap: "2rem", marginTop: "1.5rem",
-          color: "#94a3b8", fontSize: 12, flexWrap: "wrap",
-        }}>
-          <span><span style={{ color: "#6366f1" }}>---</span> Client device</span>
-          <span><span style={{ color: "#22c55e" }}>---</span> VPS server</span>
-          <span><span style={{ color: "#eab308" }}>---</span> Cloudflare Worker</span>
-          <span><span style={{ color: "#ef4444" }}>---</span> P2P connection</span>
-          <span>Animated = live data flow</span>
+        <div style={{ display: "flex", gap: "1.5rem", marginTop: "1.25rem", color: "#94a3b8", fontSize: 12, flexWrap: "wrap" }}>
+          <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 3, background: "#6366f1", marginRight: 4, verticalAlign: "middle" }} /> Client</span>
+          <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 3, background: "#22c55e", marginRight: 4, verticalAlign: "middle" }} /> VPS Server</span>
+          <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 3, background: "#eab308", marginRight: 4, verticalAlign: "middle" }} /> CF Worker</span>
+          <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 3, background: "#ef4444", marginRight: 4, verticalAlign: "middle" }} /> P2P Link</span>
+          <span>Animated = live flow &nbsp; Dashed = background/async</span>
         </div>
       </div>
       <Footer />
