@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useMemo, useState } from "react";
 import type { MetaFunction } from "react-router";
 import {
   ReactFlow,
@@ -12,6 +12,7 @@ import {
   Position,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import Dagre from "@dagrejs/dagre";
 import { Nav } from "~/components/Nav";
 import { Footer } from "~/components/Footer";
 
@@ -138,6 +139,46 @@ const nodeTypes: NodeTypes = {
   layer: LayerNode,
 };
 
+// ── Auto Layout with Dagre ──────────────────────────────────
+
+const NODE_WIDTH = 200;
+const NODE_HEIGHT = 80;
+
+interface LayoutOptions {
+  direction?: "TB" | "LR";
+  spacing?: number;
+}
+
+function layoutDiagram(
+  nodes: Node[],
+  edges: Edge[],
+  options: LayoutOptions = {},
+): { nodes: Node[]; edges: Edge[] } {
+  const { direction = "LR", spacing = 60 } = options;
+
+  const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
+  g.setGraph({ rankdir: direction, nodesep: spacing, ranksep: spacing * 1.5 });
+
+  for (const node of nodes) {
+    g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+  }
+  for (const edge of edges) {
+    g.setEdge(edge.source, edge.target);
+  }
+
+  Dagre.layout(g);
+
+  const laidOut = nodes.map((node) => {
+    const pos = g.node(node.id);
+    return {
+      ...node,
+      position: { x: pos.x - NODE_WIDTH / 2, y: pos.y - NODE_HEIGHT / 2 },
+    };
+  });
+
+  return { nodes: laidOut, edges };
+}
+
 // ── Diagram Definitions ──────────────────────────────────────
 
 type DiagramKey = "overview" | "connection" | "encryption" | "federation";
@@ -147,21 +188,25 @@ interface DiagramDef {
   description: string;
   nodes: Node[];
   edges: Edge[];
+  layout?: LayoutOptions;
 }
+
+const p = { x: 0, y: 0 }; // placeholder — dagre computes actual positions
 
 const diagrams: Record<DiagramKey, DiagramDef> = {
   overview: {
     title: "System Overview",
     description: "How the main components interact — clients connect via signaling servers and communicate peer-to-peer.",
+    layout: { direction: "LR", spacing: 80 },
     nodes: [
-      { id: "phone", type: "device", position: { x: 50, y: 200 }, data: { label: "Mobile App", detail: "Android / iOS", icon: "\uD83D\uDCF1" } },
-      { id: "desktop", type: "device", position: { x: 50, y: 400 }, data: { label: "Desktop App", detail: "Windows / macOS / Linux", icon: "\uD83D\uDDA5\uFE0F" } },
-      { id: "vps1", type: "server", position: { x: 350, y: 150 }, data: { label: "VPS Signaling", detail: "WebSocket + TURN relay", icon: "\uD83D\uDCE1" } },
-      { id: "vps2", type: "server", position: { x: 350, y: 350 }, data: { label: "VPS Signaling", detail: "Federated via SWIM gossip", icon: "\uD83D\uDCE1" } },
-      { id: "bootstrap", type: "cloud", position: { x: 650, y: 100 }, data: { label: "Bootstrap (CF Worker)", detail: "Server discovery + attestation", icon: "\u2601\uFE0F" } },
-      { id: "diagnostics", type: "cloud", position: { x: 650, y: 270 }, data: { label: "Diagnostics (CF Worker)", detail: "Heartbeats + error reports", icon: "\uD83D\uDCCA" } },
-      { id: "admin", type: "cloud", position: { x: 650, y: 440 }, data: { label: "Admin Dashboard", detail: "Monitoring + alerts", icon: "\uD83D\uDEE1\uFE0F" } },
-      { id: "peer", type: "device", position: { x: 50, y: 600 }, data: { label: "Remote Peer", detail: "Any platform", icon: "\uD83D\uDC64" } },
+      { id: "phone", type: "device", position: p, data: { label: "Mobile App", detail: "Android / iOS", icon: "\uD83D\uDCF1" } },
+      { id: "desktop", type: "device", position: p, data: { label: "Desktop App", detail: "Windows / macOS / Linux", icon: "\uD83D\uDDA5\uFE0F" } },
+      { id: "vps1", type: "server", position: p, data: { label: "VPS Signaling", detail: "WebSocket + TURN relay", icon: "\uD83D\uDCE1" } },
+      { id: "vps2", type: "server", position: p, data: { label: "VPS Signaling", detail: "Federated via SWIM gossip", icon: "\uD83D\uDCE1" } },
+      { id: "bootstrap", type: "cloud", position: p, data: { label: "Bootstrap (CF Worker)", detail: "Server discovery + attestation", icon: "\u2601\uFE0F" } },
+      { id: "diagnostics", type: "cloud", position: p, data: { label: "Diagnostics (CF Worker)", detail: "Heartbeats + error reports", icon: "\uD83D\uDCCA" } },
+      { id: "admin", type: "cloud", position: p, data: { label: "Admin Dashboard", detail: "Monitoring + alerts", icon: "\uD83D\uDEE1\uFE0F" } },
+      { id: "peer", type: "device", position: p, data: { label: "Remote Peer", detail: "Any platform", icon: "\uD83D\uDC64" } },
     ],
     edges: [
       { id: "e1", source: "phone", target: "vps1", label: "WSS", style: { stroke: "#6366f1" }, animated: true },
@@ -179,24 +224,25 @@ const diagrams: Record<DiagramKey, DiagramDef> = {
   connection: {
     title: "Connection Lifecycle",
     description: "The step-by-step flow from pairing code to encrypted P2P connection.",
+    layout: { direction: "LR", spacing: 50 },
     nodes: [
-      { id: "start", type: "layer", position: { x: 50, y: 50 }, data: { label: "1. Bootstrap", detail: "Discover signaling servers", color: "#eab308" } },
-      { id: "connect", type: "layer", position: { x: 300, y: 50 }, data: { label: "2. Connect", detail: "WebSocket to VPS", color: "#3b82f6" } },
-      { id: "register", type: "layer", position: { x: 550, y: 50 }, data: { label: "3. Register", detail: "Get pairing code", color: "#22c55e" } },
-      { id: "pair", type: "layer", position: { x: 50, y: 200 }, data: { label: "4. Pair Request", detail: "Enter peer's code", color: "#a855f7" } },
-      { id: "approve", type: "layer", position: { x: 300, y: 200 }, data: { label: "5. Approve", detail: "Both sides accept", color: "#a855f7" } },
-      { id: "exchange", type: "layer", position: { x: 550, y: 200 }, data: { label: "6. Key Exchange", detail: "X25519 ECDH", color: "#ef4444" } },
-      { id: "webrtc", type: "layer", position: { x: 50, y: 350 }, data: { label: "7. WebRTC Setup", detail: "ICE + DTLS", color: "#f97316" } },
-      { id: "datachannel", type: "layer", position: { x: 300, y: 350 }, data: { label: "8. Data Channel", detail: "messages + files", color: "#f97316" } },
-      { id: "encrypted", type: "layer", position: { x: 550, y: 350 }, data: { label: "9. E2E Encrypted", detail: "ChaCha20-Poly1305", color: "#22c55e" } },
+      { id: "start", type: "layer", position: p, data: { label: "1. Bootstrap", detail: "Discover signaling servers", color: "#eab308" } },
+      { id: "connect", type: "layer", position: p, data: { label: "2. Connect", detail: "WebSocket to VPS", color: "#3b82f6" } },
+      { id: "register", type: "layer", position: p, data: { label: "3. Register", detail: "Get pairing code", color: "#22c55e" } },
+      { id: "pair", type: "layer", position: p, data: { label: "4. Pair Request", detail: "Enter peer's code", color: "#a855f7" } },
+      { id: "approve", type: "layer", position: p, data: { label: "5. Approve", detail: "Both sides accept", color: "#a855f7" } },
+      { id: "exchange", type: "layer", position: p, data: { label: "6. Key Exchange", detail: "X25519 ECDH", color: "#ef4444" } },
+      { id: "webrtc", type: "layer", position: p, data: { label: "7. WebRTC Setup", detail: "ICE + DTLS", color: "#f97316" } },
+      { id: "datachannel", type: "layer", position: p, data: { label: "8. Data Channel", detail: "messages + files", color: "#f97316" } },
+      { id: "encrypted", type: "layer", position: p, data: { label: "9. E2E Encrypted", detail: "ChaCha20-Poly1305", color: "#22c55e" } },
     ],
     edges: [
       { id: "c1", source: "start", target: "connect", animated: true, style: { stroke: "#eab308" } },
       { id: "c2", source: "connect", target: "register", animated: true, style: { stroke: "#3b82f6" } },
-      { id: "c3", source: "register", target: "pair", sourceHandle: "bottom", targetHandle: "top", animated: true, style: { stroke: "#22c55e" } },
+      { id: "c3", source: "register", target: "pair", animated: true, style: { stroke: "#22c55e" } },
       { id: "c4", source: "pair", target: "approve", animated: true, style: { stroke: "#a855f7" } },
       { id: "c5", source: "approve", target: "exchange", animated: true, style: { stroke: "#a855f7" } },
-      { id: "c6", source: "exchange", target: "webrtc", sourceHandle: "bottom", targetHandle: "top", animated: true, style: { stroke: "#ef4444" } },
+      { id: "c6", source: "exchange", target: "webrtc", animated: true, style: { stroke: "#ef4444" } },
       { id: "c7", source: "webrtc", target: "datachannel", animated: true, style: { stroke: "#f97316" } },
       { id: "c8", source: "datachannel", target: "encrypted", animated: true, style: { stroke: "#f97316" } },
     ],
@@ -205,47 +251,49 @@ const diagrams: Record<DiagramKey, DiagramDef> = {
   encryption: {
     title: "Encryption Layers",
     description: "Multiple layers of encryption protect every message from device to device.",
+    layout: { direction: "TB", spacing: 60 },
     nodes: [
-      { id: "plaintext", type: "layer", position: { x: 50, y: 100 }, data: { label: "Plaintext Message", detail: "User's message content", color: "#f8fafc" } },
-      { id: "sign", type: "layer", position: { x: 300, y: 100 }, data: { label: "Ed25519 Sign", detail: "Authentication", color: "#a855f7" } },
-      { id: "encrypt", type: "layer", position: { x: 550, y: 100 }, data: { label: "ChaCha20-Poly1305", detail: "AEAD encryption", color: "#ef4444" } },
-      { id: "session", type: "layer", position: { x: 50, y: 270 }, data: { label: "Session Key", detail: "X25519 ECDH derived", color: "#3b82f6" } },
-      { id: "hkdf", type: "layer", position: { x: 300, y: 270 }, data: { label: "HKDF-SHA256", detail: "Key derivation", color: "#3b82f6" } },
-      { id: "ephemeral", type: "layer", position: { x: 550, y: 270 }, data: { label: "Ephemeral Keys", detail: "Fresh per session", color: "#22c55e" } },
-      { id: "webrtc_dtls", type: "layer", position: { x: 175, y: 420 }, data: { label: "WebRTC DTLS", detail: "Transport encryption", color: "#f97316" } },
-      { id: "tls", type: "layer", position: { x: 425, y: 420 }, data: { label: "WSS / TLS 1.3", detail: "Signaling transport", color: "#f97316" } },
+      { id: "plaintext", type: "layer", position: p, data: { label: "Plaintext Message", detail: "User's message content", color: "#f8fafc" } },
+      { id: "sign", type: "layer", position: p, data: { label: "Ed25519 Sign", detail: "Authentication", color: "#a855f7" } },
+      { id: "encrypt", type: "layer", position: p, data: { label: "ChaCha20-Poly1305", detail: "AEAD encryption", color: "#ef4444" } },
+      { id: "session", type: "layer", position: p, data: { label: "Session Key", detail: "X25519 ECDH derived", color: "#3b82f6" } },
+      { id: "hkdf", type: "layer", position: p, data: { label: "HKDF-SHA256", detail: "Key derivation", color: "#3b82f6" } },
+      { id: "ephemeral", type: "layer", position: p, data: { label: "Ephemeral Keys", detail: "Fresh per session", color: "#22c55e" } },
+      { id: "webrtc_dtls", type: "layer", position: p, data: { label: "WebRTC DTLS", detail: "Transport encryption", color: "#f97316" } },
+      { id: "tls", type: "layer", position: p, data: { label: "WSS / TLS 1.3", detail: "Signaling transport", color: "#f97316" } },
     ],
     edges: [
       { id: "enc1", source: "plaintext", target: "sign", label: "sign", style: { stroke: "#a855f7" } },
       { id: "enc2", source: "sign", target: "encrypt", label: "encrypt", style: { stroke: "#ef4444" } },
       { id: "enc3", source: "session", target: "hkdf", style: { stroke: "#3b82f6" } },
       { id: "enc4", source: "hkdf", target: "ephemeral", style: { stroke: "#3b82f6" } },
-      { id: "enc5", source: "hkdf", target: "encrypt", targetHandle: "top", sourceHandle: "bottom", label: "key", style: { stroke: "#3b82f6", strokeDasharray: "5 5" } },
-      { id: "enc6", source: "encrypt", target: "webrtc_dtls", sourceHandle: "bottom", targetHandle: "top", style: { stroke: "#f97316" } },
-      { id: "enc7", source: "encrypt", target: "tls", sourceHandle: "bottom", targetHandle: "top", style: { stroke: "#f97316", strokeDasharray: "3 3" } },
+      { id: "enc5", source: "hkdf", target: "encrypt", label: "key", style: { stroke: "#3b82f6", strokeDasharray: "5 5" } },
+      { id: "enc6", source: "encrypt", target: "webrtc_dtls", style: { stroke: "#f97316" } },
+      { id: "enc7", source: "encrypt", target: "tls", style: { stroke: "#f97316", strokeDasharray: "3 3" } },
     ],
   },
 
   federation: {
     title: "Server Federation",
     description: "VPS servers discover each other via the bootstrap registry and form a federated mesh using the SWIM gossip protocol.",
+    layout: { direction: "TB", spacing: 70 },
     nodes: [
-      { id: "bs", type: "cloud", position: { x: 300, y: 50 }, data: { label: "Bootstrap Registry", detail: "CF Worker + Durable Object", icon: "\u2601\uFE0F" } },
-      { id: "s1", type: "server", position: { x: 50, y: 250 }, data: { label: "VPS Frankfurt", detail: "eu-central", icon: "\uD83C\uDDE9\uD83C\uDDEA" } },
-      { id: "s2", type: "server", position: { x: 350, y: 250 }, data: { label: "VPS Helsinki", detail: "eu-north", icon: "\uD83C\uDDEB\uD83C\uDDEE" } },
-      { id: "s3", type: "server", position: { x: 650, y: 250 }, data: { label: "VPS New York", detail: "us-east", icon: "\uD83C\uDDFA\uD83C\uDDF8" } },
-      { id: "ring", type: "layer", position: { x: 300, y: 430 }, data: { label: "DHT Hash Ring", detail: "Pairing code routing", color: "#a855f7" } },
+      { id: "bs", type: "cloud", position: p, data: { label: "Bootstrap Registry", detail: "CF Worker + Durable Object", icon: "\u2601\uFE0F" } },
+      { id: "s1", type: "server", position: p, data: { label: "VPS Frankfurt", detail: "eu-central", icon: "\uD83C\uDDE9\uD83C\uDDEA" } },
+      { id: "s2", type: "server", position: p, data: { label: "VPS Helsinki", detail: "eu-north", icon: "\uD83C\uDDEB\uD83C\uDDEE" } },
+      { id: "s3", type: "server", position: p, data: { label: "VPS New York", detail: "us-east", icon: "\uD83C\uDDFA\uD83C\uDDF8" } },
+      { id: "ring", type: "layer", position: p, data: { label: "DHT Hash Ring", detail: "Pairing code routing", color: "#a855f7" } },
     ],
     edges: [
-      { id: "f1", source: "s1", target: "bs", targetHandle: "top", label: "heartbeat", style: { stroke: "#eab308" } },
+      { id: "f1", source: "s1", target: "bs", label: "heartbeat", style: { stroke: "#eab308" } },
       { id: "f2", source: "s2", target: "bs", label: "heartbeat", style: { stroke: "#eab308" } },
-      { id: "f3", source: "s3", target: "bs", targetHandle: "top", label: "heartbeat", style: { stroke: "#eab308" } },
+      { id: "f3", source: "s3", target: "bs", label: "heartbeat", style: { stroke: "#eab308" } },
       { id: "f4", source: "s1", target: "s2", label: "SWIM", style: { stroke: "#22c55e" }, animated: true },
       { id: "f5", source: "s2", target: "s3", label: "SWIM", style: { stroke: "#22c55e" }, animated: true },
       { id: "f6", source: "s1", target: "s3", label: "SWIM", style: { stroke: "#22c55e", strokeDasharray: "5 5" }, animated: true },
-      { id: "f7", source: "s1", target: "ring", sourceHandle: "bottom", targetHandle: "top", style: { stroke: "#a855f7", strokeDasharray: "3 3" } },
-      { id: "f8", source: "s2", target: "ring", sourceHandle: "bottom", style: { stroke: "#a855f7", strokeDasharray: "3 3" } },
-      { id: "f9", source: "s3", target: "ring", sourceHandle: "bottom", targetHandle: "top", style: { stroke: "#a855f7", strokeDasharray: "3 3" } },
+      { id: "f7", source: "s1", target: "ring", style: { stroke: "#a855f7", strokeDasharray: "3 3" } },
+      { id: "f8", source: "s2", target: "ring", style: { stroke: "#a855f7", strokeDasharray: "3 3" } },
+      { id: "f9", source: "s3", target: "ring", style: { stroke: "#a855f7", strokeDasharray: "3 3" } },
     ],
   },
 };
@@ -255,6 +303,12 @@ const diagrams: Record<DiagramKey, DiagramDef> = {
 export default function Architecture() {
   const [active, setActive] = useState<DiagramKey>("overview");
   const diagram = diagrams[active];
+
+  // Apply dagre auto-layout, memoized per active diagram
+  const { nodes, edges } = useMemo(
+    () => layoutDiagram(diagram.nodes, diagram.edges, diagram.layout),
+    [active],
+  );
 
   return (
     <>
@@ -303,8 +357,8 @@ export default function Architecture() {
         }}>
           <ReactFlow
             key={active}
-            nodes={diagram.nodes}
-            edges={diagram.edges}
+            nodes={nodes}
+            edges={edges}
             nodeTypes={nodeTypes}
             fitView
             fitViewOptions={{ padding: 0.3 }}

@@ -12,6 +12,7 @@
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^3.0.0",
     "@react-router/node": "^7.12.0",
     "@react-router/serve": "^7.12.0",
     "@xyflow/react": "^12.10.2",
