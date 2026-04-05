@@ -16,7 +16,7 @@ class FakeGroupStorageService extends GroupStorageService {
   final Map<String, VectorClock> _vectorClocks = {};
   final Map<String, Map<String, String>> _senderKeys = {};
 
-  FakeGroupStorageService() : super(secureStorage: FakeSecureStorage());
+  FakeGroupStorageService() : super(secureStorage: FakeCachedSecureStorage());
 
   @override
   Future<void> initialize() async {}

@@ -25,6 +25,9 @@ class SignalingConnectResult {
 class AppInitializationService {
   static const _tag = 'AppInitializationService';
 
+  // --- Secure storage ---
+  final Future<void> Function() initializeSecureStorage;
+
   // --- Core service accessors (closures over ref.read) ---
   final Future<void> Function() initializeCrypto;
   final Future<void> Function() initializeMessageStorage;
@@ -59,6 +62,7 @@ class AppInitializationService {
   final Stream<SignalingConnectionState>? Function() getConnectionStateStream;
 
   AppInitializationService({
+    required this.initializeSecureStorage,
     required this.initializeCrypto,
     required this.initializeMessageStorage,
     required this.initializeChannelStorage,
@@ -88,6 +92,9 @@ class AppInitializationService {
   /// Returns true if initialization succeeded, false otherwise.
   Future<bool> initializeCore() async {
     try {
+      logger.info(_tag, 'Initializing secure storage...');
+      await initializeSecureStorage();
+
       logger.info(_tag, 'Initializing crypto service...');
       await initializeCrypto();
 
@@ -177,57 +184,80 @@ class AppInitializationService {
 
   /// Set up signaling auto-reconnect with exponential backoff.
   ///
+  /// Listens to the current signaling client's connection state stream.
+  /// On disconnect/failure, retries indefinitely with capped exponential
+  /// backoff. After a successful reconnect, re-subscribes to the NEW
+  /// client's stream so subsequent disconnects are also detected.
+  ///
   /// [isDisposed] callback checks whether the widget is disposed.
-  /// Returns the stream subscription (caller is responsible for cancelling).
-  StreamSubscription? setupSignalingReconnect({
+  /// Returns a function that cancels the reconnect listener.
+  void Function()? setupSignalingReconnect({
     required bool Function() isDisposed,
   }) {
-    final stream = getConnectionStateStream();
-    if (stream == null) return null;
+    // Check if there's a stream available at setup time.
+    // If not, there's no client to listen to.
+    final initialStream = getConnectionStateStream();
+    if (initialStream == null) return null;
 
+    StreamSubscription? currentSub;
     bool isReconnecting = false;
 
-    return stream.listen((state) async {
-      if (state == SignalingConnectionState.disconnected ||
-          state == SignalingConnectionState.failed) {
-        setSignalingConnected(false);
-        setDisplayStateDisconnected();
+    void listenToCurrentClient() {
+      currentSub?.cancel();
+      final stream = getConnectionStateStream();
+      if (stream == null) return;
 
-        if (isReconnecting || isDisposed()) return;
-        isReconnecting = true;
+      currentSub = stream.listen((state) async {
+        if (state == SignalingConnectionState.disconnected ||
+            state == SignalingConnectionState.failed) {
+          setSignalingConnected(false);
+          setDisplayStateDisconnected();
 
-        var delay = const Duration(seconds: 3);
-        const maxDelay = Duration(seconds: 60);
-        const maxRetries = 5;
+          if (isReconnecting || isDisposed()) return;
+          isReconnecting = true;
 
-        for (var attempt = 1; attempt <= maxRetries; attempt++) {
-          if (isDisposed()) break;
-          logger.info(_tag,
-              'Signaling reconnect attempt $attempt/$maxRetries in ${delay.inSeconds}s');
-          setDisplayStateConnecting();
+          var delay = const Duration(seconds: 3);
+          const maxDelay = Duration(seconds: 120);
+          var attempt = 0;
 
-          await Future<void>.delayed(delay);
-          if (isDisposed()) break;
+          while (!isDisposed()) {
+            attempt++;
+            logger.info(_tag,
+                'Signaling reconnect attempt $attempt in ${delay.inSeconds}s');
+            setDisplayStateConnecting();
 
-          try {
-            await connectSignaling();
-            logger.info(_tag, 'Signaling reconnected on attempt $attempt');
-            isReconnecting = false;
-            return;
-          } catch (e) {
-            logger.warning(_tag, 'Reconnect attempt $attempt failed: $e');
+            await Future<void>.delayed(delay);
+            if (isDisposed()) break;
+
+            try {
+              await connectSignaling();
+              logger.info(_tag, 'Signaling reconnected on attempt $attempt');
+              isReconnecting = false;
+              // Re-subscribe to the NEW client's stream so future
+              // disconnects are detected.
+              listenToCurrentClient();
+              return;
+            } catch (e) {
+              logger.warning(_tag, 'Reconnect attempt $attempt failed: $e');
+            }
+
+            delay = Duration(
+              seconds: (delay.inSeconds * 2).clamp(1, maxDelay.inSeconds),
+            );
           }
 
-          delay = Duration(
-            seconds: (delay.inSeconds * 2).clamp(0, maxDelay.inSeconds),
-          );
+          isReconnecting = false;
         }
+      });
+    }
 
-        logger.error(
-            _tag, 'Signaling reconnect failed after $maxRetries attempts');
-        setDisplayStateDisconnected();
-        isReconnecting = false;
-      }
-    });
+    listenToCurrentClient();
+
+    // Return a cancel function instead of StreamSubscription since the
+    // subscription is replaced on each successful reconnect.
+    return () {
+      currentSub?.cancel();
+      currentSub = null;
+    };
   }
 }

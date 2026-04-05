@@ -1848,3 +1848,76 @@ Key bindings:
 - `ADMIN_USERS` Durable Object for user management
 - `BOOTSTRAP_SERVICE` service binding to `zajel-signaling` (avoids CF-to-CF 530 errors)
 - `DIAGNOSTICS_DB` D1 binding pointing to the same `zajel-diagnostics` database that the diagnostics worker writes to
+
+---
+
+## Playwright E2E Tests
+
+The admin dashboard has a comprehensive Playwright E2E test suite at `packages/admin-cf/tests/e2e-playwright/` covering authentication, all 9 dashboard tabs, API smoke tests, and navigation.
+
+### Running Tests
+
+```bash
+cd packages/admin-cf
+
+# Run against local wrangler dev server
+npm run test:playwright
+
+# Run against QA environment
+npm run test:playwright:qa
+```
+
+### Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ADMIN_URL` | `http://localhost:8787` | Base URL for the admin dashboard |
+| `ADMIN_USER` | `playwright-admin` | Username for test authentication |
+| `ADMIN_PASS` | (hardcoded test password) | Password for test authentication |
+
+### Test Architecture
+
+The test suite uses a **global setup/teardown** pattern:
+
+1. **`global-setup.ts`** -- Authenticates once before all tests, caches the JWT token to a `.auth-token` file
+2. **`global-teardown.ts`** -- Cleans up the cached token file
+3. **`fixtures.ts`** -- Provides custom Playwright fixtures:
+   - `authedPage` -- A page with the JWT token pre-injected via `addInitScript()` (avoids hitting the login rate limiter)
+   - `authToken` -- The raw JWT string for direct API calls
+
+The `addInitScript()` approach sets `localStorage.zajel_admin_token` before any page JavaScript executes, preventing race conditions where the app's `useEffect` would fire before token injection.
+
+### Test Coverage
+
+| Spec File | Tests | Coverage |
+|-----------|-------|---------|
+| `auth.spec.ts` | 6 | Login form, invalid credentials, successful login, session persistence, logout, user badge |
+| `navigation.spec.ts` | 5 + 9 per-tab | All 9 tabs render, default tab, per-tab navigation with hash routing, hash restore on load, invalid hash fallback |
+| `servers-tab.spec.ts` | 2 | Server list rendering, server health indicators |
+| `users-tab.spec.ts` | 4 | User list, role badges, user management UI |
+| `errors-tab.spec.ts` | 4 | Error list, category filtering, severity classification, time range selection |
+| `metrics-tab.spec.ts` | 4 | Performance metrics, startup time, frame rate, memory usage display |
+| `active-clients-tab.spec.ts` | 3 | Active client counts, platform breakdown, version distribution |
+| `server-health-tab.spec.ts` | 4 | Server health overview, CPU/memory metrics, connection counts, log severity display |
+| `security-tab.spec.ts` | 5 | Security events, rate limit tracking, authentication logs, anomaly detection |
+| `ai-issues-tab.spec.ts` | 3 | AI-generated issues, issue detail view, GitHub integration status |
+| `notifications-tab.spec.ts` | 7 | Notification list, notification types, mark as read, notification settings, alert rules |
+| `api-smoke.spec.ts` | 5 | Health endpoint, auth verify, server list API, error summary API, metrics API |
+
+### Configuration
+
+```typescript
+// playwright.config.ts
+{
+  testDir: './tests/e2e-playwright',
+  fullyParallel: false,        // Sequential — avoids dashboard state conflicts
+  workers: 1,                  // Single worker — rate limiter safe
+  retries: process.env.CI ? 1 : 0,
+  timeout: 30_000,
+  globalSetup: './tests/e2e-playwright/global-setup.ts',
+  globalTeardown: './tests/e2e-playwright/global-teardown.ts',
+  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }]
+}
+```
+
+Tests run sequentially with a single worker to avoid dashboard state conflicts and rate limiter triggers. Chromium is the only browser target.

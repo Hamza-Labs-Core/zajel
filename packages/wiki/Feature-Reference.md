@@ -286,3 +286,15 @@ A comprehensive list of all features in the Zajel project, organized by package 
 - **Safe Rendering** -- Mermaid diagrams rendered with strict security level; wiki content sanitized against XSS injection
 - **Input Validation** -- Wiki slug parameters validated to prevent injection; GitHub API responses validated before use; download URLs domain-validated
 - **Error Boundaries** -- Wiki rendering wrapped in error boundaries to prevent crash-based information leaks
+
+---
+
+## Feature Flags (Planned)
+
+- **Compile-Time Feature Flags** -- `FeatureFlags` class using `bool.fromEnvironment()` with `const` values for tree-shaking; disabled features are eliminated from the binary at compile time
+- **GitHub Variables Integration** -- Feature flags (`FEATURE_CHANNELS`, `FEATURE_GROUPS`, `FEATURE_VOICE_CALLS`, `FEATURE_FILE_TRANSFER`, `FEATURE_DEVICE_LINK`, `FEATURE_AUTO_UPDATE`, `FEATURE_DIAGNOSTICS`) controlled via GitHub repository variables and injected via `--dart-define`
+- **Default Enabled** -- All features default to `true`; flags are used to selectively **disable** features rather than gate them behind opt-in
+- **Three-Layer Gating** -- UI gating (hide tabs/buttons), service gating (skip initialization), and protocol gating (do not register handlers) for each feature
+- **Per-Environment Control** -- GitHub supports environment-scoped variables, allowing different flag values for QA (all enabled) vs production (disable unstable features)
+
+See `docs/plans/11-feature-flags.md` for the full implementation plan.

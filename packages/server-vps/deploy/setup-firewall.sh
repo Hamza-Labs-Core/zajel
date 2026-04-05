@@ -18,7 +18,7 @@ sudo ufw default deny incoming
 sudo ufw default allow outgoing
 
 # Allow HTTP and HTTPS
-sudo ufw allow 80/tcp comment 'HTTP (redirect to HTTPS)'
+sudo ufw allow 80/tcp comment 'HTTP (certbot + redirect)'
 sudo ufw allow 443/tcp comment 'HTTPS/WSS'
 
 # Enable firewall
