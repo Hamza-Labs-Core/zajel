@@ -424,7 +424,6 @@ class SignalingClient:
             return False
         try:
             got_registered = asyncio.Event()
-            prev_handler = getattr(self, '_on_registered_callback', None)
             self._on_registered_callback = lambda: got_registered.set()
 
             await self._send(reg_msg, ws=ws)

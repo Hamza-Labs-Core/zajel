@@ -1,7 +1,7 @@
 """Tests for signaling client message parsing."""
 
 import asyncio
-import contextlib
+
 import json
 import time
 

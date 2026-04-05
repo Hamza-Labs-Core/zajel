@@ -44,8 +44,10 @@ const darkFlowStyles = `
   fill: rgba(15, 23, 42, 0.7) !important;
 }
 .react-flow__minimap-node {
-  fill: #475569 !important;
-  stroke: none !important;
+  fill: #6366f1 !important;
+  stroke: #94a3b8 !important;
+  stroke-width: 1 !important;
+  rx: 4 !important;
 }
 .react-flow__edge-text {
   fill: #94a3b8 !important;
@@ -368,7 +370,18 @@ export default function Architecture() {
           >
             <Background color="#1e293b" gap={20} />
             <Controls />
-            <MiniMap />
+            <MiniMap
+              nodeColor={(node) => {
+                switch (node.type) {
+                  case "device": return "#6366f1";
+                  case "server": return "#22c55e";
+                  case "cloud": return "#eab308";
+                  case "layer": return (node.data as { color?: string }).color || "#94a3b8";
+                  default: return "#475569";
+                }
+              }}
+              maskColor="rgba(15, 23, 42, 0.75)"
+            />
           </ReactFlow>
         </div>
 
