@@ -415,13 +415,20 @@ class SignalingClient:
     async def _try_register_on(
         self, ws: "Optional[ClientConnection]", reg_msg: dict, label: str
     ) -> bool:
-        """Send register on a single connection and wait for confirmation."""
+        """Send register on a single connection and wait for confirmation.
+
+        Uses a fresh asyncio.Event per attempt to avoid false positives
+        from a shared _registered event being set by a different connection.
+        """
         if ws is None:
             return False
         try:
-            self._registered.clear()
+            got_registered = asyncio.Event()
+            prev_handler = getattr(self, '_on_registered_callback', None)
+            self._on_registered_callback = lambda: got_registered.set()
+
             await self._send(reg_msg, ws=ws)
-            await asyncio.wait_for(self._registered.wait(), timeout=5)
+            await asyncio.wait_for(got_registered.wait(), timeout=5)
             logger.info("Re-registration confirmed on %s for %s", label, self.pairing_code)
             return True
         except asyncio.TimeoutError:
@@ -430,6 +437,8 @@ class SignalingClient:
         except Exception as e:
             logger.warning("Re-registration failed on %s: %s", label, e)
             return False
+        finally:
+            self._on_registered_callback = None
 
     # ── Pairing ──────────────────────────────────────────────
 
@@ -846,6 +855,9 @@ class SignalingClient:
             match msg_type:
                 case "registered":
                     self._registered.set()
+                    cb = getattr(self, '_on_registered_callback', None)
+                    if cb:
+                        cb()
                     # Handle redirects for cross-server pairing
                     redirects = msg.get("redirects", [])
                     if redirects and self._public_key_b64:
