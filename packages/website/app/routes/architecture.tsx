@@ -163,6 +163,8 @@ function layoutDiagram(
 
   for (const node of nodes) {
     g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+    // Set measured dimensions so MiniMap can render nodes
+    (node as any).measured = { width: NODE_WIDTH, height: NODE_HEIGHT };
   }
   for (const edge of edges) {
     g.setEdge(edge.source, edge.target);
