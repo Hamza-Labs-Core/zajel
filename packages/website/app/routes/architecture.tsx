@@ -15,6 +15,48 @@ import "@xyflow/react/dist/style.css";
 import { Nav } from "~/components/Nav";
 import { Footer } from "~/components/Footer";
 
+const darkFlowStyles = `
+.react-flow__controls {
+  background: #1e293b !important;
+  border: 1px solid #475569 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;
+}
+.react-flow__controls button {
+  background: #1e293b !important;
+  border-color: #475569 !important;
+  color: #f8fafc !important;
+  fill: #f8fafc !important;
+}
+.react-flow__controls button:hover {
+  background: #334155 !important;
+}
+.react-flow__controls button svg {
+  fill: #f8fafc !important;
+}
+.react-flow__minimap {
+  background: #0f172a !important;
+  border: 1px solid #475569 !important;
+  border-radius: 8px !important;
+}
+.react-flow__minimap-mask {
+  fill: rgba(15, 23, 42, 0.7) !important;
+}
+.react-flow__minimap-node {
+  fill: #475569 !important;
+  stroke: none !important;
+}
+.react-flow__edge-text {
+  fill: #94a3b8 !important;
+}
+.react-flow__edge-textbg {
+  fill: #0f172a !important;
+}
+.react-flow__panel {
+  margin: 8px !important;
+}
+`;
+
 export const meta: MetaFunction = () => [
   { title: "Architecture - Zajel" },
   { name: "description", content: "Zajel system architecture — signaling, P2P, encryption, federation" },
@@ -217,6 +259,7 @@ export default function Architecture() {
   return (
     <>
       <Nav />
+      <style dangerouslySetInnerHTML={{ __html: darkFlowStyles }} />
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: "2rem" }}>
         <h1 style={{ fontSize: "2.5rem", marginBottom: "0.5rem" }}>Architecture</h1>
         <p style={{ color: "#94a3b8", marginBottom: "2rem" }}>
@@ -270,14 +313,8 @@ export default function Architecture() {
             defaultEdgeOptions={{ type: "smoothstep" }}
           >
             <Background color="#1e293b" gap={20} />
-            <Controls
-              style={{ background: "#1e293b", borderColor: "#475569" }}
-            />
-            <MiniMap
-              style={{ background: "#0f172a" }}
-              nodeColor={() => "#334155"}
-              maskColor="rgba(15, 23, 42, 0.7)"
-            />
+            <Controls />
+            <MiniMap />
           </ReactFlow>
         </div>
 
