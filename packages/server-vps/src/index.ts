@@ -14,7 +14,7 @@ import type { IncomingMessage } from 'http';
 import { loadConfig, type ServerConfig } from './config.js';
 import { WEBSOCKET, CONNECTION_LIMITS } from './constants.js';
 import { loadOrGenerateIdentity, type ServerIdentity } from './identity/server-identity.js';
-import { SQLiteStorage } from './storage/sqlite.js';
+import { createStorage } from './storage/factory.js';
 import { FederationManager, type FederationConfig } from './federation/federation-manager.js';
 import { createBootstrapClient, type BootstrapClient } from './federation/bootstrap-client.js';
 import { RelayRegistry } from './registry/relay-registry.js';
@@ -59,9 +59,8 @@ export async function createZajelServer(
   console.log(`[Zajel] Region: ${config.network.region || 'unknown'}`);
 
   // Initialize storage
-  const storage = new SQLiteStorage(config.storage.path);
-  await storage.init();
-  console.log('[Zajel] Storage initialized');
+  const storage = await createStorage(config.storage);
+  console.log(`[Zajel] Storage initialized (${config.storage.type})`);
 
   // Load or generate server identity
   const identity = await loadOrGenerateIdentity(
@@ -583,7 +582,7 @@ export async function createZajelServer(
       httpServer.close(() => resolve());
     });
 
-    storage.close();
+    await storage.close();
 
     console.log('[Zajel] Shutdown complete');
   };

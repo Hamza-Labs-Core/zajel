@@ -29,7 +29,7 @@ export interface IPReputationEntry {
 export interface Storage {
   // Lifecycle
   init(): Promise<void>;
-  close(): void;
+  close(): Promise<void>;
 
   // Server identity
   saveIdentity(identity: ServerIdentity): Promise<void>;
