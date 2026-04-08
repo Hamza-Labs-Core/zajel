@@ -417,11 +417,24 @@ class SignalingClient:
     ) -> bool:
         """Send register on a single connection and wait for confirmation.
 
-        Uses a fresh asyncio.Event per attempt to avoid false positives
-        from a shared _registered event being set by a different connection.
+        First checks if the WebSocket is alive via ping. If the ping fails
+        or times out, returns False immediately so the caller can reconnect
+        instead of waiting the full registration timeout on a dead socket.
         """
         if ws is None:
             return False
+
+        # Check if the WebSocket is alive before sending register
+        try:
+            from websockets import State
+            if hasattr(ws, 'state') and ws.state != State.OPEN:
+                logger.warning("WebSocket not open on %s (state=%s)", label, ws.state)
+                return False
+            await asyncio.wait_for(ws.ping(), timeout=3)
+        except Exception:
+            logger.warning("WebSocket dead on %s (ping failed)", label)
+            return False
+
         try:
             got_registered = asyncio.Event()
             self._on_registered_callback = lambda: got_registered.set()

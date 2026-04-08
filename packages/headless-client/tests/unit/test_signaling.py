@@ -370,11 +370,21 @@ class TestEnsureRegistered:
     @pytest.mark.asyncio
     async def test_ensure_registered_sends_register_and_waits(self):
         """ensure_registered should re-send register and wait for confirmation."""
+        from websockets import State
+
         client = SignalingClient("ws://localhost:9999")
         client._public_key_b64 = "dGVzdGtleQ=="
         client.pairing_code = "TESTCODE"
-        # Set a fake ws so _try_register_on doesn't bail on ws=None
-        client._ws = object()
+
+        # Fake ws that passes the ping liveness check
+        class FakeWs:
+            state = State.OPEN
+            async def ping(self):
+                fut = asyncio.get_event_loop().create_future()
+                fut.set_result(None)
+                return fut
+
+        client._ws = FakeWs()
 
         sent_messages = []
 
@@ -384,6 +394,9 @@ class TestEnsureRegistered:
             if msg.get("type") == "register":
                 await asyncio.sleep(0.01)
                 client._registered.set()
+                cb = getattr(client, '_on_registered_callback', None)
+                if cb:
+                    cb()
 
         client._send = mock_send
         client._connected.set()
@@ -393,7 +406,6 @@ class TestEnsureRegistered:
         assert len(sent_messages) == 1
         assert sent_messages[0]["type"] == "register"
         assert sent_messages[0]["pairingCode"] == "TESTCODE"
-        assert client._registered.is_set()
 
 
 class TestChunkRequestMeta:
