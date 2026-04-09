@@ -1768,7 +1768,6 @@ jobs:
       needs.detect-changes.outputs.ci == 'true' ||
       github.event.inputs.force_build == 'true'
     runs-on: ubuntu-latest
-    environment: qa
     env:
       CRANL_API: https://app.cranl.com/api
       CRANL_PROJECT_ID: ae32b3a6-07e7-4c4d-9c33-6f7f62a3127e
