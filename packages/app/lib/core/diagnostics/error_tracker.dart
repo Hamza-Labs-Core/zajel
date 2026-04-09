@@ -183,7 +183,7 @@ class ErrorTracker {
     if (_buffer.isEmpty) return;
 
     String? oldestKey;
-    int oldestTime = 0x7FFFFFFFFFFFFFFF; // max int
+    int oldestTime = double.maxFinite.toInt();
 
     for (final entry in _buffer.entries) {
       if (entry.value.firstOccurrence < oldestTime) {

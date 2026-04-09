@@ -10,7 +10,7 @@
     {
       "binding": "DB",
       "database_name": "zajel-diagnostics",
-      "database_id": "placeholder-d1-id",
+      "database_id": "50053b5e-b18f-40c7-abab-4d2e58bc9f7d",
       "migrations_dir": "migrations"
     }
   ],
@@ -27,7 +27,7 @@
   "kv_namespaces": [
     {
       "binding": "RATE_LIMIT_KV",
-      "id": "placeholder-kv-id"
+      "id": "4771816fd0cc469383de67257280c516"
     }
   ],
 
@@ -49,6 +49,16 @@
     "local_protocol": "http"
   },
 
+  // Secrets (set via: wrangler secret put SERVER_METRICS_SECRET)
+  // SERVER_METRICS_SECRET must be the same value as ZAJEL_ADMIN_JWT_SECRET
+  // used by the VPS servers and the admin-cf worker. This is a shared secret
+  // for authenticating VPS server pushes (metrics, logs, security events).
+
+  // Custom domain
+  "routes": [
+    { "pattern": "diagnostics.zajel.hamzalabs.dev", "custom_domain": true }
+  ],
+
   // Production vars
   "vars": {
     "ENVIRONMENT": "production"
@@ -62,7 +72,7 @@
         {
           "binding": "DB",
           "database_name": "zajel-diagnostics-qa",
-          "database_id": "placeholder-d1-qa-id",
+          "database_id": "5093d39a-2f31-4e7f-981b-a39f9523bded",
           "migrations_dir": "migrations"
         }
       ],
@@ -75,7 +85,7 @@
       "kv_namespaces": [
         {
           "binding": "RATE_LIMIT_KV",
-          "id": "placeholder-kv-qa-id"
+          "id": "7da4b66fae594a0e9e5af8ef1e0d698d"
         }
       ],
       "ratelimits": [
@@ -87,6 +97,9 @@
             "period": 60
           }
         }
+      ],
+      "routes": [
+        { "pattern": "diagnostics.zajel.qa.hamzalabs.dev", "custom_domain": true }
       ],
       "vars": {
         "ENVIRONMENT": "qa"

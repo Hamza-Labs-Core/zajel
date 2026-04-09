@@ -6,6 +6,10 @@ on:
     branches: [main]
     types: [closed]
 
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
 jobs:
   create-release-tag:
     name: Create Release Tag
@@ -45,6 +49,33 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
+      - name: Sync pubspec.yaml version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          cd packages/app
+          sed -i "s/^version: .*/version: ${VERSION}+${{ github.run_number }}/" pubspec.yaml
+          sed -i "s/^  msix_version: .*/  msix_version: ${VERSION}.0/" pubspec.yaml
+          cd ../..
+
+          # Verify the sed replacements actually took effect
+          if ! grep -q "^version: ${VERSION}" packages/app/pubspec.yaml; then
+            echo "ERROR: Failed to update version in pubspec.yaml"
+            exit 1
+          fi
+
+          # Only commit if there are changes
+          if git diff --quiet packages/app/pubspec.yaml; then
+            echo "pubspec.yaml already up to date"
+          else
+            git add packages/app/pubspec.yaml
+            git commit -m "chore: bump version to v${VERSION}"
+            git push origin main
+          fi
+
       - name: Create and push production tag
         env:
           TAG: ${{ steps.version.outputs.tag }}
@@ -53,10 +84,8 @@ jobs:
           git push origin :refs/tags/$TAG 2>/dev/null || true
           git tag -d $TAG 2>/dev/null || true
 
-          # Create production tag on merge commit
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Create production tag on HEAD (which may include the version bump commit)
           git tag -a $TAG -m "Release $TAG — PR #${{ github.event.pull_request.number }}"
           git push origin $TAG
 
-          echo "✅ Pushed $TAG — release.yml will now trigger"
+          echo "Pushed $TAG — release.yml will now trigger"

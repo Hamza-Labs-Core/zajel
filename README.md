@@ -392,7 +392,7 @@ npm run deploy
 
 ## Links
 
-- **Website**: [zajel.app](https://zajel.app)
+- **Website**: [zajel.qa.hamzalabs.dev](https://zajel.qa.hamzalabs.dev)
 - **Company**: [hamzalabs.dev](https://hamzalabs.dev)
 - **Issues**: [GitHub Issues](https://github.com/Hamza-Labs-Core/zajel/issues)
 

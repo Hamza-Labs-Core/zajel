@@ -15,8 +15,8 @@ void main() {
     const sessionId = 'ratchet-peer';
 
     setUp(() async {
-      alice = CryptoService(secureStorage: FakeSecureStorage());
-      bob = CryptoService(secureStorage: FakeSecureStorage());
+      alice = CryptoService(secureStorage: FakeCachedSecureStorage());
+      bob = CryptoService(secureStorage: FakeCachedSecureStorage());
       await alice.initialize();
       await bob.initialize();
 
@@ -205,7 +205,7 @@ void main() {
 
     test('independent counters per peer', () async {
       // Set up second peer session
-      final charlie = CryptoService(secureStorage: FakeSecureStorage());
+      final charlie = CryptoService(secureStorage: FakeCachedSecureStorage());
       await charlie.initialize();
       final charliePub = await charlie.getPublicKeyBase64();
       await alice.establishSession('charlie', charliePub);

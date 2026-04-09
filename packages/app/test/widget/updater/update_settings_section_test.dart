@@ -92,7 +92,8 @@ void main() {
       expect(find.text('Check Now'), findsOneWidget);
     });
 
-    testWidgets('shows update available details', (tester) async {
+    testWidgets('shows update available details with Update Now button',
+        (tester) async {
       final result = UpdateCheckAvailable(
         currentVersion: '1.0.0',
         latestVersion: '1.2.0',
@@ -111,7 +112,8 @@ void main() {
       expect(find.textContaining('Released Mar 1, 2026'), findsOneWidget);
       expect(find.textContaining('Added feature X'), findsOneWidget);
       expect(find.byIcon(Icons.system_update), findsOneWidget);
-      expect(find.text('Check Now'), findsOneWidget);
+      // Button should say "Update Now" (not "Check Now") when update is available
+      expect(find.text('Update Now'), findsOneWidget);
     });
 
     testWidgets('shows error with retry button', (tester) async {

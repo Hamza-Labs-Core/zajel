@@ -122,6 +122,10 @@ class TrustedPeer {
   /// Whether the user has acknowledged/dismissed the key change warning.
   final bool keyChangeAcknowledged;
 
+  /// The peer's Ed25519 signing public key (base64 encoded).
+  /// Used for channel admin appointment and SDP signature verification.
+  final String? signingPublicKey;
+
   const TrustedPeer({
     required this.id,
     required this.displayName,
@@ -137,6 +141,7 @@ class TrustedPeer {
     this.previousPublicKey,
     this.keyRotatedAt,
     this.keyChangeAcknowledged = true,
+    this.signingPublicKey,
   });
 
   TrustedPeer copyWith({
@@ -158,6 +163,7 @@ class TrustedPeer {
     DateTime? keyRotatedAt,
     bool clearKeyRotatedAt = false,
     bool? keyChangeAcknowledged,
+    String? signingPublicKey,
   }) {
     return TrustedPeer(
       id: id ?? this.id,
@@ -178,6 +184,7 @@ class TrustedPeer {
           clearKeyRotatedAt ? null : (keyRotatedAt ?? this.keyRotatedAt),
       keyChangeAcknowledged:
           keyChangeAcknowledged ?? this.keyChangeAcknowledged,
+      signingPublicKey: signingPublicKey ?? this.signingPublicKey,
     );
   }
 
@@ -204,6 +211,7 @@ class TrustedPeer {
           ? DateTime.parse(json['keyRotatedAt'] as String)
           : null,
       keyChangeAcknowledged: json['keyChangeAcknowledged'] as bool? ?? true,
+      signingPublicKey: json['signingPublicKey'] as String?,
     );
   }
 
@@ -223,6 +231,7 @@ class TrustedPeer {
         'previousPublicKey': previousPublicKey,
         'keyRotatedAt': keyRotatedAt?.toIso8601String(),
         'keyChangeAcknowledged': keyChangeAcknowledged,
+        'signingPublicKey': signingPublicKey,
       };
 
   /// Create from a connected Peer.

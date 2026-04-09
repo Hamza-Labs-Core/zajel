@@ -23,7 +23,7 @@
 | [Desktop Auto-Updater](Desktop-Auto-Updater) | In-app update lifecycle, Go binary, rollback |
 | [Security Hardening: DDoS Risk Analysis](Security-Hardening-DDoS) | 24 security plans from the DDoS risk audit |
 | [Build and Deploy](Build-and-Deploy) | Build targets, CI/CD, deployment |
-| [Feature Reference](Feature-Reference) | Complete feature list |
+| [Feature Reference](Feature-Reference) | Complete feature list and feature flags |
 | [Code Index](Code-Index) | Feature-to-code mapping for developers |
 
 ---
