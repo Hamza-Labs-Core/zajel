@@ -363,6 +363,136 @@ class TestRedirectHandling:
             "pair_request is sent immediately after connect_to_redirect() returns."
         )
 
+    @pytest.mark.asyncio
+    async def test_concurrent_connect_to_redirect_is_idempotent(self):
+        """Concurrent connect_to_redirect() calls must not create duplicate
+        registrations on the same endpoint.
+
+        Race scenario reproduced in CI (PR #25):
+
+        1. bob.connect() sends register on main — server responds "registered"
+           with redirects=[endpoint_X].
+        2. The main's _receive_loop auto-fires connect_to_redirect(endpoint_X)
+           as a background task (Task A).
+        3. Test code ALSO calls register_on_server(endpoint_X) explicitly
+           (via conftest.py headless_bob fixture), which creates Task B for
+           connect_to_redirect(endpoint_X).
+        4. Both tasks pass the `if endpoint in self._redirect_connections`
+           check (neither has added it yet), open distinct WebSockets, and
+           send separate register messages.
+        5. Server registers the FIRST ws (Task A's), responds "registered"
+           on that ws. Server sees the SECOND register as a duplicate and
+           responds code_collision on Task B's ws.
+        6. Task A stores (wsA, taskA) in _redirect_connections[endpoint_X].
+        7. Task B OVERWRITES it with (wsB, taskB) — but wsB was NOT registered.
+        8. bob.pair_with() uses wsB (from _redirect_connections) → server
+           returns "Not registered. Send register message first."
+
+        The fix: serialize concurrent connect_to_redirect calls for the same
+        endpoint so only one WebSocket is ever opened per redirect target.
+        """
+        client = SignalingClient("wss://localhost:9999")
+        client._public_key_b64 = "dGVzdGtleQ=="
+
+        # Track how many WebSockets were opened
+        opened_ws: list["_FakeRedirectWs"] = []
+
+        class _FakeRedirectWs:
+            def __init__(self, endpoint: str):
+                self.endpoint = endpoint
+                self.closed = False
+                self._messages = asyncio.Queue()
+                # Every connection gets a "registered" reply (simulating a
+                # happy server that doesn't dedupe). In the real race, the
+                # second ws would get code_collision instead, but for this
+                # test we just verify that only ONE connection was opened.
+                self._messages.put_nowait(json.dumps({
+                    "type": "registered",
+                    "pairingCode": client.pairing_code,
+                    "serverId": "vps-test",
+                }))
+
+            async def send(self, data):
+                pass
+
+            async def recv(self):
+                await asyncio.sleep(0.01)
+                return await self._messages.get()
+
+            async def close(self):
+                self.closed = True
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                # Block forever — the receive loop should keep running until
+                # cancelled, not terminate on its own (which would pop the
+                # entry from _redirect_connections prematurely).
+                await asyncio.Event().wait()
+                raise StopAsyncIteration  # unreachable
+
+        connect_lock = asyncio.Lock()
+        connect_count = 0
+
+        async def fake_connect(endpoint, **kwargs):
+            nonlocal connect_count
+            # Simulate a slow websockets.connect() so that two concurrent
+            # tasks have a chance to race past the dedup guard.
+            async with connect_lock:
+                connect_count += 1
+                ws = _FakeRedirectWs(endpoint)
+                opened_ws.append(ws)
+            # Hold the fake network handshake so both tasks can enter
+            # connect_to_redirect() before either finishes.
+            await asyncio.sleep(0.05)
+            return ws
+
+        import sys
+        sig_module = sys.modules["zajel.signaling"]
+        original_connect = sig_module.websockets.connect
+        sig_module.websockets.connect = fake_connect
+
+        endpoint = "wss://65.21.54.26:8443"
+        try:
+            # Fire two concurrent calls — mimicking the auto-redirect
+            # (from _handle_message) and the explicit register_on_server().
+            results = await asyncio.gather(
+                client.connect_to_redirect(endpoint),
+                client.connect_to_redirect(endpoint),
+                return_exceptions=True,
+            )
+
+            # Exactly ONE WebSocket should have been opened for the endpoint.
+            # Without the fix, two are opened and the second overwrites the
+            # first in _redirect_connections.
+            assert connect_count == 1, (
+                f"Expected 1 WebSocket to be opened for {endpoint}, got "
+                f"{connect_count}. Concurrent connect_to_redirect() calls must "
+                "be deduplicated to avoid the 'Not registered' race."
+            )
+            # And only one ws should be tracked in _redirect_connections.
+            assert len(client._redirect_connections) == 1
+            stored_ws = client._redirect_connections[endpoint][0]
+            assert stored_ws is opened_ws[0], (
+                "The ws stored in _redirect_connections must be the same ws "
+                "that was registered. A second connect_to_redirect() call must "
+                "NOT replace the already-registered ws."
+            )
+            # No exceptions from either call.
+            for r in results:
+                if isinstance(r, Exception):
+                    raise r
+        finally:
+            sig_module.websockets.connect = original_connect
+            if endpoint in client._redirect_connections:
+                _, task = client._redirect_connections[endpoint]
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
 
 class TestEnsureRegistered:
     """Tests for the ensure_registered recovery mechanism."""
@@ -406,6 +536,66 @@ class TestEnsureRegistered:
         assert len(sent_messages) == 1
         assert sent_messages[0]["type"] == "register"
         assert sent_messages[0]["pairingCode"] == "TESTCODE"
+
+    @pytest.mark.asyncio
+    async def test_ensure_registered_treats_code_collision_as_success(self):
+        """_try_register_on must treat code_collision as success.
+
+        Regression: when ensure_registered() is called as a recovery step
+        after a "Not registered" pair error, it calls _try_register_on on
+        the already-registered main ws. The server sees the same pairing
+        code in its map and responds with code_collision (not registered).
+        Without handling code_collision, _try_register_on waits the full
+        5-second timeout and then tears down a perfectly good WebSocket
+        via _reconnect_main, compounding the transient failure.
+        """
+        from websockets import State
+
+        client = SignalingClient("ws://localhost:9999")
+        client._public_key_b64 = "dGVzdGtleQ=="
+        client.pairing_code = "TESTCODE"
+
+        class FakeWs:
+            state = State.OPEN
+            async def ping(self):
+                fut = asyncio.get_event_loop().create_future()
+                fut.set_result(None)
+                return fut
+
+        client._ws = FakeWs()
+
+        sent_messages = []
+
+        async def mock_send(msg, ws=None):
+            sent_messages.append(msg)
+            # Simulate the server responding with code_collision (because
+            # our code is already registered on this very ws) instead of
+            # a fresh 'registered' event.
+            if msg.get("type") == "register":
+                await asyncio.sleep(0.01)
+                await client._handle_message({
+                    "type": "code_collision",
+                    "message": "Pairing code already in use.",
+                })
+
+        client._send = mock_send
+        client._connected.set()
+
+        import time
+        t0 = time.monotonic()
+        await client.ensure_registered()
+        elapsed = time.monotonic() - t0
+
+        # Must complete promptly (well under the 5s _try_register_on
+        # timeout) because code_collision was treated as success.
+        assert elapsed < 1.0, (
+            f"ensure_registered took {elapsed:.2f}s — expected <1s because "
+            "code_collision should be treated as success. If this assertion "
+            "fires, _try_register_on is still waiting the full registration "
+            "timeout on collision responses."
+        )
+        assert len(sent_messages) == 1
+        assert sent_messages[0]["type"] == "register"
 
 
 class TestChunkRequestMeta:
