@@ -83,8 +83,6 @@ class TestSettings:
     @pytest.mark.requires_signaling
     def test_connection_status_shown(self, alice, app_helper):
         """Settings shows connection status ('Connected' or 'Connecting...')."""
-        from selenium.webdriver.support.ui import WebDriverWait
-        from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.common.by import By
 
         helper = app_helper(alice)
@@ -94,15 +92,20 @@ class TestSettings:
         # navigate to the Connect screen first).
         helper.navigate_to_settings()
 
-        # The External Connections section is the 7th section — scroll down.
-        # Use a single compound XPath to search all status texts at once
-        # (avoids 5× timeout per scroll attempt).
+        # Scroll down the settings list looking for the External Connections
+        # section. Use small, slow swipes (30% of viewport) to avoid fling
+        # momentum overshooting the section. After each swipe, immediately
+        # check for the target — if we see "Debugging" without having seen
+        # External Connections, we've overshot and must scroll back up.
         screen_size = alice.get_window_size()
         center_x = int(screen_size['width'] * 0.5)
-        start_y = int(screen_size['height'] * 0.7)
-        end_y = int(screen_size['height'] * 0.3)
+        h = screen_size['height']
 
-        compound_xpath = (
+        def _find_one(xpath):
+            els = alice.find_elements(By.XPATH, xpath)
+            return els[0] if els else None
+
+        target_xpath = (
             "//*["
             "contains(@content-desc, 'External Connections') or "
             "contains(@content-desc, 'Connected') or "
@@ -110,19 +113,24 @@ class TestSettings:
             "contains(@content-desc, 'Pairing Code') or "
             "contains(@content-desc, 'Bootstrap Server')]"
         )
+        overshoot_xpath = "//*[contains(@content-desc, 'Debugging')]"
 
         found_status = False
-        for attempt in range(8):
-            try:
-                WebDriverWait(alice, 2).until(
-                    EC.presence_of_element_located((By.XPATH, compound_xpath))
-                )
+        # 15 attempts of small swipes (30% each) with immediate re-check
+        for _ in range(15):
+            if _find_one(target_xpath) is not None:
                 found_status = True
                 break
-            except (TimeoutException, NoSuchElementException):
-                pass  # element not visible yet — scroll and retry
-            alice.swipe(center_x, start_y, center_x, end_y, 800)
-            time.sleep(0.5)
+
+            # If we see "Debugging" (section below External Connections)
+            # without the target, we've scrolled past — scroll up instead.
+            if _find_one(overshoot_xpath) is not None:
+                # Scroll up (finger moves down — content moves up-to-down)
+                alice.swipe(center_x, int(h * 0.3), center_x, int(h * 0.6), 600)
+            else:
+                # Scroll down (finger moves up — content moves down-to-up)
+                alice.swipe(center_x, int(h * 0.6), center_x, int(h * 0.4), 600)
+            time.sleep(0.7)  # wait for scroll animation + settle
 
         assert found_status, \
             "Settings should show connection status section"
