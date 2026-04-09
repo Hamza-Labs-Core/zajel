@@ -360,10 +360,16 @@ def _type_in_field(helper, field_index, text, expected_count=None):
     in UiAutomator2. We locate them by index since multiple fields may
     be present (e.g. channel name + description).
 
-    Uses send_keys directly on the element (not click+mobile:type) to
-    avoid refocus churn on autofocused fields that can race and dismiss
-    the dialog. Retries once if the field list becomes empty (dialog
-    momentarily repainting after keyboard show).
+    Typing strategy depends on whether the field is already focused:
+    - Focused field (typically the autofocused first one): use send_keys.
+      Calling click() on a focused field causes refocus churn that can
+      rebuild and dismiss the dialog on slow CI emulators.
+    - Unfocused field: click to focus first, then use `mobile: type`
+      which sends keystrokes via the IME. Appium's send_keys on an
+      unfocused Flutter TextField calls Android EditText.setText()
+      directly — this bypasses Flutter's InputConnection and the
+      TextEditingController is NEVER updated, so the field appears
+      typed in the accessibility tree but the controller remains empty.
 
     NOTE: We do NOT dismiss the keyboard here. Flutter AlertDialog content
     is wrapped in SingleChildScrollView, so action buttons remain accessible
@@ -391,18 +397,23 @@ def _type_in_field(helper, field_index, text, expected_count=None):
         )
 
     field = fields[field_index]
-    # send_keys on the located element focuses it (via a tap) and sends the
-    # text in one operation. This is more reliable on autofocused fields than
-    # an explicit click() followed by `mobile: type`, which can dismiss the
-    # dialog on slow CI emulators.
+
+    # Only call click() if the field is NOT already focused. Focused fields
+    # (autofocused or previously tapped) get refocus churn from click(),
+    # which rebuilds the Flutter dialog on slow CI runners.
     try:
-        field.send_keys(text)
+        is_focused = field.get_attribute('focused') == 'true'
     except Exception:
-        # Fallback to the old click+type approach if send_keys fails (e.g.
-        # on some Appium/uiautomator2 versions).
+        is_focused = False
+
+    if not is_focused:
         field.click()
         time.sleep(0.5)
-        helper.driver.execute_script('mobile: type', {'text': text})
+
+    # Use mobile: type to send keystrokes via the IME, which goes through
+    # Flutter's InputConnection and properly updates the TextEditingController.
+    # send_keys / setValue calls setText directly which bypasses Flutter.
+    helper.driver.execute_script('mobile: type', {'text': text})
     time.sleep(0.8)
 
 
