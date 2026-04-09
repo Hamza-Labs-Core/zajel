@@ -1913,17 +1913,23 @@ jobs:
               print(app['id']); sys.exit(0)
           print('')")
 
-          # If the app exists but is unlinked (created via OpenAPI serverId
-          # path before we knew the API wants `region`), most endpoints
-          # return 400 "Application not linked to deployment backend".
-          # Non-destructive probe: GET /deployments on the app.
+          # Detect orphaned apps (created via OpenAPI serverId path before
+          # we knew the API wants `region`). Try several non-destructive
+          # endpoints that require backend linkage — any one returning
+          # "not linked to deployment backend" confirms the orphan.
           if [ -n "$APP_ID" ]; then
-            PROBE_CODE=$(curl -sS -o /tmp/probe.json -w "%{http_code}" \
-              "${{ env.CRANL_API }}/applications/$APP_ID/deployments" \
-              -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}")
-            PROBE_BODY=$(cat /tmp/probe.json 2>/dev/null || echo "")
-            if [ "$PROBE_CODE" != "200" ] || echo "$PROBE_BODY" | grep -q "not linked to deployment backend"; then
-              echo "⚠️ App $APP_ID is orphaned (probe: $PROBE_CODE / $PROBE_BODY). Deleting and recreating..."
+            IS_ORPHAN=false
+            for ENDPOINT in domains monitoring analytics; do
+              BODY=$(curl -sS "${{ env.CRANL_API }}/applications/$APP_ID/$ENDPOINT" \
+                -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" 2>&1 || true)
+              if echo "$BODY" | grep -q "not linked to deployment backend"; then
+                IS_ORPHAN=true
+                echo "Orphan confirmed via GET /$ENDPOINT: $BODY"
+                break
+              fi
+            done
+            if [ "$IS_ORPHAN" = "true" ]; then
+              echo "⚠️ App $APP_ID is orphaned. Deleting and recreating..."
               curl -sfS -X DELETE "${{ env.CRANL_API }}/applications/$APP_ID" \
                 -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}"
               APP_ID=""
