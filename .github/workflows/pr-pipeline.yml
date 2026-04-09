@@ -1758,6 +1758,285 @@ jobs:
             rm -f /tmp/zajel-deploy.lock
 
   # ============================================
+  # Deploy to Cranl (MENA signaling servers)
+  # ============================================
+  deploy-cranl:
+    name: Deploy Cranl MENA
+    needs: [tag-prerelease, detect-changes]
+    if: |
+      needs.detect-changes.outputs.server_vps == 'true' ||
+      needs.detect-changes.outputs.ci == 'true' ||
+      github.event.inputs.force_build == 'true'
+    runs-on: ubuntu-latest
+    environment: qa
+    env:
+      CRANL_API: https://app.cranl.com/api
+      CRANL_PROJECT_ID: ae32b3a6-07e7-4c4d-9c33-6f7f62a3127e
+      VERSION: ${{ needs.tag-prerelease.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - region: saudi-arabia-1
+            app_name: zajel-vps-sa
+            db_name: zajel-db-sa
+            label: Saudi Arabia
+          - region: egypt-1
+            app_name: zajel-vps-eg
+            db_name: zajel-db-eg
+            label: Egypt
+    steps:
+      - name: Check Cranl region availability
+        id: check-region
+        run: |
+          REGIONS=$(curl -sf "${{ env.CRANL_API }}/regions" \
+            -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" || echo "[]")
+
+          AVAILABLE=$(echo "$REGIONS" | python3 -c "
+          import sys, json
+          regions = json.load(sys.stdin)
+          for r in regions:
+            if r.get('id') == '${{ matrix.region }}' and r.get('available'):
+              print('true')
+              sys.exit(0)
+          print('false')
+          ")
+
+          echo "available=$AVAILABLE" >> $GITHUB_OUTPUT
+          if [ "$AVAILABLE" = "false" ]; then
+            echo "⚠️ Region ${{ matrix.label }} (${{ matrix.region }}) not available — skipping"
+          fi
+
+      - name: Ensure database exists
+        if: steps.check-region.outputs.available == 'true'
+        id: ensure-db
+        run: |
+          # List existing databases
+          DBS=$(curl -sf "${{ env.CRANL_API }}/databases" \
+            -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}")
+
+          DB_EXISTS=$(echo "$DBS" | python3 -c "
+          import sys, json
+          dbs = json.load(sys.stdin)
+          for db in dbs:
+            if db.get('name') == '${{ matrix.db_name }}':
+              print(db.get('id', ''))
+              sys.exit(0)
+          print('')
+          ")
+
+          if [ -n "$DB_EXISTS" ]; then
+            echo "✅ Database ${{ matrix.db_name }} exists (id: $DB_EXISTS)"
+            echo "db_id=$DB_EXISTS" >> $GITHUB_OUTPUT
+          else
+            echo "Creating database ${{ matrix.db_name }} in ${{ matrix.region }}..."
+            RESULT=$(curl -sf -X POST "${{ env.CRANL_API }}/databases" \
+              -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "name": "${{ matrix.db_name }}",
+                "projectId": "${{ env.CRANL_PROJECT_ID }}",
+                "type": "postgresql",
+                "region": "${{ matrix.region }}"
+              }')
+            DB_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
+            echo "✅ Database created: $DB_ID"
+            echo "db_id=$DB_ID" >> $GITHUB_OUTPUT
+
+            # Wait for database to be ready
+            echo "Waiting for database to start..."
+            for i in $(seq 1 12); do
+              sleep 10
+              INFO=$(curl -sf "${{ env.CRANL_API }}/databases/$DB_ID" \
+                -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" || echo '{}')
+              STATUS=$(echo "$INFO" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
+              if [ "$STATUS" = "running" ]; then
+                echo "Database is running"
+                break
+              fi
+              echo "  Status: $STATUS ($i/12)"
+            done
+          fi
+
+      - name: Ensure app exists
+        if: steps.check-region.outputs.available == 'true'
+        id: ensure-app
+        run: |
+          APPS=$(curl -sf "${{ env.CRANL_API }}/apps" \
+            -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}")
+
+          APP_ID=$(echo "$APPS" | python3 -c "
+          import sys, json
+          apps = json.load(sys.stdin)
+          for app in apps:
+            if app.get('name') == '${{ matrix.app_name }}':
+              print(app.get('id', ''))
+              sys.exit(0)
+          print('')
+          ")
+
+          if [ -n "$APP_ID" ]; then
+            echo "✅ App ${{ matrix.app_name }} exists (id: $APP_ID)"
+            echo "app_id=$APP_ID" >> $GITHUB_OUTPUT
+          else
+            echo "Creating app ${{ matrix.app_name }} in ${{ matrix.region }}..."
+
+            # Get repo ID
+            REPOS=$(curl -sf "${{ env.CRANL_API }}/github/repos?projectId=${{ env.CRANL_PROJECT_ID }}" \
+              -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}")
+            REPO_ID=$(echo "$REPOS" | python3 -c "
+            import sys, json
+            repos = json.load(sys.stdin)
+            for r in repos:
+              if 'zajel' in r.get('full_name', '').lower():
+                print(r.get('id', ''))
+                sys.exit(0)
+            print('')
+            ")
+
+            if [ -z "$REPO_ID" ]; then
+              echo "❌ Could not find zajel repo in Cranl GitHub connection"
+              exit 1
+            fi
+
+            RESULT=$(curl -sf -X POST "${{ env.CRANL_API }}/apps" \
+              -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"name\": \"${{ matrix.app_name }}\",
+                \"projectId\": \"${{ env.CRANL_PROJECT_ID }}\",
+                \"repositoryId\": \"$REPO_ID\",
+                \"region\": \"${{ matrix.region }}\",
+                \"branch\": \"${{ github.head_ref || github.ref_name }}\",
+                \"buildType\": \"dockerfile\",
+                \"port\": \"9000\"
+              }")
+            APP_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
+            echo "✅ App created: $APP_ID"
+            echo "app_id=$APP_ID" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set environment variables
+        if: steps.check-region.outputs.available == 'true' && steps.ensure-app.outputs.app_id != ''
+        run: |
+          APP_ID="${{ steps.ensure-app.outputs.app_id }}"
+
+          # Get database connection URL
+          DB_ID="${{ steps.ensure-db.outputs.db_id }}"
+          DB_INFO=$(curl -sf "${{ env.CRANL_API }}/databases/$DB_ID" \
+            -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" || echo '{}')
+          DATABASE_URL=$(echo "$DB_INFO" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('internalUrl') or d.get('connectionUrl') or '')")
+
+          curl -sf -X PATCH "${{ env.CRANL_API }}/apps/$APP_ID/env" \
+            -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"STORAGE_BACKEND\": \"postgres\",
+              \"DATABASE_URL\": \"$DATABASE_URL\",
+              \"ZAJEL_HOST\": \"0.0.0.0\",
+              \"ZAJEL_PORT\": \"9000\",
+              \"ZAJEL_REGION\": \"${{ matrix.region }}\",
+              \"ZAJEL_BOOTSTRAP_URL\": \"${{ vars.QA_BOOTSTRAP_URL }}\",
+              \"ZAJEL_REGISTRY_SECRET\": \"${{ secrets.SERVER_REGISTRY_SECRET }}\",
+              \"ZAJEL_ADMIN_JWT_SECRET\": \"${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}\",
+              \"ZAJEL_DIAGNOSTICS_URL\": \"https://diagnostics.zajel.qa.hamzalabs.dev\",
+              \"DIAGNOSTICS_PUSH_SECRET\": \"${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}\",
+              \"NODE_ENV\": \"qa\",
+              \"APP_VERSION\": \"${{ env.VERSION }}\"
+            }"
+          echo "✅ Environment variables set"
+
+      - name: Trigger deploy
+        if: steps.check-region.outputs.available == 'true' && steps.ensure-app.outputs.app_id != ''
+        id: deploy
+        run: |
+          APP_ID="${{ steps.ensure-app.outputs.app_id }}"
+
+          RESULT=$(curl -sf -X POST "${{ env.CRANL_API }}/apps/$APP_ID/deploy" \
+            -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" || echo '{}')
+          DEPLOY_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+          echo "deploy_id=$DEPLOY_ID" >> $GITHUB_OUTPUT
+          echo "Deployment triggered: $DEPLOY_ID"
+
+      - name: Wait for deployment
+        if: steps.check-region.outputs.available == 'true' && steps.ensure-app.outputs.app_id != ''
+        run: |
+          APP_ID="${{ steps.ensure-app.outputs.app_id }}"
+
+          echo "Waiting for deployment to complete (up to 5 min)..."
+          for i in $(seq 1 30); do
+            sleep 10
+            DEPLOYMENTS=$(curl -sf "${{ env.CRANL_API }}/apps/$APP_ID/deployments" \
+              -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" || echo '[]')
+            STATUS=$(echo "$DEPLOYMENTS" | python3 -c "
+            import sys, json
+            deps = json.load(sys.stdin)
+            if deps:
+              print(deps[0].get('status', 'unknown'))
+            else:
+              print('unknown')
+            ")
+
+            case "$STATUS" in
+              done|running)
+                echo "✅ Deployment complete: $STATUS"
+                break
+                ;;
+              error|failed)
+                echo "❌ Deployment failed"
+                # Get build logs
+                DEPLOY_ID=$(echo "$DEPLOYMENTS" | python3 -c "import sys,json; print(json.load(sys.stdin)[0].get('id',''))")
+                curl -sf "${{ env.CRANL_API }}/apps/$APP_ID/deployments/$DEPLOY_ID/logs" \
+                  -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" || true
+                exit 1
+                ;;
+              *)
+                echo "  Status: $STATUS ($i/30)"
+                ;;
+            esac
+          done
+
+      - name: Health check
+        if: steps.check-region.outputs.available == 'true' && steps.ensure-app.outputs.app_id != ''
+        run: |
+          APP_ID="${{ steps.ensure-app.outputs.app_id }}"
+
+          # Get app URL from domains
+          DOMAINS=$(curl -sf "${{ env.CRANL_API }}/apps/$APP_ID/domains" \
+            -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" || echo '[]')
+          APP_URL=$(echo "$DOMAINS" | python3 -c "
+          import sys, json
+          domains = json.load(sys.stdin)
+          for d in domains:
+            url = d.get('url') or d.get('domain') or ''
+            if url:
+              print(url if url.startswith('http') else 'https://' + url)
+              sys.exit(0)
+          print('')
+          ")
+
+          if [ -z "$APP_URL" ]; then
+            echo "⚠️ No domain found — skipping health check"
+            exit 0
+          fi
+
+          echo "Health checking $APP_URL..."
+          HEALTHY=false
+          for i in $(seq 1 6); do
+            if curl -sf "$APP_URL/health" | grep -q "healthy"; then
+              echo "✅ ${{ matrix.label }} server healthy at $APP_URL"
+              HEALTHY=true
+              break
+            fi
+            echo "  Waiting... ($i/6)"
+            sleep 5
+          done
+
+          if [ "$HEALTHY" = "false" ]; then
+            echo "⚠️ Health check failed for ${{ matrix.label }} — server may still be starting"
+          fi
+
+  # ============================================
   # PHASE 5: E2E Tests (Ubuntu with KVM-accelerated emulator)
   # ============================================
   e2e-tests:
