@@ -12,8 +12,11 @@ import {
   createGitHubIssue,
   updateExistingIssue,
   searchExistingIssues,
+  checkRateLimit,
+  rateLimitHit,
+  resetRateLimitFlag,
 } from '../../src/github-client.js';
-import type { Env, ErrorCluster, AiAnalysis } from '../../src/types.js';
+import type { Env, ErrorCluster, AiAnalysis, RelatedLogs, LogEntry } from '../../src/types.js';
 
 // ─────────────────────────────────────────────
 // Test Fixtures
@@ -136,6 +139,83 @@ describe('buildIssueBody', () => {
 
     expect(body).toContain('automatically created by the Zajel AI log analyzer');
   });
+
+  it('includes related server logs section when provided', () => {
+    const cluster = makeCluster();
+    const relatedLogs: RelatedLogs = {
+      serverLogs: [
+        { timestamp: Date.now() - 60000, severity: 'error', category: 'Federation', message: 'Connection lost to node xyz' },
+      ],
+      appLogs: [],
+    };
+    const body = buildIssueBody(cluster, null, '15 minutes', relatedLogs);
+
+    expect(body).toContain('Related Server Logs (1 entries)');
+    expect(body).toContain('Connection lost to node xyz');
+    expect(body).toContain('| Time | Severity | Category | Message |');
+  });
+
+  it('includes related app logs section when provided', () => {
+    const cluster = makeCluster();
+    const relatedLogs: RelatedLogs = {
+      serverLogs: [],
+      appLogs: [
+        { timestamp: Date.now() - 30000, severity: 'warn', category: 'WebRTC', message: 'ICE candidate timeout' },
+      ],
+    };
+    const body = buildIssueBody(cluster, null, '15 minutes', relatedLogs);
+
+    expect(body).toContain('Related App Logs (1 entries)');
+    expect(body).toContain('ICE candidate timeout');
+  });
+
+  it('includes full stack traces section when provided', () => {
+    const cluster = makeCluster();
+    const traces = ['Error at line 42\n  at main()', 'NullPointerException\n  at widget.build()'];
+    const body = buildIssueBody(cluster, null, '15 minutes', undefined, traces);
+
+    expect(body).toContain('Full Stack Traces (2 reports)');
+    expect(body).toContain('### Report 1');
+    expect(body).toContain('Error at line 42');
+    expect(body).toContain('### Report 2');
+    expect(body).toContain('NullPointerException');
+  });
+
+  it('includes event timeline when related logs exist', () => {
+    const cluster = makeCluster();
+    const relatedLogs: RelatedLogs = {
+      serverLogs: [
+        { timestamp: cluster.firstSeen + 15000, severity: 'error', category: 'Federation', message: 'Federation sync failed for node abc' },
+      ],
+      appLogs: [],
+    };
+    const body = buildIssueBody(cluster, makeAnalysis(), '15 minutes', relatedLogs);
+
+    expect(body).toContain('## Event Timeline');
+    expect(body).toContain('Error first seen');
+    expect(body).toContain('Server log: "Federation sync failed for node abc"');
+    expect(body).toContain('Error last seen');
+  });
+
+  it('omits optional sections when no related data provided', () => {
+    const cluster = makeCluster();
+    const body = buildIssueBody(cluster, null, '15 minutes');
+
+    expect(body).not.toContain('Related Server Logs');
+    expect(body).not.toContain('Related App Logs');
+    expect(body).not.toContain('Full Stack Traces');
+    expect(body).not.toContain('## Event Timeline');
+  });
+
+  it('omits optional sections when empty arrays provided', () => {
+    const cluster = makeCluster();
+    const relatedLogs: RelatedLogs = { serverLogs: [], appLogs: [] };
+    const body = buildIssueBody(cluster, null, '15 minutes', relatedLogs, []);
+
+    expect(body).not.toContain('Related Server Logs');
+    expect(body).not.toContain('Related App Logs');
+    expect(body).not.toContain('Full Stack Traces');
+  });
 });
 
 // ─────────────────────────────────────────────
@@ -164,6 +244,37 @@ describe('buildLabels', () => {
     expect(labels).toContain('storage');
     expect(labels).not.toContain('medium');
   });
+
+  it('includes version label from cluster', () => {
+    const cluster = makeCluster({ versions: ['1.6.0', '1.5.0'] });
+    const labels = buildLabels(makeAnalysis(), 'network', cluster);
+
+    expect(labels).toContain('v1.6.0');
+  });
+
+  it('includes platform label from cluster', () => {
+    const cluster = makeCluster({ platforms: ['android', 'ios'] });
+    const labels = buildLabels(makeAnalysis(), 'network', cluster);
+
+    expect(labels).toContain('android');
+  });
+
+  it('includes environment label when provided', () => {
+    const labels = buildLabels(makeAnalysis(), 'network', undefined, 'production');
+
+    expect(labels).toContain('production');
+  });
+
+  it('handles cluster with empty versions and platforms', () => {
+    const cluster = makeCluster({ versions: [], platforms: [] });
+    const labels = buildLabels(makeAnalysis(), 'network', cluster);
+
+    expect(labels).toContain('ai-detected');
+    expect(labels).toContain('high');
+    expect(labels).toContain('network');
+    // No version or platform labels
+    expect(labels).toHaveLength(3);
+  });
 });
 
 // ─────────────────────────────────────────────
@@ -183,6 +294,7 @@ describe('createGitHubIssue', () => {
           number: 42,
           html_url: 'https://github.com/owner/repo/issues/42',
         }),
+      headers: new Headers({ 'X-RateLimit-Remaining': '100', 'X-RateLimit-Reset': '1700000000' }),
     });
     globalThis.fetch = fetchMock;
 
@@ -199,13 +311,18 @@ describe('createGitHubIssue', () => {
     expect(url).toBe('https://api.github.com/repos/owner/repo/issues');
     expect(options.method).toBe('POST');
 
-    const headers = options.headers as Record<string, string>;
-    expect(headers['Authorization']).toBe('token ghp_test_token_123');
-    expect(headers['Accept']).toBe('application/vnd.github.v3+json');
+    const reqHeaders = options.headers as Record<string, string>;
+    expect(reqHeaders['Authorization']).toBe('token ghp_test_token_123');
+    expect(reqHeaders['Accept']).toBe('application/vnd.github.v3+json');
 
     const body = JSON.parse(options.body as string) as Record<string, unknown>;
     expect(body['title']).toBe('WebSocket connection fails with ETIMEDOUT');
-    expect(body['labels']).toEqual(['ai-detected', 'high', 'network']);
+    const labels = body['labels'] as string[];
+    expect(labels).toContain('ai-detected');
+    expect(labels).toContain('high');
+    expect(labels).toContain('network');
+    expect(labels).toContain('v1.3.0');
+    expect(labels).toContain('android');
     expect(body['body']).toContain('AI-Detected Issue');
   });
 
@@ -220,6 +337,7 @@ describe('createGitHubIssue', () => {
           number: 43,
           html_url: 'https://github.com/owner/repo/issues/43',
         }),
+      headers: new Headers({ 'X-RateLimit-Remaining': '100', 'X-RateLimit-Reset': '1700000000' }),
     });
     globalThis.fetch = fetchMock;
 
@@ -239,6 +357,7 @@ describe('createGitHubIssue', () => {
       ok: false,
       status: 422,
       text: () => Promise.resolve('Validation Failed'),
+      headers: new Headers({ 'X-RateLimit-Remaining': '100', 'X-RateLimit-Reset': '1700000000' }),
     });
 
     const result = await createGitHubIssue(env, cluster, makeAnalysis(), '15 minutes');
@@ -265,7 +384,10 @@ describe('updateExistingIssue', () => {
     const env = makeEnv();
     const cluster = makeCluster();
 
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'X-RateLimit-Remaining': '100', 'X-RateLimit-Reset': '1700000000' }),
+    });
     globalThis.fetch = fetchMock;
 
     await updateExistingIssue(env, 42, cluster, false);
@@ -285,7 +407,10 @@ describe('updateExistingIssue', () => {
     const env = makeEnv();
     const cluster = makeCluster();
 
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'X-RateLimit-Remaining': '100', 'X-RateLimit-Reset': '1700000000' }),
+    });
     globalThis.fetch = fetchMock;
 
     await updateExistingIssue(env, 42, cluster, true);
@@ -327,6 +452,7 @@ describe('searchExistingIssues', () => {
           total_count: 1,
           items: [{ number: 99, state: 'open' }],
         }),
+      headers: new Headers({ 'X-RateLimit-Remaining': '100', 'X-RateLimit-Reset': '1700000000' }),
     });
 
     const result = await searchExistingIssues(env, 'crypto:key_exchange_failed');
@@ -341,6 +467,7 @@ describe('searchExistingIssues', () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ total_count: 0, items: [] }),
+      headers: new Headers({ 'X-RateLimit-Remaining': '100', 'X-RateLimit-Reset': '1700000000' }),
     });
 
     const result = await searchExistingIssues(env, 'nonexistent:signature');
@@ -354,6 +481,7 @@ describe('searchExistingIssues', () => {
       ok: false,
       status: 403,
       statusText: 'Forbidden',
+      headers: new Headers({ 'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset': '1700000000' }),
     });
 
     const result = await searchExistingIssues(env, 'some:signature');
@@ -376,6 +504,7 @@ describe('searchExistingIssues', () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ total_count: 0, items: [] }),
+      headers: new Headers(),
     });
     globalThis.fetch = fetchMock;
 
@@ -386,5 +515,98 @@ describe('searchExistingIssues', () => {
     expect(url).toContain('myorg%2Fmyrepo');
     expect(url).toContain('test%3Asignature');
     expect(url).toContain('ai-detected');
+  });
+});
+
+// ─────────────────────────────────────────────
+// checkRateLimit tests
+// ─────────────────────────────────────────────
+
+describe('checkRateLimit', () => {
+  beforeEach(() => {
+    resetRateLimitFlag();
+  });
+
+  it('returns rate limit info from headers', () => {
+    const headers = new Headers({
+      'X-RateLimit-Remaining': '42',
+      'X-RateLimit-Reset': '1700000000',
+    });
+    const response = new Response('', { status: 200, headers });
+
+    const info = checkRateLimit(response);
+
+    expect(info.remaining).toBe(42);
+    expect(info.resetAt).toBe(1700000000);
+    expect(info.isLimited).toBe(false);
+  });
+
+  it('sets rateLimitHit when remaining < 5', () => {
+    resetRateLimitFlag();
+    expect(rateLimitHit).toBe(false);
+
+    const headers = new Headers({
+      'X-RateLimit-Remaining': '3',
+      'X-RateLimit-Reset': '1700000000',
+    });
+    const response = new Response('', { status: 200, headers });
+
+    const info = checkRateLimit(response);
+
+    expect(info.isLimited).toBe(true);
+    expect(rateLimitHit).toBe(true);
+  });
+
+  it('sets rateLimitHit on 403 response', () => {
+    resetRateLimitFlag();
+
+    const headers = new Headers({
+      'X-RateLimit-Remaining': '0',
+      'X-RateLimit-Reset': '1700000000',
+    });
+    const response = new Response('', { status: 403, headers });
+
+    checkRateLimit(response);
+
+    expect(rateLimitHit).toBe(true);
+  });
+
+  it('handles missing rate limit headers gracefully', () => {
+    const response = new Response('', { status: 200 });
+
+    const info = checkRateLimit(response);
+
+    expect(info.remaining).toBe(-1);
+    expect(info.resetAt).toBe(0);
+    expect(info.isLimited).toBe(false);
+  });
+
+  it('resetRateLimitFlag resets the flag', () => {
+    // Set flag via low remaining
+    const headers = new Headers({
+      'X-RateLimit-Remaining': '1',
+      'X-RateLimit-Reset': '1700000000',
+    });
+    const response = new Response('', { status: 200, headers });
+    checkRateLimit(response);
+    expect(rateLimitHit).toBe(true);
+
+    resetRateLimitFlag();
+    expect(rateLimitHit).toBe(false);
+  });
+
+  it('does not flag when remaining is exactly 5', () => {
+    resetRateLimitFlag();
+
+    const headers = new Headers({
+      'X-RateLimit-Remaining': '5',
+      'X-RateLimit-Reset': '1700000000',
+    });
+    const response = new Response('', { status: 200, headers });
+
+    const info = checkRateLimit(response);
+
+    expect(info.isLimited).toBe(false);
+    expect(rateLimitHit).toBe(false);
   });
 });

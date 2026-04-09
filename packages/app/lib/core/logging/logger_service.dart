@@ -26,6 +26,10 @@ class LoggerService {
 
   LoggerService._();
 
+  /// Constructor for testing subclasses.
+  @visibleForTesting
+  LoggerService.forTest();
+
   /// Minimum log level to record. Messages below this level are ignored.
   LogLevel minLevel = LogLevel.debug;
 

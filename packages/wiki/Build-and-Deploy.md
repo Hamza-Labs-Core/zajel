@@ -140,6 +140,16 @@ flutter run \
 | `SIGNALING_URL` | WebSocket URL for signaling server |
 | `BUILD_TOKEN` | Signed build token for attestation |
 | `E2E_TEST` | Enable auto-pairing behavior for E2E tests |
+| `VERSION` | App version string (e.g., `1.6.0`); sets `Environment.version` |
+| `FEATURE_CHANNELS` | Enable/disable channels (default `true`) |
+| `FEATURE_GROUPS` | Enable/disable groups (default `true`) |
+| `FEATURE_VOICE_CALLS` | Enable/disable VoIP (default `true`) |
+| `FEATURE_FILE_TRANSFER` | Enable/disable file sharing (default `true`) |
+| `FEATURE_DEVICE_LINK` | Enable/disable device linking (default `true`) |
+| `FEATURE_AUTO_UPDATE` | Enable/disable desktop auto-updater (default `true`) |
+| `FEATURE_DIAGNOSTICS` | Enable/disable diagnostics (default `true`) |
+
+Feature flags are compile-time constants. Setting any to `false` via `--dart-define` causes Dart's tree-shaking to eliminate the disabled feature's code from the binary. See [Feature Reference > Feature Flags](Feature-Reference#feature-flags-planned) for details.
 
 ---
 
@@ -433,7 +443,7 @@ The CI pipeline performs:
 4. **E2E tests**: Full app flow with headless client
 5. **Build updater**: Cross-compile Go binary for Windows/macOS x64/macOS arm64/Linux from a single ubuntu-latest runner
 6. **Build**: Release builds for all platforms (each bundles the updater binary)
-7. **Checksums**: Generate `checksums.txt` with SHA-256 hashes for all release artifacts
+7. **Checksums**: Generate `checksums.txt` with SHA-256 hashes for all release artifacts (both pre-release and production)
 8. **Attestation**: Upload reference binaries for attestation verification
 9. **Deploy**: Server to Cloudflare Workers, website to Cloudflare Pages
 

@@ -55,7 +55,7 @@ export class SQLiteStorage implements Storage {
     }
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.db.close();
   }
 

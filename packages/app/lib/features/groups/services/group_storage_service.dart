@@ -1,9 +1,9 @@
 import 'package:flutter/foundation.dart' show visibleForTesting;
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import '../../../core/storage/cached_secure_storage.dart';
 import '../models/group.dart';
 import '../models/group_message.dart';
 import '../models/vector_clock.dart';
@@ -11,7 +11,7 @@ import '../models/vector_clock.dart';
 /// SQLite-backed storage for groups, messages, vector clocks, and sender keys.
 ///
 /// Groups and messages are stored in SQLite. Sender keys are kept
-/// in [FlutterSecureStorage] to protect them if the database file
+/// in [CachedSecureStorage] to protect them if the database file
 /// is compromised.
 class GroupStorageService {
   static const _dbName = 'zajel_groups.db';
@@ -23,20 +23,17 @@ class GroupStorageService {
   static const _secureKeyPrefix = 'zajel_group_';
 
   Database? _db;
-  final FlutterSecureStorage _secureStorage;
+  final CachedSecureStorage _secureStorage;
 
-  GroupStorageService({FlutterSecureStorage? secureStorage})
-      : _secureStorage = secureStorage ??
-            const FlutterSecureStorage(
-              aOptions: AndroidOptions(encryptedSharedPreferences: true),
-            );
+  GroupStorageService({CachedSecureStorage? secureStorage})
+      : _secureStorage = secureStorage ?? CachedSecureStorage();
 
   /// Test-only constructor that accepts a pre-opened [Database], bypassing
   /// [initialize] (which requires path_provider platform channels).
   @visibleForTesting
   GroupStorageService.withDatabase({
     required Database database,
-    required FlutterSecureStorage secureStorage,
+    required CachedSecureStorage secureStorage,
   })  : _db = database,
         _secureStorage = secureStorage;
 

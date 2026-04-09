@@ -453,7 +453,8 @@ class HeadlessBob:
         The VPS signaling server can return "Not registered" or
         "Pair request could not be processed" if the server hasn't
         fully processed registration or is cleaning up stale state
-        from a previous test phase.
+        from a previous test phase.  On "Not registered", re-sends the
+        register message before retrying so the server recognises us.
         """
         last_err = None
         for attempt in range(1, retries + 1):
@@ -471,6 +472,14 @@ class HeadlessBob:
                     if attempt < retries:
                         import time
                         time.sleep(delay)
+                        # Re-register before retrying so the server
+                        # recognises our WebSocket on the next attempt.
+                        try:
+                            self._run(self._client.ensure_registered())
+                        except Exception as re_err:
+                            logging.warning(
+                                "Re-registration failed: %s", re_err,
+                            )
                         continue
                 raise
         raise last_err

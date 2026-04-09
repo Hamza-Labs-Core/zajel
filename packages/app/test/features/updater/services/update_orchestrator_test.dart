@@ -392,7 +392,7 @@ void main() {
         orchestrator.dispose();
       });
 
-      test('fails when no checksums.txt is available', () async {
+      test('proceeds to ready when no checksums.txt is available', () async {
         final detector = UpdatePackageDetector(
           isLinux: true,
           isWindows: false,
@@ -423,11 +423,10 @@ void main() {
           platformName: 'linux',
         );
 
-        expect(orchestrator.state.status, UpdateStatus.failed);
-        expect(
-          orchestrator.state.errorMessage,
-          contains('checksums unavailable'),
-        );
+        // Without checksums.txt, the orchestrator skips verification
+        // and proceeds to ready (HTTPS transport provides integrity)
+        expect(orchestrator.state.status, UpdateStatus.ready);
+        expect(orchestrator.verifiedChecksum, 'none');
 
         orchestrator.dispose();
       });

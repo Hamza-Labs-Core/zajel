@@ -20,6 +20,7 @@ class TestConnectionStates:
     """Test suite for connection state transitions and edge cases."""
 
     @pytest.mark.single_device
+    @pytest.mark.requires_signaling
     def test_online_after_launch(self, alice, app_helper):
         """Fresh launch → navigate to connect → 'Online' status on home screen."""
         helper = app_helper(alice)
@@ -84,20 +85,19 @@ class TestConnectionStates:
         time.sleep(5)
 
         # Alice should see the peer but not "Connected"
-        # Look for a "Cancel" or "Connect" button on the peer card
-        # (the peer will show as disconnected since Bob is offline)
+        # Either a "Cancel" button is shown (connection attempt in progress)
+        # or the peer already shows as disconnected (Bob is dead)
         try:
             alice._find("Cancel", timeout=10)
-            # If we see Cancel, tap it to cancel the connection attempt
             alice._find("Cancel", timeout=5, partial=False).click()
             time.sleep(3)
-            cancelled = True
         except Exception:
-            # Peer might already show as disconnected (no Cancel button)
-            # This is also acceptable — the connection wasn't attempted
-            cancelled = True
+            # No Cancel button — peer may already show as disconnected
+            pass
 
-        assert cancelled, "Should be able to cancel or see disconnected state"
+        # Either way, with Bob offline, Alice should not see peer as connected
+        assert not alice.is_peer_connected(), \
+            "With Bob offline, peer should not show as connected"
 
     @pytest.mark.slow
     def test_peer_disconnect_updates_status(self, device_pair, app_helper):
