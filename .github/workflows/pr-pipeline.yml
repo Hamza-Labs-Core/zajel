@@ -2066,9 +2066,11 @@ jobs:
             sleep 10
             DEPLOYMENTS=$(curl -sfS "${{ env.CRANL_API }}/applications/$APP_ID/deployments" \
               -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}")
+            # Response shape: {"deployments": [...]}
             STATUS=$(echo "$DEPLOYMENTS" | python3 -c "
           import sys,json
-          deps=json.load(sys.stdin)
+          d=json.load(sys.stdin)
+          deps=d.get('deployments', []) if isinstance(d, dict) else (d if isinstance(d, list) else [])
           print(deps[0]['status'] if deps else 'unknown')")
 
             case "$STATUS" in
@@ -2079,7 +2081,11 @@ jobs:
                 ;;
               error|failed)
                 echo "❌ Deployment failed"
-                DEPLOY_ID=$(echo "$DEPLOYMENTS" | python3 -c "import sys,json; print(json.load(sys.stdin)[0].get('id',''))")
+                DEPLOY_ID=$(echo "$DEPLOYMENTS" | python3 -c "
+          import sys,json
+          d=json.load(sys.stdin)
+          deps=d.get('deployments', []) if isinstance(d, dict) else (d if isinstance(d, list) else [])
+          print(deps[0].get('id','') if deps else '')")
                 if [ -n "$DEPLOY_ID" ]; then
                   echo "--- Build logs ---"
                   curl -sfS "${{ env.CRANL_API }}/applications/$APP_ID/deployments/$DEPLOY_ID/logs" \
@@ -2104,11 +2110,22 @@ jobs:
           APP_ID="${{ steps.ensure-app.outputs.app_id }}"
           DOMAINS=$(curl -sfS "${{ env.CRANL_API }}/applications/$APP_ID/domains" \
             -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}")
+          # Response shape: {"domains": [...], "defaultDomain": "..."}
           APP_URL=$(echo "$DOMAINS" | python3 -c "
           import sys,json
-          for d in json.load(sys.stdin):
-            u=d.get('url') or d.get('domain','')
-            if u: print(u if u.startswith('http') else 'https://'+u); sys.exit(0)
+          d = json.load(sys.stdin)
+          # Try defaultDomain first
+          if isinstance(d, dict):
+            dd = d.get('defaultDomain')
+            if dd:
+              print(dd if dd.startswith('http') else 'https://'+dd); sys.exit(0)
+            items = d.get('domains', [])
+          else:
+            items = d if isinstance(d, list) else []
+          for item in items:
+            u = item.get('url') or item.get('domain','')
+            if u:
+              print(u if u.startswith('http') else 'https://'+u); sys.exit(0)
           print('')")
 
           if [ -z "$APP_URL" ]; then
