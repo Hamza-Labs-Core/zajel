@@ -1818,49 +1818,6 @@ jobs:
               print(db['id']); sys.exit(0)
           print('')")
 
-          # If the database exists but NO app by matching name has a
-          # DATABASE_URL env var set (i.e. we can't recover the URL),
-          # delete the orphan DB so it gets recreated fresh below.
-          if [ -n "$DB_ID" ]; then
-            APPS_LIST=$(curl -sfS "${{ env.CRANL_API }}/applications" \
-              -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}")
-            MATCH_APP_ID=$(echo "$APPS_LIST" | python3 -c "
-          import sys, json
-          for app in json.load(sys.stdin):
-            if app.get('name') == '${{ matrix.app_name }}':
-              print(app['id']); sys.exit(0)
-          print('')")
-            if [ -z "$MATCH_APP_ID" ]; then
-              echo "⚠️ DB exists but matching app does not — deleting DB to recreate"
-              curl -sfS -X DELETE "${{ env.CRANL_API }}/databases/$DB_ID" \
-                -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}"
-              DB_ID=""
-            else
-              APP_ENV=$(curl -sS "${{ env.CRANL_API }}/applications/$MATCH_APP_ID/environment" \
-                -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" || echo '{}')
-              HAS_URL=$(echo "$APP_ENV" | python3 -c "
-          import sys,json
-          try:
-            d=json.load(sys.stdin)
-            env_str = ''
-            if isinstance(d, dict):
-              env_str = d.get('env','') or ''
-              if not env_str and d.get('DATABASE_URL'):
-                print('yes'); sys.exit(0)
-            found = any(line.startswith('DATABASE_URL=') for line in (env_str or '').split('\n'))
-            print('yes' if found else 'no')
-          except Exception:
-            print('no')")
-              if [ "$HAS_URL" != "yes" ]; then
-                echo "⚠️ DB exists but app has no DATABASE_URL env — recreating DB"
-                curl -sfS -X DELETE "${{ env.CRANL_API }}/databases/$DB_ID" \
-                  -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}"
-                DB_ID=""
-                sleep 3  # let deletion propagate
-              fi
-            fi
-          fi
-
           DATABASE_URL=""
           if [ -n "$DB_ID" ]; then
             echo "✅ Database ${{ matrix.db_name }} exists ($DB_ID)"
@@ -1893,7 +1850,6 @@ jobs:
             fi
           fi
           echo "db_id=$DB_ID" >> $GITHUB_OUTPUT
-          echo "EFFECTIVE_DB_ID=$DB_ID" >> $GITHUB_ENV
           # Write URL to masked env file (not step output — outputs leak to logs)
           if [ -n "$DATABASE_URL" ]; then
             echo "DATABASE_URL_NEW=$DATABASE_URL" >> $GITHUB_ENV
@@ -1913,94 +1869,6 @@ jobs:
             if app.get('name') == '${{ matrix.app_name }}':
               print(app['id']); sys.exit(0)
           print('')")
-
-          # Detect apps that need recreation:
-          # (a) orphaned: created via OpenAPI serverId path before we knew
-          #     the API wants `region` — /monitoring returns "not linked".
-          # (b) permanently broken: all prior deployments are in error
-          #     state (e.g. wrong dockerfilePath from an earlier workflow
-          #     revision that can't be changed post-create).
-          if [ -n "$APP_ID" ]; then
-            NEEDS_RECREATE=false
-
-            # Check orphan
-            for ENDPOINT in domains monitoring analytics; do
-              BODY=$(curl -sS "${{ env.CRANL_API }}/applications/$APP_ID/$ENDPOINT" \
-                -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" 2>&1 || true)
-              if echo "$BODY" | grep -q "not linked to deployment backend"; then
-                NEEDS_RECREATE=true
-                echo "Orphan confirmed via GET /$ENDPOINT: $BODY"
-                break
-              fi
-            done
-
-            # Check all deployments errored (app has never successfully
-            # built, likely due to stale config captured at create time)
-            if [ "$NEEDS_RECREATE" = "false" ]; then
-              DEPLOYS=$(curl -sfS "${{ env.CRANL_API }}/applications/$APP_ID/deployments" \
-                -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" || echo '{"deployments":[]}')
-              ALL_ERROR=$(echo "$DEPLOYS" | python3 -c "
-          import sys,json
-          d=json.load(sys.stdin)
-          deps=d.get('deployments',[]) if isinstance(d,dict) else (d if isinstance(d,list) else [])
-          if not deps:
-            print('no')
-          else:
-            statuses = [x.get('status','') for x in deps]
-            # If any deployment ever succeeded (done/running), do not recreate
-            if any(s in ('done','running') for s in statuses):
-              print('no')
-            # If we have >= 2 error deployments, the app config is broken
-            elif sum(1 for s in statuses if s in ('error','failed')) >= 2:
-              print('yes')
-            else:
-              print('no')")
-              if [ "$ALL_ERROR" = "yes" ]; then
-                NEEDS_RECREATE=true
-                echo "All prior deployments errored — app config is broken"
-              fi
-            fi
-
-            if [ "$NEEDS_RECREATE" = "true" ]; then
-              echo "⚠️ App $APP_ID needs recreation. Deleting app + DB..."
-              curl -sfS -X DELETE "${{ env.CRANL_API }}/applications/$APP_ID" \
-                -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}"
-              APP_ID=""
-              # Also delete the DB so the next step captures a fresh URL
-              DB_ID_TO_DELETE="${{ steps.ensure-db.outputs.db_id }}"
-              if [ -n "$DB_ID_TO_DELETE" ]; then
-                echo "Also deleting DB $DB_ID_TO_DELETE to regen URL"
-                curl -sfS -X DELETE "${{ env.CRANL_API }}/databases/$DB_ID_TO_DELETE" \
-                  -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" || true
-                # Recreate DB now and capture URL
-                RESULT=$(curl -sfS -X POST "${{ env.CRANL_API }}/databases" \
-                  -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" \
-                  -H "Content-Type: application/json" \
-                  -d "{
-                    \"name\": \"${{ matrix.db_name }}\",
-                    \"projectId\": \"${{ env.CRANL_PROJECT_ID }}\",
-                    \"type\": \"postgresql\",
-                    \"region\": \"${{ matrix.server_id }}\"
-                  }")
-                NEW_DB_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
-                if [ -z "$NEW_DB_ID" ]; then
-                  echo "❌ Replacement DB creation returned no id"
-                  exit 1
-                fi
-                NEW_URL=$(echo "$RESULT" | python3 -c "
-          import sys,json
-          d=json.load(sys.stdin)
-          print(d.get('connectionUrl') or d.get('connection_url') or d.get('internalUrl') or d.get('internal_url') or '')")
-                if [ -n "$NEW_URL" ]; then
-                  echo "::add-mask::$NEW_URL"
-                  echo "DATABASE_URL_NEW=$NEW_URL" >> $GITHUB_ENV
-                  echo "✅ Replacement DB $NEW_DB_ID created + URL captured"
-                fi
-                echo "EFFECTIVE_DB_ID=$NEW_DB_ID" >> $GITHUB_ENV
-              fi
-              sleep 3
-            fi
-          fi
 
           if [ -n "$APP_ID" ]; then
             echo "✅ App ${{ matrix.app_name }} exists ($APP_ID)"
@@ -2034,8 +1902,7 @@ jobs:
           set -e
 
           APP_ID="${{ steps.ensure-app.outputs.app_id }}"
-          # Use EFFECTIVE_DB_ID which accounts for any recreation in ensure-app
-          DB_ID="${EFFECTIVE_DB_ID:-${{ steps.ensure-db.outputs.db_id }}}"
+          DB_ID="${{ steps.ensure-db.outputs.db_id }}"
 
           if [ -z "$APP_ID" ] || [ -z "$DB_ID" ]; then
             echo "❌ Missing app or db id (app=$APP_ID db=$DB_ID)"
@@ -2059,7 +1926,6 @@ jobs:
           env_str = ''
           if isinstance(d, dict):
             env_str = d.get('env', '') or ''
-            # Fallback: newer APIs may inline keys
             if not env_str and 'DATABASE_URL' in d:
               print(d['DATABASE_URL']); sys.exit(0)
           for line in (env_str or '').split('\n'):
@@ -2073,10 +1939,16 @@ jobs:
           fi
 
           if [ -z "$DATABASE_URL" ]; then
-            echo "❌ No DATABASE_URL available. The DB exists but was created"
-            echo "   outside this workflow, and the app has no prior env var."
-            echo "   Manual remediation: delete the database and re-run so a"
-            echo "   fresh one is created by this workflow."
+            echo "❌ No DATABASE_URL available. The database exists ($DB_ID)"
+            echo "   but the app has no DATABASE_URL env var (this happens when"
+            echo "   the DB was created outside this workflow, OR the env was"
+            echo "   never set on the app)."
+            echo ""
+            echo "   Manual remediation:"
+            echo "   1. Delete the database via the Cranl dashboard:"
+            echo "      https://app.cranl.com/projects/${{ env.CRANL_PROJECT_ID }}"
+            echo "   2. Re-run this workflow — it will create a fresh DB and"
+            echo "      capture the URL from the create response."
             exit 1
           fi
 
@@ -2160,8 +2032,12 @@ jobs:
             print('')")
                 if [ -n "$DEPLOY_ID" ]; then
                   echo "--- Build logs for $DEPLOY_ID ---"
+                  # Best-effort log fetch — we're already failing the step,
+                  # so log retrieval errors shouldn't mask the original failure.
+                  set +e
                   curl -sS "${{ env.CRANL_API }}/applications/$APP_ID/deployments/$DEPLOY_ID/logs" \
-                    -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" || true
+                    -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}"
+                  set -e
                   echo ""
                 fi
                 exit 1
