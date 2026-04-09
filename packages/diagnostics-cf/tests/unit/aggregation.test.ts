@@ -209,17 +209,18 @@ describe('aggregateErrors', () => {
     expect(stmt1.boundValues[2]).toBe('crypto'); // category
     expect(stmt1.boundValues[3]).toBe('1.2.3'); // app_version
     expect(stmt1.boundValues[4]).toBe('android'); // platform
-    expect(stmt1.boundValues[5]).toBe(3); // count
-    expect(stmt1.boundValues[6]).toBe(1709380700000); // first_seen
-    expect(stmt1.boundValues[7]).toBe(1709380800000); // last_seen
-    expect(stmt1.boundValues[8]).toBe('decrypt failed'); // sample_message
-    expect(stmt1.boundValues[9]).toBe('at line 42'); // sample_stack_trace
+    expect(stmt1.boundValues[5]).toBe('production'); // environment
+    expect(stmt1.boundValues[6]).toBe(3); // count
+    expect(stmt1.boundValues[7]).toBe(1709380700000); // first_seen
+    expect(stmt1.boundValues[8]).toBe(1709380800000); // last_seen
+    expect(stmt1.boundValues[9]).toBe('decrypt failed'); // sample_message
+    expect(stmt1.boundValues[10]).toBe('at line 42'); // sample_stack_trace
 
     // Verify second error statement
     const stmt2 = db.batchStatements[0]![1]!;
     expect(stmt2.boundValues[1]).toBe('sig2');
     expect(stmt2.boundValues[2]).toBe('network');
-    expect(stmt2.boundValues[9]).toBeNull(); // no stackTrace
+    expect(stmt2.boundValues[10]).toBeNull(); // no stackTrace
   });
 
   it('should use ON CONFLICT DO UPDATE for count and timestamps', async () => {
