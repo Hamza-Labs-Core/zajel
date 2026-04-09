@@ -1914,14 +1914,16 @@ jobs:
           print('')")
 
           # If the app exists but is unlinked (created via OpenAPI serverId
-          # path before we knew the API wants `region`), GET /environment
-          # returns "Application not linked to deployment backend". Detect
-          # this and auto-recreate by deleting and clearing APP_ID.
+          # path before we knew the API wants `region`), most endpoints
+          # return 400 "Application not linked to deployment backend".
+          # Non-destructive probe: GET /deployments on the app.
           if [ -n "$APP_ID" ]; then
-            PROBE=$(curl -sS "${{ env.CRANL_API }}/applications/$APP_ID/environment" \
+            PROBE_CODE=$(curl -sS -o /tmp/probe.json -w "%{http_code}" \
+              "${{ env.CRANL_API }}/applications/$APP_ID/deployments" \
               -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}")
-            if echo "$PROBE" | grep -q "not linked to deployment backend"; then
-              echo "⚠️ App $APP_ID is orphaned (not linked to backend). Deleting and recreating..."
+            PROBE_BODY=$(cat /tmp/probe.json 2>/dev/null || echo "")
+            if [ "$PROBE_CODE" != "200" ] || echo "$PROBE_BODY" | grep -q "not linked to deployment backend"; then
+              echo "⚠️ App $APP_ID is orphaned (probe: $PROBE_CODE / $PROBE_BODY). Deleting and recreating..."
               curl -sfS -X DELETE "${{ env.CRANL_API }}/applications/$APP_ID" \
                 -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}"
               APP_ID=""
