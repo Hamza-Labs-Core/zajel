@@ -1818,6 +1818,50 @@ jobs:
               print(db['id']); sys.exit(0)
           print('')")
 
+          # If the database exists but NO app by matching name has a
+          # DATABASE_URL env var set (i.e. we can't recover the URL),
+          # delete the orphan DB so it gets recreated fresh below.
+          if [ -n "$DB_ID" ]; then
+            APPS_LIST=$(curl -sfS "${{ env.CRANL_API }}/applications" \
+              -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}")
+            MATCH_APP_ID=$(echo "$APPS_LIST" | python3 -c "
+          import sys, json
+          for app in json.load(sys.stdin):
+            if app.get('name') == '${{ matrix.app_name }}':
+              print(app['id']); sys.exit(0)
+          print('')")
+            if [ -z "$MATCH_APP_ID" ]; then
+              echo "⚠️ DB exists but matching app does not — deleting DB to recreate"
+              curl -sfS -X DELETE "${{ env.CRANL_API }}/databases/$DB_ID" \
+                -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}"
+              DB_ID=""
+            else
+              APP_ENV=$(curl -sS "${{ env.CRANL_API }}/applications/$MATCH_APP_ID/environment" \
+                -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" || echo '{}')
+              HAS_URL=$(echo "$APP_ENV" | python3 -c "
+          import sys,json
+          try:
+            d=json.load(sys.stdin)
+            env_str = ''
+            if isinstance(d, dict):
+              env_str = d.get('env','') or ''
+              if not env_str and d.get('DATABASE_URL'):
+                print('yes'); sys.exit(0)
+            found = any(line.startswith('DATABASE_URL=') for line in (env_str or '').split('\n'))
+            print('yes' if found else 'no')
+          except Exception:
+            print('no')")
+              if [ "$HAS_URL" != "yes" ]; then
+                echo "⚠️ DB exists but app has no DATABASE_URL env — recreating DB"
+                curl -sfS -X DELETE "${{ env.CRANL_API }}/databases/$DB_ID" \
+                  -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}"
+                DB_ID=""
+                sleep 3  # let deletion propagate
+              fi
+            fi
+          fi
+
+          DATABASE_URL=""
           if [ -n "$DB_ID" ]; then
             echo "✅ Database ${{ matrix.db_name }} exists ($DB_ID)"
           else
@@ -1831,34 +1875,28 @@ jobs:
                 \"type\": \"postgresql\",
                 \"region\": \"${{ matrix.server_id }}\"
               }")
-            echo "API response: $RESULT"
+            # Do NOT echo $RESULT — it contains the DB password in connectionUrl
             DB_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
             if [ -z "$DB_ID" ]; then
               echo "❌ Database creation did not return an id"
               exit 1
             fi
             echo "Created: $DB_ID"
-
-            # Wait for database to be ready (up to 2 min)
-            READY=false
-            for i in $(seq 1 12); do
-              sleep 10
-              INFO=$(curl -sfS "${{ env.CRANL_API }}/databases/$DB_ID" \
-                -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}")
-              STATUS=$(echo "$INFO" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
-              if [ "$STATUS" = "running" ]; then
-                echo "✅ Database running"
-                READY=true
-                break
-              fi
-              echo "  DB status: $STATUS ($i/12)"
-            done
-            if [ "$READY" != "true" ]; then
-              echo "❌ Database did not become ready within 2 minutes"
-              exit 1
+            # Capture connectionUrl from create response and mask it
+            DATABASE_URL=$(echo "$RESULT" | python3 -c "
+          import sys,json
+          d=json.load(sys.stdin)
+          print(d.get('connectionUrl') or d.get('connection_url') or d.get('internalUrl') or d.get('internal_url') or '')")
+            if [ -n "$DATABASE_URL" ]; then
+              echo "::add-mask::$DATABASE_URL"
+              echo "✅ Captured DATABASE_URL from create response"
             fi
           fi
           echo "db_id=$DB_ID" >> $GITHUB_OUTPUT
+          # Write URL to masked env file (not step output — outputs leak to logs)
+          if [ -n "$DATABASE_URL" ]; then
+            echo "DATABASE_URL_NEW=$DATABASE_URL" >> $GITHUB_ENV
+          fi
 
       - name: Ensure app exists
         id: ensure-app
@@ -1874,6 +1912,22 @@ jobs:
             if app.get('name') == '${{ matrix.app_name }}':
               print(app['id']); sys.exit(0)
           print('')")
+
+          # If the app exists but is unlinked (created via OpenAPI serverId
+          # path before we knew the API wants `region`), GET /environment
+          # returns "Application not linked to deployment backend". Detect
+          # this and auto-recreate by deleting and clearing APP_ID.
+          if [ -n "$APP_ID" ]; then
+            PROBE=$(curl -sS "${{ env.CRANL_API }}/applications/$APP_ID/environment" \
+              -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}")
+            if echo "$PROBE" | grep -q "not linked to deployment backend"; then
+              echo "⚠️ App $APP_ID is orphaned (not linked to backend). Deleting and recreating..."
+              curl -sfS -X DELETE "${{ env.CRANL_API }}/applications/$APP_ID" \
+                -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}"
+              APP_ID=""
+              sleep 3
+            fi
+          fi
 
           if [ -n "$APP_ID" ]; then
             echo "✅ App ${{ matrix.app_name }} exists ($APP_ID)"
@@ -1914,38 +1968,76 @@ jobs:
             exit 1
           fi
 
-          DB_INFO=$(curl -sfS "${{ env.CRANL_API }}/databases/$DB_ID" \
-            -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}")
-          DATABASE_URL=$(echo "$DB_INFO" | python3 -c "
+          # Determine DATABASE_URL: prefer freshly captured URL from
+          # DB create, otherwise read from existing app env vars (which
+          # would have been set on a prior run when DB was created).
+          DATABASE_URL="${DATABASE_URL_NEW:-}"
+          if [ -n "$DATABASE_URL" ]; then
+            echo "Using DATABASE_URL captured from fresh DB creation"
+          else
+            echo "Reading DATABASE_URL from existing app env vars..."
+            EXISTING_ENV=$(curl -sfS "${{ env.CRANL_API }}/applications/$APP_ID/environment" \
+              -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}")
+            # Parse per EnvironmentVariables schema: {"env": "K=V\nK2=V2"}
+            DATABASE_URL=$(echo "$EXISTING_ENV" | python3 -c "
           import sys,json
           d=json.load(sys.stdin)
-          url = d.get('internal_url') or d.get('connection_url') or d.get('internalUrl') or d.get('connectionUrl') or ''
-          print(url)")
+          env_str = ''
+          if isinstance(d, dict):
+            env_str = d.get('env', '') or ''
+            # Fallback: newer APIs may inline keys
+            if not env_str and 'DATABASE_URL' in d:
+              print(d['DATABASE_URL']); sys.exit(0)
+          for line in (env_str or '').split('\n'):
+            if line.startswith('DATABASE_URL='):
+              print(line.split('=', 1)[1]); sys.exit(0)
+          print('')")
+            if [ -n "$DATABASE_URL" ]; then
+              echo "::add-mask::$DATABASE_URL"
+              echo "✅ Reused existing DATABASE_URL from app env"
+            fi
+          fi
 
           if [ -z "$DATABASE_URL" ]; then
-            echo "❌ Database has no connection URL. Full response:"
-            echo "$DB_INFO"
+            echo "❌ No DATABASE_URL available. The DB exists but was created"
+            echo "   outside this workflow, and the app has no prior env var."
+            echo "   Manual remediation: delete the database and re-run so a"
+            echo "   fresh one is created by this workflow."
             exit 1
           fi
+
+          # Build env as newline-separated KEY=VALUE string (per Cranl
+          # OpenAPI EnvironmentVariables schema: {"env": "K=V\nK2=V2"}).
+          # Export shell vars so python3 can read them from os.environ —
+          # safer than shell interpolation for values with special chars.
+          export DATABASE_URL REG_SECRET ADMIN_JWT
+          ENV_JSON=$(python3 -c "
+          import json, os
+          env = {
+            'STORAGE_BACKEND': 'postgres',
+            'DATABASE_URL': os.environ['DATABASE_URL'],
+            'ZAJEL_HOST': '0.0.0.0',
+            'ZAJEL_PORT': '9000',
+            'ZAJEL_REGION': '${{ matrix.server_id }}',
+            'ZAJEL_BOOTSTRAP_URL': '${{ vars.QA_BOOTSTRAP_URL }}',
+            'ZAJEL_REGISTRY_SECRET': os.environ['REG_SECRET'],
+            'ZAJEL_ADMIN_JWT_SECRET': os.environ['ADMIN_JWT'],
+            'ZAJEL_DIAGNOSTICS_URL': 'https://diagnostics.zajel.qa.hamzalabs.dev',
+            'DIAGNOSTICS_PUSH_SECRET': os.environ['ADMIN_JWT'],
+            'NODE_ENV': 'qa',
+            'APP_VERSION': '${{ env.VERSION }}',
+          }
+          env_str = '\n'.join(f'{k}={v}' for k, v in env.items())
+          print(json.dumps({'env': env_str}))")
 
           curl -sfS -X PUT "${{ env.CRANL_API }}/applications/$APP_ID/environment" \
             -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" \
             -H "Content-Type: application/json" \
-            -d "{
-              \"STORAGE_BACKEND\": \"postgres\",
-              \"DATABASE_URL\": \"$DATABASE_URL\",
-              \"ZAJEL_HOST\": \"0.0.0.0\",
-              \"ZAJEL_PORT\": \"9000\",
-              \"ZAJEL_REGION\": \"${{ matrix.server_id }}\",
-              \"ZAJEL_BOOTSTRAP_URL\": \"${{ vars.QA_BOOTSTRAP_URL }}\",
-              \"ZAJEL_REGISTRY_SECRET\": \"${{ secrets.SERVER_REGISTRY_SECRET }}\",
-              \"ZAJEL_ADMIN_JWT_SECRET\": \"${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}\",
-              \"ZAJEL_DIAGNOSTICS_URL\": \"https://diagnostics.zajel.qa.hamzalabs.dev\",
-              \"DIAGNOSTICS_PUSH_SECRET\": \"${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}\",
-              \"NODE_ENV\": \"qa\",
-              \"APP_VERSION\": \"${{ env.VERSION }}\"
-            }"
+            -d "$ENV_JSON"
           echo "✅ Environment variables set"
+        env:
+          REG_SECRET: ${{ secrets.SERVER_REGISTRY_SECRET }}
+          ADMIN_JWT: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
 
       - name: Trigger deploy
         run: |
