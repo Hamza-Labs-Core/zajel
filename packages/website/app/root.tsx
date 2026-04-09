@@ -34,3 +34,30 @@ export function Layout({ children }: { children: React.ReactNode }) {
 export default function App() {
   return <Outlet />;
 }
+
+export function HydrateFallback() {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minHeight: "100vh",
+        background: "#0f172a",
+        color: "#f8fafc",
+        fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
+      }}
+    >
+      <div style={{ textAlign: "center" }}>
+        <img
+          src="/images/app-icon.png"
+          alt="Zajel"
+          width={64}
+          height={64}
+          style={{ borderRadius: 12, marginBottom: 16 }}
+        />
+        <p style={{ color: "#94a3b8" }}>Loading...</p>
+      </div>
+    </div>
+  );
+}

@@ -87,6 +87,11 @@ class BackgroundSyncService {
   /// but cannot download them.
   ChannelSyncService? _channelSyncService;
 
+  /// Optional callback to check whether the signaling client is connected.
+  /// When set and returns false, [runSync] skips the sync cycle to avoid
+  /// flooding logs with "Attempted to send while not connected" warnings.
+  bool Function()? isSignalingConnected;
+
   /// Timer for foreground periodic sync (desktop/web).
   Timer? _foregroundTimer;
 
@@ -291,6 +296,18 @@ class BackgroundSyncService {
   ///
   /// Returns a [BackgroundSyncResult] summarizing what happened.
   Future<BackgroundSyncResult> runSync() async {
+    // Skip sync when signaling is disconnected to avoid flooding logs
+    // with "Attempted to send while not connected" warnings.
+    if (isSignalingConnected != null && !isSignalingConnected!()) {
+      _log('runSync', 'Signaling disconnected, skipping sync');
+      return const BackgroundSyncResult(
+        channelsChecked: 0,
+        chunksDownloaded: 0,
+        errors: 0,
+        duration: Duration.zero,
+      );
+    }
+
     if (_isSyncing) {
       _log('runSync', 'Sync already in progress, skipping');
       return const BackgroundSyncResult(
