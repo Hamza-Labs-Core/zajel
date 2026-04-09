@@ -1792,20 +1792,18 @@ jobs:
       - name: Verify API access
         id: verify
         run: |
-          RESULT=$(curl -sf -X POST "${{ env.CRANL_API }}/cli/auth/verify" \
-            -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" \
-            -H "Content-Type: application/json" 2>&1 || echo "FAIL")
-
-          if echo "$RESULT" | grep -qi "error\|FAIL\|unauthorized"; then
-            echo "❌ Cranl API auth failed — skipping deployment"
-            echo "skip=true" >> $GITHUB_OUTPUT
-          else
-            echo "✅ Cranl API authenticated"
-            echo "skip=false" >> $GITHUB_OUTPUT
+          set -e
+          if [ -z "${{ secrets.CRANL_API_KEY }}" ]; then
+            echo "❌ CRANL_API_KEY secret not set"
+            exit 1
           fi
+          RESULT=$(curl -sfS -X POST "${{ env.CRANL_API }}/cli/auth/verify" \
+            -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" \
+            -H "Content-Type: application/json")
+          echo "Auth response: $RESULT"
+          echo "✅ Cranl API authenticated"
 
       - name: Ensure database exists
-        if: steps.verify.outputs.skip != 'true'
         id: ensure-db
         run: |
           set -e
@@ -1831,7 +1829,7 @@ jobs:
                 \"name\": \"${{ matrix.db_name }}\",
                 \"projectId\": \"${{ env.CRANL_PROJECT_ID }}\",
                 \"type\": \"postgresql\",
-                \"serverId\": \"${{ matrix.server_id }}\"
+                \"region\": \"${{ matrix.server_id }}\"
               }")
             echo "API response: $RESULT"
             DB_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
@@ -1863,7 +1861,6 @@ jobs:
           echo "db_id=$DB_ID" >> $GITHUB_OUTPUT
 
       - name: Ensure app exists
-        if: steps.verify.outputs.skip != 'true'
         id: ensure-app
         run: |
           set -e
@@ -1889,7 +1886,7 @@ jobs:
                 \"name\": \"${{ matrix.app_name }}\",
                 \"projectId\": \"${{ env.CRANL_PROJECT_ID }}\",
                 \"repositoryId\": \"${{ env.GITHUB_REPO_ID }}\",
-                \"serverId\": \"${{ matrix.server_id }}\",
+                \"region\": \"${{ matrix.server_id }}\",
                 \"branch\": \"${{ github.head_ref || github.ref_name }}\",
                 \"buildType\": \"dockerfile\",
                 \"buildPath\": \"packages/server-vps\",
@@ -1906,7 +1903,6 @@ jobs:
           echo "app_id=$APP_ID" >> $GITHUB_OUTPUT
 
       - name: Set environment variables
-        if: steps.verify.outputs.skip != 'true'
         run: |
           set -e
 
@@ -1952,7 +1948,6 @@ jobs:
           echo "✅ Environment variables set"
 
       - name: Trigger deploy
-        if: steps.verify.outputs.skip != 'true'
         run: |
           set -e
           APP_ID="${{ steps.ensure-app.outputs.app_id }}"
@@ -1961,7 +1956,6 @@ jobs:
           echo "✅ Deployment triggered"
 
       - name: Wait for deployment
-        if: steps.verify.outputs.skip != 'true'
         run: |
           set -e
           APP_ID="${{ steps.ensure-app.outputs.app_id }}"
@@ -2005,7 +1999,6 @@ jobs:
           fi
 
       - name: Health check
-        if: steps.verify.outputs.skip != 'true'
         run: |
           set -e
           APP_ID="${{ steps.ensure-app.outputs.app_id }}"
