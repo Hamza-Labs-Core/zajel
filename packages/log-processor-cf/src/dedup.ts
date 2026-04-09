@@ -7,7 +7,7 @@
  */
 
 import type { Env, ErrorCluster, DedupResult } from './types.js';
-import { REOPEN_THRESHOLD } from './types.js';
+import { REOPEN_THRESHOLD, MAX_RETRY_COUNT } from './types.js';
 
 /**
  * Check whether an error cluster is a duplicate of an existing tracked issue.
@@ -141,5 +141,105 @@ export async function updateIssueStatus(
      WHERE error_signature = ?`,
   )
     .bind(status, totalOccurrences, lastDetected, now, errorSignature)
+    .run();
+}
+
+/**
+ * Pending issue row returned from the retry queue query.
+ */
+export interface PendingIssueRow {
+  error_signature: string;
+  severity: string;
+  component: string;
+  ai_analysis: string | null;
+  retry_count: number;
+  total_occurrences: number;
+  first_detected: number;
+  last_detected: number;
+}
+
+/**
+ * Query pending issues that failed to create on GitHub in previous runs.
+ * Returns rows with status = 'pending' and retry_count < MAX_RETRY_COUNT.
+ */
+export async function getPendingIssues(env: Env): Promise<PendingIssueRow[]> {
+  try {
+    const result = await env.DB.prepare(
+      `SELECT error_signature, severity, component, ai_analysis,
+              COALESCE(retry_count, 0) as retry_count,
+              total_occurrences, first_detected, last_detected
+       FROM issue_tracking
+       WHERE status = 'pending'
+         AND COALESCE(retry_count, 0) < ?
+       ORDER BY last_detected DESC
+       LIMIT 10`,
+    )
+      .bind(MAX_RETRY_COUNT)
+      .all<PendingIssueRow>();
+
+    return result.success ? (result.results ?? []) : [];
+  } catch (error) {
+    console.error('Failed to query pending issues:', error);
+    return [];
+  }
+}
+
+/**
+ * Increment the retry count for a pending issue.
+ */
+export async function incrementRetryCount(
+  env: Env,
+  errorSignature: string,
+): Promise<void> {
+  const now = Date.now();
+
+  await env.DB.prepare(
+    `UPDATE issue_tracking
+     SET retry_count = COALESCE(retry_count, 0) + 1, updated_at = ?
+     WHERE error_signature = ?`,
+  )
+    .bind(now, errorSignature)
+    .run();
+}
+
+/**
+ * Mark a pending issue as failed (exceeded max retries).
+ */
+export async function markIssueFailed(
+  env: Env,
+  errorSignature: string,
+): Promise<void> {
+  const now = Date.now();
+
+  await env.DB.prepare(
+    `UPDATE issue_tracking
+     SET status = 'failed', updated_at = ?
+     WHERE error_signature = ?`,
+  )
+    .bind(now, errorSignature)
+    .run();
+}
+
+/**
+ * Update a pending issue to open after successful GitHub creation.
+ */
+export async function updatePendingToOpen(
+  env: Env,
+  errorSignature: string,
+  issueNumber: number,
+  issueUrl: string,
+): Promise<void> {
+  const now = Date.now();
+
+  await env.DB.prepare(
+    `UPDATE issue_tracking
+     SET status = 'open',
+         github_issue_number = ?,
+         github_issue_url = ?,
+         retry_count = COALESCE(retry_count, 0),
+         updated_at = ?
+     WHERE error_signature = ?`,
+  )
+    .bind(issueNumber, issueUrl, now, errorSignature)
     .run();
 }

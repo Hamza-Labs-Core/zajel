@@ -305,3 +305,46 @@ The Python headless client enforces a hard limit of **1,000 chunks per channel**
 | Server chunk cache | Configurable | LRU with TTL |
 
 **Note:** The Dart app's `ChannelStorageService.saveChunk` does NOT enforce a per-channel chunk limit. Chunks are inserted into SQLite without eviction. This means the Flutter app's database can grow without bound for channels with high publishing volume. The 1,000 chunk limit applies only to the Python headless client's in-memory storage.
+
+---
+
+## Cross-Server Channel Relay (Planned)
+
+Currently, channel messages (`chunk_announce`) only reach subscribers connected to the **same** VPS server as the channel owner. In a multi-server federation, a subscriber on Server B will never receive `chunk_available` notifications for a channel whose owner is on Server A. A three-phase plan addresses this gap.
+
+### Phase 1: Channel Registration Gossip
+
+When a client subscribes to or owns a channel, the server gossips this to the federation so other servers know where subscribers and owners are.
+
+New federation message types:
+- `channel-owner-announce { channelId, serverId, endpoint }` -- "I have the owner of this channel"
+- `channel-subscriber-announce { channelId, serverId, endpoint }` -- "I have subscribers for this channel"
+- `channel-unsubscribe-announce { channelId, serverId }` -- cleanup on disconnect
+
+The `ChannelHandler` maintains `remoteSubscribers` and `remoteOwners` maps to track which servers have subscribers and owners for each channel.
+
+### Phase 2: Cross-Server Chunk Announcement Forwarding
+
+When a chunk is announced on a server that has subscribers on other servers, the announcement is forwarded via the federation transport:
+
+1. After notifying local subscribers, `handleChunkAnnounce` checks `channelHandler.remoteSubscribers`
+2. For each remote server with subscribers, a `federation-chunk-relay` message is sent
+3. The remote server delivers `chunk_available` to its local subscriber WebSockets
+
+### Phase 3: Chunk Fetch Relay
+
+When a subscriber on Server B receives `chunk_available` and requests the chunk, the request is forwarded to the server that hosts the chunk source:
+
+1. `chunk_request` is forwarded via federation to the server that announced the chunk
+2. The remote server delivers the request to the chunk owner
+3. The owner sends `chunk_data` back through the same relay path
+
+### Risks and Mitigations
+
+| Risk | Mitigation |
+|------|-----------|
+| Gossip overhead from per-subscription messages | Batch announcements (announce all channels on connect) |
+| Stale subscriber routes after server crash | TTL + heartbeat refresh |
+| Duplicate delivery via multiple redirect paths | Client-side deduplication by chunkId (already implemented) |
+
+See `docs/plans/10-cross-server-channel-relay.md` for the full plan with file-level change details.

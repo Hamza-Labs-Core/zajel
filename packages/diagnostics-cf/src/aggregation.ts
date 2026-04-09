@@ -34,13 +34,15 @@ export async function aggregateErrors(
   const timeBucket = getTimeBucket(report.timestamp);
   const statements: D1PreparedStatement[] = [];
 
+  const environment = report.environment ?? 'production';
+
   for (const error of report.errors) {
     statements.push(
       db
         .prepare(
-          `INSERT INTO error_aggregates (time_bucket, error_signature, category, app_version, platform, count, first_seen, last_seen, sample_message, sample_stack_trace)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-           ON CONFLICT(time_bucket, error_signature, app_version, platform) DO UPDATE SET
+          `INSERT INTO error_aggregates (time_bucket, error_signature, category, app_version, platform, environment, count, first_seen, last_seen, sample_message, sample_stack_trace)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+           ON CONFLICT(time_bucket, error_signature, app_version, platform, environment) DO UPDATE SET
              count = count + excluded.count,
              first_seen = MIN(first_seen, excluded.first_seen),
              last_seen = MAX(last_seen, excluded.last_seen),
@@ -53,6 +55,7 @@ export async function aggregateErrors(
           error.category,
           report.appVersion,
           report.platform,
+          environment,
           error.count,
           error.firstOccurrence,
           error.lastOccurrence,

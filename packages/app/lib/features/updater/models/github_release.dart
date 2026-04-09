@@ -117,7 +117,7 @@ class GitHubRelease {
   static const _platformSuffixes = {
     'windows': ['-windows.zip'],
     'macos': ['-macos.dmg', '-macos.zip'],
-    'linux': ['-linux.tar.gz'],
+    'linux': ['-linux.AppImage', '-linux.tar.gz'],
   };
 
   /// Returns the release asset appropriate for the given [platform].

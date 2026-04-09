@@ -1,18 +1,18 @@
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import '../../../core/storage/cached_secure_storage.dart';
 import '../models/channel.dart';
 import '../models/chunk.dart';
 
 /// SQLite-backed storage for channels and chunks.
 ///
 /// Channels are stored in the `channels` table. Private keys are kept
-/// separately in [FlutterSecureStorage] to avoid leaking them if the
+/// separately in [CachedSecureStorage] to avoid leaking them if the
 /// database file is compromised.
 ///
 /// Chunks are stored in the `chunks` table, indexed by channel and sequence.
@@ -25,20 +25,17 @@ class ChannelStorageService {
   static const _secureKeyPrefix = 'zajel_channel_';
 
   Database? _db;
-  final FlutterSecureStorage _secureStorage;
+  final CachedSecureStorage _secureStorage;
 
-  ChannelStorageService({FlutterSecureStorage? secureStorage})
-      : _secureStorage = secureStorage ??
-            const FlutterSecureStorage(
-              aOptions: AndroidOptions(encryptedSharedPreferences: true),
-            );
+  ChannelStorageService({CachedSecureStorage? secureStorage})
+      : _secureStorage = secureStorage ?? CachedSecureStorage();
 
   /// Test-only constructor that accepts a pre-opened [Database], bypassing
   /// [initialize] (which requires path_provider platform channels).
   @visibleForTesting
   ChannelStorageService.withDatabase({
     required Database database,
-    required FlutterSecureStorage secureStorage,
+    required CachedSecureStorage secureStorage,
   })  : _db = database,
         _secureStorage = secureStorage;
 
@@ -117,19 +114,19 @@ class ChannelStorageService {
     if (channel.ownerSigningKeyPrivate != null) {
       await _secureStorage.write(
         key: '$_secureKeyPrefix${channel.id}_signing_private',
-        value: channel.ownerSigningKeyPrivate,
+        value: channel.ownerSigningKeyPrivate!,
       );
     }
     if (channel.adminSigningKeyPrivate != null) {
       await _secureStorage.write(
         key: '$_secureKeyPrefix${channel.id}_admin_signing_private',
-        value: channel.adminSigningKeyPrivate,
+        value: channel.adminSigningKeyPrivate!,
       );
     }
     if (channel.encryptionKeyPrivate != null) {
       await _secureStorage.write(
         key: '$_secureKeyPrefix${channel.id}_encryption_private',
-        value: channel.encryptionKeyPrivate,
+        value: channel.encryptionKeyPrivate!,
       );
     }
   }

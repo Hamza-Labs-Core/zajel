@@ -75,8 +75,10 @@ export function loadConfig(): ServerConfig {
     },
 
     storage: {
-      type: 'sqlite',
+      type: envString('STORAGE_BACKEND', 'sqlite') as 'sqlite' | 'postgres',
       path: envString('ZAJEL_DB_PATH', './data/zajel.db'),
+      databaseUrl: process.env['DATABASE_URL'],
+      poolSize: envNumber('ZAJEL_PG_POOL_SIZE', 20),
     },
 
     client: {

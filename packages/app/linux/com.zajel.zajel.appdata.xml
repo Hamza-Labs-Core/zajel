@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.zajel.zajel</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Zajel</name>
+  <summary>Private peer-to-peer encrypted messaging</summary>
+  <description>
+    <p>
+      Zajel (Arabic for "carrier pigeon") enables secure, private messaging
+      between devices using end-to-end encryption with X25519 key exchange
+      and ChaCha20-Poly1305 authenticated encryption.
+    </p>
+    <p>Features include:</p>
+    <ul>
+      <li>Direct peer-to-peer connections via WebRTC</li>
+      <li>Pairing via codes or QR scanning</li>
+      <li>Encrypted file transfer</li>
+      <li>Channels (broadcast, polls, live streaming)</li>
+      <li>Groups (mesh P2P with sender key encryption)</li>
+      <li>Voice and video calls</li>
+      <li>Zero-knowledge servers that never see message content</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">com.zajel.zajel.desktop</launchable>
+  <url type="homepage">https://zajel.app</url>
+  <url type="bugtracker">https://github.com/Hamza-Labs-Core/zajel/issues</url>
+  <developer id="com.zajel">
+    <name>Zajel</name>
+  </developer>
+  <releases>
+    <release version="0.0.1" date="2026-03-05">
+      <description>
+        <p>Initial release with peer-to-peer encrypted messaging.</p>
+      </description>
+    </release>
+  </releases>
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+    <content_attribute id="social-audio">intense</content_attribute>
+  </content_rating>
+  <categories>
+    <category>Network</category>
+    <category>InstantMessaging</category>
+    <category>Chat</category>
+  </categories>
+</component>
