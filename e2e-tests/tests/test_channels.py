@@ -138,8 +138,8 @@ class TestChannels:
         helper._find("Create Channel", timeout=10).click()
         time.sleep(2)
 
-        _type_in_field(helper, 0, "Detail Test Channel")
-        _type_in_field(helper, 1, "Channel description here")
+        _type_in_field(helper, 0, "Detail Test Channel", expected_count=2)
+        _type_in_field(helper, 1, "Channel description here", expected_count=2)
 
         helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
@@ -277,8 +277,8 @@ class TestChannels:
         helper._find("Create Channel", timeout=10).click()
         time.sleep(2)
 
-        _type_in_field(helper, 0, "Info Sheet Channel")
-        _type_in_field(helper, 1, "Sheet description")
+        _type_in_field(helper, 0, "Info Sheet Channel", expected_count=2)
+        _type_in_field(helper, 1, "Sheet description", expected_count=2)
 
         helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
