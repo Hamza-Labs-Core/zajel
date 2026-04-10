@@ -8,7 +8,6 @@ needs a paired peer to verify it gets removed.
 
 import time
 import pytest
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 from config import P2P_CONNECTION_TIMEOUT
 
