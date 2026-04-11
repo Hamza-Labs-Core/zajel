@@ -1885,7 +1885,8 @@ jobs:
                 \"branch\": \"${{ github.head_ref || github.ref_name }}\",
                 \"buildType\": \"dockerfile\",
                 \"buildPath\": \"packages/server-vps\",
-                \"dockerfilePath\": \"Dockerfile\"
+                \"dockerfilePath\": \"Dockerfile\",
+                \"port\": 9000
               }")
             echo "API response: $RESULT"
             APP_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
