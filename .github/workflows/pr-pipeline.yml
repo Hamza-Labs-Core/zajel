@@ -1909,6 +1909,21 @@ jobs:
             exit 1
           fi
 
+          # Fetch the app's default domain for ZAJEL_PUBLIC_ENDPOINT
+          DOMAINS=$(curl -sfS "${{ env.CRANL_API }}/applications/$APP_ID/domains" \
+            -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}")
+          APP_DOMAIN=$(echo "$DOMAINS" | python3 -c "
+          import sys,json
+          d=json.load(sys.stdin)
+          dd = d.get('defaultDomain','') if isinstance(d,dict) else ''
+          print(dd)" 2>/dev/null || echo "")
+          if [ -z "$APP_DOMAIN" ]; then
+            echo "❌ Could not determine app domain for ZAJEL_PUBLIC_ENDPOINT"
+            exit 1
+          fi
+          PUBLIC_ENDPOINT="wss://${APP_DOMAIN}"
+          echo "Public endpoint: $PUBLIC_ENDPOINT"
+
           # Determine DATABASE_URL: prefer freshly captured URL from
           # DB create, otherwise read from existing app env vars (which
           # would have been set on a prior run when DB was created).
@@ -1956,7 +1971,7 @@ jobs:
           # OpenAPI EnvironmentVariables schema: {"env": "K=V\nK2=V2"}).
           # Export shell vars so python3 can read them from os.environ —
           # safer than shell interpolation for values with special chars.
-          export DATABASE_URL REG_SECRET ADMIN_JWT
+          export DATABASE_URL REG_SECRET ADMIN_JWT PUBLIC_ENDPOINT
           ENV_JSON=$(python3 -c "
           import json, os
           env = {
@@ -1968,6 +1983,7 @@ jobs:
             'ZAJEL_BOOTSTRAP_URL': '${{ vars.QA_BOOTSTRAP_URL }}',
             'ZAJEL_REGISTRY_SECRET': os.environ['REG_SECRET'],
             'ZAJEL_ADMIN_JWT_SECRET': os.environ['ADMIN_JWT'],
+            'ZAJEL_PUBLIC_ENDPOINT': os.environ['PUBLIC_ENDPOINT'],
             'ZAJEL_DIAGNOSTICS_URL': 'https://diagnostics.zajel.qa.hamzalabs.dev',
             'DIAGNOSTICS_PUSH_SECRET': os.environ['ADMIN_JWT'],
             'NODE_ENV': 'qa',
