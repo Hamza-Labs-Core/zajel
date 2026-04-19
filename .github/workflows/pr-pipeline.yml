@@ -1985,6 +1985,7 @@ jobs:
             'ZAJEL_REGISTRY_SECRET': os.environ['REG_SECRET'],
             'ZAJEL_ADMIN_JWT_SECRET': os.environ['ADMIN_JWT'],
             'ZAJEL_PUBLIC_ENDPOINT': os.environ['PUBLIC_ENDPOINT'],
+            'ZAJEL_CF_ADMIN_URL': 'https://admin.zajel.qa.hamzalabs.dev',
             'ZAJEL_DIAGNOSTICS_URL': 'https://diagnostics.zajel.qa.hamzalabs.dev',
             'DIAGNOSTICS_PUSH_SECRET': os.environ['ADMIN_JWT'],
             'NODE_ENV': 'qa',
