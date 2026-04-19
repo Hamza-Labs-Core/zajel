@@ -1,9 +1,8 @@
 import 'dart:convert';
 
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-
 import '../../../core/config/environment.dart';
 import '../../../core/logging/logger_service.dart';
+import '../../../core/storage/cached_secure_storage.dart';
 import '../models/build_token.dart';
 import '../models/session_token.dart';
 import 'attestation_client.dart';
@@ -23,14 +22,14 @@ class AttestationService {
   static const _sessionTokenKey = 'attestation_session_token';
 
   final AttestationClient _client;
-  final FlutterSecureStorage _secureStorage;
+  final CachedSecureStorage _secureStorage;
   final String _deviceId;
 
   SessionToken? _cachedToken;
 
   AttestationService({
     required AttestationClient client,
-    required FlutterSecureStorage secureStorage,
+    required CachedSecureStorage secureStorage,
     required String deviceId,
   })  : _client = client,
         _secureStorage = secureStorage,

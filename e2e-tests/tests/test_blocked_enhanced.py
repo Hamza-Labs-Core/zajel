@@ -87,11 +87,13 @@ class TestBlockedEnhanced:
         alice_helper._find("Unblock", timeout=10, partial=False).click()
         time.sleep(1)
 
-        # Should see "unblocked" snackbar or empty state
+        # Should see empty state after unblocking
         try:
             alice_helper._find("No blocked users", timeout=5)
+            unblocked = True
         except Exception:
-            pass  # May take time to update
+            unblocked = False
+        assert unblocked, "After unblocking, blocked list should show 'No blocked users'"
 
     def test_remove_permanently(self, alice, bob):
         """Remove a peer permanently from blocked list and trusted storage."""
@@ -126,8 +128,10 @@ class TestBlockedEnhanced:
         alice_helper._find("Remove", timeout=10, partial=False).click()
         time.sleep(2)
 
-        # Should see "removed permanently" snackbar or empty state
+        # Should see empty state after permanent removal
         try:
             alice_helper._find("No blocked users", timeout=5)
+            removed = True
         except Exception:
-            pass  # Snackbar may have dismissed
+            removed = False
+        assert removed, "After removing permanently, blocked list should be empty"

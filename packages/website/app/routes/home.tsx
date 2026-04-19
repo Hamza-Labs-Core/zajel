@@ -117,6 +117,9 @@ export async function clientLoader() {
   }
 }
 
+// Render the page immediately; don't block on the GitHub API fetch
+clientLoader.hydrate = true as const;
+
 export default function Home() {
   const { release } = useLoaderData<typeof clientLoader>();
   const [detectedPlatform, setDetectedPlatform] = useState<string | null>(null);

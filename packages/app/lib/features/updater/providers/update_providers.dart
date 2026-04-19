@@ -7,12 +7,16 @@ import '../services/github_release_service.dart';
 import '../services/update_download_service.dart';
 import '../services/update_orchestrator.dart';
 import '../services/update_package_detector.dart';
+import 'auto_update_providers.dart';
 
 /// Provider for the GitHub release service.
 ///
+/// Watches [includePrereleasesProvider] and syncs the preference to the service.
 /// Manages lifecycle via [ref.onDispose] to close the HTTP client.
 final githubReleaseServiceProvider = Provider<GitHubReleaseService>((ref) {
   final service = GitHubReleaseService();
+  final includePrerelease = ref.watch(includePrereleasesProvider);
+  service.includePrerelease = includePrerelease;
   ref.onDispose(() => service.dispose());
   return service;
 });

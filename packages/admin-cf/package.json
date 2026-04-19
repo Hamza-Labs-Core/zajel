@@ -11,16 +11,19 @@
     "test": "vitest run",
     "test:e2e": "vitest run tests/e2e/",
     "test:watch": "vitest",
-    "build:dashboard": "vite build",
-    "dev:dashboard": "vite"
+    "build:dashboard": "vite build --config dashboard/vite.config.ts && node scripts/inline-dashboard.mjs",
+    "dev:dashboard": "vite --config dashboard/vite.config.ts",
+    "test:playwright": "npx playwright test",
+    "test:playwright:qa": "ADMIN_URL=https://admin.zajel.qa.hamzalabs.dev npx playwright test"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250210.0",
+    "@playwright/test": "^1.58.2",
     "@preact/preset-vite": "^2.9.4",
     "preact": "^10.26.5",
     "typescript": "^5.8.3",
-    "vite": "^6.2.3",
     "uplot": "^1.6.31",
+    "vite": "^6.2.3",
     "vitest": "^4.0.16",
     "wrangler": "^4.58.0"
   },

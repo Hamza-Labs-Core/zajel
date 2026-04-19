@@ -7,7 +7,15 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { checkDuplicate, recordIssue, updateIssueStatus } from '../../src/dedup.js';
+import {
+  checkDuplicate,
+  recordIssue,
+  updateIssueStatus,
+  getPendingIssues,
+  incrementRetryCount,
+  markIssueFailed,
+  updatePendingToOpen,
+} from '../../src/dedup.js';
 import type { Env, ErrorCluster } from '../../src/types.js';
 import { REOPEN_THRESHOLD } from '../../src/types.js';
 
@@ -243,6 +251,144 @@ describe('updateIssueStatus', () => {
     );
     expect(prepareMock).toHaveBeenCalledWith(
       expect.stringContaining('WHERE error_signature = ?'),
+    );
+  });
+});
+
+// ─────────────────────────────────────────────
+// getPendingIssues tests
+// ─────────────────────────────────────────────
+
+describe('getPendingIssues', () => {
+  it('returns pending issues from D1', async () => {
+    const pendingRows = [
+      {
+        error_signature: 'net:timeout',
+        severity: 'high',
+        component: 'network',
+        ai_analysis: '{"severity":"high"}',
+        retry_count: 1,
+        total_occurrences: 15,
+        first_detected: Date.now() - 7200000,
+        last_detected: Date.now() - 60000,
+      },
+    ];
+
+    const prepare = vi.fn().mockImplementation(() => ({
+      bind: vi.fn().mockReturnThis(),
+      all: vi.fn().mockResolvedValue({ success: true, results: pendingRows }),
+    }));
+
+    const env: Env = {
+      DB: { prepare } as unknown as D1Database,
+      REPORTS_BUCKET: {} as R2Bucket,
+      AI: {} as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+
+    const result = await getPendingIssues(env);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.error_signature).toBe('net:timeout');
+    expect(result[0]!.retry_count).toBe(1);
+  });
+
+  it('returns empty array on D1 failure', async () => {
+    const env: Env = {
+      DB: {
+        prepare: vi.fn().mockReturnValue({
+          bind: vi.fn().mockReturnThis(),
+          all: vi.fn().mockRejectedValue(new Error('D1 error')),
+        }),
+      } as unknown as D1Database,
+      REPORTS_BUCKET: {} as R2Bucket,
+      AI: {} as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+
+    const result = await getPendingIssues(env);
+    expect(result).toEqual([]);
+  });
+
+  it('queries with MAX_RETRY_COUNT filter', async () => {
+    const prepare = vi.fn().mockImplementation(() => ({
+      bind: vi.fn().mockReturnThis(),
+      all: vi.fn().mockResolvedValue({ success: true, results: [] }),
+    }));
+
+    const env: Env = {
+      DB: { prepare } as unknown as D1Database,
+      REPORTS_BUCKET: {} as R2Bucket,
+      AI: {} as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+
+    await getPendingIssues(env);
+
+    expect(prepare).toHaveBeenCalledWith(
+      expect.stringContaining("status = 'pending'"),
+    );
+    expect(prepare).toHaveBeenCalledWith(
+      expect.stringContaining('retry_count'),
+    );
+  });
+});
+
+// ─────────────────────────────────────────────
+// incrementRetryCount tests
+// ─────────────────────────────────────────────
+
+describe('incrementRetryCount', () => {
+  it('increments retry_count for the given signature', async () => {
+    const { env, runMock } = makeEnv();
+
+    await incrementRetryCount(env, 'net:timeout');
+
+    expect(runMock).toHaveBeenCalledTimes(1);
+    const prepareMock = env.DB.prepare as ReturnType<typeof vi.fn>;
+    expect(prepareMock).toHaveBeenCalledWith(
+      expect.stringContaining('retry_count = COALESCE(retry_count, 0) + 1'),
+    );
+  });
+});
+
+// ─────────────────────────────────────────────
+// markIssueFailed tests
+// ─────────────────────────────────────────────
+
+describe('markIssueFailed', () => {
+  it('sets status to failed for the given signature', async () => {
+    const { env, runMock } = makeEnv();
+
+    await markIssueFailed(env, 'net:timeout');
+
+    expect(runMock).toHaveBeenCalledTimes(1);
+    const prepareMock = env.DB.prepare as ReturnType<typeof vi.fn>;
+    expect(prepareMock).toHaveBeenCalledWith(
+      expect.stringContaining("status = 'failed'"),
+    );
+  });
+});
+
+// ─────────────────────────────────────────────
+// updatePendingToOpen tests
+// ─────────────────────────────────────────────
+
+describe('updatePendingToOpen', () => {
+  it('updates pending issue to open with issue details', async () => {
+    const { env, runMock } = makeEnv();
+
+    await updatePendingToOpen(env, 'net:timeout', 42, 'https://github.com/owner/repo/issues/42');
+
+    expect(runMock).toHaveBeenCalledTimes(1);
+    const prepareMock = env.DB.prepare as ReturnType<typeof vi.fn>;
+    expect(prepareMock).toHaveBeenCalledWith(
+      expect.stringContaining("status = 'open'"),
+    );
+    expect(prepareMock).toHaveBeenCalledWith(
+      expect.stringContaining('github_issue_number'),
     );
   });
 });

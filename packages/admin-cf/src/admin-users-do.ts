@@ -285,15 +285,14 @@ export class AdminUsersDO implements DurableObject {
    * Verify JWT token (used by VPS servers)
    */
   private async handleVerify(request: Request): Promise<Response> {
-    const authHeader = request.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
+    const token = this.extractToken(request);
+    if (!token) {
       return this.jsonResponse(
-        { success: false, error: 'Missing authorization header' },
+        { success: false, error: 'Missing authorization' },
         401
       );
     }
 
-    const token = authHeader.substring(7);
     const payload = await verifyJwt<JwtPayload>(token, this.env.ZAJEL_ADMIN_JWT_SECRET);
     if (!payload) {
       return this.jsonResponse(
@@ -426,15 +425,14 @@ export class AdminUsersDO implements DurableObject {
     request: Request,
     requiredRole?: 'admin' | 'super-admin'
   ): Promise<JwtPayload | Response> {
-    const authHeader = request.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
+    const token = this.extractToken(request);
+    if (!token) {
       return this.jsonResponse(
-        { success: false, error: 'Missing authorization header' },
+        { success: false, error: 'Missing authorization' },
         401
       );
     }
 
-    const token = authHeader.substring(7);
     const payload = await verifyJwt<JwtPayload>(token, this.env.ZAJEL_ADMIN_JWT_SECRET);
     if (!payload) {
       return this.jsonResponse(
@@ -451,6 +449,22 @@ export class AdminUsersDO implements DurableObject {
     }
 
     return payload;
+  }
+
+  /**
+   * Extract JWT token from Authorization header or cookie
+   */
+  private extractToken(request: Request): string | null {
+    const authHeader = request.headers.get('Authorization');
+    if (authHeader?.startsWith('Bearer ')) {
+      return authHeader.substring(7);
+    }
+    const cookie = request.headers.get('Cookie');
+    if (cookie) {
+      const match = cookie.match(/zajel_admin_token=([^;]+)/);
+      if (match?.[1]) return match[1];
+    }
+    return null;
   }
 
   /**
