@@ -1781,13 +1781,9 @@ jobs:
       matrix:
         include:
           - server_id: saudi-arabia-1
-            app_name: zajel-vps-sa
+            app_name: zajel-vps-sa-01
             db_name: zajel-db-sa
             label: Saudi Arabia
-          - server_id: egypt-1
-            app_name: zajel-vps-eg
-            db_name: zajel-db-eg
-            label: Egypt
     steps:
       - name: Verify API access
         id: verify
