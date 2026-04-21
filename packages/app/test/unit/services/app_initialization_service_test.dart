@@ -30,11 +30,13 @@ void main() {
     // Default stubs that can be overridden per-test
     late Future<List<TrustedPeer>> Function() getAllTrustedPeersStub;
     late Future<SignalingConnectResult> Function(String) connectToSignalingStub;
-    late Future<DiscoveredServer?> Function() selectServerStub;
+    late Future<List<DiscoveredServer>> Function() selectServerCandidatesStub;
     late String Function(DiscoveredServer) getWebSocketUrlStub;
+    late void Function(String) recordConnectionFailureStub;
     late Future<void> Function() reconnectTrustedPeersStub;
     late Stream<SignalingConnectionState>? Function()
         getConnectionStateStreamStub;
+    late List<String> recordedConnectionFailures;
 
     setUp(() {
       cryptoInitialized = false;
@@ -58,15 +60,20 @@ void main() {
             pairingCode: 'ABC123',
             signalingClient: 'mock-client',
           );
-      selectServerStub = () async => const DiscoveredServer(
-            serverId: 'srv1',
-            endpoint: 'https://example.com',
-            publicKey: 'pk1',
-            region: 'us-east',
-            registeredAt: 0,
-            lastSeen: 0,
-          );
+      selectServerCandidatesStub = () async => const [
+            DiscoveredServer(
+              serverId: 'srv1',
+              endpoint: 'https://example.com',
+              publicKey: 'pk1',
+              region: 'us-east',
+              registeredAt: 0,
+              lastSeen: 0,
+            ),
+          ];
       getWebSocketUrlStub = (server) => 'wss://${server.endpoint}/ws';
+      recordedConnectionFailures = [];
+      recordConnectionFailureStub =
+          (endpoint) => recordedConnectionFailures.add(endpoint);
       reconnectTrustedPeersStub = () async {};
       getConnectionStateStreamStub = () => null;
     });
@@ -101,8 +108,9 @@ void main() {
           notificationPermissionRequested = true;
         },
         connectToSignaling: connectToSignalingStub,
-        selectServer: selectServerStub,
+        selectServerCandidates: selectServerCandidatesStub,
         getWebSocketUrl: getWebSocketUrlStub,
+        recordConnectionFailure: recordConnectionFailureStub,
         reconnectTrustedPeers: reconnectTrustedPeersStub,
         setPairingCode: (code) => pairingCodeSet = code,
         setSignalingClient: (client) => signalingClientSet = client,
@@ -193,8 +201,9 @@ void main() {
           requestNotificationPermission: () async =>
               notificationPermissionRequested = true,
           connectToSignaling: connectToSignalingStub,
-          selectServer: selectServerStub,
+          selectServerCandidates: selectServerCandidatesStub,
           getWebSocketUrl: getWebSocketUrlStub,
+          recordConnectionFailure: recordConnectionFailureStub,
           reconnectTrustedPeers: reconnectTrustedPeersStub,
           setPairingCode: (code) => pairingCodeSet = code,
           setSignalingClient: (client) => signalingClientSet = client,
@@ -234,8 +243,9 @@ void main() {
           requestNotificationPermission: () async =>
               notificationPermissionRequested = true,
           connectToSignaling: connectToSignalingStub,
-          selectServer: selectServerStub,
+          selectServerCandidates: selectServerCandidatesStub,
           getWebSocketUrl: getWebSocketUrlStub,
+          recordConnectionFailure: recordConnectionFailureStub,
           reconnectTrustedPeers: reconnectTrustedPeersStub,
           setPairingCode: (code) => pairingCodeSet = code,
           setSignalingClient: (client) => signalingClientSet = client,
@@ -280,7 +290,7 @@ void main() {
       });
 
       test('sets disconnected when no server available', () async {
-        selectServerStub = () async => null;
+        selectServerCandidatesStub = () async => const <DiscoveredServer>[];
 
         service = buildService();
         await service.connectSignaling();

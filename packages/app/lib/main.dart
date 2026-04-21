@@ -175,10 +175,12 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
           signalingClient: cm.signalingClient,
         );
       },
-      selectServer: () =>
-          ref.read(serverDiscoveryServiceProvider).selectServer(),
+      selectServerCandidates: () =>
+          ref.read(serverDiscoveryServiceProvider).selectServerCandidates(),
       getWebSocketUrl: (server) =>
           ref.read(serverDiscoveryServiceProvider).getWebSocketUrl(server),
+      recordConnectionFailure: (endpoint) =>
+          ref.read(serverSkipListProvider).add(endpoint),
       reconnectTrustedPeers: () =>
           ref.read(connectionManagerProvider).reconnectTrustedPeers(),
       setPairingCode: (code) =>
