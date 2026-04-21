@@ -195,12 +195,28 @@ class AppInitializationService {
     // Try candidates in order until one connects. Each failed endpoint
     // is recorded so sibling connection sites (pairing redirects,
     // reconnect loop, federation) skip it for the next ~5 minutes.
+    //
+    // Per-attempt timeout: WebSocket.connect() has no built-in timeout
+    // on Android (DNS + TCP connect can hang for ~30s per dead host on
+    // a bad network). Without a cap the failover loop would take
+    // N_candidates x 30s before landing on a live server, which exceeds
+    // the app's "offline" display budget and E2E test wait windows.
+    // 8s is long enough for a healthy WSS handshake from any supported
+    // region and short enough to finish the whole failover inside a
+    // 60s UI wait.
+    const perAttemptTimeout = Duration(seconds: 8);
+
     for (final server in candidates) {
       setSelectedServer(server);
       final serverUrl = getWebSocketUrl(server);
       logger.info(_tag, 'Trying server ${server.region} - ${server.endpoint}');
       try {
-        final result = await connectToSignaling(serverUrl);
+        final result = await connectToSignaling(serverUrl).timeout(
+          perAttemptTimeout,
+          onTimeout: () => throw TimeoutException(
+            'Connect to ${server.endpoint} timed out after ${perAttemptTimeout.inSeconds}s',
+          ),
+        );
         logger.info(_tag,
             'Connected to ${server.endpoint} (pairing code: ${result.pairingCode})');
         setPairingCode(result.pairingCode);

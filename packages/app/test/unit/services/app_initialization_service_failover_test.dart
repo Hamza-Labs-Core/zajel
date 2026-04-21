@@ -201,5 +201,40 @@ void main() {
       expect(displayStates, contains('connected'));
       expect(failureRecords, isEmpty);
     });
+
+    test('a candidate that hangs does not block the entire failover loop',
+        () async {
+      // Simulates a dead endpoint whose DNS/TCP connect hangs for longer
+      // than the test's 60s app-ready wait. Without a per-attempt timeout,
+      // the failover loop gets stuck and never reaches the live server.
+      final candidates = [
+        _server('hangs.example.com'),
+        _server('live.example.com'),
+      ];
+
+      service = buildService(
+        selectCandidates: () async => candidates,
+        connect: (url) async {
+          if (url.contains('hangs')) {
+            // Never completes — mimics a WebSocket handshake against a
+            // host that accepts TCP but never responds.
+            await Future<void>.delayed(const Duration(seconds: 120));
+            throw StateError('unreachable');
+          }
+          return SignalingConnectResult(
+            pairingCode: 'LIVE',
+            signalingClient: 'mock-client',
+          );
+        },
+      );
+
+      // Bounded by the per-attempt timeout in connectSignaling (expected
+      // to be well under the 30-second fail-safe used here). If the loop
+      // has no timeout, this test times out.
+      await service.connectSignaling().timeout(const Duration(seconds: 30));
+
+      expect(displayStates, contains('connected'));
+      expect(failureRecords, contains('hangs.example.com'));
+    });
   });
 }
