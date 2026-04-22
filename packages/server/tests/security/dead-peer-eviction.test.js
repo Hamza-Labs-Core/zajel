@@ -118,19 +118,25 @@ describe('Dead-Peer Eviction', () => {
     ]);
   });
 
-  it('resets probe-failure count on a successful heartbeat', async () => {
-    await registerServer('ed25519:flaky', 'wss://flaky-host.example.com');
+  it('does NOT reset probe-failure count on heartbeat (heartbeat != reachability)', async () => {
+    // A VPS whose public port is firewalled can still heartbeat to the
+    // bootstrap worker (heartbeat is outbound-only). Resetting
+    // probeFailures on every heartbeat would prevent eviction forever,
+    // because VPS heartbeats (~60s) arrive between alarm cycles (~2 min)
+    // and would repeatedly clear the counter before it hit threshold.
+    // Only a successful probe should reset the counter.
+    await registerServer('ed25519:firewalled', 'wss://firewalled-host.example.com');
 
-    stubProbeResponses(['flaky-host']);
+    stubProbeResponses(['firewalled-host']);
 
     // 1 probe failure accrued
     await registry.alarm();
 
-    // Simulate server recovery: successful heartbeat (not a probe)
+    // Heartbeat arrives — must NOT reset probeFailures.
     vi.advanceTimersByTime(60_000);
     await registry.fetch(
       createRequest('POST', '/servers/heartbeat', {
-        serverId: 'ed25519:flaky',
+        serverId: 'ed25519:firewalled',
         connections: 1,
         relayConnections: 0,
         signalingConnections: 1,
@@ -138,8 +144,26 @@ describe('Dead-Peer Eviction', () => {
       }, authHeaders)
     );
 
-    // Probe stays dead but heartbeat reset probe-failure counter to 0.
-    // Next alarm bumps to 1 again — still below threshold of 2.
+    // Second alarm: probe fails again — counter hits threshold → evicted.
+    await registry.alarm();
+    expect(await listServers()).toHaveLength(0);
+  });
+
+  it('resets probe-failure count when a probe succeeds', async () => {
+    // A server that was flaky but recovers (probe now succeeds) must
+    // not be evicted by earlier accumulated probe failures.
+    await registerServer('ed25519:recovering', 'wss://recovering-host.example.com');
+
+    // Round 1: probe fails, counter = 1
+    stubProbeResponses(['recovering-host']);
+    await registry.alarm();
+
+    // Round 2: probe now succeeds → counter reset to 0
+    stubProbeResponses([]); // all live
+    await registry.alarm();
+
+    // Round 3: probe fails once more → counter = 1, still below threshold.
+    stubProbeResponses(['recovering-host']);
     await registry.alarm();
     expect(await listServers()).toHaveLength(1);
   });

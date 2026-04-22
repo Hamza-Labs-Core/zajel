@@ -1347,9 +1347,16 @@ export class ServerRegistryDO {
     }
 
     server.lastSeen = hbNow;
-    // A live heartbeat means the server is still alive — reset any
-    // accumulated probe-failure count so we don't evict a recovering server.
-    server.probeFailures = 0;
+    // Note: we deliberately do NOT reset server.probeFailures here. A
+    // heartbeat only proves the VPS process can reach the bootstrap
+    // worker (outbound); it does not prove clients can reach the VPS's
+    // public port (inbound). A crash-looping or firewalled VPS may
+    // keep heartbeating indefinitely while its WSS endpoint is dead
+    // — resetting probeFailures on heartbeat would prevent the alarm
+    // from ever evicting such servers, because its probeFailures would
+    // be cleared between alarm ticks. probeFailures is reset only when
+    // a probe itself succeeds (see alarm()), which is the actual
+    // signal that inbound reachability is restored.
     if (typeof body.connections === 'number' && Number.isFinite(body.connections)) {
       server.connections = Math.max(0, Math.floor(body.connections));
     }
