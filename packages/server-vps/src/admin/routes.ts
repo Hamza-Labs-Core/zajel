@@ -1217,7 +1217,11 @@ function getDashboardHtml(cfAdminUrl?: string): string {
           y = centerY + Math.sin(angle) * radius - 24;
         }
 
-        const shortId = node.id.substring(0, 6);
+        // Strip the 'ed25519:' prefix before truncating — every Ed25519
+        // serverId starts with those 8 chars, so truncating at 6 produces
+        // 'ed2551' for every node and the topology looks like 18 duplicates.
+        const keyPart = node.id.startsWith('ed25519:') ? node.id.slice(8) : node.id;
+        const shortId = keyPart.substring(0, 6);
         const statusClass = isLocal ? 'local' : node.status;
 
         return \`<div class="node \${statusClass}" style="left: \${x}px; top: \${y}px;" title="\${node.id}\\n\${node.region}">\${shortId}</div>\`;

@@ -192,6 +192,50 @@ export class Membership extends EventEmitter {
   }
 
   /**
+   * Purge members that have been in a non-alive state for too long.
+   *
+   * Without this, the membership table accumulates every server ever seen
+   * via gossip — each short-lived CI probe, each crashed VPS, each deleted
+   * Cranl container. They sit in `suspect` or `failed` forever because
+   * only an explicit `leave` announcement calls [remove] and dead peers
+   * never send one.
+   *
+   * Default: purge `failed`/`left` entries older than 30 min, and
+   * `suspect` older than 1 hour (longer because suspect may still
+   * refute). `alive` entries are never purged by this method.
+   *
+   * Returns the number of entries removed.
+   */
+  pruneStale(options?: {
+    failedTtlMs?: number;
+    suspectTtlMs?: number;
+    unknownTtlMs?: number;
+  }): number {
+    const now = Date.now();
+    const failedTtl = options?.failedTtlMs ?? 30 * 60 * 1000;
+    const suspectTtl = options?.suspectTtlMs ?? 60 * 60 * 1000;
+    const unknownTtl = options?.unknownTtlMs ?? 30 * 60 * 1000;
+
+    const toRemove: string[] = [];
+    for (const [serverId, entry] of this.members) {
+      if (serverId === this.localServerId) continue; // never purge self
+      const age = now - entry.lastSeen;
+      const expired =
+        (entry.status === 'failed' && age >= failedTtl) ||
+        (entry.status === 'left' && age >= failedTtl) ||
+        (entry.status === 'suspect' && age >= suspectTtl) ||
+        (entry.status === 'unknown' && age >= unknownTtl);
+      if (expired) toRemove.push(serverId);
+    }
+
+    for (const serverId of toRemove) {
+      this.members.delete(serverId);
+      this.emit('member-leave', serverId);
+    }
+    return toRemove.length;
+  }
+
+  /**
    * Get a member by ID
    */
   get(serverId: string): MembershipEntry | undefined {
