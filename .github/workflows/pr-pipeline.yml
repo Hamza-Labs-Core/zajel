@@ -820,12 +820,19 @@ jobs:
 
       - name: Install OpenSSL
         if: steps.check.outputs.needed == 'true'
+        env:
+          # Pin to a specific OpenSSL 3.x version so a runner-image or choco
+          # package bump (e.g. the OpenSSL 4 GA roll-out in April 2026 that
+          # silently shifted pinned_websocket's imports from libssl-3 →
+          # libssl-4 while the CMake bundle still collected 3.x DLLs) can't
+          # produce a zip whose bundled runtime DLLs don't match the exe's
+          # imports. Bump this deliberately when upgrading.
+          OPENSSL_CHOCO_VERSION: '3.4.1'
         run: |
-          # Install OpenSSL with development files (no pinned version - use latest available)
           # Ignore choco exit code — OpenSSL may already be installed on the runner,
           # and transient CDN errors (503) cause choco to return non-zero even when
           # the package is already present. We validate OpenSSL presence below.
-          choco install openssl -y --no-progress
+          choco install openssl --version=$env:OPENSSL_CHOCO_VERSION -y --no-progress --allow-downgrade
           $chocoExit = $LASTEXITCODE
           if ($chocoExit -ne 0) {
             Write-Host "WARNING: choco install returned exit code $chocoExit (may be pre-installed or CDN issue)"
@@ -891,6 +898,41 @@ jobs:
             --dart-define=E2E_TEST=true `
             --dart-define=DIAGNOSTICS_URL=https://diagnostics.zajel.qa.hamzalabs.dev
 
+      - name: Bundle OpenSSL DLLs + verify imports match
+        if: steps.check.outputs.needed == 'true'
+        working-directory: packages/app
+        shell: pwsh
+        run: |
+          $release = "build\windows\x64\runner\Release"
+
+          # Belt-and-braces: copy every libssl-*-x64.dll and libcrypto-*-x64.dll
+          # from OpenSSL's bin into the Release folder regardless of CMake state.
+          $opensslBin = "$env:OPENSSL_ROOT_DIR\bin"
+          Copy-Item "$opensslBin\libssl-*-x64.dll","$opensslBin\libcrypto-*-x64.dll" $release -Force -ErrorAction Stop
+
+          # Assert every libssl-* / libcrypto-* imported by zajel.exe is bundled.
+          # Catches toolchain bumps that shift the linked libssl major (e.g. the
+          # April 2026 OpenSSL 4 GA roll-out) at build time, not at user launch.
+          $exe = Join-Path $release "zajel.exe"
+          $bytes = [IO.File]::ReadAllBytes($exe)
+          $asText = [Text.Encoding]::ASCII.GetString($bytes)
+          $imports = [Regex]::Matches($asText, 'lib(?:ssl|crypto)-[0-9_]+-x64\.dll') | ForEach-Object { $_.Value } | Sort-Object -Unique
+          Write-Host "zajel.exe imports these OpenSSL DLLs: $($imports -join ', ')"
+          $missing = @()
+          foreach ($imp in $imports) {
+            if (-not (Test-Path (Join-Path $release $imp))) { $missing += $imp }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Host "ERROR: exe imports DLLs that are not bundled: $($missing -join ', ')"
+            Get-ChildItem $release | Select-Object Name
+            exit 1
+          }
+          Write-Host "All OpenSSL DLLs imported by zajel.exe are present in the bundle."
+
+      - name: Zip Windows build
+        if: steps.check.outputs.needed == 'true'
+        working-directory: packages/app
+        run: |
           Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath zajel-${{ env.VERSION }}-windows.zip
 
       - name: Save build commit SHA

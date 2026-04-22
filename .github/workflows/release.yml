@@ -464,11 +464,83 @@ jobs:
           echo "VERSION=${TAG#v}" >> $GITHUB_ENV
           echo "BUILD_NUMBER=${{ github.run_number }}" >> $GITHUB_ENV
 
+      - name: Install OpenSSL (release must match PR toolchain)
+        shell: pwsh
+        env:
+          # Must match OPENSSL_CHOCO_VERSION in pr-pipeline.yml. Pinning
+          # a specific 3.x version guards against runner-image bumps that
+          # would otherwise shift pinned_websocket's linked libssl major
+          # and ship a zip whose bundled DLLs don't match exe imports.
+          OPENSSL_CHOCO_VERSION: '3.4.1'
+        run: |
+          choco install openssl --version=$env:OPENSSL_CHOCO_VERSION -y --no-progress --allow-downgrade
+          $chocoExit = $LASTEXITCODE
+          if ($chocoExit -ne 0) {
+            Write-Host "WARNING: choco install returned exit code $chocoExit (may be pre-installed or CDN issue)"
+          }
+
+          $opensslRoot = "C:\Program Files\OpenSSL-Win64"
+          if (-not (Test-Path $opensslRoot)) { $opensslRoot = "C:\Program Files\OpenSSL" }
+
+          $libDir = $null
+          foreach ($path in @("$opensslRoot\lib\VC\x64\MD", "$opensslRoot\lib\VC\x64", "$opensslRoot\lib")) {
+            if (Test-Path "$path\libssl.lib") { $libDir = $path; break }
+          }
+          if ($libDir -eq $null) {
+            Write-Host "ERROR: Could not find OpenSSL libraries"
+            dir "$opensslRoot" -Recurse | Where-Object { $_.Name -like "*.lib" }
+            exit 1
+          }
+
+          echo "OPENSSL_ROOT_DIR=$opensslRoot" >> $env:GITHUB_ENV
+          echo "OPENSSL_INCLUDE_DIR=$opensslRoot\include" >> $env:GITHUB_ENV
+          echo "OPENSSL_CRYPTO_LIBRARY=$libDir\libcrypto.lib" >> $env:GITHUB_ENV
+          echo "OPENSSL_SSL_LIBRARY=$libDir\libssl.lib" >> $env:GITHUB_ENV
+          dir "$opensslRoot\bin\libssl-*.dll", "$opensslRoot\bin\libcrypto-*.dll"
+          exit 0
+
       - name: Get dependencies
         run: flutter pub get
 
       - name: Build Windows
         run: flutter build windows --release --obfuscate --split-debug-info=build/debug-info/windows --dart-define=VERSION=${{ env.VERSION }} --dart-define=BUILD_NUMBER=${{ env.BUILD_NUMBER }}
+
+      - name: Bundle OpenSSL DLLs + verify imports match
+        shell: pwsh
+        run: |
+          $release = "build\windows\x64\runner\Release"
+
+          # Belt-and-braces: copy every libssl-*-x64.dll and libcrypto-*-x64.dll
+          # from OpenSSL's bin into the Release folder, regardless of what
+          # CMake did. Duplicate copies are harmless (overwrite the same file).
+          $opensslBin = "$env:OPENSSL_ROOT_DIR\bin"
+          Copy-Item "$opensslBin\libssl-*-x64.dll","$opensslBin\libcrypto-*-x64.dll" $release -Force -ErrorAction Stop
+
+          # Parse zajel.exe's import table with System.Reflection.PortableExecutable
+          # and assert every libssl-*/libcrypto-* imported DLL is present
+          # next to the exe. Catches the April 2026 regression (exe imports
+          # libssl-4 but zip bundles libssl-3) at build time instead of at
+          # user launch.
+          $exe = Join-Path $release "zajel.exe"
+          $bytes = [IO.File]::ReadAllBytes($exe)
+          $ms = New-Object IO.MemoryStream(,$bytes)
+          Add-Type -AssemblyName "System.Reflection.Metadata"
+          $peReader = New-Object System.Reflection.PortableExecutable.PEReader($ms)
+          # Read imports the low-tech way: scan bytes for "libssl-" / "libcrypto-" ASCII strings.
+          $asText = [Text.Encoding]::ASCII.GetString($bytes)
+          $imports = [Regex]::Matches($asText, 'lib(?:ssl|crypto)-[0-9_]+-x64\.dll') | ForEach-Object { $_.Value } | Sort-Object -Unique
+          Write-Host "zajel.exe imports these OpenSSL DLLs: $($imports -join ', ')"
+          $missing = @()
+          foreach ($imp in $imports) {
+            if (-not (Test-Path (Join-Path $release $imp))) { $missing += $imp }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Host "ERROR: exe imports DLLs that are not bundled: $($missing -join ', ')"
+            Write-Host "Release folder contents:"
+            Get-ChildItem $release | Select-Object Name
+            exit 1
+          }
+          Write-Host "All OpenSSL DLLs imported by zajel.exe are present in the bundle."
 
       - name: Decode certificate
         if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' }}
