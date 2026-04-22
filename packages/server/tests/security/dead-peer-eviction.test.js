@@ -168,16 +168,21 @@ describe('Dead-Peer Eviction', () => {
     expect(await listServers()).toHaveLength(1);
   });
 
-  it('treats non-2xx probe responses as failures', async () => {
-    await registerServer('ed25519:bad-status', 'wss://bad-status.example.com');
+  it('treats 3xx redirects as reachable (port-80 nginx redirect to HTTPS)', async () => {
+    // The probe uses plain HTTP on port 80 to sidestep cert-validation
+    // issues on CF Workers. Most VPS nginx configs answer port 80 with a
+    // 301 → https://…; we must accept that as liveness.
+    await registerServer('ed25519:redirect', 'wss://redirect-host.example.com');
 
-    // Respond 500 on all probes
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('err', { status: 500 })));
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(null, { status: 301, headers: { Location: 'https://redirect-host.example.com/' } })
+    ));
 
     await registry.alarm();
     await registry.alarm();
 
-    expect(await listServers()).toHaveLength(0);
+    // Still present — a 301 is an HTTP response, so probe counts as success.
+    expect(await listServers()).toHaveLength(1);
   });
 
   it('evicts servers whose lastSeen exceeds the shortened TTL (2 min)', async () => {

@@ -366,13 +366,27 @@ export class ServerRegistryDO {
    * between restarts while its public WSS endpoint never serves traffic.
    * This active probe closes that gap.
    *
-   * Returns true if the endpoint returned a 2xx response within the
-   * configured timeout, false otherwise.
+   * Implementation detail: we probe over plain HTTP on port 80, NOT
+   * HTTPS. Let's Encrypt's "Root YE" / short-lived IP certificate
+   * infrastructure (GA January 2026) is not in every trust store yet —
+   * notably the Cloudflare Workers runtime fetch() trust store was
+   * observed rejecting live VPSs with LE IP certs as of 2026-04-22,
+   * producing false-positive probe failures that evicted healthy
+   * servers. Port 80 has no TLS handshake so this class of problem
+   * cannot fire. Any VPS running nginx will answer port 80 with at
+   * minimum a 301 → HTTPS redirect, which is a sufficient liveness
+   * signal. A fully-dead port 80 (connection refused / DNS failure)
+   * proves the server can't serve clients either.
+   *
+   * Returns true if the endpoint produced any HTTP response (including
+   * redirects) within the configured timeout, false if the request
+   * errored or timed out.
    */
   async probeServer(endpoint) {
-    // Convert wss:// → https:// / ws:// → http:// for the probe.
+    // Convert to http:// on port 80 regardless of the registered scheme.
     let probeUrl = endpoint;
-    if (probeUrl.startsWith('wss://')) probeUrl = 'https://' + probeUrl.slice(6);
+    if (probeUrl.startsWith('wss://')) probeUrl = 'http://' + probeUrl.slice(6);
+    else if (probeUrl.startsWith('https://')) probeUrl = 'http://' + probeUrl.slice(8);
     else if (probeUrl.startsWith('ws://')) probeUrl = 'http://' + probeUrl.slice(5);
     if (!probeUrl.endsWith('/')) probeUrl += '/';
     probeUrl += 'health';
@@ -380,9 +394,13 @@ export class ServerRegistryDO {
     try {
       const res = await fetch(probeUrl, {
         method: 'GET',
+        redirect: 'manual',
         signal: AbortSignal.timeout(this.probeTimeoutMs),
       });
-      return res.ok;
+      // Any HTTP response is proof of life, including 3xx redirects.
+      // Only network-level failures (DNS, TCP refused, TLS fail on
+      // port-80-serves-TLS-only setups, timeouts) count as failures.
+      return res.status > 0 && res.status < 600;
     } catch {
       return false;
     }
