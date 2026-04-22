@@ -121,13 +121,13 @@ export async function handleServerMetrics(
         connections_total,
         connections_relay,
         connections_signaling,
-        active_codes,
-        message_rate_per_sec,
+        entropy_active_codes,
+        message_rate_per_second,
         uptime_seconds,
         timestamp
-      FROM server_metric_snapshots
+      FROM server_metrics
       WHERE id IN (
-        SELECT MAX(id) FROM server_metric_snapshots GROUP BY server_id
+        SELECT MAX(id) FROM server_metrics GROUP BY server_id
       )
       LIMIT 500
     `).all<{
@@ -138,8 +138,8 @@ export async function handleServerMetrics(
       connections_total: number;
       connections_relay: number;
       connections_signaling: number;
-      active_codes: number;
-      message_rate_per_sec: number;
+      entropy_active_codes: number;
+      message_rate_per_second: number;
       uptime_seconds: number;
       timestamp: number;
     }>();
@@ -155,8 +155,8 @@ export async function handleServerMetrics(
         relay: row.connections_relay,
         signaling: row.connections_signaling,
       },
-      activeCodes: row.active_codes,
-      messageRatePerSec: row.message_rate_per_sec,
+      activeCodes: row.entropy_active_codes,
+      messageRatePerSec: row.message_rate_per_second,
       uptimeSeconds: row.uptime_seconds,
       timestamp: row.timestamp,
     }));
@@ -208,8 +208,8 @@ export async function handleServerMetricsDetail(
       SELECT
         server_id, region, cpu_percent, memory_mb,
         connections_total, connections_relay, connections_signaling,
-        active_codes, message_rate_per_sec, uptime_seconds, timestamp
-      FROM server_metric_snapshots
+        entropy_active_codes, message_rate_per_second, uptime_seconds, timestamp
+      FROM server_metrics
       WHERE server_id = ?
       ORDER BY id DESC
       LIMIT 1
@@ -221,8 +221,8 @@ export async function handleServerMetricsDetail(
       connections_total: number;
       connections_relay: number;
       connections_signaling: number;
-      active_codes: number;
-      message_rate_per_sec: number;
+      entropy_active_codes: number;
+      message_rate_per_second: number;
       uptime_seconds: number;
       timestamp: number;
     }>();
@@ -231,8 +231,8 @@ export async function handleServerMetricsDetail(
     const historyResult = await env.DIAGNOSTICS_DB.prepare(`
       SELECT
         cpu_percent, memory_mb, connections_total,
-        message_rate_per_sec, timestamp
-      FROM server_metric_snapshots
+        message_rate_per_second, timestamp
+      FROM server_metrics
       WHERE server_id = ? AND timestamp > ?
       ORDER BY timestamp ASC
       LIMIT 1000
@@ -240,7 +240,7 @@ export async function handleServerMetricsDetail(
       cpu_percent: number;
       memory_mb: number;
       connections_total: number;
-      message_rate_per_sec: number;
+      message_rate_per_second: number;
       timestamp: number;
     }>();
 
@@ -256,8 +256,8 @@ export async function handleServerMetricsDetail(
             relay: current.connections_relay,
             signaling: current.connections_signaling,
           },
-          activeCodes: current.active_codes,
-          messageRatePerSec: current.message_rate_per_sec,
+          activeCodes: current.entropy_active_codes,
+          messageRatePerSec: current.message_rate_per_second,
           uptimeSeconds: current.uptime_seconds,
           timestamp: current.timestamp,
         }
@@ -393,9 +393,11 @@ export async function handleNetworkMetrics(
     const result = await env.DIAGNOSTICS_DB.prepare(`
       SELECT
         time_bucket, platform, app_version,
-        signaling_success_count, signaling_attempt_count,
-        webrtc_success_count, webrtc_attempt_count,
-        relay_usage_count, direct_usage_count,
+        signaling_success_count, signaling_failure_count,
+        (signaling_success_count + signaling_failure_count) AS signaling_attempt_count,
+        webrtc_success_count, webrtc_failure_count,
+        (webrtc_success_count + webrtc_failure_count) AS webrtc_attempt_count,
+        relay_usage_count, direct_p2p_count,
         avg_latency_ms
       FROM network_aggregates
       WHERE time_bucket > ?
@@ -406,11 +408,13 @@ export async function handleNetworkMetrics(
       platform: string;
       app_version: string;
       signaling_success_count: number;
+      signaling_failure_count: number;
       signaling_attempt_count: number;
       webrtc_success_count: number;
+      webrtc_failure_count: number;
       webrtc_attempt_count: number;
       relay_usage_count: number;
-      direct_usage_count: number;
+      direct_p2p_count: number;
       avg_latency_ms: number;
     }>();
 
@@ -466,15 +470,19 @@ export async function handleFederationMetrics(
     const since = Date.now() - rangeMs;
 
     // C-3 fix: Run both queries in parallel
+    // Federation data lives in server_metrics table, not a separate table
     const [latestResult, historyResult] = await Promise.all([
       // H-4 fix: latest-per-server bounded by time window
       env.DIAGNOSTICS_DB.prepare(`
         SELECT
-          server_id, alive_members, total_members,
-          gossip_latency_ms, sync_completeness, timestamp
-        FROM federation_metrics
+          server_id,
+          federation_alive_members AS alive_members,
+          federation_total_members AS total_members,
+          gossip_rtt_p50_ms AS gossip_latency_ms,
+          timestamp
+        FROM server_metrics
         WHERE timestamp > ? AND id IN (
-          SELECT MAX(id) FROM federation_metrics
+          SELECT MAX(id) FROM server_metrics
           WHERE timestamp > ?
           GROUP BY server_id
         )
@@ -484,15 +492,17 @@ export async function handleFederationMetrics(
         alive_members: number;
         total_members: number;
         gossip_latency_ms: number;
-        sync_completeness: number;
         timestamp: number;
       }>(),
 
       env.DIAGNOSTICS_DB.prepare(`
         SELECT
-          server_id, alive_members, total_members,
-          gossip_latency_ms, sync_completeness, timestamp
-        FROM federation_metrics
+          server_id,
+          federation_alive_members AS alive_members,
+          federation_total_members AS total_members,
+          gossip_rtt_p50_ms AS gossip_latency_ms,
+          timestamp
+        FROM server_metrics
         WHERE timestamp > ?
         ORDER BY timestamp ASC
         LIMIT 1000
@@ -501,7 +511,6 @@ export async function handleFederationMetrics(
         alive_members: number;
         total_members: number;
         gossip_latency_ms: number;
-        sync_completeness: number;
         timestamp: number;
       }>(),
     ]);

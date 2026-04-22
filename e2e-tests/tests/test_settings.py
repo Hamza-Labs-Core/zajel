@@ -79,44 +79,57 @@ class TestSettings:
         assert persisted, "Display name should persist after app restart"
 
     @pytest.mark.single_device
+    @pytest.mark.requires_signaling
     def test_connection_status_shown(self, alice, app_helper):
         """Settings shows connection status ('Connected' or 'Connecting...')."""
+        from selenium.webdriver.common.by import By
+
         helper = app_helper(alice)
         helper.wait_for_app_ready()
 
-        # Navigate to connect first to trigger signaling connection
-        helper.navigate_to_connect()
-        time.sleep(5)
-        helper.go_back_to_home()
-
+        # The app auto-connects to signaling on startup (no need to
+        # navigate to the Connect screen first).
         helper.navigate_to_settings()
 
-        # The External Connections section may be below the fold — scroll down
-        # Use small scroll increments to avoid overshooting past the section
+        # Scroll down the settings list looking for the External Connections
+        # section. Use small, slow swipes (30% of viewport) to avoid fling
+        # momentum overshooting the section. After each swipe, immediately
+        # check for the target — if we see "Debugging" without having seen
+        # External Connections, we've overshot and must scroll back up.
         screen_size = alice.get_window_size()
         center_x = int(screen_size['width'] * 0.5)
-        start_y = int(screen_size['height'] * 0.6)
+        h = screen_size['height']
+
+        def _find_one(xpath):
+            els = alice.find_elements(By.XPATH, xpath)
+            return els[0] if els else None
+
+        target_xpath = (
+            "//*["
+            "contains(@content-desc, 'External Connections') or "
+            "contains(@content-desc, 'Connected') or "
+            "contains(@content-desc, 'Connecting') or "
+            "contains(@content-desc, 'Pairing Code') or "
+            "contains(@content-desc, 'Bootstrap Server')]"
+        )
+        overshoot_xpath = "//*[contains(@content-desc, 'Debugging')]"
 
         found_status = False
-        # On Pixel 6 (~859dp usable), "External Connections" is at ~492dp
-        # and should be visible without scrolling. Try with a longer timeout
-        # first, then scroll with smaller increments as fallback.
-        for attempt in range(4):
-            find_timeout = 5 if attempt == 0 else 2
-            for status_text in ['External Connections', 'Connected',
-                                'Connecting', 'Pairing Code']:
-                try:
-                    helper._find(status_text, timeout=find_timeout)
-                    found_status = True
-                    break
-                except Exception:
-                    pass
-            if found_status:
+        # 15 attempts of small swipes (30% each) with immediate re-check
+        for _ in range(15):
+            if _find_one(target_xpath) is not None:
+                found_status = True
                 break
-            # Small scroll (~150dp) to avoid overshooting past the section
-            small_end_y = int(screen_size['height'] * 0.45)
-            alice.swipe(center_x, start_y, center_x, small_end_y, 500)
-            time.sleep(1)
+
+            # If we see "Debugging" (section below External Connections)
+            # without the target, we've scrolled past — scroll up instead.
+            if _find_one(overshoot_xpath) is not None:
+                # Scroll up (finger moves down — content moves up-to-down)
+                alice.swipe(center_x, int(h * 0.3), center_x, int(h * 0.6), 600)
+            else:
+                # Scroll down (finger moves up — content moves down-to-up)
+                alice.swipe(center_x, int(h * 0.6), center_x, int(h * 0.4), 600)
+            time.sleep(0.7)  # wait for scroll animation + settle
 
         assert found_status, \
             "Settings should show connection status section"
@@ -129,19 +142,20 @@ class TestSettings:
 
         helper.navigate_to_settings()
 
-        # Scroll down to find View Logs (it's in the Debugging section)
+        # Scroll down to find View Logs (it's in the Debugging section,
+        # near the bottom of the settings screen).
         screen_size = alice.get_window_size()
         center_x = int(screen_size['width'] * 0.5)
-        start_y = int(screen_size['height'] * 0.8)
-        end_y = int(screen_size['height'] * 0.2)
+        start_y = int(screen_size['height'] * 0.7)
+        end_y = int(screen_size['height'] * 0.3)
 
-        for _ in range(3):
+        for _ in range(6):
             try:
                 helper._find("View Logs", timeout=3)
                 break
             except Exception:
-                alice.swipe(center_x, start_y, center_x, end_y, 500)
-                time.sleep(1)
+                alice.swipe(center_x, start_y, center_x, end_y, 800)
+                time.sleep(0.5)
 
         helper.tap_settings_option("View Logs")
 
@@ -190,10 +204,10 @@ class TestSettings:
         # Scroll to bottom to find 'Clear All Data'
         screen_size = alice_driver.get_window_size()
         center_x = int(screen_size['width'] * 0.5)
-        start_y = int(screen_size['height'] * 0.8)
-        end_y = int(screen_size['height'] * 0.2)
+        start_y = int(screen_size['height'] * 0.7)
+        end_y = int(screen_size['height'] * 0.3)
 
-        for _ in range(5):
+        for _ in range(6):
             try:
                 alice._find("Clear All Data", timeout=3)
                 break

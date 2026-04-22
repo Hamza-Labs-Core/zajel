@@ -8,6 +8,7 @@ import 'package:zajel/core/crypto/crypto_service.dart';
 import 'package:zajel/core/network/connection_manager.dart';
 import 'package:zajel/core/network/meeting_point_service.dart';
 import 'package:zajel/core/network/rendezvous_service.dart';
+import 'package:zajel/core/storage/cached_secure_storage.dart';
 import 'package:zajel/core/network/signaling_client.dart';
 import 'package:zajel/core/network/webrtc_service.dart';
 import 'package:zajel/core/network/device_link_service.dart';
@@ -292,4 +293,39 @@ class FakeSecureStorage implements FlutterSecureStorage {
 
   @override
   void unregisterAllListenersForKey({required String key}) {}
+}
+
+/// Test fake for [CachedSecureStorage] backed by an in-memory map.
+///
+/// Already initialized (no file I/O needed).
+class FakeCachedSecureStorage extends CachedSecureStorage {
+  final Map<String, String> _store = {};
+
+  FakeCachedSecureStorage() : super(storage: const FlutterSecureStorage());
+
+  @override
+  Future<void> initialize() async {
+    // No-op for tests
+  }
+
+  @override
+  Future<String?> read({required String key}) async => _store[key];
+
+  @override
+  Future<void> write({required String key, required String value}) async {
+    _store[key] = value;
+  }
+
+  @override
+  Future<void> delete({required String key}) async {
+    _store.remove(key);
+  }
+
+  @override
+  Future<Map<String, String>> readAll() async => Map.from(_store);
+
+  @override
+  Future<void> deleteAll() async {
+    _store.clear();
+  }
 }

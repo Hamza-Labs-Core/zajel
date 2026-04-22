@@ -242,13 +242,14 @@ describe('analyzeWithAi', () => {
     const env = makeEnv({ response: VALID_AI_RESPONSE });
     const cluster = makeCluster();
 
-    const { analysis, tokensUsed } = await analyzeWithAi(env, cluster, '15 minutes');
+    const { analysis, tokensUsed, modelUsed } = await analyzeWithAi(env, cluster, '15 minutes');
 
     expect(analysis).not.toBeNull();
     expect(analysis!.title).toBe('X25519 key exchange fails with invalid public key length');
     expect(analysis!.severity).toBe('high');
     expect(analysis!.component).toBe('crypto');
     expect(tokensUsed).toBe(0); // No usage metadata in mock
+    expect(modelUsed).toBe('@cf/meta/llama-3.1-8b-instruct');
   });
 
   it('extracts token usage from response metadata', async () => {
@@ -272,11 +273,21 @@ describe('analyzeWithAi', () => {
   });
 
   it('returns null analysis for malformed AI response (graceful degradation)', async () => {
-    const env = makeEnv({ response: 'I cannot analyze this error.' });
+    // Both primary and fallback return malformed response
+    const runMock = vi.fn().mockResolvedValue({ response: 'I cannot analyze this error.' });
+    const env: Env = {
+      DB: {} as D1Database,
+      REPORTS_BUCKET: {} as R2Bucket,
+      AI: { run: runMock } as unknown as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
     const cluster = makeCluster();
 
-    const { analysis } = await analyzeWithAi(env, cluster, '15 minutes');
+    const { analysis, modelUsed } = await analyzeWithAi(env, cluster, '15 minutes');
     expect(analysis).toBeNull();
+    // Fallback was tried, returned malformed too
+    expect(modelUsed).toBe('@cf/mistral/mistral-7b-instruct-v0.1');
   });
 
   it('returns null analysis when AI service fails (graceful degradation)', async () => {
@@ -289,7 +300,15 @@ describe('analyzeWithAi', () => {
   });
 
   it('handles unexpected response format', async () => {
-    const env = makeEnv({ data: 'something unexpected' });
+    // Both models return unexpected format
+    const runMock = vi.fn().mockResolvedValue({ data: 'something unexpected' });
+    const env: Env = {
+      DB: {} as D1Database,
+      REPORTS_BUCKET: {} as R2Bucket,
+      AI: { run: runMock } as unknown as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
     const cluster = makeCluster();
 
     const { analysis } = await analyzeWithAi(env, cluster, '15 minutes');
@@ -318,5 +337,109 @@ describe('analyzeWithAi', () => {
         max_tokens: 512,
       }),
     );
+  });
+
+  it('falls back to mistral when primary model fails', async () => {
+    let callCount = 0;
+    const runMock = vi.fn().mockImplementation((model: string) => {
+      callCount++;
+      if (callCount === 1) {
+        // Primary fails
+        throw new Error('Primary model unavailable');
+      }
+      // Fallback succeeds
+      return { response: VALID_AI_RESPONSE };
+    });
+    const env: Env = {
+      DB: {} as D1Database,
+      REPORTS_BUCKET: {} as R2Bucket,
+      AI: { run: runMock } as unknown as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+    const cluster = makeCluster();
+
+    const { analysis, modelUsed } = await analyzeWithAi(env, cluster, '15 minutes');
+
+    expect(analysis).not.toBeNull();
+    expect(modelUsed).toBe('@cf/mistral/mistral-7b-instruct-v0.1');
+    expect(runMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to mistral when primary returns empty response', async () => {
+    let callCount = 0;
+    const runMock = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        // Primary returns empty
+        return { response: '' };
+      }
+      // Fallback succeeds
+      return { response: VALID_AI_RESPONSE };
+    });
+    const env: Env = {
+      DB: {} as D1Database,
+      REPORTS_BUCKET: {} as R2Bucket,
+      AI: { run: runMock } as unknown as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+    const cluster = makeCluster();
+
+    const { analysis, modelUsed } = await analyzeWithAi(env, cluster, '15 minutes');
+
+    expect(analysis).not.toBeNull();
+    expect(modelUsed).toBe('@cf/mistral/mistral-7b-instruct-v0.1');
+  });
+
+  it('falls back to mistral when primary returns unparseable response', async () => {
+    let callCount = 0;
+    const runMock = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        // Primary returns unparseable
+        return { response: 'Not valid JSON at all' };
+      }
+      // Fallback succeeds
+      return { response: VALID_AI_RESPONSE };
+    });
+    const env: Env = {
+      DB: {} as D1Database,
+      REPORTS_BUCKET: {} as R2Bucket,
+      AI: { run: runMock } as unknown as Ai,
+      GITHUB_TOKEN: 'ghp_test',
+      GITHUB_REPO: 'owner/repo',
+    };
+    const cluster = makeCluster();
+
+    const { analysis, modelUsed } = await analyzeWithAi(env, cluster, '15 minutes');
+
+    expect(analysis).not.toBeNull();
+    expect(modelUsed).toBe('@cf/mistral/mistral-7b-instruct-v0.1');
+  });
+
+  it('includes regression context in prompt when provided', () => {
+    const cluster = makeCluster();
+    const regression = {
+      errorSignature: 'crypto:x25519_key_exchange_failed',
+      currentRate: 20,
+      baselineRate: 5,
+      multiplier: 4,
+      isNewInVersion: true,
+      latestVersion: '1.2.1',
+    };
+
+    const prompt = buildPrompt(cluster, '15 minutes', regression);
+    expect(prompt).toContain('REGRESSION DETECTED');
+    expect(prompt).toContain('Current error rate: 20 errors/hour');
+    expect(prompt).toContain('Baseline rate (24h avg): 5.00 errors/hour');
+    expect(prompt).toContain('Rate multiplier: 4x baseline');
+    expect(prompt).toContain('New in version 1.2.1: YES');
+  });
+
+  it('does not include regression context when not provided', () => {
+    const cluster = makeCluster();
+    const prompt = buildPrompt(cluster, '15 minutes');
+    expect(prompt).not.toContain('REGRESSION DETECTED');
   });
 });

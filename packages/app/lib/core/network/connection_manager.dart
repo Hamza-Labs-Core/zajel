@@ -121,6 +121,7 @@ class ConnectionManager {
   /// so that messages and conversations are preserved.
   final Map<String, String> _codeToStableId = {};
   final Map<String, String> _stableIdToCode = {};
+  final Map<String, String> _peerSigningKeys = {};
 
   /// Cache proposed display names from incoming pair requests so they're
   /// available when [SignalingPairMatched] arrives (which doesn't carry names).
@@ -428,11 +429,15 @@ class ConnectionManager {
     _peers[normalizedCode] = peer;
     _notifyPeersChanged();
 
-    // Request pairing (peer must approve before WebRTC starts)
-    // Using captured state.client - guaranteed non-null by pattern match
-    logger.info(
-        'ConnectionManager', 'Sending pair_request for code: $normalizedCode');
-    state.client.requestPairing(normalizedCode,
+    // Route pair_request through the redirect client that knows this peer,
+    // or fall back to the primary client for local-server pairing.
+    final targetClient = _peerToClient[normalizedCode];
+    final client = (targetClient != null && targetClient.isConnected)
+        ? targetClient
+        : state.client;
+    logger.info('ConnectionManager',
+        'Sending pair_request for code: $normalizedCode via ${client == state.client ? "primary" : "redirect"} server');
+    client.requestPairing(normalizedCode,
         proposedName: proposedName ?? _username);
   }
 
@@ -757,7 +762,10 @@ class ConnectionManager {
       if (state == PeerConnectionState.connected) {
         final peer = _peers[stableId];
         if (peer != null && peer.publicKey != null) {
-          _trustedPeersStorage.savePeer(TrustedPeer.fromPeer(peer)).then((_) {
+          final trustedPeer = TrustedPeer.fromPeer(peer).copyWith(
+            signingPublicKey: _peerSigningKeys[stableId],
+          );
+          _trustedPeersStorage.savePeer(trustedPeer).then((_) {
             logger.info('ConnectionManager', 'Saved trusted peer: $stableId');
           }).catchError((e) {
             logger.error('ConnectionManager',
@@ -888,11 +896,12 @@ class ConnectionManager {
           _stableIdToCode[stableId] = peerCode;
           _peers.remove(peerCode); // Remove placeholder under pairing code
 
-          // Store peer signing key from pair_matched for SDP verification.
-          // The WebRTC layer uses the signaling code, so store under both.
+          // Store peer signing key from pair_matched for SDP verification
+          // and future use (e.g., channel admin appointment).
           if (peerSigningPublicKey != null) {
             _webrtcService.setPeerSigningKey(peerCode, peerSigningPublicKey);
             _webrtcService.setPeerSigningKey(stableId, peerSigningPublicKey);
+            _peerSigningKeys[stableId] = peerSigningPublicKey;
           }
 
           // Check if this is a reconnection (existing trusted peer)
@@ -1451,13 +1460,16 @@ class ConnectionManager {
       switch (event) {
         case RendezvousResult(:final liveMatches, deadDrops: _):
           for (final match in liveMatches) {
+            _peerToClient[match.peerId] = client;
             _handleLiveMatch(match.peerId);
           }
         case RendezvousPartial(:final liveMatches, deadDrops: _, redirects: _):
           for (final match in liveMatches) {
+            _peerToClient[match.peerId] = client;
             _handleLiveMatch(match.peerId);
           }
         case RendezvousMatch(:final peerId, relayId: _, meetingPoint: _):
+          _peerToClient[peerId] = client;
           _handleLiveMatch(peerId);
       }
     });

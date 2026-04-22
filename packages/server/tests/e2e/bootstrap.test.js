@@ -377,7 +377,7 @@ describe('Bootstrap Service E2E Tests', () => {
       expect(serverIds).toContain('ed25519:server-3');
     });
 
-    it('should filter out stale servers (lastSeen > 5 minutes)', async () => {
+    it('should filter out stale servers (lastSeen past TTL)', async () => {
       const serverData = {
         serverId: 'ed25519:stale-server',
         endpoint: 'wss://stale.example.com',
@@ -387,8 +387,8 @@ describe('Bootstrap Service E2E Tests', () => {
 
       await serverRegistry.fetch(createRequest('POST', '/servers', serverData));
 
-      // Advance time by 6 minutes (past 5 minute TTL)
-      vi.advanceTimersByTime(6 * 60 * 1000);
+      // Advance past the 2-minute heartbeat TTL
+      vi.advanceTimersByTime(3 * 60 * 1000);
 
       const request = createRequest('GET', '/servers');
       const response = await serverRegistry.fetch(request);
@@ -397,7 +397,7 @@ describe('Bootstrap Service E2E Tests', () => {
       expect(data.servers).toHaveLength(0);
     });
 
-    it('should keep servers with lastSeen < 5 minutes', async () => {
+    it('should keep servers with lastSeen within TTL', async () => {
       const serverData = {
         serverId: 'ed25519:fresh-server',
         endpoint: 'wss://fresh.example.com',
@@ -407,8 +407,8 @@ describe('Bootstrap Service E2E Tests', () => {
 
       await serverRegistry.fetch(createRequest('POST', '/servers', serverData));
 
-      // Advance time by 4 minutes (within 5 minute TTL)
-      vi.advanceTimersByTime(4 * 60 * 1000);
+      // Within the 2-minute heartbeat TTL
+      vi.advanceTimersByTime(1 * 60 * 1000);
 
       const request = createRequest('GET', '/servers');
       const response = await serverRegistry.fetch(request);
@@ -450,10 +450,10 @@ describe('Bootstrap Service E2E Tests', () => {
 
       await serverRegistry.fetch(createRequest('POST', '/servers', serverData));
 
-      // Advance time by 2 minutes
-      vi.advanceTimersByTime(2 * 60 * 1000);
+      // Advance 1 minute (within the 2-min TTL)
+      vi.advanceTimersByTime(1 * 60 * 1000);
 
-      // Send heartbeat
+      // Send heartbeat — resets lastSeen
       const heartbeatRequest = createRequest('POST', '/servers/heartbeat', {
         serverId: 'ed25519:heartbeat-server',
       });
@@ -463,8 +463,8 @@ describe('Bootstrap Service E2E Tests', () => {
       expect(response.status).toBe(200);
       expect(data.success).toBe(true);
 
-      // Advance another 4 minutes - should still be fresh because of heartbeat
-      vi.advanceTimersByTime(4 * 60 * 1000);
+      // Advance another 1 minute — should still be fresh thanks to the heartbeat
+      vi.advanceTimersByTime(1 * 60 * 1000);
 
       const listResponse = await serverRegistry.fetch(createRequest('GET', '/servers'));
       const listData = await listResponse.json();

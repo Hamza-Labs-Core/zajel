@@ -332,15 +332,23 @@ export class ServerRegistryDO {
     this.state = state;
     this.env = env;
     this.logger = createLogger(env);
-    // TTL for server entries (5 minutes)
-    this.serverTTL = 5 * 60 * 1000;
+    // TTL for server entries (2 minutes = 2x heartbeat interval).
+    // A server that has not heartbeated within this window is evicted.
+    this.serverTTL = 2 * 60 * 1000;
+    // Alarm cadence: how often we run the probe/eviction sweep.
+    this.alarmInterval = 2 * 60 * 1000;
+    // Timeout for per-server reachability probes.
+    this.probeTimeoutMs = 3_000;
+    // After this many consecutive failed probes a server is evicted,
+    // even if its heartbeat TTL has not yet elapsed.
+    this.probeFailureThreshold = 2;
 
     // Schedule periodic cleanup alarm
     if (state.blockConcurrencyWhile) {
       state.blockConcurrencyWhile(async () => {
         const currentAlarm = await state.storage.getAlarm();
         if (!currentAlarm) {
-          await state.storage.setAlarm(Date.now() + 5 * 60 * 1000);
+          await state.storage.setAlarm(Date.now() + this.alarmInterval);
         }
 
         // Check for migration from global shard (one-time)
@@ -350,22 +358,79 @@ export class ServerRegistryDO {
   }
 
   /**
-   * Periodic alarm for cleaning up stale server entries and their anomaly data.
+   * Probe a single server's public endpoint for reachability.
+   *
+   * The heartbeat path only proves the server can reach the bootstrap
+   * worker — it does NOT prove clients can reach the server. A
+   * crash-looping container may briefly come up long enough to heartbeat
+   * between restarts while its public WSS endpoint never serves traffic.
+   * This active probe closes that gap.
+   *
+   * Returns true if the endpoint returned a 2xx response within the
+   * configured timeout, false otherwise.
+   */
+  async probeServer(endpoint) {
+    // Convert wss:// → https:// / ws:// → http:// for the probe.
+    let probeUrl = endpoint;
+    if (probeUrl.startsWith('wss://')) probeUrl = 'https://' + probeUrl.slice(6);
+    else if (probeUrl.startsWith('ws://')) probeUrl = 'http://' + probeUrl.slice(5);
+    if (!probeUrl.endsWith('/')) probeUrl += '/';
+    probeUrl += 'health';
+
+    try {
+      const res = await fetch(probeUrl, {
+        method: 'GET',
+        signal: AbortSignal.timeout(this.probeTimeoutMs),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Periodic alarm: probe every registered server and evict those that are
+   * unreachable or whose heartbeat TTL has expired. Also cleans up orphaned
+   * anomaly state and expired nonces.
    */
   async alarm() {
     const now = Date.now();
     const deleteKeys = [];
 
-    // Clean up stale server entries
+    // Probe every server and collect eviction candidates.
     const entries = await this.state.storage.list({ prefix: 'server:' });
+    const probeUpdates = [];
     for (const [key, server] of entries) {
+      // TTL-based eviction (heartbeat went silent).
       if (now - server.lastSeen >= this.serverTTL) {
         deleteKeys.push(key);
-        // Also clean up anomaly history, score, and heartbeat rate limit for this server
         deleteKeys.push(`anomaly-history:${server.serverId}`);
         deleteKeys.push(`anomaly-score:${server.serverId}`);
         deleteKeys.push(`heartbeat-rl:${server.serverId}`);
+        continue;
       }
+
+      // Active reachability probe.
+      const alive = await this.probeServer(server.endpoint);
+      const prev = typeof server.probeFailures === 'number' ? server.probeFailures : 0;
+      const next = alive ? 0 : prev + 1;
+
+      if (!alive && next >= this.probeFailureThreshold) {
+        deleteKeys.push(key);
+        deleteKeys.push(`anomaly-history:${server.serverId}`);
+        deleteKeys.push(`anomaly-score:${server.serverId}`);
+        deleteKeys.push(`heartbeat-rl:${server.serverId}`);
+        continue;
+      }
+
+      if (next !== prev) {
+        probeUpdates.push([key, { ...server, probeFailures: next }]);
+      }
+    }
+
+    // Persist updated probe counters on survivors.
+    for (const [key, value] of probeUpdates) {
+      await this.state.storage.put(key, value);
     }
 
     // Clean up expired nonces (prevent unbounded storage growth)
@@ -383,7 +448,7 @@ export class ServerRegistryDO {
       }
     }
     // Reschedule next cleanup
-    await this.state.storage.setAlarm(Date.now() + 5 * 60 * 1000);
+    await this.state.storage.setAlarm(Date.now() + this.alarmInterval);
   }
 
   /**
@@ -1282,6 +1347,9 @@ export class ServerRegistryDO {
     }
 
     server.lastSeen = hbNow;
+    // A live heartbeat means the server is still alive — reset any
+    // accumulated probe-failure count so we don't evict a recovering server.
+    server.probeFailures = 0;
     if (typeof body.connections === 'number' && Number.isFinite(body.connections)) {
       server.connections = Math.max(0, Math.floor(body.connections));
     }

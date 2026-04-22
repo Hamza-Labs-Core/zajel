@@ -121,7 +121,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   late final LinkRequestHandler _linkRequestHandler;
   late final NotificationListenerService _notificationListener;
   late final VoipCallHandler _voipCallHandler;
-  StreamSubscription? _signalingReconnectSubscription;
+  void Function()? _cancelSignalingReconnect;
   ProviderSubscription? _peerStatusSubscription;
   ProviderSubscription? _voipSubscription;
   ProviderSubscription? _updateStateSubscription;
@@ -146,6 +146,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
 
   void _buildServices() {
     _initService = AppInitializationService(
+      initializeSecureStorage: () =>
+          ref.read(cachedSecureStorageProvider).initialize(),
       initializeCrypto: () => ref.read(cryptoServiceProvider).initialize(),
       initializeMessageStorage: () =>
           ref.read(messageStorageProvider).initialize(),
@@ -173,10 +175,12 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
           signalingClient: cm.signalingClient,
         );
       },
-      selectServer: () =>
-          ref.read(serverDiscoveryServiceProvider).selectServer(),
+      selectServerCandidates: () =>
+          ref.read(serverDiscoveryServiceProvider).selectServerCandidates(),
       getWebSocketUrl: (server) =>
           ref.read(serverDiscoveryServiceProvider).getWebSocketUrl(server),
+      recordConnectionFailure: (endpoint) =>
+          ref.read(serverSkipListProvider).add(endpoint),
       reconnectTrustedPeers: () =>
           ref.read(connectionManagerProvider).reconnectTrustedPeers(),
       setPairingCode: (code) =>
@@ -403,6 +407,14 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     ref.read(channelSyncServiceProvider);
     ref.read(backgroundSyncServiceProvider);
 
+    // Eagerly start diagnostics service (heartbeats + error reports).
+    // The provider handles start/stop based on user opt-in preference.
+    ref.read(diagnosticsServiceProvider);
+
+    // Eagerly start log upload service (deduped log streaming to diagnostics-cf).
+    // Also gated on the same diagnostics opt-in preference.
+    ref.read(logUploadServiceProvider);
+
     _setupPeerStatusNotifications();
     _setupVoipCallListener();
     unawaited(_syncAndroidSecureFlag());
@@ -423,7 +435,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       logger.error('ZajelApp', 'Signaling connection failed', e, stack);
     }
 
-    _signalingReconnectSubscription = _initService.setupSignalingReconnect(
+    _cancelSignalingReconnect = _initService.setupSignalingReconnect(
       isDisposed: () => _disposed,
     );
 
@@ -582,7 +594,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     _linkRequestHandler.dispose();
     _notificationListener.dispose();
     _voipCallHandler.dispose();
-    _signalingReconnectSubscription?.cancel();
+    _cancelSignalingReconnect?.call();
     _peerStatusSubscription?.close();
     _voipSubscription?.close();
     _updateStateSubscription?.close();

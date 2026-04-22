@@ -30,11 +30,13 @@ void main() {
     // Default stubs that can be overridden per-test
     late Future<List<TrustedPeer>> Function() getAllTrustedPeersStub;
     late Future<SignalingConnectResult> Function(String) connectToSignalingStub;
-    late Future<DiscoveredServer?> Function() selectServerStub;
+    late Future<List<DiscoveredServer>> Function() selectServerCandidatesStub;
     late String Function(DiscoveredServer) getWebSocketUrlStub;
+    late void Function(String) recordConnectionFailureStub;
     late Future<void> Function() reconnectTrustedPeersStub;
     late Stream<SignalingConnectionState>? Function()
         getConnectionStateStreamStub;
+    late List<String> recordedConnectionFailures;
 
     setUp(() {
       cryptoInitialized = false;
@@ -58,21 +60,27 @@ void main() {
             pairingCode: 'ABC123',
             signalingClient: 'mock-client',
           );
-      selectServerStub = () async => const DiscoveredServer(
-            serverId: 'srv1',
-            endpoint: 'https://example.com',
-            publicKey: 'pk1',
-            region: 'us-east',
-            registeredAt: 0,
-            lastSeen: 0,
-          );
+      selectServerCandidatesStub = () async => const [
+            DiscoveredServer(
+              serverId: 'srv1',
+              endpoint: 'https://example.com',
+              publicKey: 'pk1',
+              region: 'us-east',
+              registeredAt: 0,
+              lastSeen: 0,
+            ),
+          ];
       getWebSocketUrlStub = (server) => 'wss://${server.endpoint}/ws';
+      recordedConnectionFailures = [];
+      recordConnectionFailureStub =
+          (endpoint) => recordedConnectionFailures.add(endpoint);
       reconnectTrustedPeersStub = () async {};
       getConnectionStateStreamStub = () => null;
     });
 
     AppInitializationService buildService() {
       return AppInitializationService(
+        initializeSecureStorage: () async {},
         initializeCrypto: () async {
           cryptoInitialized = true;
         },
@@ -100,8 +108,9 @@ void main() {
           notificationPermissionRequested = true;
         },
         connectToSignaling: connectToSignalingStub,
-        selectServer: selectServerStub,
+        selectServerCandidates: selectServerCandidatesStub,
         getWebSocketUrl: getWebSocketUrlStub,
+        recordConnectionFailure: recordConnectionFailureStub,
         reconnectTrustedPeers: reconnectTrustedPeersStub,
         setPairingCode: (code) => pairingCodeSet = code,
         setSignalingClient: (client) => signalingClientSet = client,
@@ -171,6 +180,7 @@ void main() {
 
       test('returns false and logs error when crypto init fails', () async {
         service = AppInitializationService(
+          initializeSecureStorage: () async {},
           initializeCrypto: () async => throw Exception('Crypto failed'),
           initializeMessageStorage: () async {
             messageStorageInitialized = true;
@@ -191,8 +201,9 @@ void main() {
           requestNotificationPermission: () async =>
               notificationPermissionRequested = true,
           connectToSignaling: connectToSignalingStub,
-          selectServer: selectServerStub,
+          selectServerCandidates: selectServerCandidatesStub,
           getWebSocketUrl: getWebSocketUrlStub,
+          recordConnectionFailure: recordConnectionFailureStub,
           reconnectTrustedPeers: reconnectTrustedPeersStub,
           setPairingCode: (code) => pairingCodeSet = code,
           setSignalingClient: (client) => signalingClientSet = client,
@@ -215,6 +226,7 @@ void main() {
 
       test('returns false when message storage init fails', () async {
         service = AppInitializationService(
+          initializeSecureStorage: () async {},
           initializeCrypto: () async => cryptoInitialized = true,
           initializeMessageStorage: () async =>
               throw Exception('DB init failed'),
@@ -231,8 +243,9 @@ void main() {
           requestNotificationPermission: () async =>
               notificationPermissionRequested = true,
           connectToSignaling: connectToSignalingStub,
-          selectServer: selectServerStub,
+          selectServerCandidates: selectServerCandidatesStub,
           getWebSocketUrl: getWebSocketUrlStub,
+          recordConnectionFailure: recordConnectionFailureStub,
           reconnectTrustedPeers: reconnectTrustedPeersStub,
           setPairingCode: (code) => pairingCodeSet = code,
           setSignalingClient: (client) => signalingClientSet = client,
@@ -277,7 +290,7 @@ void main() {
       });
 
       test('sets disconnected when no server available', () async {
-        selectServerStub = () async => null;
+        selectServerCandidatesStub = () async => const <DiscoveredServer>[];
 
         service = buildService();
         await service.connectSignaling();
@@ -304,9 +317,9 @@ void main() {
         getConnectionStateStreamStub = () => null;
         service = buildService();
 
-        final sub = service.setupSignalingReconnect(isDisposed: () => false);
+        final cancel = service.setupSignalingReconnect(isDisposed: () => false);
 
-        expect(sub, isNull);
+        expect(cancel, isNull);
       });
 
       test('reconnects on disconnect event', () async {
@@ -321,7 +334,7 @@ void main() {
         };
 
         service = buildService();
-        final sub = service.setupSignalingReconnect(isDisposed: () => false);
+        final cancel = service.setupSignalingReconnect(isDisposed: () => false);
 
         // Emit disconnect
         controller.add(SignalingConnectionState.disconnected);
@@ -335,7 +348,7 @@ void main() {
         // But at minimum, the state should show disconnected then connecting
         expect(displayStates, contains('disconnected'));
 
-        sub?.cancel();
+        cancel?.call();
         await controller.close();
       });
 
@@ -353,7 +366,7 @@ void main() {
         };
 
         service = buildService();
-        final sub = service.setupSignalingReconnect(isDisposed: () => true);
+        final cancel = service.setupSignalingReconnect(isDisposed: () => true);
 
         controller.add(SignalingConnectionState.disconnected);
         await Future<void>.delayed(const Duration(milliseconds: 100));
@@ -361,7 +374,7 @@ void main() {
         // Should not attempt to connect when disposed
         expect(connectCount, equals(0));
 
-        sub?.cancel();
+        cancel?.call();
         await controller.close();
       });
 
@@ -370,7 +383,7 @@ void main() {
         getConnectionStateStreamStub = () => controller.stream;
 
         service = buildService();
-        final sub = service.setupSignalingReconnect(isDisposed: () => false);
+        final cancel = service.setupSignalingReconnect(isDisposed: () => false);
 
         controller.add(SignalingConnectionState.connected);
         await Future<void>.delayed(const Duration(milliseconds: 100));
@@ -378,7 +391,7 @@ void main() {
         // No state transitions should occur for connected events
         expect(displayStates, isEmpty);
 
-        sub?.cancel();
+        cancel?.call();
         await controller.close();
       });
     });

@@ -114,3 +114,30 @@ export const REOPEN_THRESHOLD = 10;
 
 /** Workers AI model identifier */
 export const AI_MODEL = '@cf/meta/llama-3.1-8b-instruct';
+
+/** Fallback AI model identifier */
+export const FALLBACK_AI_MODEL = '@cf/mistral/mistral-7b-instruct-v0.1';
+
+/** Maximum retry count for pending GitHub issues before marking as failed */
+export const MAX_RETRY_COUNT = 3;
+
+/**
+ * A log entry from server_logs or app_logs.
+ */
+export interface LogEntry {
+  timestamp: number;
+  severity: string;
+  category: string;
+  message: string;
+}
+
+/**
+ * Related logs from server_logs and app_logs tables.
+ */
+export interface RelatedLogs {
+  serverLogs: LogEntry[];
+  appLogs: LogEntry[];
+}
+
+/** Minimum occurrences for a log message pattern to become a cluster */
+export const LOG_CLUSTER_THRESHOLD = 5;

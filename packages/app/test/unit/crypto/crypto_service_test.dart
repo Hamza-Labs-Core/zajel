@@ -11,10 +11,10 @@ import '../../mocks/mocks.dart';
 void main() {
   group('CryptoService', () {
     late CryptoService cryptoService;
-    late FakeSecureStorage fakeStorage;
+    late FakeCachedSecureStorage fakeStorage;
 
     setUp(() {
-      fakeStorage = FakeSecureStorage();
+      fakeStorage = FakeCachedSecureStorage();
       cryptoService = CryptoService(secureStorage: fakeStorage);
     });
 
@@ -78,8 +78,8 @@ void main() {
 
     group('key exchange', () {
       test('performKeyExchange produces shared secret', () async {
-        final alice = CryptoService(secureStorage: FakeSecureStorage());
-        final bob = CryptoService(secureStorage: FakeSecureStorage());
+        final alice = CryptoService(secureStorage: FakeCachedSecureStorage());
+        final bob = CryptoService(secureStorage: FakeCachedSecureStorage());
 
         await alice.initialize();
         await bob.initialize();
@@ -95,9 +95,9 @@ void main() {
       });
 
       test('different key pairs produce different shared secrets', () async {
-        final alice = CryptoService(secureStorage: FakeSecureStorage());
-        final bob = CryptoService(secureStorage: FakeSecureStorage());
-        final charlie = CryptoService(secureStorage: FakeSecureStorage());
+        final alice = CryptoService(secureStorage: FakeCachedSecureStorage());
+        final bob = CryptoService(secureStorage: FakeCachedSecureStorage());
+        final charlie = CryptoService(secureStorage: FakeCachedSecureStorage());
 
         await alice.initialize();
         await bob.initialize();
@@ -116,8 +116,8 @@ void main() {
 
     group('session establishment', () {
       test('establishSession creates session key', () async {
-        final alice = CryptoService(secureStorage: FakeSecureStorage());
-        final bob = CryptoService(secureStorage: FakeSecureStorage());
+        final alice = CryptoService(secureStorage: FakeCachedSecureStorage());
+        final bob = CryptoService(secureStorage: FakeCachedSecureStorage());
 
         await alice.initialize();
         await bob.initialize();
@@ -129,9 +129,9 @@ void main() {
       });
 
       test('session keys are persisted', () async {
-        final storage = FakeSecureStorage();
+        final storage = FakeCachedSecureStorage();
         final alice = CryptoService(secureStorage: storage);
-        final bob = CryptoService(secureStorage: FakeSecureStorage());
+        final bob = CryptoService(secureStorage: FakeCachedSecureStorage());
 
         await alice.initialize();
         await bob.initialize();
@@ -156,8 +156,8 @@ void main() {
       const sessionId = 'shared-session';
 
       setUp(() async {
-        alice = CryptoService(secureStorage: FakeSecureStorage());
-        bob = CryptoService(secureStorage: FakeSecureStorage());
+        alice = CryptoService(secureStorage: FakeCachedSecureStorage());
+        bob = CryptoService(secureStorage: FakeCachedSecureStorage());
 
         await alice.initialize();
         await bob.initialize();
@@ -212,7 +212,7 @@ void main() {
       });
 
       test('decryption fails with wrong session', () async {
-        final charlie = CryptoService(secureStorage: FakeSecureStorage());
+        final charlie = CryptoService(secureStorage: FakeCachedSecureStorage());
         await charlie.initialize();
 
         // Charlie establishes a different session
@@ -277,7 +277,7 @@ void main() {
 
     group('session management', () {
       test('clearAllSessions removes all session keys', () async {
-        final bob = CryptoService(secureStorage: FakeSecureStorage());
+        final bob = CryptoService(secureStorage: FakeCachedSecureStorage());
         await cryptoService.initialize();
         await bob.initialize();
 
@@ -316,8 +316,8 @@ void main() {
 
     group('edge cases', () {
       test('handles very long messages', () async {
-        final alice = CryptoService(secureStorage: FakeSecureStorage());
-        final bob = CryptoService(secureStorage: FakeSecureStorage());
+        final alice = CryptoService(secureStorage: FakeCachedSecureStorage());
+        final bob = CryptoService(secureStorage: FakeCachedSecureStorage());
         await alice.initialize();
         await bob.initialize();
 
@@ -334,8 +334,8 @@ void main() {
       });
 
       test('handles special characters', () async {
-        final alice = CryptoService(secureStorage: FakeSecureStorage());
-        final bob = CryptoService(secureStorage: FakeSecureStorage());
+        final alice = CryptoService(secureStorage: FakeCachedSecureStorage());
+        final bob = CryptoService(secureStorage: FakeCachedSecureStorage());
         await alice.initialize();
         await bob.initialize();
 
@@ -386,8 +386,8 @@ void main() {
       });
 
       test('produces different tags for different keys', () async {
-        final alice = CryptoService(secureStorage: FakeSecureStorage());
-        final bob = CryptoService(secureStorage: FakeSecureStorage());
+        final alice = CryptoService(secureStorage: FakeCachedSecureStorage());
+        final bob = CryptoService(secureStorage: FakeCachedSecureStorage());
         await alice.initialize();
         await bob.initialize();
 
@@ -439,8 +439,8 @@ void main() {
           () async {
         SharedPreferences.setMockInitialValues({});
         final prefs = await SharedPreferences.getInstance();
-        final svc =
-            CryptoService(secureStorage: FakeSecureStorage(), prefs: prefs);
+        final svc = CryptoService(
+            secureStorage: FakeCachedSecureStorage(), prefs: prefs);
         await svc.initialize();
 
         // Migration: stableId should match peerIdFromPublicKey
@@ -455,8 +455,8 @@ void main() {
         SharedPreferences.setMockInitialValues(
             {'zajel_stable_id': 'ABCD1234EFGH5678'});
         final prefs = await SharedPreferences.getInstance();
-        final svc =
-            CryptoService(secureStorage: FakeSecureStorage(), prefs: prefs);
+        final svc = CryptoService(
+            secureStorage: FakeCachedSecureStorage(), prefs: prefs);
         await svc.initialize();
 
         expect(svc.stableId, 'ABCD1234EFGH5678');
@@ -465,8 +465,8 @@ void main() {
       test('stableId survives key regeneration', () async {
         SharedPreferences.setMockInitialValues({});
         final prefs = await SharedPreferences.getInstance();
-        final svc =
-            CryptoService(secureStorage: FakeSecureStorage(), prefs: prefs);
+        final svc = CryptoService(
+            secureStorage: FakeCachedSecureStorage(), prefs: prefs);
         await svc.initialize();
 
         final originalStableId = svc.stableId;
@@ -481,7 +481,7 @@ void main() {
       test('stableId persists across service instances', () async {
         SharedPreferences.setMockInitialValues({});
         final prefs = await SharedPreferences.getInstance();
-        final storage = FakeSecureStorage();
+        final storage = FakeCachedSecureStorage();
 
         final svc1 = CryptoService(secureStorage: storage, prefs: prefs);
         await svc1.initialize();
@@ -531,8 +531,8 @@ void main() {
 
     group('forward secrecy - ephemeral key exchange', () {
       test('establishSessionWithEphemeral creates session key', () async {
-        final alice = CryptoService(secureStorage: FakeSecureStorage());
-        final bob = CryptoService(secureStorage: FakeSecureStorage());
+        final alice = CryptoService(secureStorage: FakeCachedSecureStorage());
+        final bob = CryptoService(secureStorage: FakeCachedSecureStorage());
 
         await alice.initialize();
         await bob.initialize();
@@ -566,8 +566,8 @@ void main() {
 
       test('ephemeral session key differs from identity-only session key',
           () async {
-        final alice = CryptoService(secureStorage: FakeSecureStorage());
-        final bob = CryptoService(secureStorage: FakeSecureStorage());
+        final alice = CryptoService(secureStorage: FakeCachedSecureStorage());
+        final bob = CryptoService(secureStorage: FakeCachedSecureStorage());
 
         await alice.initialize();
         await bob.initialize();
@@ -606,8 +606,8 @@ void main() {
         // key exchange (zajel_session_v2) and the other uses identity-only
         // (zajel_session), the derived session keys differ and messages
         // cannot be decrypted.
-        final alice = CryptoService(secureStorage: FakeSecureStorage());
-        final bob = CryptoService(secureStorage: FakeSecureStorage());
+        final alice = CryptoService(secureStorage: FakeCachedSecureStorage());
+        final bob = CryptoService(secureStorage: FakeCachedSecureStorage());
 
         await alice.initialize();
         await bob.initialize();
@@ -643,9 +643,9 @@ void main() {
       });
 
       test('ephemeral session is persisted', () async {
-        final storage = FakeSecureStorage();
+        final storage = FakeCachedSecureStorage();
         final alice = CryptoService(secureStorage: storage);
-        final bob = CryptoService(secureStorage: FakeSecureStorage());
+        final bob = CryptoService(secureStorage: FakeCachedSecureStorage());
 
         await alice.initialize();
         await bob.initialize();
@@ -677,8 +677,8 @@ void main() {
       const sessionId = 'ratchet-test';
 
       setUp(() async {
-        alice = CryptoService(secureStorage: FakeSecureStorage());
-        bob = CryptoService(secureStorage: FakeSecureStorage());
+        alice = CryptoService(secureStorage: FakeCachedSecureStorage());
+        bob = CryptoService(secureStorage: FakeCachedSecureStorage());
 
         await alice.initialize();
         await bob.initialize();
@@ -723,8 +723,8 @@ void main() {
         final nonce = Uint8List.fromList(List.filled(32, 42));
 
         // Two separate pairs with same starting key and same nonce
-        final alice2 = CryptoService(secureStorage: FakeSecureStorage());
-        final bob2 = CryptoService(secureStorage: FakeSecureStorage());
+        final alice2 = CryptoService(secureStorage: FakeCachedSecureStorage());
+        final bob2 = CryptoService(secureStorage: FakeCachedSecureStorage());
         await alice2.initialize();
         await bob2.initialize();
 
@@ -849,8 +849,8 @@ void main() {
       });
 
       test('verifySDP rejects wrong signing key', () async {
-        final crypto1 = CryptoService(secureStorage: FakeSecureStorage());
-        final crypto2 = CryptoService(secureStorage: FakeSecureStorage());
+        final crypto1 = CryptoService(secureStorage: FakeCachedSecureStorage());
+        final crypto2 = CryptoService(secureStorage: FakeCachedSecureStorage());
         await crypto1.initialize();
         await crypto2.initialize();
 
@@ -957,8 +957,10 @@ void main() {
       });
 
       test('two peers can cross-verify SDP signatures', () async {
-        final aliceCrypto = CryptoService(secureStorage: FakeSecureStorage());
-        final bobCrypto = CryptoService(secureStorage: FakeSecureStorage());
+        final aliceCrypto =
+            CryptoService(secureStorage: FakeCachedSecureStorage());
+        final bobCrypto =
+            CryptoService(secureStorage: FakeCachedSecureStorage());
         await aliceCrypto.initialize();
         await bobCrypto.initialize();
 
@@ -988,8 +990,10 @@ void main() {
       });
 
       test('MITM SDP tampering is detected', () async {
-        final aliceCrypto = CryptoService(secureStorage: FakeSecureStorage());
-        final bobCrypto = CryptoService(secureStorage: FakeSecureStorage());
+        final aliceCrypto =
+            CryptoService(secureStorage: FakeCachedSecureStorage());
+        final bobCrypto =
+            CryptoService(secureStorage: FakeCachedSecureStorage());
         await aliceCrypto.initialize();
         await bobCrypto.initialize();
 
@@ -1012,9 +1016,10 @@ void main() {
 
       test('MITM key substitution is detected via trusted key binding',
           () async {
-        final aliceCrypto = CryptoService(secureStorage: FakeSecureStorage());
+        final aliceCrypto =
+            CryptoService(secureStorage: FakeCachedSecureStorage());
         final attackerCrypto =
-            CryptoService(secureStorage: FakeSecureStorage());
+            CryptoService(secureStorage: FakeCachedSecureStorage());
         await aliceCrypto.initialize();
         await attackerCrypto.initialize();
 

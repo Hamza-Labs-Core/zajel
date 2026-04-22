@@ -125,6 +125,14 @@ class SignalingClient:
         # Redirect connections for cross-server pairing (mirrors Flutter app behavior)
         # Key: endpoint URL, Value: (websocket, receive_task)
         self._redirect_connections: dict[str, tuple[ClientConnection, asyncio.Task]] = {}
+        # In-flight connect_to_redirect() tasks, keyed by endpoint. Used to
+        # deduplicate concurrent calls — when the server auto-triggers a
+        # redirect connection via the "registered" message AND the caller
+        # explicitly calls register_on_server() for the same endpoint, both
+        # tasks would otherwise open distinct WebSockets and race, leaving
+        # an unregistered ws in _redirect_connections (causing subsequent
+        # pair_request messages to hit "Not registered").
+        self._redirect_connect_tasks: dict[str, asyncio.Task] = {}
         # Maps a peer's code to the WebSocket that received the pairing event
         self._peer_to_ws: dict[str, ClientConnection] = {}
 
@@ -242,9 +250,43 @@ class SignalingClient:
         Called automatically when the server includes redirects in the
         registered response.  Can also be called explicitly to register
         on additional servers (e.g. when federation hasn't propagated yet).
+
+        Concurrent calls for the same endpoint are deduplicated so that only
+        one WebSocket is ever opened per redirect target. Without this, the
+        auto-triggered connect (from the main's "registered" response) can
+        race with an explicit register_on_server() call, producing two
+        distinct WebSockets on the same endpoint — the second register is
+        rejected as a duplicate by the server (code_collision), but its ws
+        still overwrites the registered one in _redirect_connections,
+        leading to "Not registered" pair errors downstream.
         """
         if endpoint in self._redirect_connections:
             return  # Already connected
+
+        # If another coroutine is already connecting to this endpoint, wait
+        # for its task instead of starting a new one.
+        existing_task = self._redirect_connect_tasks.get(endpoint)
+        if existing_task is not None:
+            try:
+                await existing_task
+            except Exception:
+                pass
+            return
+
+        # Mark this endpoint as in-flight and run the actual connect logic
+        # inside a task wrapper so concurrent callers can await it.
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            self._redirect_connect_tasks[endpoint] = current_task
+        try:
+            await self._do_connect_to_redirect(endpoint)
+        finally:
+            self._redirect_connect_tasks.pop(endpoint, None)
+
+    async def _do_connect_to_redirect(self, endpoint: str) -> None:
+        """Internal: perform the actual redirect connection + registration."""
+        if endpoint in self._redirect_connections:
+            return  # Already connected (another concurrent caller finished first)
         t0 = time.monotonic()
         try:
             logger.info("[T+0ms] connect_to_redirect() start — %s", endpoint)
@@ -260,26 +302,85 @@ class SignalingClient:
             # Wait for the server to confirm registration before returning.
             # Without this, pair_with() can race ahead and get "Not registered"
             # because the server hasn't processed the register message yet.
-            try:
-                raw = await asyncio.wait_for(ws.recv(), timeout=5)
-                resp = json.loads(raw)
-                if resp.get("type") == "registered":
-                    logger.info("[T+%dms] redirect registered confirmed — %s",
-                                int((time.monotonic() - t0) * 1000), endpoint)
-                else:
-                    # Not the expected response — route it through normal handling
-                    logger.info("[T+%dms] redirect got unexpected response type=%s — %s",
-                                int((time.monotonic() - t0) * 1000), resp.get("type"), endpoint)
-                    await self._handle_message(resp, source_ws=ws)
-            except asyncio.TimeoutError:
-                logger.warning("[T+%dms] TIMEOUT waiting for registered on redirect %s",
-                               int((time.monotonic() - t0) * 1000), endpoint)
+            #
+            # The VPS always sends server_info (and optionally attest_request)
+            # immediately on connection — before processing our register message.
+            # We must loop past those pre-registration messages until we see
+            # 'registered' or 'error', or until the timeout fires.
+            # Messages that arrive before registration (server_info, pong, etc.)
+            # are routed through normal handling rather than dropped.
+            # Messages that we do NOT expect pre-registration (pair_error, etc.)
+            # are also routed so they are not lost.
+            pre_registration_types = {"server_info", "pong", "attest_challenge"}
+            deadline = asyncio.get_event_loop().time() + 5
+            registration_confirmed = False
+            collision_detected = False
+            while True:
+                remaining_timeout = deadline - asyncio.get_event_loop().time()
+                if remaining_timeout <= 0:
+                    logger.warning("[T+%dms] TIMEOUT waiting for registered on redirect %s",
+                                   int((time.monotonic() - t0) * 1000), endpoint)
+                    break
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=remaining_timeout)
+                    resp = json.loads(raw)
+                    resp_type = resp.get("type")
+                    if resp_type == "registered":
+                        logger.info("[T+%dms] redirect registered confirmed — %s",
+                                    int((time.monotonic() - t0) * 1000), endpoint)
+                        registration_confirmed = True
+                        break
+                    elif resp_type == "code_collision":
+                        # Server rejected our register because the code is
+                        # already in use — typically because another concurrent
+                        # connect_to_redirect() beat us to it, or because a
+                        # stale entry exists on the server. Either way, this
+                        # ws is NOT registered and must not be stored in
+                        # _redirect_connections — otherwise subsequent
+                        # pair_request messages will hit "Not registered".
+                        logger.warning("[T+%dms] redirect code_collision on %s: %s",
+                                       int((time.monotonic() - t0) * 1000),
+                                       endpoint, resp.get("message"))
+                        collision_detected = True
+                        break
+                    elif resp_type == "error":
+                        logger.warning("[T+%dms] redirect registration error: %s — %s",
+                                       int((time.monotonic() - t0) * 1000),
+                                       resp.get("message"), endpoint)
+                        await self._handle_message(resp, source_ws=ws)
+                        break
+                    else:
+                        # Pre-registration message (e.g. server_info) — route
+                        # through normal handling and keep waiting
+                        logger.info("[T+%dms] redirect pre-registration message type=%s — %s",
+                                    int((time.monotonic() - t0) * 1000), resp_type, endpoint)
+                        await self._handle_message(resp, source_ws=ws)
+                        if resp_type not in pre_registration_types:
+                            # Unexpected message before registered — stop waiting
+                            break
+                except asyncio.TimeoutError:
+                    logger.warning("[T+%dms] TIMEOUT waiting for registered on redirect %s",
+                                   int((time.monotonic() - t0) * 1000), endpoint)
+                    break
+
+            if collision_detected:
+                # Tear down the unregistered ws without adding it to
+                # _redirect_connections.
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+                return
 
             # Start receiving messages from this redirect connection
             task = asyncio.create_task(self._redirect_receive_loop(endpoint, ws))
             self._redirect_connections[endpoint] = (ws, task)
             elapsed = int((time.monotonic() - t0) * 1000)
-            logger.info("[T+%dms] connect_to_redirect() done — %s", elapsed, endpoint)
+            if registration_confirmed:
+                logger.info("[T+%dms] connect_to_redirect() done — %s", elapsed, endpoint)
+            else:
+                logger.warning("[T+%dms] connect_to_redirect() stored ws without confirmed registration — %s",
+                               elapsed, endpoint)
         except Exception as e:
             elapsed = int((time.monotonic() - t0) * 1000)
             logger.warning("[T+%dms] FAILED connect_to_redirect %s: %s", elapsed, endpoint, e)
@@ -309,9 +410,129 @@ class SignalingClient:
             try:
                 await ws.close()
             except Exception:
-                pass
+                pass  # Connection may already be closed
         self._redirect_connections.clear()
         self._peer_to_ws.clear()
+
+    async def ensure_registered(self) -> None:
+        """Re-send the register message on main and all redirect connections.
+
+        Used as a recovery mechanism when the server responds with
+        'Not registered' during pair_with retries.
+
+        If the main connection is dead (send fails or registration times out),
+        reconnects the WebSocket before giving up.
+        """
+        if self._public_key_b64 is None:
+            raise RuntimeError("Cannot re-register: no stored public key")
+
+        reg_msg = {
+            "type": "register",
+            "pairingCode": self.pairing_code,
+            "publicKey": self._public_key_b64,
+        }
+
+        # Re-register on main connection
+        confirmed = await self._try_register_on(self._ws, reg_msg, "main")
+
+        if not confirmed and self._ws is not None:
+            # Main connection is dead — reconnect
+            await self._reconnect_main(reg_msg)
+
+        # Re-register on all redirect connections; reconnect dead ones
+        for endpoint, (ws, task) in list(self._redirect_connections.items()):
+            ok = await self._try_register_on(ws, reg_msg, f"redirect {endpoint}")
+            if not ok:
+                await self._reconnect_redirect(endpoint, reg_msg)
+
+    async def _reconnect_main(self, reg_msg: dict) -> None:
+        """Tear down stale main WebSocket and reconnect."""
+        logger.info("Reconnecting main WebSocket to %s", self.url)
+        try:
+            if self._receive_task:
+                self._receive_task.cancel()
+            if self._heartbeat_task:
+                self._heartbeat_task.cancel()
+            try:
+                await self._ws.close()
+            except Exception:
+                pass  # Connection already dead — ignore close errors
+
+            self._ws = await asyncio.wait_for(
+                websockets.connect(self.url), timeout=10
+            )
+            self._receive_task = asyncio.create_task(self._receive_loop())
+            self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+            await self._try_register_on(self._ws, reg_msg, "main (reconnected)")
+        except Exception as e:
+            logger.warning("Main reconnect failed: %s", e)
+
+    async def _reconnect_redirect(self, endpoint: str, reg_msg: dict) -> None:
+        """Tear down stale redirect connection and reconnect."""
+        logger.info("Reconnecting redirect WebSocket to %s", endpoint)
+        try:
+            old = self._redirect_connections.pop(endpoint, None)
+            if old:
+                old[1].cancel()
+                try:
+                    await old[0].close()
+                except Exception:
+                    pass  # Connection may already be closed
+
+            await self.connect_to_redirect(endpoint)
+        except Exception as e:
+            logger.warning("Redirect reconnect to %s failed: %s", endpoint, e)
+
+    async def _try_register_on(
+        self, ws: "Optional[ClientConnection]", reg_msg: dict, label: str
+    ) -> bool:
+        """Send register on a single connection and wait for confirmation.
+
+        First checks if the WebSocket is alive via ping. If the ping fails
+        or times out, returns False immediately so the caller can reconnect
+        instead of waiting the full registration timeout on a dead socket.
+
+        Treats ``code_collision`` as success: the server only sends this
+        when the pairing code is already registered on a live ws, so if
+        we get it back we are effectively already registered (on the very
+        ws we just sent register on, which is the typical recovery case —
+        the pair-with recovery path calls us on a still-live main ws).
+        """
+        if ws is None:
+            return False
+
+        # Check if the WebSocket is alive before sending register
+        try:
+            from websockets import State
+            if hasattr(ws, 'state') and ws.state != State.OPEN:
+                logger.warning("WebSocket not open on %s (state=%s)", label, ws.state)
+                return False
+            await asyncio.wait_for(ws.ping(), timeout=3)
+        except Exception:
+            logger.warning("WebSocket dead on %s (ping failed)", label)
+            return False
+
+        try:
+            got_registered = asyncio.Event()
+            self._on_registered_callback = lambda: got_registered.set()
+            # code_collision means the code is already registered — treat
+            # as success so the caller doesn't tear down a perfectly good
+            # WebSocket and hammer the server with a reconnect.
+            self._on_code_collision_callback = lambda: got_registered.set()
+
+            await self._send(reg_msg, ws=ws)
+            await asyncio.wait_for(got_registered.wait(), timeout=5)
+            logger.info("Re-registration confirmed on %s for %s", label, self.pairing_code)
+            return True
+        except asyncio.TimeoutError:
+            logger.warning("Re-registration TIMEOUT on %s for %s", label, self.pairing_code)
+            return False
+        except Exception as e:
+            logger.warning("Re-registration failed on %s: %s", label, e)
+            return False
+        finally:
+            self._on_registered_callback = None
+            self._on_code_collision_callback = None
 
     # ── Pairing ──────────────────────────────────────────────
 
@@ -644,13 +865,22 @@ class SignalingClient:
             logger.error("Heartbeat error: %s", e)
 
     async def _reconnect(self) -> None:
-        """Reconnect to the signaling server and re-register."""
+        """Reconnect to the signaling server and re-register.
+
+        Waits for the 'registered' response before returning so that
+        subsequent pair_with() calls don't race ahead of registration.
+        """
         if self._public_key_b64 is None:
             raise RuntimeError("Cannot reconnect: no stored public key")
 
-        logger.info("Reconnecting to %s...", self.url)
+        t0 = time.monotonic()
+        logger.info("[T+0ms] _reconnect() start — %s", self.url)
         self._ws = await websockets.connect(self.url)
         self._connected.set()
+        logger.info("[T+%dms] WebSocket reconnected", int((time.monotonic() - t0) * 1000))
+
+        # Clear registered event so we can wait for the new confirmation
+        self._registered.clear()
 
         # Re-register with the same pairing code
         await self._send({
@@ -658,13 +888,25 @@ class SignalingClient:
             "pairingCode": self.pairing_code,
             "publicKey": self._public_key_b64,
         })
+        logger.info("[T+%dms] register sent", int((time.monotonic() - t0) * 1000))
+
+        # Wait for 'registered' response — without this, pair_with() can
+        # send pair_request before the server has processed registration,
+        # resulting in "Not registered. Send register message first."
+        try:
+            await asyncio.wait_for(self._registered.wait(), timeout=10)
+            logger.info("[T+%dms] registered confirmed", int((time.monotonic() - t0) * 1000))
+        except asyncio.TimeoutError:
+            logger.warning("[T+%dms] TIMEOUT waiting for registered on reconnect",
+                           int((time.monotonic() - t0) * 1000))
 
         # Restart heartbeat
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
-        logger.info("Reconnected and re-registered as %s", self.pairing_code)
+        elapsed = int((time.monotonic() - t0) * 1000)
+        logger.info("[T+%dms] _reconnect() done — re-registered as %s", elapsed, self.pairing_code)
 
     async def _receive_loop(self) -> None:
         backoff = 1
@@ -707,6 +949,9 @@ class SignalingClient:
             match msg_type:
                 case "registered":
                     self._registered.set()
+                    cb = getattr(self, '_on_registered_callback', None)
+                    if cb:
+                        cb()
                     # Handle redirects for cross-server pairing
                     redirects = msg.get("redirects", [])
                     if redirects and self._public_key_b64:
@@ -716,6 +961,18 @@ class SignalingClient:
                                 asyncio.create_task(
                                     self.connect_to_redirect(endpoint)
                                 )
+
+                case "code_collision":
+                    # Server says the pairing code is already registered on
+                    # a live ws. For a re-register attempt on an already
+                    # registered ws (the common ensure_registered() recovery
+                    # path) this is effectively success: we are registered.
+                    # Fire the collision callback so _try_register_on can
+                    # return True without waiting the full timeout.
+                    logger.info("code_collision received: %s", msg.get("message"))
+                    cb = getattr(self, '_on_code_collision_callback', None)
+                    if cb:
+                        cb()
 
                 case "pong":
                     pass  # Heartbeat response
