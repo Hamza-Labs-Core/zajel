@@ -1,64 +1,17 @@
 # Private Relay Architecture — Discussion Q&A
 
 **Date:** 2026-04-22
-**Context:** Triggered by production log analysis showing WebRTC P2P failures when one peer sits behind a VPN. Discussion expanded from "fix the VPN case" into a full privacy-messenger architecture review.
+**Context:** Full privacy-messenger architecture review — separating signaling from relay, end-to-end crypto that does not rely on TLS/PKI, on-device at-rest and in-memory hardening, and country-level DPI resistance.
 
 > This is a discussion artifact, not a committed design. The concrete plans it implies will be written as their own docs once direction is confirmed.
 
 ---
 
-## Q1 — "What if I told you that the other pair is online, but is behind a VPN?"
-
-### A1 — Then ICE failure is the primary issue, not a keepalive problem
-
-The logs show no `typ relay` candidates in any offer/ice_candidate; the peer on a VPN almost certainly has symmetric or port-restricted NAT, and without TURN there's no fallback path.
-
-Consumer VPNs (Mullvad, Nord, WireGuard exits, corporate SSL-VPN) nearly always present symmetric NAT to the outside: each `(dst-ip, dst-port)` pair gets a different source port. ICE's srflx candidate is harvested once via STUN against a different destination, so the port the peer learns is *not* the port that will accept traffic from you. Direct P2P is structurally impossible — TURN is mandatory.
-
-**Re-reading the two ICE failures with the VPN fact in mind:**
-
-- **MC9QH5 dying in 45s** (`21:26:43.931 connected → 21:27:28.717 disconnected`) is the signature:
-  - ICE finds *a* valid candidate pair, probably a lucky prflx discovery during the initial STUN binding request burst (both sides sent checks at ~the same time, one got through)
-  - That pinhole dies the moment the VPN's NAT re-uses the outbound port for any other destination — typically well under a minute
-  - No ICE restart, no relay fallback → straight to Failed
-
-- **XCWAAY dying in 6½ min** is the slower version of the same thing:
-  - Initial binding happened to work because home router is on a normal (likely endpoint-independent) NAT — srflx `96.242.14.209` cleanly
-  - Consent Freshness (RFC 7675) keeps re-probing every ~5s
-  - Asymmetric mapping means checks fail in the peer→you direction eventually, quorum lost after the 30s consent window → Disconnected at 21:29:49, Failed at 21:29:59
-
-**Evidence in log:** scan the `offer` payload at `21:23:21.636` and `21:26:43.562` — only `typ host` and `typ srflx` candidates. No `typ relay`. Either no TURN configured for the Linux build (`TURN_URL` not baked in via `--dart-define`) or TURN configured but unreachable / rejected creds so no relay candidate gathered.
-
-**Implication:** #4 (ICE death) collapses into the same work as the shelved IP-exposure question. If the client defaults to `iceTransportPolicy: 'relay'`, the peer never learns your home IP — they only see the TURN server's public IP. TURN infrastructure unlocks both.
-
----
-
-## Q2 — Requirements for proper solution
-
-> We need the following, this needs deep thinking and research and a good plan:
->
-> 1. Clients behind a VPN should work normally
-> 2. Client IPs should never be exposed
-> 3. Can we solve 2 by having our own VPN servers? meaning that all traffic we do is through our servers, but not the signaling servers, and are heavily encrypted, not just ssl, that no body in the world can see inside, not even the server itself
-
-### A2 — Initial 4-layer plan (superseded by A3 after requirement clarification)
-
-Summary before the clarification:
-
-- **Layer 1: Production TURN** (`turns://` on 443, HMAC ephemeral creds, `iceTransportPolicy: 'relay'`)
-- **Layer 2: Split-relay** across two regions (A→TURN_eu→TURN_me→B) so no single server sees both legs
-- **Layer 3: Operator-trust hardening** (no-log, RAM-only, reproducible builds, warrant canary, transparency log)
-- **Layer 4 (don't build): Onion/mix routing** — too expensive in latency for WebRTC, recommend Tor transport as opt-in instead
-
-Initial framing incorrectly assumed WebRTC's DTLS content-E2E was enough to satisfy requirement #3. The clarification below changes that.
-
----
-
-## Q3 — Clarified requirements: paranoid-by-default privacy messenger
+## Q — Clarified requirements: paranoid-by-default privacy messenger
 
 > What I mean when I say VPN, I mean only Zajel traffic, and when I say not SSL, I mean our own encryption that no RSA backdoor can make it visible, and I want all encrypted on disk, so on client data is encrypted 100%, even in memory its encrypted, even if it means users need a password to see the msgs, and no data in notifications, see recent Signal Apple notification issue, latency? meh, what's important is privacy, ISP can't see, LAN can't see, router can't see, our servers can't see, and it should be a server other than signaling servers so that they can be deployed on their own, with own hardware rules, signaling servers only introduce and traffic full encryption starts after on the direct talk, and this is for text, and VoIP, so that a country like UAE would never know what the traffic is
 
-### A3 — Six-layer architecture and phased plan
+### A — Six-layer architecture and phased plan
 
 > "No RSA backdoor" is a real concern but already structurally solved by the ciphers Zajel uses — we're on X25519 (ECDH), Ed25519 (signatures), ChaCha20-Poly1305 (AEAD), HKDF, and ML-KEM-768 (post-quantum KEM per the register log `"supportedKEMs":["x25519","x25519-mlkem768"]`). No RSA anywhere. The PKI-trust issue (what if a CA is compelled?) is the harder version of that concern, and the answer is: don't use CAs for anything security-critical — pin public keys directly, signed by Ed25519, distributed via signaling that the client has already verified.
 
