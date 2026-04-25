@@ -6,7 +6,8 @@ import '../../features/groups/services/group_invitation_service.dart';
 import '../logging/logger_service.dart';
 
 /// Listens to incoming group invitations from [GroupInvitationService] and
-/// surfaces an Accept/Decline dialog for each one.
+/// surfaces both an OS notification (for backgrounded users) and an
+/// in-app Accept/Decline dialog.
 ///
 /// Mirrors the closure-based DI pattern of `PairRequestHandler`. The actual
 /// accept/decline work lives on the service; this class is just the UI
@@ -17,6 +18,12 @@ class GroupInviteHandler {
   final void Function(String groupId) declineInvitation;
   final BuildContext? Function() getContext;
 
+  /// Optional callback to dispatch an OS-level notification when an invite
+  /// arrives. Decoupled via a callback (rather than holding a
+  /// `NotificationService`) so this class stays pure-UI and trivially
+  /// testable. Wire-through happens in `main.dart`.
+  final Future<void> Function(PendingGroupInvite invite)? notifyInvite;
+
   StreamSubscription<PendingGroupInvite>? _subscription;
 
   GroupInviteHandler({
@@ -24,6 +31,7 @@ class GroupInviteHandler {
     required this.acceptInvitation,
     required this.declineInvitation,
     required this.getContext,
+    this.notifyInvite,
   });
 
   void listen() {
@@ -31,7 +39,12 @@ class GroupInviteHandler {
         'GroupInviteHandler', 'listen() called — stream subscription active');
     _subscription = pendingInvites.listen((invite) {
       logger.info('GroupInviteHandler',
-          'Stream event: pending invite for ${invite.groupId} ("${invite.groupName}") — invoking dialog');
+          'Stream event: pending invite for ${invite.groupId} ("${invite.groupName}") — dispatching notification + dialog');
+      // Fire-and-forget — never block the dialog on the OS notification.
+      notifyInvite?.call(invite).catchError((Object e) {
+        logger.warning(
+            'GroupInviteHandler', 'notifyInvite callback failed: $e');
+      });
       _showDialog(invite);
     });
   }

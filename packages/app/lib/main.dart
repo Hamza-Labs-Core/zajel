@@ -265,6 +265,15 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       acceptInvitation: invitationService.acceptInvitation,
       declineInvitation: invitationService.declineInvitation,
       getContext: () => rootNavigatorKey.currentContext,
+      notifyInvite: (invite) async {
+        final settings = ref.read(notificationSettingsProvider);
+        await ref.read(notificationServiceProvider).showGroupInviteNotification(
+              inviteId: invite.groupId,
+              groupName: invite.groupName,
+              inviterPeerId: invite.fromPeerId,
+              settings: settings,
+            );
+      },
     );
 
     _notificationListener = NotificationListenerService(
