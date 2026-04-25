@@ -2,46 +2,49 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../features/groups/services/group_invitation_service.dart';
 import '../logging/logger_service.dart';
 
-/// Handles incoming pair request dialogs.
+/// Listens to incoming group invitations from [GroupInvitationService] and
+/// surfaces an Accept/Decline dialog for each one.
 ///
-/// Uses closure-based DI for testability -- Riverpod stays in main.dart.
-class PairRequestHandler {
-  final Stream<(String, String, String?)> pairRequests;
-  final void Function(String code, {required bool accept}) respondToPairRequest;
+/// Mirrors the closure-based DI pattern of `PairRequestHandler`. The actual
+/// accept/decline work lives on the service; this class is just the UI
+/// bridge.
+class GroupInviteHandler {
+  final Stream<PendingGroupInvite> pendingInvites;
+  final Future<void> Function(String groupId) acceptInvitation;
+  final void Function(String groupId) declineInvitation;
   final BuildContext? Function() getContext;
 
-  StreamSubscription<(String, String, String?)>? _subscription;
+  StreamSubscription<PendingGroupInvite>? _subscription;
 
-  PairRequestHandler({
-    required this.pairRequests,
-    required this.respondToPairRequest,
+  GroupInviteHandler({
+    required this.pendingInvites,
+    required this.acceptInvitation,
+    required this.declineInvitation,
     required this.getContext,
   });
 
-  /// Start listening for pair requests.
   void listen() {
     logger.info(
-        'PairRequestHandler', 'listen() called — stream subscription active');
-    _subscription = pairRequests.listen((event) {
-      final (fromCode, fromPublicKey, proposedName) = event;
-      logger.info('PairRequestHandler',
-          'Stream event received for $fromCode — invoking _showDialog');
-      _showDialog(fromCode, fromPublicKey, proposedName: proposedName);
+        'GroupInviteHandler', 'listen() called — stream subscription active');
+    _subscription = pendingInvites.listen((invite) {
+      logger.info('GroupInviteHandler',
+          'Stream event: pending invite for ${invite.groupId} ("${invite.groupName}") — invoking dialog');
+      _showDialog(invite);
     });
   }
 
-  Future<void> _showDialog(String fromCode, String fromPublicKey,
-      {String? proposedName}) async {
+  Future<void> _showDialog(PendingGroupInvite invite) async {
     final context = getContext();
     if (context == null) {
-      logger.warning('PairRequestHandler',
-          'No context available to show pair request dialog (rootNavigatorKey.currentContext is null)');
+      logger.warning('GroupInviteHandler',
+          'No context available to show group invite dialog (rootNavigatorKey.currentContext is null)');
       return;
     }
-    logger.info('PairRequestHandler',
-        'showDialog() about to be called for $fromCode (context found)');
+    logger.info('GroupInviteHandler',
+        'showDialog() about to be called for ${invite.groupId} (context found)');
 
     final accepted = await showDialog<bool>(
       context: context,
@@ -49,19 +52,17 @@ class PairRequestHandler {
       builder: (context) => AlertDialog(
         title: const Row(
           children: [
-            Icon(Icons.person_add, color: Colors.blue),
+            Icon(Icons.group_add, color: Colors.blue),
             SizedBox(width: 8),
-            Text('Connection Request'),
+            Text('Group Invitation'),
           ],
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (proposedName != null)
-              Text('$proposedName (code: $fromCode) wants to connect.')
-            else
-              Text('Device with code $fromCode wants to connect.'),
+            Text(
+                'You have been invited to join the group "${invite.groupName}".'),
             const SizedBox(height: 16),
             Container(
               padding: const EdgeInsets.all(12),
@@ -73,16 +74,20 @@ class PairRequestHandler {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Device Code',
+                    'Group',
                     style: TextStyle(fontSize: 12, color: Colors.grey),
                   ),
                   Text(
-                    fromCode,
+                    invite.groupName,
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
-                      letterSpacing: 2,
                     ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${invite.group.members.length} members',
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
                   ),
                 ],
               ),
@@ -101,7 +106,8 @@ class PairRequestHandler {
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Only accept if you know this device.',
+                      'Only accept if you trust the inviter. Joining shares '
+                      'your identity with all current group members.',
                       style: TextStyle(fontSize: 12),
                     ),
                   ),
@@ -123,16 +129,17 @@ class PairRequestHandler {
       ),
     );
 
-    respondToPairRequest(fromCode, accept: accepted == true);
-
     if (accepted == true) {
-      logger.info('PairRequestHandler', 'Pair request from $fromCode accepted');
+      logger.info('GroupInviteHandler',
+          'User accepted invite ${invite.groupId} — calling acceptInvitation');
+      await acceptInvitation(invite.groupId);
     } else {
-      logger.info('PairRequestHandler', 'Pair request from $fromCode declined');
+      logger.info('GroupInviteHandler',
+          'User declined invite ${invite.groupId} — calling declineInvitation');
+      declineInvitation(invite.groupId);
     }
   }
 
-  /// Cancel the subscription.
   void dispose() {
     _subscription?.cancel();
   }

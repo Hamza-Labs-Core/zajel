@@ -852,7 +852,8 @@ class ConnectionManager {
           // Check if this public key is blocked
           if (_isPublicKeyBlocked != null &&
               _isPublicKeyBlocked!(fromPublicKey)) {
-            // Auto-reject blocked users silently
+            logger.info('ConnectionManager',
+                'pair_incoming branch: BLOCKED (auto-reject silently) for $fromCode');
             final state = _signalingState;
             if (state is SignalingConnected) {
               state.client.respondToPairing(fromCode, accept: false);
@@ -863,19 +864,23 @@ class ConnectionManager {
           final isTrusted =
               await _trustedPeersStorage.isTrustedByPublicKey(fromPublicKey);
           if (isTrusted) {
-            logger.info(
-                'ConnectionManager', 'Auto-accepting trusted peer $fromCode');
+            logger.info('ConnectionManager',
+                'pair_incoming branch: TRUSTED (auto-accept silently) for $fromCode');
             respondToPairRequest(fromCode, accept: true);
             break;
           }
           // In E2E test mode, auto-accept all pair requests
           if (Environment.isE2eTest) {
             logger.info('ConnectionManager',
-                'E2E mode: auto-accepting pair request from $fromCode');
+                'pair_incoming branch: E2E (auto-accept) for $fromCode');
             respondToPairRequest(fromCode, accept: true);
             break;
           }
           // Someone wants to pair with us - emit event for UI to show approval dialog
+          logger.info(
+              'ConnectionManager',
+              'pair_incoming branch: EMIT_TO_UI (show dialog) for $fromCode '
+                  '(listeners=${_pairRequestController.hasListener})');
           _pairRequestController.add((fromCode, fromPublicKey, proposedName));
           break;
 

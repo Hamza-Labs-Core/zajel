@@ -16,6 +16,7 @@ import 'core/models/models.dart';
 import 'core/providers/app_providers.dart';
 import 'core/services/app_initialization_service.dart';
 import 'core/services/file_transfer_listener.dart';
+import 'core/services/group_invite_handler.dart';
 import 'core/services/link_request_handler.dart';
 import 'core/services/notification_listener_service.dart';
 import 'core/services/pair_request_handler.dart';
@@ -119,6 +120,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   late final FileTransferListener _fileTransferListener;
   late final PairRequestHandler _pairRequestHandler;
   late final LinkRequestHandler _linkRequestHandler;
+  late final GroupInviteHandler _groupInviteHandler;
   late final NotificationListenerService _notificationListener;
   late final VoipCallHandler _voipCallHandler;
   void Function()? _cancelSignalingReconnect;
@@ -254,6 +256,14 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
                 accept: accept,
                 deviceId: deviceId,
               ),
+      getContext: () => rootNavigatorKey.currentContext,
+    );
+
+    final invitationService = ref.read(groupInvitationServiceProvider);
+    _groupInviteHandler = GroupInviteHandler(
+      pendingInvites: invitationService.pendingInvites,
+      acceptInvitation: invitationService.acceptInvitation,
+      declineInvitation: invitationService.declineInvitation,
       getContext: () => rootNavigatorKey.currentContext,
     );
 
@@ -396,11 +406,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     _fileTransferListener.listen();
     _pairRequestHandler.listen();
     _linkRequestHandler.listen();
+    _groupInviteHandler.listen();
     _notificationListener.listen();
-
-    // Eagerly start group invitation listener so incoming grp: messages
-    // are processed even before the user opens a group screen.
-    ref.read(groupInvitationServiceProvider);
 
     // Eagerly start channel sync so chunk_announce/chunk_data messages
     // are processed from app startup.
@@ -592,6 +599,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     _fileTransferListener.dispose();
     _pairRequestHandler.dispose();
     _linkRequestHandler.dispose();
+    _groupInviteHandler.dispose();
     _notificationListener.dispose();
     _voipCallHandler.dispose();
     _cancelSignalingReconnect?.call();

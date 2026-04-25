@@ -219,7 +219,36 @@ void main() {
   // Receiving invitations (via stream listener)
   // ---------------------------------------------------------------------------
   group('incoming invitation handling', () {
-    test('accepts a new group invitation and calls onGroupJoined', () async {
+    test('stages a new invitation as pending, does NOT auto-accept', () async {
+      Group? joinedGroup;
+      invitationService.onGroupJoined = (g) => joinedGroup = g;
+
+      when(() => groupService.getGroup('grp_1')).thenAnswer((_) async => null);
+
+      final pendingFuture = invitationService.pendingInvites.first;
+
+      invitationService.start();
+      invitationController.add(('peer_creator', _makeInvitationPayload()));
+
+      final pending = await pendingFuture.timeout(const Duration(seconds: 1));
+
+      expect(pending.groupId, 'grp_1');
+      expect(pending.groupName, 'Test Group');
+      expect(pending.fromPeerId, 'peer_creator');
+      expect(invitationService.currentPending, hasLength(1));
+
+      // Critical: no group persisted, no callback fired, no crypto state
+      // touched until the user explicitly accepts.
+      expect(joinedGroup, isNull);
+      verifyNever(() => groupService.acceptInvitation(
+            group: any(named: 'group'),
+            senderKeys: any(named: 'senderKeys'),
+          ));
+      verifyNever(() => cryptoService.importGroupKeys(any(), any()));
+      verifyNever(() => cryptoService.setSenderKey(any(), any(), any()));
+    });
+
+    test('acceptInvitation persists group and fires onGroupJoined', () async {
       Group? joinedGroup;
       invitationService.onGroupJoined = (g) => joinedGroup = g;
 
@@ -233,23 +262,67 @@ void main() {
           )).thenAnswer((_) async => _makeGroup());
 
       invitationService.start();
-
       invitationController.add(('peer_creator', _makeInvitationPayload()));
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
+      final result = await invitationService.acceptInvitation('grp_1');
+
+      expect(result, isNotNull);
+      expect(result!.id, 'grp_1');
       expect(joinedGroup, isNotNull);
-      expect(joinedGroup!.id, 'grp_1');
       expect(joinedGroup!.name, 'Test Group');
+      expect(invitationService.currentPending, isEmpty);
 
       verify(() => cryptoService.importGroupKeys(
             'grp_1',
-            {'creator_device': 'creator_key_b64'},
+            {
+              'creator_device': 'creator_key_b64',
+              selfDeviceId: 'invitee_key_b64'
+            },
           )).called(1);
       verify(() => cryptoService.setSenderKey(
             'grp_1',
             selfDeviceId,
             'invitee_key_b64',
           )).called(1);
+    });
+
+    test('declineInvitation drops pending entry without persisting', () async {
+      when(() => groupService.getGroup('grp_1')).thenAnswer((_) async => null);
+
+      invitationService.start();
+      invitationController.add(('peer_creator', _makeInvitationPayload()));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(invitationService.currentPending, hasLength(1));
+
+      final declined = invitationService.declineInvitation('grp_1');
+      expect(declined, isTrue);
+      expect(invitationService.currentPending, isEmpty);
+      verifyNever(() => groupService.acceptInvitation(
+            group: any(named: 'group'),
+            senderKeys: any(named: 'senderKeys'),
+          ));
+    });
+
+    test('declineInvitation returns false for unknown invite id', () {
+      expect(invitationService.declineInvitation('nope'), isFalse);
+    });
+
+    test('acceptInvitation returns null for unknown invite id', () async {
+      expect(await invitationService.acceptInvitation('nope'), isNull);
+    });
+
+    test('duplicate invite for same group is ignored while pending', () async {
+      when(() => groupService.getGroup('grp_1')).thenAnswer((_) async => null);
+
+      invitationService.start();
+      invitationController.add(('peer_creator', _makeInvitationPayload()));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      invitationController.add(('peer_creator', _makeInvitationPayload()));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(invitationService.currentPending, hasLength(1));
     });
 
     test('ignores invitation for group we already belong to', () async {
@@ -260,11 +333,11 @@ void main() {
           .thenAnswer((_) async => _makeGroup());
 
       invitationService.start();
-
       invitationController.add(('peer_creator', _makeInvitationPayload()));
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
       expect(joinedGroup, isNull);
+      expect(invitationService.currentPending, isEmpty);
       verifyNever(() => groupService.acceptInvitation(
             group: any(named: 'group'),
             senderKeys: any(named: 'senderKeys'),
@@ -277,14 +350,15 @@ void main() {
 
       invitationService.start();
 
-      // Send invalid JSON
       invitationController.add(('peer_bad', 'not valid json'));
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
       expect(joinedGroup, isNull);
+      expect(invitationService.currentPending, isEmpty);
     });
 
-    test('handles exception during acceptInvitation gracefully', () async {
+    test('acceptInvitation restores pending entry on persist failure',
+        () async {
       Group? joinedGroup;
       invitationService.onGroupJoined = (g) => joinedGroup = g;
 
@@ -298,16 +372,17 @@ void main() {
           )).thenThrow(Exception('Storage failure'));
 
       invitationService.start();
-
       invitationController.add(('peer_creator', _makeInvitationPayload()));
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
-      // Should not crash; onGroupJoined should not be called
+      final result = await invitationService.acceptInvitation('grp_1');
+      expect(result, isNull);
       expect(joinedGroup, isNull);
+      // Pending entry restored so user can retry.
+      expect(invitationService.currentPending, hasLength(1));
     });
 
-    test('merges invitee key into senderKeys when calling acceptInvitation',
-        () async {
+    test('acceptInvitation merges invitee key into senderKeys', () async {
       when(() => groupService.getGroup('grp_1')).thenAnswer((_) async => null);
       when(() => cryptoService.importGroupKeys(any(), any())).thenReturn(null);
       when(() => cryptoService.setSenderKey(any(), any(), any()))
@@ -318,9 +393,9 @@ void main() {
           )).thenAnswer((_) async => _makeGroup());
 
       invitationService.start();
-
       invitationController.add(('peer_creator', _makeInvitationPayload()));
       await Future<void>.delayed(const Duration(milliseconds: 50));
+      await invitationService.acceptInvitation('grp_1');
 
       final captured = verify(() => groupService.acceptInvitation(
             group: any(named: 'group'),
@@ -328,7 +403,6 @@ void main() {
           )).captured;
 
       final passedKeys = captured.first as Map<String, String>;
-      // Should include both the existing keys and the invitee's own key
       expect(passedKeys['creator_device'], 'creator_key_b64');
       expect(passedKeys[selfDeviceId], 'invitee_key_b64');
     });
@@ -567,25 +641,17 @@ void main() {
   // start
   // ---------------------------------------------------------------------------
   group('start', () {
-    test('subscribes to both streams and processes events', () async {
-      Group? joinedGroup;
-      invitationService.onGroupJoined = (g) => joinedGroup = g;
-
+    test('subscribes to both streams and stages incoming invites as pending',
+        () async {
       when(() => groupService.getGroup(any())).thenAnswer((_) async => null);
-      when(() => cryptoService.importGroupKeys(any(), any())).thenReturn(null);
-      when(() => cryptoService.setSenderKey(any(), any(), any()))
-          .thenReturn(null);
-      when(() => groupService.acceptInvitation(
-            group: any(named: 'group'),
-            senderKeys: any(named: 'senderKeys'),
-          )).thenAnswer((_) async => _makeGroup());
 
       invitationService.start();
 
       invitationController.add(('peer', _makeInvitationPayload()));
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
-      expect(joinedGroup, isNotNull);
+      expect(invitationService.currentPending, hasLength(1));
+      expect(invitationService.currentPending.first.fromPeerId, 'peer');
     });
   });
 }
