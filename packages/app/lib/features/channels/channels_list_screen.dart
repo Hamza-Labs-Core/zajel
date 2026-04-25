@@ -121,6 +121,11 @@ class ChannelsListScreen extends ConsumerWidget {
       try {
         final decoded = ChannelLinkService.decode(linkController.text);
 
+        if (!context.mounted) return;
+        final confirmed =
+            await _confirmChannelSubscribe(context, decoded.manifest);
+        if (confirmed != true) return;
+
         final channelService = ref.read(channelServiceProvider);
         await channelService.subscribe(
           manifest: decoded.manifest,
@@ -163,6 +168,106 @@ class ChannelsListScreen extends ConsumerWidget {
         }
       }
     }
+  }
+
+  /// Confirm dialog shown after a channel invite link is parsed but before
+  /// the actual subscribe call.
+  ///
+  /// Channel links are bearer tokens — anyone with the link can subscribe —
+  /// so this isn't a security gate against attackers, it's a UX gate
+  /// against a user accidentally pasting the wrong link or being tricked
+  /// into subscribing to a channel they didn't recognize. Shows the
+  /// channel's plaintext name + description + admin count so the user can
+  /// sanity-check before committing.
+  static Future<bool?> _confirmChannelSubscribe(
+    BuildContext context,
+    ChannelManifest manifest,
+  ) {
+    final adminCount = manifest.adminKeys.length;
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.podcasts, color: Colors.blue),
+            SizedBox(width: 8),
+            Text('Subscribe to channel?'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    manifest.name,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  if (manifest.description.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      manifest.description,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  Text(
+                    adminCount == 0
+                        ? 'No additional admins'
+                        : '$adminCount admin${adminCount == 1 ? '' : 's'}',
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.shade200),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.warning_amber, color: Colors.orange, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Subscribe only if this channel matches what the '
+                      'sender intended to share.',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Subscribe'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
