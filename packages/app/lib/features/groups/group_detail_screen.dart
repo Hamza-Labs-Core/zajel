@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/logging/logger_service.dart';
 import '../../core/models/peer.dart';
 import '../../core/providers/app_providers.dart';
+import '../../shared/widgets/app_toast.dart';
 import '../../shared/widgets/compose_bar.dart';
 import '../../shared/widgets/message_list_view.dart';
 import 'models/group.dart';
@@ -296,11 +297,11 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
       if (mounted) setState(() => _newMessageSignal++);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to send: $e'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'Failed to send: $e',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.error,
         );
       }
     } finally {
@@ -338,11 +339,10 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
       if (value == 'copy') {
         Clipboard.setData(ClipboardData(text: content));
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Message copied to clipboard'),
-            duration: Duration(seconds: 2),
-          ),
+        showAppToast(
+          context,
+          'Message copied to clipboard',
+          duration: const Duration(seconds: 2),
         );
       }
     });
@@ -374,12 +374,11 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
         .toList();
 
     if (availablePeers.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-              'No connected peers available. Peers must be online to add.'),
-          duration: Duration(seconds: 3),
-        ),
+      showAppToast(
+        context,
+        'No connected peers available. Peers must be online to add.',
+        duration: const Duration(seconds: 3),
+        kind: AppToastKind.warning,
       );
       return;
     }
@@ -466,19 +465,19 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen> {
         ref.invalidate(groupByIdProvider(widget.groupId));
 
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Invitation sent to ${selectedPeer.displayName}'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'Invitation sent to ${selectedPeer.displayName}',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.success,
         );
       } catch (e) {
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to add member: $e'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'Failed to add member: $e',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.error,
         );
       }
     }

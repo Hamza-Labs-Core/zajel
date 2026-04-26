@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/config/environment.dart';
 import '../../../core/logging/logger_service.dart';
+import '../../../shared/widgets/app_toast.dart';
 import '../models/update_check_result.dart';
 import '../models/update_state.dart';
 import '../providers/auto_update_providers.dart';
@@ -262,21 +263,21 @@ class UpdateSettingsSection extends ConsumerWidget {
     } on UpdaterBinaryNotFoundException catch (e) {
       logger.error('UpdateSettings', 'Updater binary not found', e);
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Update failed: ${e.message}'),
-            duration: const Duration(seconds: 5),
-          ),
+        showAppToast(
+          context,
+          'Update failed: ${e.message}',
+          duration: const Duration(seconds: 5),
+          kind: AppToastKind.error,
         );
       }
     } catch (e) {
       logger.error('UpdateSettings', 'Failed to launch updater', e);
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Update failed: $e'),
-            duration: const Duration(seconds: 5),
-          ),
+        showAppToast(
+          context,
+          'Update failed: $e',
+          duration: const Duration(seconds: 5),
+          kind: AppToastKind.error,
         );
       }
     }

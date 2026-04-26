@@ -6,6 +6,7 @@ import '../../core/logging/logger_service.dart';
 import '../../core/models/models.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/utils/identity_utils.dart';
+import '../../shared/widgets/app_toast.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/relative_time.dart';
 
@@ -421,11 +422,11 @@ class _PeerCard extends ConsumerWidget {
       aliases[peer.id] = newName;
       ref.read(peerAliasesProvider.notifier).state = aliases;
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Renamed to $newName'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'Renamed to $newName',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.success,
         );
       }
     }
@@ -468,11 +469,10 @@ class _PeerCard extends ConsumerWidget {
             'HomeScreen', 'Best-effort disconnect failed for ${peer.id}: $e');
       }
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${_displayName(ref)} deleted'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          '${_displayName(ref)} deleted',
+          duration: const Duration(seconds: 3),
         );
       }
     }
@@ -510,11 +510,10 @@ class _PeerCard extends ConsumerWidget {
             displayName: _displayName(ref),
           );
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${_displayName(ref)} blocked'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          '${_displayName(ref)} blocked',
+          duration: const Duration(seconds: 3),
         );
       }
     }
@@ -555,12 +554,11 @@ class _PeerCard extends ConsumerWidget {
       await connectionManager.connectToPeer(peer.id);
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Connection failed: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'Connection failed: $e',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.error,
         );
       }
     }

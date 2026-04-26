@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/logging/logger_service.dart';
 import '../../core/providers/app_providers.dart';
+import '../../shared/widgets/app_toast.dart';
 import '../channels/providers/channel_providers.dart';
 import '../groups/providers/group_providers.dart';
 import '../updater/widgets/auto_update_settings.dart';
@@ -600,26 +601,26 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       await cryptoService.regenerateIdentityKeys();
 
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Keys regenerated'),
-          duration: Duration(seconds: 3),
-        ),
+      showAppToast(
+        context,
+        'Keys regenerated',
+        duration: const Duration(seconds: 3),
+        kind: AppToastKind.success,
       );
     }
   }
 
   Future<void> _launchUrl(String urlString) async {
     final url = Uri.parse(urlString);
-    final messenger = ScaffoldMessenger.of(context);
     if (await canLaunchUrl(url)) {
       await launchUrl(url, mode: LaunchMode.externalApplication);
     } else {
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text('Could not open $urlString'),
-          duration: const Duration(seconds: 3),
-        ),
+      if (!mounted) return;
+      showAppToast(
+        context,
+        'Could not open $urlString',
+        duration: const Duration(seconds: 3),
+        kind: AppToastKind.error,
       );
     }
   }
@@ -684,11 +685,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       await prefs.clear();
 
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('All data cleared. Please restart the app.'),
-          duration: Duration(seconds: 5),
-        ),
+      showAppToast(
+        context,
+        'All data cleared. Please restart the app.',
+        duration: const Duration(seconds: 5),
+        kind: AppToastKind.success,
       );
     }
   }
@@ -708,11 +709,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final logDir = logger.logDirectoryPath;
     if (logDir == null) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Logs not initialized'),
-          duration: Duration(seconds: 3),
-        ),
+      showAppToast(
+        context,
+        'Logs not initialized',
+        duration: const Duration(seconds: 3),
+        kind: AppToastKind.warning,
       );
       return;
     }
@@ -729,12 +730,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     } catch (e) {
       logger.error('Settings', 'Failed to open log directory', e);
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to open log directory: $e'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
+      showAppToast(
+        context,
+        'Failed to open log directory: $e',
+        duration: const Duration(seconds: 3),
+        kind: AppToastKind.error,
       );
     }
   }
@@ -743,6 +743,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final messenger = ScaffoldMessenger.of(context);
     try {
       if (!context.mounted) return;
+      // TODO: SnackBarAction not yet supported by showAppToast — keep showSnackBar
+      // (Complex Row+CircularProgressIndicator content paired with
+      //  hideCurrentSnackBar() to dismiss when async work completes.)
       messenger.showSnackBar(
         const SnackBar(
           content: Row(
@@ -767,12 +770,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       messenger.hideCurrentSnackBar();
       logger.error('Settings', 'Failed to export logs', e);
       if (!context.mounted) return;
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text('Failed to export logs: $e'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
+      showAppToast(
+        context,
+        'Failed to export logs: $e',
+        duration: const Duration(seconds: 3),
+        kind: AppToastKind.error,
       );
     }
   }
@@ -871,11 +873,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       await logger.clearLogs();
 
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Logs cleared'),
-          duration: Duration(seconds: 3),
-        ),
+      showAppToast(
+        context,
+        'Logs cleared',
+        duration: const Duration(seconds: 3),
+        kind: AppToastKind.success,
       );
     }
   }

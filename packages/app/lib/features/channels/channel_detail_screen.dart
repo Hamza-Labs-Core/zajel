@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 
 import '../../core/providers/app_providers.dart';
 import '../../core/storage/trusted_peers_storage.dart';
+import '../../shared/widgets/app_toast.dart';
 import '../../shared/widgets/compose_bar.dart';
 import '../../shared/widgets/message_list_view.dart';
 import 'models/channel.dart';
@@ -355,10 +356,11 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
       // Verify the content type is allowed by channel rules
       if (!channel.manifest.rules.isContentTypeAllowed(ContentType.text.name)) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-                content: Text('Text content is not allowed in this channel'),
-                duration: Duration(seconds: 3)),
+          showAppToast(
+            context,
+            'Text content is not allowed in this channel',
+            duration: const Duration(seconds: 3),
+            kind: AppToastKind.warning,
           );
         }
         return;
@@ -408,20 +410,20 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
       if (mounted) setState(() => _newMessageSignal++);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Published (${chunks.length} chunk(s))'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'Published (${chunks.length} chunk(s))',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.success,
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to publish: $e'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'Failed to publish: $e',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.error,
         );
       }
     } finally {
@@ -486,10 +488,10 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
             TextButton(
               onPressed: () {
                 Clipboard.setData(ClipboardData(text: channelLink!));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text('Invite link copied to clipboard'),
-                      duration: Duration(seconds: 3)),
+                showAppToast(
+                  context,
+                  'Invite link copied to clipboard',
+                  duration: const Duration(seconds: 3),
                 );
               },
               child: const Text('Copy'),
@@ -645,13 +647,11 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
     if (!context.mounted) return;
 
     if (eligible.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content:
-              Text('No eligible contacts. Contacts need to reconnect first '
-                  'to share their signing key.'),
-          duration: Duration(seconds: 4),
-        ),
+      showAppToast(
+        context,
+        'No eligible contacts. Contacts need to reconnect first '
+        'to share their signing key.',
+        duration: const Duration(seconds: 4),
       );
       return;
     }
@@ -673,20 +673,19 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
         );
         ref.invalidate(channelByIdProvider(widget.channelId));
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content:
-                Text('Admin "${selected.alias ?? selected.displayName}" added'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'Admin "${selected.alias ?? selected.displayName}" added',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.success,
         );
       } catch (e) {
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to add admin: $e'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'Failed to add admin: $e',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.error,
         );
       }
     }
@@ -760,19 +759,19 @@ class _ChannelDetailScreenState extends ConsumerState<ChannelDetailScreen> {
         );
         ref.invalidate(channelByIdProvider(widget.channelId));
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Admin "${admin.label}" removed successfully'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'Admin "${admin.label}" removed successfully',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.success,
         );
       } catch (e) {
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to remove admin: $e'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'Failed to remove admin: $e',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.error,
         );
       }
     }

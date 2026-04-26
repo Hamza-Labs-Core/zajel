@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:toastification/toastification.dart';
 
 import 'app_router.dart';
 import 'core/config/environment.dart';
@@ -558,6 +559,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       if (messenger == null) return;
 
       final wasInterrupted = result.status == 'interrupted_recovery';
+      // Intentionally not migrated — special pump-callback path
       messenger.showSnackBar(
         SnackBar(
           content: Text(
@@ -665,6 +667,12 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       darkTheme: AppTheme.darkTheme,
       themeMode: ref.watch(themeModeProvider),
       routerConfig: appRouter,
+      // ToastificationWrapper hosts the Overlay that toastification.show
+      // pushes into. Wrapping inside MaterialApp.router via `builder` makes
+      // the wrapper a descendant of the Navigator so toasts render above
+      // routed pages.
+      builder: (context, child) =>
+          ToastificationWrapper(child: child ?? const SizedBox.shrink()),
     );
 
     // Wrap with Listener on desktop to feed pointer events to IdleDetector

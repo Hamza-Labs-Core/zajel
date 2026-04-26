@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/providers/app_providers.dart';
+import '../../shared/widgets/app_toast.dart';
 import 'models/channel.dart';
 import 'providers/channel_providers.dart';
 import 'services/channel_link_service.dart';
@@ -141,29 +142,28 @@ class ChannelsListScreen extends ConsumerWidget {
         });
 
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Subscribed to "${decoded.manifest.name}"'),
-              duration: const Duration(seconds: 3),
-            ),
+          showAppToast(
+            context,
+            'Subscribed to "${decoded.manifest.name}"',
+            duration: const Duration(seconds: 3),
           );
         }
       } on FormatException {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Invalid channel invite link'),
-              duration: Duration(seconds: 3),
-            ),
+          showAppToast(
+            context,
+            'Invalid channel invite link',
+            duration: const Duration(seconds: 3),
+            kind: AppToastKind.error,
           );
         }
       } catch (e) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Subscribe failed: $e'),
-              duration: const Duration(seconds: 3),
-            ),
+          showAppToast(
+            context,
+            'Subscribe failed: $e',
+            duration: const Duration(seconds: 3),
+            kind: AppToastKind.error,
           );
         }
       }
