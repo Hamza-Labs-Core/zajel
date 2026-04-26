@@ -121,7 +121,10 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   late final FileTransferListener _fileTransferListener;
   late final PairRequestHandler _pairRequestHandler;
   late final LinkRequestHandler _linkRequestHandler;
-  late final GroupInviteHandler _groupInviteHandler;
+  // Nullable because instantiation is deferred to _initialize() — see the
+  // block right before listen() calls. If _initialize fails before that
+  // point, dispose() must still work.
+  GroupInviteHandler? _groupInviteHandler;
   late final NotificationListenerService _notificationListener;
   late final VoipCallHandler _voipCallHandler;
   void Function()? _cancelSignalingReconnect;
@@ -260,22 +263,11 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       getContext: () => rootNavigatorKey.currentContext,
     );
 
-    final invitationService = ref.read(groupInvitationServiceProvider);
-    _groupInviteHandler = GroupInviteHandler(
-      pendingInvites: invitationService.pendingInvites,
-      acceptInvitation: invitationService.acceptInvitation,
-      declineInvitation: invitationService.declineInvitation,
-      getContext: () => rootNavigatorKey.currentContext,
-      notifyInvite: (invite) async {
-        final settings = ref.read(notificationSettingsProvider);
-        await ref.read(notificationServiceProvider).showGroupInviteNotification(
-              inviteId: invite.groupId,
-              groupName: invite.groupName,
-              inviterPeerId: invite.fromPeerId,
-              settings: settings,
-            );
-      },
-    );
+    // GroupInviteHandler is instantiated later in _initialize() — its
+    // dependency `groupInvitationServiceProvider` watches cryptoServiceProvider
+    // and reads `.stableId` synchronously at provider construction, which
+    // throws CryptoException("CryptoService not initialized") if read before
+    // _initialize() runs.
 
     _notificationListener = NotificationListenerService(
       messages: cm.peerMessages,
@@ -434,10 +426,32 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       }
     }
 
+    // Instantiate GroupInviteHandler now that crypto + storage are
+    // initialized. Doing this earlier (in _buildServices) crashes because
+    // groupInvitationServiceProvider watches cryptoServiceProvider and reads
+    // `.stableId` synchronously at construction.
+    final invitationService = ref.read(groupInvitationServiceProvider);
+    final groupInviteHandler = GroupInviteHandler(
+      pendingInvites: invitationService.pendingInvites,
+      acceptInvitation: invitationService.acceptInvitation,
+      declineInvitation: invitationService.declineInvitation,
+      getContext: () => rootNavigatorKey.currentContext,
+      notifyInvite: (invite) async {
+        final settings = ref.read(notificationSettingsProvider);
+        await ref.read(notificationServiceProvider).showGroupInviteNotification(
+              inviteId: invite.groupId,
+              groupName: invite.groupName,
+              inviterPeerId: invite.fromPeerId,
+              settings: settings,
+            );
+      },
+    );
+    _groupInviteHandler = groupInviteHandler;
+
     _fileTransferListener.listen();
     _pairRequestHandler.listen();
     _linkRequestHandler.listen();
-    _groupInviteHandler.listen();
+    groupInviteHandler.listen();
     _notificationListener.listen();
 
     // Eagerly start channel sync so chunk_announce/chunk_data messages
@@ -631,7 +645,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     _fileTransferListener.dispose();
     _pairRequestHandler.dispose();
     _linkRequestHandler.dispose();
-    _groupInviteHandler.dispose();
+    _groupInviteHandler?.dispose();
     _notificationListener.dispose();
     _voipCallHandler.dispose();
     _cancelSignalingReconnect?.call();
