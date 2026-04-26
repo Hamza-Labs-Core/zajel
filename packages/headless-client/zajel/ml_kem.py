@@ -28,23 +28,39 @@ _mlkem_available: Optional[bool] = None
 
 
 def is_mlkem_available() -> bool:
-    """Check if ML-KEM-768 support is available.
+    """Check if ML-KEM-768 support is *usable* (not just importable).
 
-    Requires cryptography >= 44.0 with ML-KEM support.
+    Two failure modes the cryptography ecosystem can produce:
+    1. The Python module `cryptography.hazmat.primitives.asymmetric.mlkem`
+       doesn't exist (older `cryptography` package, < ~47.0). ImportError.
+    2. The module exists but the underlying OpenSSL/BoringSSL backend
+       doesn't actually implement ML-KEM (e.g., a `cryptography` wheel
+       linked against an OpenSSL < 3.5). The import succeeds but
+       `MLKEM768PrivateKey.generate()` raises `UnsupportedAlgorithm` at
+       runtime, *after* tests have already been collected.
+
+    A simple `import` probe catches case 1 only; CI hit case 2 with the
+    `mlkem` module present but generate() throwing UnsupportedAlgorithm,
+    which leaked past the @skipif markers and produced 10 errors. So the
+    probe actually generates a keypair to confirm both paths work, and
+    treats any exception as "not available."
     """
     global _mlkem_available
     if _mlkem_available is not None:
         return _mlkem_available
 
     try:
-        from cryptography.hazmat.primitives.asymmetric.mlkem import (  # noqa: F401
+        from cryptography.hazmat.primitives.asymmetric.mlkem import (
             MLKEM768PrivateKey,
         )
+        # Round-trip generate to confirm the backend actually implements ML-KEM.
+        # Without this, the import-only probe can return True on wheels whose
+        # bundled OpenSSL doesn't have ML-KEM.
+        MLKEM768PrivateKey.generate()
         _mlkem_available = True
-    except ImportError:
+    except Exception as e:  # ImportError, UnsupportedAlgorithm, etc.
         logger.warning(
-            "ML-KEM not available: cryptography >= 44.0 required. "
-            "Hybrid mode disabled."
+            "ML-KEM not available: %s. Hybrid mode disabled.", e
         )
         _mlkem_available = False
 

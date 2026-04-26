@@ -354,6 +354,15 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       _disposeServicesSync();
     }
 
+    // After a detached event the widget element can be in a deactivated
+    // state when the next platform lifecycle message arrives — the
+    // integration_test binding (Linux E2E) is especially aggressive about
+    // re-emitting lifecycle messages during pump cycles. ref.read() on a
+    // deactivated element raises "Looking up a deactivated widget's
+    // ancestor is unsafe" and aborts the pump loop, leaving the widget
+    // tree on the loading screen and breaking every UI-finding test.
+    if (!mounted) return;
+
     // Track foreground state for notification suppression
     ref.read(appInForegroundProvider.notifier).state =
         state == AppLifecycleState.resumed;
