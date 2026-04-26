@@ -354,35 +354,47 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       _disposeServicesSync();
     }
 
-    // After a detached event the widget element can be in a deactivated
-    // state when the next platform lifecycle message arrives — the
-    // integration_test binding (Linux E2E) is especially aggressive about
-    // re-emitting lifecycle messages during pump cycles. ref.read() on a
-    // deactivated element raises "Looking up a deactivated widget's
-    // ancestor is unsafe" and aborts the pump loop, leaving the widget
-    // tree on the loading screen and breaking every UI-finding test.
     if (!mounted) return;
 
-    // Track foreground state for notification suppression
-    ref.read(appInForegroundProvider.notifier).state =
-        state == AppLifecycleState.resumed;
+    // The integration_test binding (Linux E2E Shelf-server flow) re-emits
+    // platform lifecycle messages during pump-cycles, sometimes after the
+    // root element has entered the deactivated lifecycle stage but before
+    // dispose() runs — `mounted` is still true at that point but
+    // `ref.read` performs an InheritedWidget ancestor lookup that asserts
+    // the element is *active*, raising "Looking up a deactivated widget's
+    // ancestor is unsafe." That assertion (in debug builds, which
+    // integration_test uses) aborts the pump loop, the widget tree never
+    // progresses past the loading screen, and every Shelf UI-finding test
+    // times out. Catch the assertion and treat it as a no-op: there's no
+    // observable state to update if the element is already on its way
+    // out.
+    try {
+      ref.read(appInForegroundProvider.notifier).state =
+          state == AppLifecycleState.resumed;
 
-    // Privacy screen: obscure app content when backgrounded.
-    // On mobile: inactive/paused when app goes to background or task switcher.
-    // On desktop: hidden when minimized, inactive when losing focus.
-    final privacyEnabled = ref.read(privacyScreenProvider);
-    if (privacyEnabled) {
-      if (state == AppLifecycleState.inactive ||
-          state == AppLifecycleState.paused ||
-          state == AppLifecycleState.hidden) {
-        if (mounted && !_showPrivacyScreen) {
-          setState(() => _showPrivacyScreen = true);
-        }
-      } else if (state == AppLifecycleState.resumed) {
-        if (mounted && _showPrivacyScreen) {
-          setState(() => _showPrivacyScreen = false);
+      // Privacy screen: obscure app content when backgrounded.
+      // On mobile: inactive/paused when backgrounded or in task switcher.
+      // On desktop: hidden when minimized, inactive when losing focus.
+      final privacyEnabled = ref.read(privacyScreenProvider);
+      if (privacyEnabled) {
+        if (state == AppLifecycleState.inactive ||
+            state == AppLifecycleState.paused ||
+            state == AppLifecycleState.hidden) {
+          if (!_showPrivacyScreen) {
+            setState(() => _showPrivacyScreen = true);
+          }
+        } else if (state == AppLifecycleState.resumed) {
+          if (_showPrivacyScreen) {
+            setState(() => _showPrivacyScreen = false);
+          }
         }
       }
+    } on FlutterError catch (e) {
+      // Swallow ancestor-lookup-on-deactivated-element assertions only;
+      // any other framework error should still surface.
+      if (!e.message.contains('deactivated widget')) rethrow;
+      logger.warning(
+          'ZajelApp', 'Skipping lifecycle state update on deactivated element');
     }
   }
 
