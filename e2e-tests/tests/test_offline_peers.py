@@ -87,17 +87,18 @@ class TestOfflinePeers:
         alice_helper.go_back_to_home()
         time.sleep(3)
 
-        # Try to open chat with the offline peer
-        try:
-            # Find the offline peer and tap it
-            alice.find_element(
-                "xpath",
-                "//*[contains(@content-desc, 'Last seen')]"
-            ).click()
-            time.sleep(2)
+        # Find the offline peer and tap it
+        peer_card = alice.find_element(
+            "xpath",
+            "//*[contains(@content-desc, 'Last seen')]"
+        )
+        peer_card.click()
+        time.sleep(2)
 
-            # Should see the offline banner
+        # Should see the offline banner in chat
+        try:
             alice_helper._find("offline", timeout=5)
+            banner_shown = True
         except Exception:
-            # Peer card may not be tappable in all states
-            pass
+            banner_shown = False
+        assert banner_shown, "Chat with offline peer should show offline banner"

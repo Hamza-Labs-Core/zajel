@@ -12,12 +12,55 @@ import 'group_service.dart';
 /// Wire prefix for group invitations sent over 1:1 P2P channels.
 const String _invitePrefix = 'ginv:';
 
+/// A group invitation that has been received but not yet accepted or declined
+/// by the user.
+class PendingGroupInvite {
+  /// Stable identifier — the group ID. Used as the key in [acceptInvitation] /
+  /// [declineInvitation] and the dedup key in the pending map.
+  final String groupId;
+
+  /// Peer ID of the inviter on the 1:1 channel that delivered the invite.
+  final String fromPeerId;
+
+  /// Display name of the group (from the wire payload).
+  final String groupName;
+
+  /// The fully-parsed [Group] object — used by [acceptInvitation] to persist.
+  final Group group;
+
+  /// All sender keys delivered with the invitation, including the invitee's
+  /// own freshly-generated key for outbound messages in this group.
+  final Map<String, String> senderKeys;
+
+  /// The invitee's own sender key for this group (subset of [senderKeys]).
+  final String inviteeSenderKey;
+
+  /// Wall-clock time the invitation arrived (used for sorting / TTL display).
+  final DateTime receivedAt;
+
+  const PendingGroupInvite({
+    required this.groupId,
+    required this.fromPeerId,
+    required this.groupName,
+    required this.group,
+    required this.senderKeys,
+    required this.inviteeSenderKey,
+    required this.receivedAt,
+  });
+}
+
 /// Handles sending and receiving group invitations over existing 1:1
 /// WebRTC data channels.
 ///
 /// When a group owner adds a member, we need to deliver the group
 /// metadata and sender keys to the invitee's device. This service
 /// bridges the group layer to the 1:1 P2P channel.
+///
+/// Incoming invitations are **staged as pending** and emitted on
+/// [pendingInvites]. The UI is responsible for prompting the user and
+/// calling [acceptInvitation] or [declineInvitation]. The service does
+/// not auto-accept (that would let any peer who knows your peer ID
+/// silently insert you into a group).
 class GroupInvitationService {
   final ConnectionManager _connectionManager;
   final GroupService _groupService;
@@ -27,7 +70,23 @@ class GroupInvitationService {
   StreamSubscription<(String, String)>? _inviteSub;
   StreamSubscription<(String, String)>? _groupDataSub;
 
-  /// Callback invoked when a group invitation is received and accepted.
+  /// Pending invitations keyed by group ID. We dedupe by group ID so a peer
+  /// re-sending the same invite doesn't queue duplicates for the user.
+  final Map<String, PendingGroupInvite> _pendingInvites = {};
+
+  final StreamController<PendingGroupInvite> _pendingController =
+      StreamController<PendingGroupInvite>.broadcast();
+
+  /// Stream of newly-staged group invitations awaiting user approval.
+  /// UI handler should listen and show an Accept/Decline prompt.
+  Stream<PendingGroupInvite> get pendingInvites => _pendingController.stream;
+
+  /// Snapshot of currently pending invitations (e.g. for a notification badge).
+  List<PendingGroupInvite> get currentPending =>
+      List.unmodifiable(_pendingInvites.values);
+
+  /// Callback invoked when a group invitation has been **accepted by the
+  /// user** (via [acceptInvitation]) and the group persisted locally.
   void Function(Group group)? onGroupJoined;
 
   /// Callback invoked when a group message is received over a 1:1 channel.
@@ -62,6 +121,8 @@ class GroupInvitationService {
     _inviteSub = null;
     await _groupDataSub?.cancel();
     _groupDataSub = null;
+    await _pendingController.close();
+    _pendingInvites.clear();
   }
 
   /// Send a group invitation to a peer over the 1:1 data channel.
@@ -99,6 +160,11 @@ class GroupInvitationService {
   }
 
   /// Handle an incoming group invitation.
+  ///
+  /// Parses the invitation, dedupes against existing memberships and pending
+  /// queue, then **stages the invite as pending** and emits on
+  /// [pendingInvites]. Does NOT touch group storage or crypto state — those
+  /// happen in [acceptInvitation] only after explicit user approval.
   Future<void> _handleInvitation(String fromPeerId, String payload) async {
     try {
       final data = jsonDecode(payload) as Map<String, dynamic>;
@@ -112,7 +178,7 @@ class GroupInvitationService {
           (data['senderKeys'] as Map<String, dynamic>).cast<String, String>();
       final inviteeSenderKey = data['inviteeSenderKey'] as String;
 
-      // Check if we already have this group
+      // Already a member — invite is a no-op.
       final existing = await _groupService.getGroup(groupId);
       if (existing != null) {
         logger.info(
@@ -122,12 +188,20 @@ class GroupInvitationService {
         return;
       }
 
-      // Parse members
+      // Already pending the same group — ignore the dup so re-sends from a
+      // flaky inviter don't queue multiple identical prompts.
+      if (_pendingInvites.containsKey(groupId)) {
+        logger.info(
+          'GroupInvitationService',
+          'Invitation for "$groupName" already pending, ignoring duplicate',
+        );
+        return;
+      }
+
       final members = membersJson
           .map((m) => GroupMember.fromJson(m as Map<String, dynamic>))
           .toList();
 
-      // Create the group locally
       final group = Group(
         id: groupId,
         name: groupName,
@@ -137,24 +211,23 @@ class GroupInvitationService {
         createdBy: createdBy,
       );
 
-      // Import sender keys for all existing members
-      _cryptoService.importGroupKeys(groupId, senderKeys);
-
-      // Set our own sender key
-      _cryptoService.setSenderKey(groupId, _selfDeviceId, inviteeSenderKey);
-
-      // Persist group and keys via the service
-      await _groupService.acceptInvitation(
+      final pending = PendingGroupInvite(
+        groupId: groupId,
+        fromPeerId: fromPeerId,
+        groupName: groupName,
         group: group,
         senderKeys: {...senderKeys, _selfDeviceId: inviteeSenderKey},
+        inviteeSenderKey: inviteeSenderKey,
+        receivedAt: DateTime.now(),
       );
+
+      _pendingInvites[groupId] = pending;
+      _pendingController.add(pending);
 
       logger.info(
         'GroupInvitationService',
-        'Accepted invitation to group "$groupName" from $fromPeerId',
+        'Staged pending invitation to group "$groupName" from $fromPeerId',
       );
-
-      onGroupJoined?.call(group);
     } catch (e, stack) {
       logger.error(
         'GroupInvitationService',
@@ -163,6 +236,63 @@ class GroupInvitationService {
         stack,
       );
     }
+  }
+
+  /// Accept a pending group invitation by ID. Persists the group + sender
+  /// keys, fires [onGroupJoined], and removes the pending entry.
+  ///
+  /// Returns the persisted [Group] on success, or null if no pending invite
+  /// exists for [groupId] (already accepted, declined, or never received).
+  Future<Group?> acceptInvitation(String groupId) async {
+    final pending = _pendingInvites.remove(groupId);
+    if (pending == null) {
+      logger.warning('GroupInvitationService',
+          'acceptInvitation($groupId): no pending invite');
+      return null;
+    }
+
+    try {
+      _cryptoService.importGroupKeys(groupId, pending.senderKeys);
+      _cryptoService.setSenderKey(
+          groupId, _selfDeviceId, pending.inviteeSenderKey);
+
+      await _groupService.acceptInvitation(
+        group: pending.group,
+        senderKeys: pending.senderKeys,
+      );
+
+      logger.info(
+        'GroupInvitationService',
+        'Accepted invitation to "${pending.groupName}" from ${pending.fromPeerId}',
+      );
+
+      onGroupJoined?.call(pending.group);
+      return pending.group;
+    } catch (e, stack) {
+      // On failure, restore the pending entry so the user can retry.
+      _pendingInvites[groupId] = pending;
+      logger.error(
+        'GroupInvitationService',
+        'Failed to accept invitation $groupId',
+        e,
+        stack,
+      );
+      return null;
+    }
+  }
+
+  /// Decline a pending group invitation by ID. Drops the pending entry
+  /// silently — no message is sent back to the inviter (dropping is
+  /// indistinguishable from being offline / app-killed, which is the
+  /// correct privacy posture).
+  bool declineInvitation(String groupId) {
+    final removed = _pendingInvites.remove(groupId);
+    if (removed == null) return false;
+    logger.info(
+      'GroupInvitationService',
+      'Declined invitation to "${removed.groupName}" from ${removed.fromPeerId}',
+    );
+    return true;
   }
 
   /// Handle incoming group message data from a 1:1 peer connection.

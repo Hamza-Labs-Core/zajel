@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/providers/app_providers.dart';
+import '../../shared/widgets/app_toast.dart';
 import '../../shared/widgets/relative_time.dart';
 
 /// Screen for managing blocked peers.
@@ -160,11 +161,11 @@ class BlockedPeersScreen extends ConsumerWidget {
       await ref.read(blockedPeersProvider.notifier).unblock(peerId);
       ref.invalidate(blockedPeerDetailsProvider);
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('$displayName unblocked'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          '$displayName unblocked',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.success,
         );
       }
     }
@@ -204,11 +205,10 @@ class BlockedPeersScreen extends ConsumerWidget {
       await ref.read(blockedPeersProvider.notifier).removePermanently(peerId);
       ref.invalidate(blockedPeerDetailsProvider);
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('$displayName removed permanently'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          '$displayName removed permanently',
+          duration: const Duration(seconds: 3),
         );
       }
     }

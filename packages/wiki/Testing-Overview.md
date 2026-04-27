@@ -90,6 +90,14 @@ graph TB
 | Unit tests | `packages/web-client/` | Vitest | `web-client-tests.yml` |
 | E2E (Chromium) | `packages/web-client/` | Playwright (2 shards) | `web-client-tests.yml` |
 
+### Admin Dashboard Tests
+
+| Category | Path | Runner | CI Workflow |
+|----------|------|--------|-------------|
+| Playwright E2E | `packages/admin-cf/tests/e2e-playwright/` | Playwright (Chromium) | `npm run test:playwright` |
+
+The admin dashboard has 85 Playwright E2E tests covering authentication, all 9 dashboard tabs (Servers, Users, Errors, Metrics, Active Clients, Server Health, Security, AI Issues, Notifications), API smoke tests, and tab navigation. Tests use `addInitScript()` for JWT token injection to avoid rate limiter issues. See [Admin Dashboard > Playwright E2E Tests](Admin-Dashboard#playwright-e2e-tests) for details.
+
 ### Cross-Component Tests
 
 | Category | Path | Runner | CI Workflow |

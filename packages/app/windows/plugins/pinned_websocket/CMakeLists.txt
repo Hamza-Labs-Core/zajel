@@ -74,28 +74,40 @@ if(OpenSSL_FOUND)
   get_filename_component(_openssl_root "${_openssl_root}" DIRECTORY)
   get_filename_component(_openssl_root "${_openssl_root}" DIRECTORY)
 
-  # OpenSSL 3.x DLLs: libssl-3-x64.dll / libcrypto-3-x64.dll
-  # OpenSSL 1.1.x DLLs: libssl-1_1-x64.dll / libcrypto-1_1-x64.dll
+  # Runtime DLLs follow the naming scheme libssl-<MAJOR>-x64.dll /
+  # libcrypto-<MAJOR>-x64.dll (3, 4, 5, ...) for 3.x+ and
+  # libssl-1_1-x64.dll / libcrypto-1_1-x64.dll for 1.1.x. Glob across all
+  # present majors so a runner-image bump to a new OpenSSL major (e.g.
+  # 3 → 4 on windows-latest during 2026-04) can't silently ship an exe
+  # whose imports don't match the bundled DLLs.
   set(_openssl_dll_search_dirs
     "${_openssl_root}/bin"
     "${_openssl_lib_dir}"
     "${_openssl_root}"
   )
-  # Also check OPENSSL_ROOT_DIR from environment if set
   if(DEFINED ENV{OPENSSL_ROOT_DIR})
     list(APPEND _openssl_dll_search_dirs "$ENV{OPENSSL_ROOT_DIR}/bin")
   endif()
 
   set(OPENSSL_RUNTIME_DLLS "")
-  foreach(_dll_name libssl-3-x64.dll libcrypto-3-x64.dll
-                    libssl-1_1-x64.dll libcrypto-1_1-x64.dll)
-    find_file(_found_dll "${_dll_name}" PATHS ${_openssl_dll_search_dirs} NO_DEFAULT_PATH)
-    if(_found_dll)
-      list(APPEND OPENSSL_RUNTIME_DLLS "${_found_dll}")
-      message(STATUS "Found OpenSSL DLL: ${_found_dll}")
+  foreach(_search_dir IN LISTS _openssl_dll_search_dirs)
+    if(EXISTS "${_search_dir}")
+      file(GLOB _ssl_dlls "${_search_dir}/libssl-*-x64.dll")
+      file(GLOB _crypto_dlls "${_search_dir}/libcrypto-*-x64.dll")
+      foreach(_dll IN LISTS _ssl_dlls _crypto_dlls)
+        list(APPEND OPENSSL_RUNTIME_DLLS "${_dll}")
+        message(STATUS "Found OpenSSL DLL: ${_dll}")
+      endforeach()
     endif()
-    unset(_found_dll CACHE)
   endforeach()
+  list(REMOVE_DUPLICATES OPENSSL_RUNTIME_DLLS)
+
+  if(NOT OPENSSL_RUNTIME_DLLS)
+    message(WARNING "pinned_websocket: linked against OpenSSL but found no "
+      "runtime DLLs in: ${_openssl_dll_search_dirs} — the resulting binary "
+      "will fail at launch with 'libssl-*-x64.dll not found'. Ensure choco "
+      "install openssl completed and OPENSSL_ROOT_DIR points at its install.")
+  endif()
 
   # Propagate to parent scope so the main CMakeLists.txt can install them
   set(OPENSSL_RUNTIME_DLLS "${OPENSSL_RUNTIME_DLLS}" PARENT_SCOPE)

@@ -22,7 +22,8 @@ final groupCryptoServiceProvider = Provider<GroupCryptoService>((ref) {
 ///
 /// Requires [initialize] to be called before use (typically at app startup).
 final groupStorageServiceProvider = Provider<GroupStorageService>((ref) {
-  final service = GroupStorageService();
+  final secureStorage = ref.watch(cachedSecureStorageProvider);
+  final service = GroupStorageService(secureStorage: secureStorage);
   ref.onDispose(() => service.close());
   return service;
 });

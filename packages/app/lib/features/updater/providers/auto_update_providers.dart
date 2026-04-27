@@ -68,6 +68,36 @@ class BackgroundDownloadSettingsNotifier extends StateNotifier<bool> {
   }
 }
 
+// ── Pre-Release Channel ──────────────────────────────────
+
+/// Whether the user has opted in to receiving pre-release updates.
+///
+/// Default: false (stable channel). When enabled, the update checker
+/// queries `/releases` (list) instead of `/releases/latest` to include
+/// pre-release builds.
+///
+/// Persisted to SharedPreferences under the key `includePrereleases`.
+final includePrereleasesProvider =
+    StateNotifierProvider<IncludePrereleasesNotifier, bool>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return IncludePrereleasesNotifier(prefs);
+});
+
+/// StateNotifier for the pre-release channel preference.
+class IncludePrereleasesNotifier extends StateNotifier<bool> {
+  final SharedPreferences _prefs;
+  static const _key = 'includePrereleases';
+
+  IncludePrereleasesNotifier(this._prefs)
+      : super(_prefs.getBool(_key) ?? false);
+
+  /// Enable or disable pre-release updates.
+  Future<void> setEnabled(bool enabled) async {
+    state = enabled;
+    await _prefs.setBool(_key, enabled);
+  }
+}
+
 // ── Idle Detector ──────────────────────────────────
 
 /// Provider for the [IdleDetector] singleton.
@@ -75,9 +105,10 @@ class BackgroundDownloadSettingsNotifier extends StateNotifier<bool> {
 /// The idle detector tracks user activity and determines when the app
 /// has been idle long enough for an auto-update to proceed.
 final idleDetectorProvider = ChangeNotifierProvider<IdleDetector>((ref) {
-  final detector = IdleDetector();
-  ref.onDispose(() => detector.dispose());
-  return detector;
+  // ChangeNotifierProvider automatically disposes the ChangeNotifier —
+  // do NOT add ref.onDispose(() => detector.dispose()) here as that
+  // causes a double-dispose assertion error.
+  return IdleDetector();
 });
 
 // ── Updater Launcher ──────────────────────────────────

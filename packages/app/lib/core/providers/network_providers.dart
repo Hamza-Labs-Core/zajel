@@ -9,6 +9,7 @@ import '../network/meeting_point_service.dart';
 import '../network/peer_reconnection_service.dart';
 import '../network/relay_client.dart';
 import '../network/server_discovery_service.dart';
+import '../network/server_skip_list.dart';
 import '../network/signaling_client.dart'
     show SignalingClient, RendezvousResult, RendezvousPartial, RendezvousMatch;
 import '../network/voip_service.dart';
@@ -130,10 +131,12 @@ final peerReconnectionServiceProvider =
 final deviceLinkServiceProvider = Provider<DeviceLinkService>((ref) {
   final cryptoService = ref.watch(cryptoServiceProvider);
   final webrtcService = ref.watch(webrtcServiceProvider);
+  final secureStorage = ref.watch(cachedSecureStorageProvider);
 
   final service = DeviceLinkService(
     cryptoService: cryptoService,
     webrtcService: webrtcService,
+    secureStorage: secureStorage,
   );
   ref.onDispose(() => service.dispose());
   return service;
@@ -215,13 +218,24 @@ final bootstrapServerUrlProvider = StateProvider<String>((ref) {
   return prefs.getString('bootstrapServerUrl') ?? _effectiveBootstrapUrl;
 });
 
+/// Shared skip list for signaling endpoints. When a connection attempt
+/// to a specific server fails, that endpoint is added here and excluded
+/// from future candidate lists for 5 minutes. Lives at app scope so
+/// every connection site (initial connect, reconnect loop, pairing
+/// redirects, federation) observes the same "do not retry" state.
+final serverSkipListProvider = Provider<ServerSkipList>((ref) {
+  return ServerSkipList();
+});
+
 /// Provider for server discovery service.
 final serverDiscoveryServiceProvider = Provider<ServerDiscoveryService>((ref) {
   final bootstrapUrl = ref.watch(bootstrapServerUrlProvider);
   final verifier = ref.watch(bootstrapVerifierProvider);
+  final skipList = ref.watch(serverSkipListProvider);
   final service = ServerDiscoveryService(
     bootstrapUrl: bootstrapUrl,
     bootstrapVerifier: verifier,
+    skipList: skipList,
   );
   ref.onDispose(() => service.dispose());
   return service;

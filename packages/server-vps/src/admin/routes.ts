@@ -6,14 +6,25 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { requireAuth, sendJson, setAuthCookie, extractToken, verifyJwt } from './auth.js';
 import type { MetricsCollector } from './metrics.js';
 import type { AdminConfig } from './types.js';
+import type { LogBuffer, LogSeverity } from './log-buffer.js';
+
+const SEVERITY_LEVELS = ['debug', 'info', 'warn', 'error', 'critical'] as const;
 
 export class AdminRoutes {
   private metricsCollector: MetricsCollector;
   private config: AdminConfig;
+  private logBuffer: LogBuffer | null = null;
 
   constructor(metricsCollector: MetricsCollector, config: AdminConfig) {
     this.metricsCollector = metricsCollector;
     this.config = config;
+  }
+
+  /**
+   * Set the log buffer instance for log query endpoints.
+   */
+  setLogBuffer(logBuffer: LogBuffer): void {
+    this.logBuffer = logBuffer;
   }
 
   /**
@@ -122,6 +133,14 @@ export class AdminRoutes {
       return this.handleScaling(req, res);
     }
 
+    if (path === '/admin/api/logs') {
+      return this.handleLogs(req, res);
+    }
+
+    if (path === '/admin/api/logs/export') {
+      return this.handleLogsExport(req, res);
+    }
+
     // Serve dashboard for any other /admin/* route (SPA routing)
     if (path.startsWith('/admin/')) {
       this.serveDashboard(res);
@@ -206,6 +225,153 @@ export class AdminRoutes {
 
     const scaling = this.metricsCollector.getScalingRecommendation();
     sendJson(res, { success: true, data: scaling });
+    return true;
+  }
+
+  /**
+   * Query logs from the in-memory LogBuffer.
+   */
+  private handleLogs(req: IncomingMessage, res: ServerResponse): boolean {
+    const auth = requireAuth(req, res, this.config.jwtSecret);
+    if (!auth) return true;
+
+    if (!this.logBuffer) {
+      sendJson(res, { success: false, error: 'Log buffer not available' }, 503);
+      return true;
+    }
+
+    const url = new URL(req.url || '/', `http://${req.headers.host}`);
+
+    const severityParam = url.searchParams.get('severity');
+    const sinceParam = url.searchParams.get('since');
+    const untilParam = url.searchParams.get('until');
+    const limitParam = url.searchParams.get('limit');
+    const offsetParam = url.searchParams.get('offset');
+    const keyword = url.searchParams.get('keyword') || undefined;
+    const category = url.searchParams.get('category') || undefined;
+
+    // Validate severity if provided
+    let severity: LogSeverity | undefined;
+    if (severityParam) {
+      if (!SEVERITY_LEVELS.includes(severityParam as LogSeverity)) {
+        sendJson(res, { success: false, error: `Invalid severity: ${severityParam}` }, 400);
+        return true;
+      }
+      severity = severityParam as LogSeverity;
+    }
+
+    const rawLimit = limitParam ? parseInt(limitParam, 10) : 200;
+    const limit = Math.min(Math.max(isNaN(rawLimit) ? 200 : rawLimit, 1), 1000);
+    const rawOffset = offsetParam ? parseInt(offsetParam, 10) : 0;
+    const offset = Math.max(isNaN(rawOffset) ? 0 : rawOffset, 0);
+
+    const result = this.logBuffer.query({
+      severity,
+      since: sinceParam ? parseInt(sinceParam, 10) : undefined,
+      until: untilParam ? parseInt(untilParam, 10) : undefined,
+      keyword,
+      category,
+      limit,
+      offset,
+    });
+
+    sendJson(res, {
+      success: true,
+      data: {
+        entries: result.entries,
+        total: result.total,
+        hasMore: result.hasMore,
+      },
+    });
+    return true;
+  }
+
+  /**
+   * Export logs as JSON or CSV for a time range.
+   */
+  private handleLogsExport(req: IncomingMessage, res: ServerResponse): boolean {
+    const auth = requireAuth(req, res, this.config.jwtSecret);
+    if (!auth) return true;
+
+    if (!this.logBuffer) {
+      sendJson(res, { success: false, error: 'Log buffer not available' }, 503);
+      return true;
+    }
+
+    const url = new URL(req.url || '/', `http://${req.headers.host}`);
+
+    const sinceParam = url.searchParams.get('since');
+    const untilParam = url.searchParams.get('until');
+    const format = url.searchParams.get('format') || 'json';
+
+    if (!sinceParam || !untilParam) {
+      sendJson(res, { success: false, error: 'Both since and until query parameters are required' }, 400);
+      return true;
+    }
+
+    const since = parseInt(sinceParam, 10);
+    const until = parseInt(untilParam, 10);
+
+    if (isNaN(since) || isNaN(until)) {
+      sendJson(res, { success: false, error: 'since and until must be valid Unix timestamps in milliseconds' }, 400);
+      return true;
+    }
+
+    if (format !== 'json' && format !== 'csv') {
+      sendJson(res, { success: false, error: `Invalid format: ${format}. Must be "json" or "csv"` }, 400);
+      return true;
+    }
+
+    // Query all entries in the time range (use max buffer limit of 500 per query call)
+    const result = this.logBuffer.query({
+      since,
+      until,
+      limit: 500,
+      offset: 0,
+    });
+
+    const entries = result.entries;
+
+    if (format === 'csv') {
+      const header = 'timestamp,severity,category,message,metadata';
+      const rows = entries.map((e) => {
+        const escapeCsv = (s: string) => `"${s.replace(/"/g, '""')}"`;
+        return [
+          e.timestamp,
+          e.severity,
+          escapeCsv(e.category),
+          escapeCsv(e.message),
+          e.metadata ? escapeCsv(JSON.stringify(e.metadata)) : '',
+        ].join(',');
+      });
+      const csv = header + '\n' + rows.join('\n');
+
+      res.writeHead(200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="logs-${since}-${until}.csv"`,
+        'Cache-Control': 'no-store',
+      });
+      res.end(csv);
+      return true;
+    }
+
+    // JSON format (default)
+    const body = JSON.stringify({
+      success: true,
+      data: {
+        since,
+        until,
+        count: entries.length,
+        entries,
+      },
+    });
+
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Disposition': `attachment; filename="logs-${since}-${until}.json"`,
+      'Cache-Control': 'no-store',
+    });
+    res.end(body);
     return true;
   }
 
@@ -1051,7 +1217,11 @@ function getDashboardHtml(cfAdminUrl?: string): string {
           y = centerY + Math.sin(angle) * radius - 24;
         }
 
-        const shortId = node.id.substring(0, 6);
+        // Strip the 'ed25519:' prefix before truncating — every Ed25519
+        // serverId starts with those 8 chars, so truncating at 6 produces
+        // 'ed2551' for every node and the topology looks like 18 duplicates.
+        const keyPart = node.id.startsWith('ed25519:') ? node.id.slice(8) : node.id;
+        const shortId = keyPart.substring(0, 6);
         const statusClass = isLocal ? 'local' : node.status;
 
         return \`<div class="node \${statusClass}" style="left: \${x}px; top: \${y}px;" title="\${node.id}\\n\${node.region}">\${shortId}</div>\`;
