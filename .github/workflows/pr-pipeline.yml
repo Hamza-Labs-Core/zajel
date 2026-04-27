@@ -1831,7 +1831,13 @@ jobs:
             db_name: zajel-db-eg-01
             label: Egypt
     steps:
-      - name: Verify API access
+      - name: Install Cranl CLI
+        run: |
+          set -e
+          curl -fsSL https://cranl.com/install.sh | bash
+          cranl version
+
+      - name: Authenticate Cranl CLI
         id: verify
         run: |
           set -e
@@ -1839,11 +1845,12 @@ jobs:
             echo "❌ CRANL_API_KEY secret not set"
             exit 1
           fi
-          RESULT=$(curl -sfS -X POST "${{ env.CRANL_API }}/cli/auth/verify" \
-            -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" \
-            -H "Content-Type: application/json")
-          echo "Auth response: $RESULT"
-          echo "✅ Cranl API authenticated"
+          # cranl login both verifies the key and stores credentials for
+          # subsequent `cranl …` calls in this job. projects select is
+          # required by `cranl apps create` / `cranl db create`.
+          cranl login "${{ secrets.CRANL_API_KEY }}"
+          cranl projects select "${{ env.CRANL_PROJECT_ID }}"
+          echo "✅ Cranl CLI authenticated"
 
       - name: Ensure database exists
         id: ensure-db
@@ -2010,13 +2017,15 @@ jobs:
             exit 1
           fi
 
-          # Build env as newline-separated KEY=VALUE string (per Cranl
-          # OpenAPI EnvironmentVariables schema: {"env": "K=V\nK2=V2"}).
-          # Export shell vars so python3 can read them from os.environ —
-          # safer than shell interpolation for values with special chars.
+          # Build a .env file for `cranl apps env push`. Using python3 to
+          # write it (rather than a shell heredoc) avoids quoting traps
+          # for values with $, `, " or newlines — DATABASE_URL passwords
+          # can contain anything.
           export DATABASE_URL REG_SECRET ADMIN_JWT PUBLIC_ENDPOINT
-          ENV_JSON=$(python3 -c "
-          import json, os
+          ENV_FILE=$(mktemp)
+          trap 'rm -f "$ENV_FILE"' EXIT
+          python3 -c "
+          import os
           env = {
             'STORAGE_BACKEND': 'postgres',
             'DATABASE_URL': os.environ['DATABASE_URL'],
@@ -2033,14 +2042,12 @@ jobs:
             'NODE_ENV': 'qa',
             'APP_VERSION': '${{ env.VERSION }}',
           }
-          env_str = '\n'.join(f'{k}={v}' for k, v in env.items())
-          print(json.dumps({'env': env_str}))")
+          with open('$ENV_FILE', 'w') as f:
+            for k, v in env.items():
+              f.write(f'{k}={v}\n')"
 
-          curl -sfS -X PUT "${{ env.CRANL_API }}/applications/$APP_ID/environment" \
-            -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d "$ENV_JSON"
-          echo "✅ Environment variables set"
+          cranl apps env push "$APP_ID" "$ENV_FILE"
+          echo "✅ Environment variables set via cranl apps env push"
         env:
           REG_SECRET: ${{ secrets.SERVER_REGISTRY_SECRET }}
           ADMIN_JWT: ${{ secrets.ZAJEL_ADMIN_JWT_SECRET }}
@@ -2049,9 +2056,8 @@ jobs:
         run: |
           set -e
           APP_ID="${{ steps.ensure-app.outputs.app_id }}"
-          curl -sfS -X POST "${{ env.CRANL_API }}/applications/$APP_ID/deploy" \
-            -H "Authorization: Bearer ${{ secrets.CRANL_API_KEY }}"
-          echo "✅ Deployment triggered"
+          cranl apps deploy "$APP_ID"
+          echo "✅ Deployment triggered via cranl apps deploy"
 
       - name: Wait for deployment
         run: |
