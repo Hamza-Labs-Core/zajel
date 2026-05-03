@@ -37,7 +37,7 @@ void main() {
     late CryptoService cryptoService;
 
     setUp(() async {
-      cryptoService = CryptoService(secureStorage: FakeSecureStorage());
+      cryptoService = CryptoService(secureStorage: FakeCachedSecureStorage());
       await cryptoService.initialize();
     });
 
@@ -93,7 +93,7 @@ void main() {
     });
 
     test('classical establishSession still works', () async {
-      final bob = CryptoService(secureStorage: FakeSecureStorage());
+      final bob = CryptoService(secureStorage: FakeCachedSecureStorage());
       await bob.initialize();
 
       final bobPub = await bob.getPublicKeyBase64();
@@ -107,8 +107,8 @@ void main() {
     test('classical session uses zajel_session info', () async {
       // Verify that two peers using classical establishSession can
       // encrypt/decrypt — proving the HKDF info string matches
-      final alice = CryptoService(secureStorage: FakeSecureStorage());
-      final bob = CryptoService(secureStorage: FakeSecureStorage());
+      final alice = CryptoService(secureStorage: FakeCachedSecureStorage());
+      final bob = CryptoService(secureStorage: FakeCachedSecureStorage());
       await alice.initialize();
       await bob.initialize();
 

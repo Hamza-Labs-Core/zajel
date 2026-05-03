@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import '../crypto/bootstrap_verifier.dart';
 import '../logging/logger_service.dart';
+import 'server_skip_list.dart';
 
 /// Represents a discovered VPS server from the bootstrap service.
 class DiscoveredServer {
@@ -71,6 +72,10 @@ class ServerDiscoveryService {
   /// Optional verifier for bootstrap response signatures.
   final BootstrapVerifier? _verifier;
 
+  /// Optional shared skip list. When present, candidate lists returned
+  /// by [selectServerCandidates] exclude endpoints currently skipped.
+  final ServerSkipList? _skipList;
+
   /// Cached list of discovered servers.
   List<DiscoveredServer> _cachedServers = [];
 
@@ -91,8 +96,10 @@ class ServerDiscoveryService {
     required this.bootstrapUrl,
     http.Client? client,
     BootstrapVerifier? bootstrapVerifier,
+    ServerSkipList? skipList,
   })  : _client = client ?? http.Client(),
-        _verifier = bootstrapVerifier;
+        _verifier = bootstrapVerifier,
+        _skipList = skipList;
 
   /// Stream of server list updates.
   Stream<List<DiscoveredServer>> get servers => _serversController.stream;
@@ -168,13 +175,35 @@ class ServerDiscoveryService {
   ///
   /// Returns null if no servers are available.
   Future<DiscoveredServer?> selectServer({String? preferredRegion}) async {
+    final candidates = await selectServerCandidates(
+      preferredRegion: preferredRegion,
+      max: 3,
+    );
+    if (candidates.isEmpty) return null;
+    // Keep legacy random pick for single-shot callers (e.g. the Connect
+    // screen which only displays "selected server"). The failover loop
+    // in AppInitializationService.connectSignaling goes through the full
+    // ordered candidate list instead.
+    final random = Random();
+    return candidates[random.nextInt(candidates.length)];
+  }
+
+  /// Return an ordered list of candidate servers to try for a signaling
+  /// connection, most-recently-seen first, with any skip-listed endpoints
+  /// removed. Capped at [max] so a huge registry doesn't cause the caller
+  /// to burn excessive time on failover attempts.
+  ///
+  /// When a skip list is configured, endpoints that were marked as
+  /// failing in the last 5 minutes are filtered out. This prevents the
+  /// client from burning its retry budget on servers that are known to be
+  /// broken (e.g. DNS not propagated, crash-looping containers).
+  Future<List<DiscoveredServer>> selectServerCandidates({
+    String? preferredRegion,
+    int max = 5,
+  }) async {
     final servers = await fetchServers();
+    if (servers.isEmpty) return const [];
 
-    if (servers.isEmpty) {
-      return null;
-    }
-
-    // Filter by region if preferred
     List<DiscoveredServer> candidates = servers;
     if (preferredRegion != null) {
       final regionServers =
@@ -184,13 +213,17 @@ class ServerDiscoveryService {
       }
     }
 
-    // Sort by lastSeen (most recent first)
+    // Most recently heartbeated first — a proxy for "most likely alive".
     candidates.sort((a, b) => b.lastSeen.compareTo(a.lastSeen));
 
-    // Take top 3 candidates and pick randomly for load distribution
-    final topCandidates = candidates.take(3).toList();
-    final random = Random();
-    return topCandidates[random.nextInt(topCandidates.length)];
+    if (_skipList != null) {
+      candidates = _skipList.filter(candidates);
+    }
+
+    if (candidates.length > max) {
+      candidates = candidates.sublist(0, max);
+    }
+    return candidates;
   }
 
   /// Get the WebSocket URL for connecting to a server.

@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/providers/app_providers.dart';
@@ -44,9 +43,10 @@ final attestationDeviceIdProvider = Provider<String>((ref) {
 final attestationServiceProvider = Provider<AttestationService>((ref) {
   final client = ref.watch(attestationClientProvider);
   final deviceId = ref.watch(attestationDeviceIdProvider);
+  final secureStorage = ref.watch(cachedSecureStorageProvider);
   return AttestationService(
     client: client,
-    secureStorage: const FlutterSecureStorage(),
+    secureStorage: secureStorage,
     deviceId: deviceId,
   );
 });

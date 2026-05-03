@@ -106,9 +106,16 @@ export class GossipProtocol extends EventEmitter {
     // Start failure detector
     this.failureDetector.start();
 
-    // Start periodic state exchange
+    // Start periodic state exchange.
+    // Also prune stale members (failed / suspect / left) older than the
+    // per-status TTL so the membership table doesn't accumulate every
+    // short-lived peer we ever gossiped about.
     this.stateExchangeInterval = setInterval(() => {
       this.performStateExchange();
+      const purged = this.membership.pruneStale();
+      if (purged > 0) {
+        console.log(`[Gossip] Pruned ${purged} stale member(s) from membership table`);
+      }
     }, this.config.stateExchangeInterval);
   }
 

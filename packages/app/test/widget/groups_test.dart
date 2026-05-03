@@ -471,6 +471,10 @@ void main() {
         find.text('No connected peers available. Peers must be online to add.'),
         findsOneWidget,
       );
+
+      // Wait for the toast auto-close timer (3s) to fire so its PausableTimer
+      // doesn't leak past widget tree disposal.
+      await tester.pumpAndSettle(const Duration(seconds: 5));
     });
 
     testWidgets('only shows connected peers with public keys', (tester) async {
@@ -531,6 +535,10 @@ void main() {
         find.text('No connected peers available. Peers must be online to add.'),
         findsOneWidget,
       );
+
+      // Wait for the toast auto-close timer (3s) to fire so its PausableTimer
+      // doesn't leak past widget tree disposal.
+      await tester.pumpAndSettle(const Duration(seconds: 5));
     });
   });
 }

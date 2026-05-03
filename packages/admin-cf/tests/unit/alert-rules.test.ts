@@ -976,21 +976,23 @@ describe('Alert Rules API', () => {
 
   describe('CORS headers', () => {
     it('responses include CORS headers', async () => {
-      const env = createMockEnv();
+      const env = createMockEnv({ ADMIN_ALLOWED_ORIGINS: 'http://localhost' });
       const req = new Request('http://localhost/admin/api/alerts/rules', {
-        headers: { Authorization: `Bearer ${superAdminToken}` },
+        headers: { Authorization: `Bearer ${superAdminToken}`, Origin: 'http://localhost' },
       });
       const res = await worker.fetch(req, env);
-      expect(res.headers.get('access-control-allow-origin')).toBe('*');
-      expect(res.headers.get('access-control-allow-methods')).toContain('PUT');
+      expect(res.headers.get('access-control-allow-origin')).toBe('http://localhost');
+      expect(res.headers.get('access-control-allow-methods')).toContain('GET');
     });
 
     it('401 responses include CORS headers', async () => {
-      const env = createMockEnv();
-      const req = new Request('http://localhost/admin/api/alerts/rules');
+      const env = createMockEnv({ ADMIN_ALLOWED_ORIGINS: 'http://localhost' });
+      const req = new Request('http://localhost/admin/api/alerts/rules', {
+        headers: { Origin: 'http://localhost' },
+      });
       const res = await worker.fetch(req, env);
       expect(res.status).toBe(401);
-      expect(res.headers.get('access-control-allow-origin')).toBe('*');
+      expect(res.headers.get('access-control-allow-origin')).toBe('http://localhost');
     });
   });
 

@@ -16,9 +16,18 @@ function isSupportedLang(lang: string): lang is SupportedLang {
   return (SUPPORTED_LANGS as readonly string[]).includes(lang);
 }
 
-// Eagerly load sidebar (needed on every page)
+// Eagerly load sidebar (needed on every page).
+// Vite's `?raw` returns `{ default: "..." }` under dev + prod-SPA builds;
+// casting `as string` compiles but crashes at runtime with
+// "e.split is not a function" when WikiSidebar.parseSidebar tries to
+// split the module object. Unwrap `.default` the same way the lazy
+// page loader below does.
 const sidebarModules = import.meta.glob("../../../wiki/_Sidebar.md", { query: "?raw", eager: true });
-const sidebarContent = Object.values(sidebarModules)[0] as string;
+const rawSidebar = Object.values(sidebarModules)[0] as unknown;
+const sidebarContent: string =
+  typeof rawSidebar === "string"
+    ? rawSidebar
+    : ((rawSidebar as { default: string })?.default ?? "");
 
 // Lazily load English wiki pages (exclude _Sidebar.md and _Footer.md)
 const enModules = import.meta.glob(["../../../wiki/*.md", "!../../../wiki/_*.md"], { query: "?raw" }) as Record<string, () => Promise<string>>;

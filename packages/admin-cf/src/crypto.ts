@@ -152,7 +152,7 @@ export async function verifyJwt<T = Record<string, unknown>>(
     const payload = JSON.parse(base64UrlDecode(encodedPayload)) as T & { exp?: number };
 
     // Check expiration
-    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+    if (payload.exp && payload.exp <= Math.floor(Date.now() / 1000)) {
       return null;
     }
 

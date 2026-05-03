@@ -201,6 +201,68 @@ class NotificationService {
     }
   }
 
+  /// Show a group invitation notification — fires when an incoming group
+  /// invite is staged as pending and is awaiting user approval.
+  ///
+  /// Routed through the same OS-notification surface as messages so that a
+  /// backgrounded user (especially on Windows desktop, where the in-app
+  /// dialog won't surface above other windows) sees that an action is
+  /// required. Tapping the notification — when delivery supports it —
+  /// brings the app forward; the pending dialog is already queued there
+  /// via [GroupInviteHandler].
+  Future<void> showGroupInviteNotification({
+    required String inviteId,
+    required String groupName,
+    required String inviterPeerId,
+    required NotificationSettings settings,
+  }) async {
+    if (!_initialized) {
+      if (!_loggedInitWarning) {
+        logger.warning(
+            _tag, 'Notification suppressed: service not initialized');
+        _loggedInitWarning = true;
+      }
+      return;
+    }
+    // Honour the same DND + per-peer mute rules as messages — but key the
+    // mute check on the inviter's peer ID, since the group itself isn't a
+    // mutable subject of the user's mute list yet.
+    if (!settings.shouldNotify(inviterPeerId)) return;
+    if (!settings.messageNotifications) return;
+
+    final title = 'Group invitation';
+    final body = settings.previewEnabled
+        ? 'You have been invited to "$groupName"'
+        : 'You have a new group invitation';
+
+    if (Platform.isWindows) {
+      await _showWindowsNotification(title: title, body: body);
+      return;
+    }
+
+    try {
+      await _plugin.show(
+        inviteId.hashCode + 3000,
+        title,
+        body,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            'invitations',
+            'Invitations',
+            channelDescription: 'Pending group / pair / channel invitations',
+            importance: Importance.high,
+            priority: Priority.high,
+            playSound: settings.soundEnabled,
+          ),
+          linux: const LinuxNotificationDetails(),
+        ),
+        payload: 'invite:group:$inviteId',
+      );
+    } catch (e) {
+      logger.error(_tag, 'Failed to show group invite notification', e);
+    }
+  }
+
   /// Show peer online/offline notification.
   Future<void> showPeerStatusNotification({
     required String peerName,

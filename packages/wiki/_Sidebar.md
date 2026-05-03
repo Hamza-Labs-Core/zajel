@@ -21,6 +21,7 @@
 - [Privacy Model](Privacy-Model)
 - [App Attestation](App-Attestation)
 - [Security Hardening: DDoS Risk Analysis](Security-Hardening-DDoS)
+- [Messaging App Comparison](Messaging-App-Comparison)
 
 **Testing & CI**
 - [Testing Overview](Testing-Overview)
@@ -32,6 +33,7 @@
 
 **Features**
 - [Desktop Auto-Updater](Desktop-Auto-Updater)
+- [Feature Flags](Feature-Reference#feature-flags-planned)
 
 **Development**
 - [Build and Deploy](Build-and-Deploy)

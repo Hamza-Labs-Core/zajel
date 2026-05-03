@@ -7,9 +7,11 @@ import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../../core/config/environment.dart';
 import '../../core/logging/logger_service.dart';
 import '../../core/models/linked_device.dart';
 import '../../core/providers/app_providers.dart';
+import '../../shared/widgets/app_toast.dart';
 
 /// Screen for connecting to external peers via QR code or pairing code.
 class ConnectScreen extends ConsumerStatefulWidget {
@@ -38,6 +40,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
     // initState runs during the widget tree build phase; Riverpod forbids
     // provider writes at that point.
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       _connectToServer();
       _listenForLinkRequests();
     });
@@ -169,11 +172,11 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
     );
 
     if (approved == true) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Linked with $deviceName'),
-          duration: const Duration(seconds: 3),
-        ),
+      showAppToast(
+        context,
+        'Linked with $deviceName',
+        duration: const Duration(seconds: 3),
+        kind: AppToastKind.success,
       );
       // Cancel the link session since it's now used
       setState(() => _linkSession = null);
@@ -195,6 +198,11 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
   }
 
   Future<void> _connectToServer() async {
+    // Skip signaling in integration tests — the VPS/bootstrap server is not
+    // available and the connection attempt would produce unhandled async errors
+    // that leak across test zones.
+    if (Environment.isIntegrationTest) return;
+
     // If already connected to signaling (e.g. from main.dart auto-connect),
     // skip reconnection to avoid replacing the existing SignalingClient and
     // generating a new pairing code.
@@ -212,6 +220,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
       // First, discover and select a VPS server
       final discoveryService = ref.read(serverDiscoveryServiceProvider);
       final selectedServer = await discoveryService.selectServer();
+
+      if (!mounted) return;
 
       if (selectedServer == null) {
         setState(
@@ -233,6 +243,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
         serverUrl: serverUrl,
       );
 
+      if (!mounted) return;
+
       ref.read(pairingCodeProvider.notifier).state = code;
       ref.read(signalingClientProvider.notifier).state =
           connectionManager.signalingClient;
@@ -252,9 +264,13 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
       }
 
       // Re-register meeting points for trusted peer reconnection
-      await connectionManager.reconnectTrustedPeers();
+      if (mounted) {
+        await connectionManager.reconnectTrustedPeers();
+      }
     } catch (e) {
-      setState(() => _error = 'Failed to connect to server: $e');
+      if (mounted) {
+        setState(() => _error = 'Failed to connect to server: $e');
+      }
       ref.read(signalingDisplayStateProvider.notifier).state =
           SignalingDisplayState.disconnected;
     }
@@ -420,11 +436,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
                   icon: const Icon(Icons.copy),
                   onPressed: () {
                     Clipboard.setData(ClipboardData(text: pairingCode));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Code copied to clipboard'),
-                        duration: Duration(seconds: 3),
-                      ),
+                    showAppToast(
+                      context,
+                      'Code copied to clipboard',
+                      duration: const Duration(seconds: 3),
                     );
                   },
                 ),
@@ -583,11 +598,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
                     onPressed: () {
                       Clipboard.setData(
                           ClipboardData(text: _linkSession!.linkCode));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Link code copied'),
-                          duration: Duration(seconds: 3),
-                        ),
+                      showAppToast(
+                        context,
+                        'Link code copied',
+                        duration: const Duration(seconds: 3),
                       );
                     },
                   ),
@@ -749,10 +763,11 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
   Future<void> _createLinkSession() async {
     final serverUrl = ref.read(signalingServerUrlProvider);
     if (serverUrl == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('No server selected. Please wait or retry.'),
-            duration: Duration(seconds: 3)),
+      showAppToast(
+        context,
+        'No server selected. Please wait or retry.',
+        duration: const Duration(seconds: 3),
+        kind: AppToastKind.warning,
       );
       return;
     }
@@ -763,11 +778,11 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
       setState(() => _linkSession = session);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to create link session: $e'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'Failed to create link session: $e',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.error,
         );
       }
     }
@@ -808,11 +823,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
       final deviceLinkService = ref.read(deviceLinkServiceProvider);
       await deviceLinkService.revokeDevice(device.id);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${device.deviceName} revoked'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          '${device.deviceName} revoked',
+          duration: const Duration(seconds: 3),
         );
       }
     }
@@ -840,11 +854,11 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
         '_connectWithCode called with code: "$code" (length: ${code.length})');
     if (code.isEmpty || code.length != 6) {
       logger.warning('ConnectScreen', 'Invalid code - empty or wrong length');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please enter a valid 6-character code'),
-          duration: Duration(seconds: 3),
-        ),
+      showAppToast(
+        context,
+        'Please enter a valid 6-character code',
+        duration: const Duration(seconds: 3),
+        kind: AppToastKind.warning,
       );
       return;
     }
@@ -860,21 +874,20 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
       logger.info('ConnectScreen', 'connectToPeer succeeded, popping screen');
       if (mounted) {
         context.pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Connecting to peer...'),
-            duration: Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'Connecting to peer...',
+          duration: const Duration(seconds: 3),
         );
       }
     } catch (e) {
       logger.error('ConnectScreen', 'connectToPeer failed', e);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to connect: $e'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'Failed to connect: $e',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.error,
         );
       }
     } finally {

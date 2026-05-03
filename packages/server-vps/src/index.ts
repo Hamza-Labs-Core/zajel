@@ -14,7 +14,7 @@ import type { IncomingMessage } from 'http';
 import { loadConfig, type ServerConfig } from './config.js';
 import { WEBSOCKET, CONNECTION_LIMITS } from './constants.js';
 import { loadOrGenerateIdentity, type ServerIdentity } from './identity/server-identity.js';
-import { SQLiteStorage } from './storage/sqlite.js';
+import { createStorage } from './storage/factory.js';
 import { FederationManager, type FederationConfig } from './federation/federation-manager.js';
 import { createBootstrapClient, type BootstrapClient } from './federation/bootstrap-client.js';
 import { RelayRegistry } from './registry/relay-registry.js';
@@ -27,6 +27,7 @@ import { createAdminModule, type AdminModule } from './admin/index.js';
 import { requireAuth } from './admin/auth.js';
 import { loadBuildManifest } from './identity/build-manifest.js';
 import { startMetricsPush, type MetricsPushHandle } from './admin/metrics-push.js';
+import type { LogPushHandle } from './utils/logger.js';
 import { SecurityEventReporter } from './security/security-events.js';
 import { QuarantineManager } from './security/quarantine.js';
 import { DDoSDetector } from './security/ddos-detector.js';
@@ -58,9 +59,8 @@ export async function createZajelServer(
   console.log(`[Zajel] Region: ${config.network.region || 'unknown'}`);
 
   // Initialize storage
-  const storage = new SQLiteStorage(config.storage.path);
-  await storage.init();
-  console.log('[Zajel] Storage initialized');
+  const storage = await createStorage(config.storage);
+  console.log(`[Zajel] Storage initialized (${config.storage.type})`);
 
   // Load or generate server identity
   const identity = await loadOrGenerateIdentity(
@@ -462,6 +462,12 @@ export async function createZajelServer(
   });
   adminModuleRef = adminModule;
 
+  // Wire logger to also write to the admin LogBuffer so the log query
+  // REST endpoints can serve in-memory log entries.
+  if (adminModule.logBuffer) {
+    logger.setLogBuffer(adminModule.logBuffer);
+  }
+
   if (config.admin.jwtSecret) {
     console.log('[Zajel] Admin dashboard enabled at /admin/');
   }
@@ -490,6 +496,18 @@ export async function createZajelServer(
       serverId: identity.serverId,
       region: config.network.region || 'unknown',
     });
+  }
+
+  // Start log push to diagnostics-cf (reuses same env vars as metrics push)
+  let logPush: LogPushHandle | null = null;
+  if (diagnosticsUrl && pushSecret) {
+    logPush = logger.startLogPush({
+      diagnosticsUrl,
+      pushSecret,
+      serverId: identity.serverId,
+    });
+  } else {
+    console.log('[Zajel] Log push disabled (ZAJEL_DIAGNOSTICS_URL or DIAGNOSTICS_PUSH_SECRET not set)');
   }
 
   // Wire DDoS detector into admin WebSocket handler's 1-second metrics loop
@@ -539,6 +557,9 @@ export async function createZajelServer(
     // Stop metrics push
     metricsPush?.stop();
 
+    // Stop log push
+    logPush?.stop();
+
     // Stop security modules
     securityReporter.stop();
     quarantineManager.shutdown();
@@ -561,7 +582,7 @@ export async function createZajelServer(
       httpServer.close(() => resolve());
     });
 
-    storage.close();
+    await storage.close();
 
     console.log('[Zajel] Shutdown complete');
   };

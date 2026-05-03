@@ -37,6 +37,18 @@ class Environment {
     defaultValue: '',
   );
 
+  /// Diagnostics server URL (Cloudflare Workers).
+  ///
+  /// Where crash reports and heartbeats are sent.
+  /// Override with `--dart-define=DIAGNOSTICS_URL=<url>`
+  static const String diagnosticsUrl = String.fromEnvironment(
+    'DIAGNOSTICS_URL',
+    defaultValue: '',
+  );
+
+  /// Whether a diagnostics URL was provided.
+  static bool get hasDiagnosticsUrl => diagnosticsUrl.isNotEmpty;
+
   /// Environment name (production, qa, dev).
   ///
   /// Override with `--dart-define=ENV=<env>`
@@ -121,6 +133,11 @@ class Environment {
 
   /// Whether running in development environment.
   static bool get isDev => env == 'dev';
+
+  /// Alias for [env] — returns the environment name (production, qa, dev).
+  ///
+  /// Provided for consistency with the log upload payload schema.
+  static String get environment => env;
 
   /// Whether a custom bootstrap URL was provided.
   static bool get hasCustomBootstrapUrl => bootstrapUrl.isNotEmpty;

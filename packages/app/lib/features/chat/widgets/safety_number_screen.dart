@@ -6,6 +6,7 @@ import '../../../core/crypto/crypto_service.dart';
 import '../../../core/models/peer.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/utils/identity_utils.dart';
+import '../../../shared/widgets/app_toast.dart';
 
 /// Full-screen view for comparing safety numbers with a peer.
 ///
@@ -62,11 +63,10 @@ class _SafetyNumberScreenState extends ConsumerState<SafetyNumberScreen> {
   void _copyToClipboard() {
     if (_safetyNumber == null) return;
     Clipboard.setData(ClipboardData(text: _safetyNumber!));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Safety number copied to clipboard'),
-        duration: Duration(seconds: 3),
-      ),
+    showAppToast(
+      context,
+      'Safety number copied to clipboard',
+      duration: const Duration(seconds: 3),
     );
   }
 

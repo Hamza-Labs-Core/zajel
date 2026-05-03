@@ -19,6 +19,7 @@ export function Nav() {
         <a href="/#features">Features</a>
         <a href="/#download">Download</a>
         <Link to="/guide" aria-current={isActive("/guide") ? "page" : undefined}>User Guide</Link>
+        <Link to="/architecture" aria-current={isActive("/architecture") ? "page" : undefined}>Architecture</Link>
         <Link to="/wiki/en" aria-current={isActive("/wiki") ? "page" : undefined}>Wiki</Link>
         <a href="https://github.com/Hamza-Labs-Core/zajel" target="_blank" rel="noopener noreferrer" aria-label="GitHub (opens in new tab)">
           GitHub

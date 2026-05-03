@@ -63,6 +63,36 @@ class TestMlKemAvailability:
         result2 = is_mlkem_available()
         assert result1 == result2
 
+    def test_unsupported_backend_returns_false(self, monkeypatch):
+        """If the cryptography module imports but the backend can't actually
+        do ML-KEM (UnsupportedAlgorithm at generate time), is_mlkem_available
+        must return False.
+
+        Repros the CI failure mode where `from ...mlkem import MLKEM768PrivateKey`
+        succeeds (so an import-only probe returns True) but
+        MLKEM768PrivateKey.generate() raises UnsupportedAlgorithm — leaking
+        past the @skipif markers and turning into test errors.
+        """
+        from cryptography.exceptions import UnsupportedAlgorithm
+
+        import zajel.ml_kem as ml_kem_mod
+
+        # Reset the availability cache so the probe runs again.
+        monkeypatch.setattr(ml_kem_mod, "_mlkem_available", None)
+
+        # Stub MLKEM768PrivateKey.generate to behave like the broken backend.
+        try:
+            from cryptography.hazmat.primitives.asymmetric import mlkem as _mlkem
+        except ImportError:
+            pytest.skip("cryptography.hazmat.primitives.asymmetric.mlkem not present")
+
+        def _raise(*_a, **_kw):
+            raise UnsupportedAlgorithm("ML-KEM-768 is not supported by this backend.")
+
+        monkeypatch.setattr(_mlkem.MLKEM768PrivateKey, "generate", _raise)
+
+        assert ml_kem_mod.is_mlkem_available() is False
+
 
 @pytest.mark.skipif(
     not is_mlkem_available(),

@@ -24,7 +24,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { createServer, type Server } from 'http';
 import { readFileSync, existsSync } from 'fs';
-import { resolve, join, extname } from 'path';
+import { resolve, join, extname, relative, isAbsolute } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
@@ -126,13 +126,27 @@ describe('Web-to-Web Integration Tests', () => {
       );
     }
 
-    // Start simple static file server for the pre-built web client
+    // Start simple static file server for the pre-built web client.
+    //
+    // Even though this is test infrastructure that serves the local
+    // web-client build (no real attacker reaching it), we sanitize against
+    // directory traversal so CodeQL's `js/path-injection` doesn't flag it
+    // and so a future copy-paste of this server pattern doesn't carry the
+    // vulnerability into production code. Two-step check: resolve() then
+    // relative() — if the result starts with `..` or is absolute, the
+    // request escaped the dist directory.
+    const DIST_ABS = resolve(WEB_CLIENT_DIST);
     server = createServer((req, res) => {
-      let filePath = join(WEB_CLIENT_DIST, req.url === '/' ? 'index.html' : req.url!);
+      const reqPath = req.url === '/' ? 'index.html' : (req.url ?? '/');
+      const candidate = resolve(DIST_ABS, '.' + reqPath);
+      const rel = relative(DIST_ABS, candidate);
+      const inside = !rel.startsWith('..') && !isAbsolute(rel);
+
+      let filePath = inside ? join(DIST_ABS, rel) : join(DIST_ABS, 'index.html');
 
       // Handle SPA routing - serve index.html for non-file requests
       if (!existsSync(filePath) || !extname(filePath)) {
-        filePath = join(WEB_CLIENT_DIST, 'index.html');
+        filePath = join(DIST_ABS, 'index.html');
       }
 
       try {

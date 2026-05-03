@@ -22,10 +22,12 @@ class PairRequestHandler {
 
   /// Start listening for pair requests.
   void listen() {
+    logger.info(
+        'PairRequestHandler', 'listen() called — stream subscription active');
     _subscription = pairRequests.listen((event) {
       final (fromCode, fromPublicKey, proposedName) = event;
-      logger.info(
-          'PairRequestHandler', 'Showing pair request dialog for $fromCode');
+      logger.info('PairRequestHandler',
+          'Stream event received for $fromCode — invoking _showDialog');
       _showDialog(fromCode, fromPublicKey, proposedName: proposedName);
     });
   }
@@ -35,9 +37,11 @@ class PairRequestHandler {
     final context = getContext();
     if (context == null) {
       logger.warning('PairRequestHandler',
-          'No context available to show pair request dialog');
+          'No context available to show pair request dialog (rootNavigatorKey.currentContext is null)');
       return;
     }
+    logger.info('PairRequestHandler',
+        'showDialog() about to be called for $fromCode (context found)');
 
     final accepted = await showDialog<bool>(
       context: context,

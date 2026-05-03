@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:toastification/toastification.dart';
 
 import 'app_router.dart';
 import 'core/config/environment.dart';
@@ -16,6 +17,7 @@ import 'core/models/models.dart';
 import 'core/providers/app_providers.dart';
 import 'core/services/app_initialization_service.dart';
 import 'core/services/file_transfer_listener.dart';
+import 'core/services/group_invite_handler.dart';
 import 'core/services/link_request_handler.dart';
 import 'core/services/notification_listener_service.dart';
 import 'core/services/pair_request_handler.dart';
@@ -119,9 +121,13 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
   late final FileTransferListener _fileTransferListener;
   late final PairRequestHandler _pairRequestHandler;
   late final LinkRequestHandler _linkRequestHandler;
+  // Nullable because instantiation is deferred to _initialize() — see the
+  // block right before listen() calls. If _initialize fails before that
+  // point, dispose() must still work.
+  GroupInviteHandler? _groupInviteHandler;
   late final NotificationListenerService _notificationListener;
   late final VoipCallHandler _voipCallHandler;
-  StreamSubscription? _signalingReconnectSubscription;
+  void Function()? _cancelSignalingReconnect;
   ProviderSubscription? _peerStatusSubscription;
   ProviderSubscription? _voipSubscription;
   ProviderSubscription? _updateStateSubscription;
@@ -146,6 +152,8 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
 
   void _buildServices() {
     _initService = AppInitializationService(
+      initializeSecureStorage: () =>
+          ref.read(cachedSecureStorageProvider).initialize(),
       initializeCrypto: () => ref.read(cryptoServiceProvider).initialize(),
       initializeMessageStorage: () =>
           ref.read(messageStorageProvider).initialize(),
@@ -173,10 +181,12 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
           signalingClient: cm.signalingClient,
         );
       },
-      selectServer: () =>
-          ref.read(serverDiscoveryServiceProvider).selectServer(),
+      selectServerCandidates: () =>
+          ref.read(serverDiscoveryServiceProvider).selectServerCandidates(),
       getWebSocketUrl: (server) =>
           ref.read(serverDiscoveryServiceProvider).getWebSocketUrl(server),
+      recordConnectionFailure: (endpoint) =>
+          ref.read(serverSkipListProvider).add(endpoint),
       reconnectTrustedPeers: () =>
           ref.read(connectionManagerProvider).reconnectTrustedPeers(),
       setPairingCode: (code) =>
@@ -252,6 +262,12 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
               ),
       getContext: () => rootNavigatorKey.currentContext,
     );
+
+    // GroupInviteHandler is instantiated later in _initialize() — its
+    // dependency `groupInvitationServiceProvider` watches cryptoServiceProvider
+    // and reads `.stableId` synchronously at provider construction, which
+    // throws CryptoException("CryptoService not initialized") if read before
+    // _initialize() runs.
 
     _notificationListener = NotificationListenerService(
       messages: cm.peerMessages,
@@ -330,26 +346,47 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       _disposeServicesSync();
     }
 
-    // Track foreground state for notification suppression
-    ref.read(appInForegroundProvider.notifier).state =
-        state == AppLifecycleState.resumed;
+    if (!mounted) return;
 
-    // Privacy screen: obscure app content when backgrounded.
-    // On mobile: inactive/paused when app goes to background or task switcher.
-    // On desktop: hidden when minimized, inactive when losing focus.
-    final privacyEnabled = ref.read(privacyScreenProvider);
-    if (privacyEnabled) {
-      if (state == AppLifecycleState.inactive ||
-          state == AppLifecycleState.paused ||
-          state == AppLifecycleState.hidden) {
-        if (mounted && !_showPrivacyScreen) {
-          setState(() => _showPrivacyScreen = true);
-        }
-      } else if (state == AppLifecycleState.resumed) {
-        if (mounted && _showPrivacyScreen) {
-          setState(() => _showPrivacyScreen = false);
+    // The integration_test binding (Linux E2E Shelf-server flow) re-emits
+    // platform lifecycle messages during pump-cycles, sometimes after the
+    // root element has entered the deactivated lifecycle stage but before
+    // dispose() runs — `mounted` is still true at that point but
+    // `ref.read` performs an InheritedWidget ancestor lookup that asserts
+    // the element is *active*, raising "Looking up a deactivated widget's
+    // ancestor is unsafe." That assertion (in debug builds, which
+    // integration_test uses) aborts the pump loop, the widget tree never
+    // progresses past the loading screen, and every Shelf UI-finding test
+    // times out. Catch the assertion and treat it as a no-op: there's no
+    // observable state to update if the element is already on its way
+    // out.
+    try {
+      ref.read(appInForegroundProvider.notifier).state =
+          state == AppLifecycleState.resumed;
+
+      // Privacy screen: obscure app content when backgrounded.
+      // On mobile: inactive/paused when backgrounded or in task switcher.
+      // On desktop: hidden when minimized, inactive when losing focus.
+      final privacyEnabled = ref.read(privacyScreenProvider);
+      if (privacyEnabled) {
+        if (state == AppLifecycleState.inactive ||
+            state == AppLifecycleState.paused ||
+            state == AppLifecycleState.hidden) {
+          if (!_showPrivacyScreen) {
+            setState(() => _showPrivacyScreen = true);
+          }
+        } else if (state == AppLifecycleState.resumed) {
+          if (_showPrivacyScreen) {
+            setState(() => _showPrivacyScreen = false);
+          }
         }
       }
+    } on FlutterError catch (e) {
+      // Swallow ancestor-lookup-on-deactivated-element assertions only;
+      // any other framework error should still surface.
+      if (!e.message.contains('deactivated widget')) rethrow;
+      logger.warning(
+          'ZajelApp', 'Skipping lifecycle state update on deactivated element');
     }
   }
 
@@ -389,19 +426,46 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       }
     }
 
+    // Instantiate GroupInviteHandler now that crypto + storage are
+    // initialized. Doing this earlier (in _buildServices) crashes because
+    // groupInvitationServiceProvider watches cryptoServiceProvider and reads
+    // `.stableId` synchronously at construction.
+    final invitationService = ref.read(groupInvitationServiceProvider);
+    final groupInviteHandler = GroupInviteHandler(
+      pendingInvites: invitationService.pendingInvites,
+      acceptInvitation: invitationService.acceptInvitation,
+      declineInvitation: invitationService.declineInvitation,
+      getContext: () => rootNavigatorKey.currentContext,
+      notifyInvite: (invite) async {
+        final settings = ref.read(notificationSettingsProvider);
+        await ref.read(notificationServiceProvider).showGroupInviteNotification(
+              inviteId: invite.groupId,
+              groupName: invite.groupName,
+              inviterPeerId: invite.fromPeerId,
+              settings: settings,
+            );
+      },
+    );
+    _groupInviteHandler = groupInviteHandler;
+
     _fileTransferListener.listen();
     _pairRequestHandler.listen();
     _linkRequestHandler.listen();
+    groupInviteHandler.listen();
     _notificationListener.listen();
-
-    // Eagerly start group invitation listener so incoming grp: messages
-    // are processed even before the user opens a group screen.
-    ref.read(groupInvitationServiceProvider);
 
     // Eagerly start channel sync so chunk_announce/chunk_data messages
     // are processed from app startup.
     ref.read(channelSyncServiceProvider);
     ref.read(backgroundSyncServiceProvider);
+
+    // Eagerly start diagnostics service (heartbeats + error reports).
+    // The provider handles start/stop based on user opt-in preference.
+    ref.read(diagnosticsServiceProvider);
+
+    // Eagerly start log upload service (deduped log streaming to diagnostics-cf).
+    // Also gated on the same diagnostics opt-in preference.
+    ref.read(logUploadServiceProvider);
 
     _setupPeerStatusNotifications();
     _setupVoipCallListener();
@@ -423,7 +487,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       logger.error('ZajelApp', 'Signaling connection failed', e, stack);
     }
 
-    _signalingReconnectSubscription = _initService.setupSignalingReconnect(
+    _cancelSignalingReconnect = _initService.setupSignalingReconnect(
       isDisposed: () => _disposed,
     );
 
@@ -530,6 +594,7 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       if (messenger == null) return;
 
       final wasInterrupted = result.status == 'interrupted_recovery';
+      // Intentionally not migrated — special pump-callback path
       messenger.showSnackBar(
         SnackBar(
           content: Text(
@@ -580,9 +645,10 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
     _fileTransferListener.dispose();
     _pairRequestHandler.dispose();
     _linkRequestHandler.dispose();
+    _groupInviteHandler?.dispose();
     _notificationListener.dispose();
     _voipCallHandler.dispose();
-    _signalingReconnectSubscription?.cancel();
+    _cancelSignalingReconnect?.call();
     _peerStatusSubscription?.close();
     _voipSubscription?.close();
     _updateStateSubscription?.close();
@@ -636,6 +702,12 @@ class _ZajelAppState extends ConsumerState<ZajelApp>
       darkTheme: AppTheme.darkTheme,
       themeMode: ref.watch(themeModeProvider),
       routerConfig: appRouter,
+      // ToastificationWrapper hosts the Overlay that toastification.show
+      // pushes into. Wrapping inside MaterialApp.router via `builder` makes
+      // the wrapper a descendant of the Navigator so toasts render above
+      // routed pages.
+      builder: (context, child) =>
+          ToastificationWrapper(child: child ?? const SizedBox.shrink()),
     );
 
     // Wrap with Listener on desktop to feed pointer events to IdleDetector

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../shared/widgets/app_toast.dart';
+
 /// Dismissable dialog suggesting the user update the app.
 ///
 /// Shown when the app version is below the recommended version but
@@ -82,10 +84,11 @@ class UpdatePromptDialog extends StatelessWidget {
               final uri = Uri.tryParse(updateUrl!);
               if (uri == null) {
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        duration: Duration(seconds: 3),
-                        content: Text('Invalid update URL.')),
+                  showAppToast(
+                    context,
+                    'Invalid update URL.',
+                    duration: const Duration(seconds: 3),
+                    kind: AppToastKind.error,
                   );
                 }
                 return;
@@ -96,10 +99,11 @@ class UpdatePromptDialog extends StatelessWidget {
                 }
               } catch (e) {
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                        duration: const Duration(seconds: 3),
-                        content: Text('Failed to open URL: $e')),
+                  showAppToast(
+                    context,
+                    'Failed to open URL: $e',
+                    duration: const Duration(seconds: 3),
+                    kind: AppToastKind.error,
                   );
                 }
               }
@@ -130,14 +134,12 @@ class UpdatePromptDialog extends StatelessWidget {
       }
     }
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          duration: const Duration(seconds: 3),
-          content: Text(
-            'Could not open store. Please update manually from '
-            '${storeName ?? "the store"}.',
-          ),
-        ),
+      showAppToast(
+        context,
+        'Could not open store. Please update manually from '
+        '${storeName ?? "the store"}.',
+        duration: const Duration(seconds: 3),
+        kind: AppToastKind.warning,
       );
     }
   }

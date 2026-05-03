@@ -271,8 +271,10 @@ export interface ServerConfig {
     virtualNodes: number;
   };
   storage: {
-    type: 'sqlite';
+    type: 'sqlite' | 'postgres';
     path: string;
+    databaseUrl?: string;
+    poolSize?: number;
   };
   client: {
     maxConnectionsPerPeer: number;
