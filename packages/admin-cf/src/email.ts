@@ -167,9 +167,21 @@ export function buildRawMimeEmail(
           return _m;
       }
     });
-  const textBody = decodeBasicEntities(
-    stripStyleBlocks(htmlBody).replace(/<[^>]*>/g, '')
-  )
+  // Loop the tag-strip to a fixed point so input like
+  // `<scr<script>ipt>` (which would leave `<script>` after a single
+  // `replace(/<[^>]*>/g, '')`) can't smuggle markup through. Without
+  // the loop, CodeQL flags this as
+  // `js/incomplete-multi-character-sanitization`.
+  const stripAllTags = (s: string): string => {
+    let prev: string;
+    let out = s;
+    do {
+      prev = out;
+      out = out.replace(/<[^>]*>/g, '');
+    } while (out !== prev);
+    return out;
+  };
+  const textBody = decodeBasicEntities(stripAllTags(stripStyleBlocks(htmlBody)))
     .replace(/\n\s*\n\s*\n/g, '\n\n')
     .trim();
 
