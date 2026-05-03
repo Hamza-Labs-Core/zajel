@@ -46,6 +46,11 @@ dependencies:
   url_launcher: ^6.2.5
   flutter_local_notifications: ^18.0.0
   emoji_picker_flutter: ^3.0.0
+  # In-app toast notifications. Used instead of ScaffoldMessenger.showSnackBar
+  # because toastification dismisses via its own pausable_timer (event-loop
+  # driven), which keeps working when Flutter's frame scheduler pauses on
+  # window blur (Windows desktop). See lib/shared/widgets/app_toast.dart.
+  toastification: ^3.0.0
   sqflite_common_ffi: ^2.4.0+2
   intl: ^0.19.0
 

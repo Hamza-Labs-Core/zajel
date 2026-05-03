@@ -117,14 +117,59 @@ export function buildRawMimeEmail(
   const boundary = `----=_Part_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const date = new Date().toUTCString();
 
-  // Plain text fallback (strip HTML)
-  const textBody = htmlBody
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
+  // Plain text fallback (strip HTML).
+  //
+  // The previous regex chain triggered three different CodeQL rules on a
+  // single line:
+  //   - js/polynomial-redos      (lazy quantifier on /<style>...</style>/)
+  //   - js/incomplete-multi-character-sanitization (single-pass replace
+  //     could leave a leftover `<style>` if tags were nested or
+  //     reconstructed by an earlier rule's output)
+  //   - js/double-escaping       (decoding `&amp;` last re-introduced
+  //     other entities like `&amp;lt;` -> `&lt;`)
+  //
+  // Replacement strategy:
+  //   1. `removeAll(...)` — loop replace on `<style>...</style>` so a
+  //      pathological string with nested or re-formed tags can't
+  //      smuggle markup through, and avoid the lazy-quantifier ReDoS
+  //      pattern by anchoring on a non-`<` body via `[^<]*` (and
+  //      tolerating any `<` that isn't `</style>` via a follow-up).
+  //   2. Strip remaining tags with a non-greedy match that has no
+  //      ambiguous backtracking.
+  //   3. Decode entities in the order numeric → `&amp;` LAST is what
+  //      causes double-escape; instead, decode `&amp;` FIRST so any
+  //      following `&lt;` is left as-is.
+  const stripStyleBlocks = (s: string): string => {
+    let prev: string;
+    let out = s;
+    do {
+      prev = out;
+      out = out.replace(/<style\b[^>]*>[^<]*(?:<(?!\/style>)[^<]*)*<\/style\s*>/gi, '');
+    } while (out !== prev);
+    return out;
+  };
+  const decodeBasicEntities = (s: string): string =>
+    s.replace(/&(amp|lt|gt|nbsp|#39|quot);/gi, (_m, name) => {
+      switch (name.toLowerCase()) {
+        case 'amp':
+          return '&';
+        case 'lt':
+          return '<';
+        case 'gt':
+          return '>';
+        case 'nbsp':
+          return ' ';
+        case '#39':
+          return "'";
+        case 'quot':
+          return '"';
+        default:
+          return _m;
+      }
+    });
+  const textBody = decodeBasicEntities(
+    stripStyleBlocks(htmlBody).replace(/<[^>]*>/g, '')
+  )
     .replace(/\n\s*\n\s*\n/g, '\n\n')
     .trim();
 

@@ -1,5 +1,8 @@
 name: Server Tests (CF Workers)
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main, 'feature/**']

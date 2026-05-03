@@ -453,7 +453,8 @@ class HeadlessBob:
         The VPS signaling server can return "Not registered" or
         "Pair request could not be processed" if the server hasn't
         fully processed registration or is cleaning up stale state
-        from a previous test phase.
+        from a previous test phase.  On "Not registered", re-sends the
+        register message before retrying so the server recognises us.
         """
         last_err = None
         for attempt in range(1, retries + 1):
@@ -471,6 +472,14 @@ class HeadlessBob:
                     if attempt < retries:
                         import time
                         time.sleep(delay)
+                        # Re-register before retrying so the server
+                        # recognises our WebSocket on the next attempt.
+                        try:
+                            self._run(self._client.ensure_registered())
+                        except Exception as re_err:
+                            logging.warning(
+                                "Re-registration failed: %s", re_err,
+                            )
                         continue
                 raise
         raise last_err
@@ -791,6 +800,39 @@ def headless_bob():
     # Set up log file for headless client diagnostics
     log_handler = _setup_headless_log_file("HeadlessBob")
 
+    def _try_connect_primary(urls: list[str]) -> tuple["HeadlessBob", str, list[str]]:
+        """Try each URL in order as primary until one connects.
+
+        Returns (bob, chosen_url, remaining_urls). Raises if none connect.
+        Without this loop, a single dead endpoint at signaling_urls[0]
+        (for example, a Cranl container that briefly heartbeated before
+        crash-looping) errors the whole fixture and cascades into every
+        headless-paired test.
+        """
+        last_err: Exception | None = None
+        for i, url in enumerate(urls):
+            candidate = HeadlessBob(
+                signaling_url=url,
+                name="HeadlessBob",
+                auto_accept_pairs=True,
+                log_level="DEBUG",
+                ice_servers=ice_servers,
+            )
+            try:
+                candidate.connect()
+                remaining = urls[:i] + urls[i + 1:]
+                return candidate, url, remaining
+            except Exception as e:
+                logger.warning("HeadlessBob connect to %s failed: %s — trying next", url, e)
+                last_err = e
+                try:
+                    candidate.disconnect()
+                except Exception:
+                    pass
+        raise RuntimeError(
+            f"HeadlessBob could not connect to any of {len(urls)} signaling URLs: {last_err}"
+        )
+
     if len(signaling_urls) <= 1:
         # Single server — simple case
         bob = HeadlessBob(
@@ -805,21 +847,14 @@ def headless_bob():
         bob.disconnect()
     else:
         # Multiple servers — register on all of them (mimic Flutter app)
-        primary_url = signaling_urls[0]
-        bob = HeadlessBob(
-            signaling_url=primary_url,
-            name="HeadlessBob",
-            auto_accept_pairs=True,
-            log_level="DEBUG",
-            ice_servers=ice_servers,
-        )
-        bob.connect()
+        bob, primary_url, other_urls = _try_connect_primary(signaling_urls)
+        logger.info("HeadlessBob primary server: %s", primary_url)
 
         # Register on all OTHER servers so the pairing code is findable everywhere.
         # The server may have already sent redirects (via DHT), but if federation
         # isn't ready (e.g. fresh deploy), we do it explicitly.
         redirect_ok = True
-        for url in signaling_urls[1:]:
+        for url in other_urls:
             try:
                 bob.register_on_server(url)
             except Exception as e:
@@ -843,8 +878,21 @@ def headless_bob():
                     log_level="DEBUG",
                     ice_servers=ice_servers,
                 )
-                b.connect()
-                bobs.append(b)
+                try:
+                    b.connect()
+                    bobs.append(b)
+                except Exception as e:
+                    # A dead endpoint in the discovered list must not
+                    # kill the entire fixture — skip and continue.
+                    logger.warning("MultiServerBob skip %s: %s", url, e)
+                    try:
+                        b.disconnect()
+                    except Exception:
+                        pass
+            if not bobs:
+                raise RuntimeError(
+                    f"MultiServerBob: no signaling URL reachable out of {len(signaling_urls)}"
+                )
             yield MultiServerBob(bobs)
             for b in bobs:
                 b.disconnect()

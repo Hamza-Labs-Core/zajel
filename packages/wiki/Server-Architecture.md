@@ -448,3 +448,11 @@ The `RoutingTable` class provides three key operations:
 - **`getRedirectTargets(hashes)`**: Returns the subset of routing destinations that are NOT the local server, with their endpoints, for generating redirect responses.
 
 When a client registers meeting points, the server checks which hashes it owns and redirects the rest to the appropriate federated peers. The replication factor ensures that each hash is stored on multiple servers for redundancy.
+
+#### Cross-Server Pairing
+
+When peers are registered on different VPS servers, rendezvous matches may arrive on a redirect server rather than the client's primary server. The Flutter app's `ConnectionManager` maintains a `_peerToClient` map that tracks which signaling client connection discovered each peer. When initiating a `pair_request`, `connectToPeer()` routes through the correct redirect client rather than always using the primary connection. The Python headless client similarly re-registers on all redirect connections during pairing retries.
+
+#### Cross-Server Channels (Planned)
+
+Channel chunk distribution currently works within a single server. A planned extension will gossip channel subscription state across federated servers and relay `chunk_announce` / `chunk_data` messages through the federation transport. See [Channels Architecture > Cross-Server Channel Relay](Channels-Architecture#cross-server-channel-relay-planned) for details.

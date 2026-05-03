@@ -1,5 +1,8 @@
 name: Deploy VPS Server (Reusable)
 
+permissions:
+  contents: read
+
 on:
   workflow_call:
     inputs:
@@ -92,7 +95,7 @@ jobs:
 
       - name: Acquire lock
         if: ${{ !inputs.skip_lock }}
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.4
         with:
           host: ${{ vars.VPS_SERVERS }}
           username: ${{ secrets.VPS_USER }}
@@ -123,7 +126,7 @@ jobs:
           strip_components: 1
 
       - name: Start server
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.4
         env:
           PORT: ${{ inputs.port }}
           ENV: ${{ inputs.environment }}
@@ -175,7 +178,7 @@ jobs:
 
       - name: Release lock
         if: always()
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.4
         with:
           host: ${{ vars.VPS_SERVERS }}
           username: ${{ secrets.VPS_USER }}

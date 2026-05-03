@@ -116,7 +116,9 @@ Nine parallel jobs:
 
 ### Phase 4: Create GitHub Pre-release
 
-Downloads all build artifacts, generates a changelog from the PR description, creates a GitHub pre-release with all platform binaries attached. Cleans up stale draft releases and keeps only the 3 most recent pre-releases.
+Downloads all build artifacts, generates `checksums.txt` containing SHA-256 hashes of all platform binaries, generates a changelog from the PR description, and creates a GitHub pre-release with all platform binaries and `checksums.txt` attached. Cleans up stale draft releases and keeps only the 3 most recent pre-releases.
+
+The `checksums.txt` generation was previously only present in the production release workflow (`release.yml`). It is now included in the PR pipeline as well, ensuring the desktop auto-updater can verify pre-release artifact integrity.
 
 ### Phase 5: E2E Tests (three parallel tracks)
 

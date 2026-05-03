@@ -31,7 +31,8 @@ final channelCryptoServiceProvider = Provider<ChannelCryptoService>((ref) {
 ///
 /// Requires [initialize] to be called before use (typically at app startup).
 final channelStorageServiceProvider = Provider<ChannelStorageService>((ref) {
-  final service = ChannelStorageService();
+  final secureStorage = ref.watch(cachedSecureStorageProvider);
+  final service = ChannelStorageService(secureStorage: secureStorage);
   ref.onDispose(() => service.close());
   return service;
 });
@@ -245,6 +246,10 @@ final backgroundSyncServiceProvider = Provider<BackgroundSyncService>((ref) {
 
   // Wire up the channel sync service for chunk downloads
   service.setChannelSyncService(channelSyncService);
+
+  // Check signaling connection state to skip sync when disconnected
+  final signalingClient = ref.watch(signalingClientProvider);
+  service.isSignalingConnected = () => signalingClient?.isConnected ?? false;
 
   ref.onDispose(() => service.dispose());
   return service;

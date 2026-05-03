@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/config/environment.dart';
 import '../../../core/logging/logger_service.dart';
+import '../../../shared/widgets/app_toast.dart';
 import '../../updater/models/update_check_result.dart';
 import '../../updater/models/update_state.dart';
 import '../../updater/providers/auto_update_providers.dart';
@@ -388,14 +389,12 @@ class _ForceUpdateDialogState extends ConsumerState<ForceUpdateDialog> {
       }
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        duration: const Duration(seconds: 3),
-        content: Text(
-          'Could not open store. Please update manually from '
-          '${widget.storeName ?? "the store"}.',
-        ),
-      ),
+    showAppToast(
+      context,
+      'Could not open store. Please update manually from '
+      '${widget.storeName ?? "the store"}.',
+      duration: const Duration(seconds: 3),
+      kind: AppToastKind.warning,
     );
   }
 
@@ -404,10 +403,11 @@ class _ForceUpdateDialogState extends ConsumerState<ForceUpdateDialog> {
     final uri = Uri.tryParse(widget.updateUrl!);
     if (uri == null) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            duration: Duration(seconds: 3),
-            content: Text('Invalid update URL.')),
+      showAppToast(
+        context,
+        'Invalid update URL.',
+        duration: const Duration(seconds: 3),
+        kind: AppToastKind.error,
       );
       return;
     }
@@ -416,19 +416,20 @@ class _ForceUpdateDialogState extends ConsumerState<ForceUpdateDialog> {
         await launchUrl(uri, mode: LaunchMode.externalApplication);
       } else {
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            duration: Duration(seconds: 3),
-            content: Text('Could not open update URL. Please update manually.'),
-          ),
+        showAppToast(
+          context,
+          'Could not open update URL. Please update manually.',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.warning,
         );
       }
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            duration: const Duration(seconds: 3),
-            content: Text('Failed to open URL: $e')),
+      showAppToast(
+        context,
+        'Failed to open URL: $e',
+        duration: const Duration(seconds: 3),
+        kind: AppToastKind.error,
       );
     }
   }
@@ -439,10 +440,11 @@ class _ForceUpdateDialogState extends ConsumerState<ForceUpdateDialog> {
     final uri = Uri.tryParse(url);
     if (uri == null) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            duration: Duration(seconds: 3),
-            content: Text('Invalid download URL.')),
+      showAppToast(
+        context,
+        'Invalid download URL.',
+        duration: const Duration(seconds: 3),
+        kind: AppToastKind.error,
       );
       return;
     }
@@ -451,20 +453,20 @@ class _ForceUpdateDialogState extends ConsumerState<ForceUpdateDialog> {
         await launchUrl(uri, mode: LaunchMode.externalApplication);
       } else {
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            duration: Duration(seconds: 3),
-            content:
-                Text('Could not open download URL. Please download manually.'),
-          ),
+        showAppToast(
+          context,
+          'Could not open download URL. Please download manually.',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.warning,
         );
       }
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            duration: const Duration(seconds: 3),
-            content: Text('Failed to open URL: $e')),
+      showAppToast(
+        context,
+        'Failed to open URL: $e',
+        duration: const Duration(seconds: 3),
+        kind: AppToastKind.error,
       );
     }
   }

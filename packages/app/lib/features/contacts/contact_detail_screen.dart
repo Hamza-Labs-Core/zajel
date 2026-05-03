@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/storage/trusted_peers_storage.dart';
 import '../../core/utils/identity_utils.dart';
+import '../../shared/widgets/app_toast.dart';
 import '../../shared/widgets/relative_time.dart';
 
 /// Detail screen for a single contact, allowing edit alias, notes, block/remove.
@@ -210,11 +211,11 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
     await storage.updateAlias(widget.peerId, alias.isEmpty ? null : alias);
     await _loadPeer();
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Alias saved'),
-          duration: Duration(seconds: 3),
-        ),
+      showAppToast(
+        context,
+        'Alias saved',
+        duration: const Duration(seconds: 3),
+        kind: AppToastKind.success,
       );
     }
   }
@@ -225,11 +226,10 @@ class _ContactDetailScreenState extends ConsumerState<ContactDetailScreen> {
     _aliasController.clear();
     await _loadPeer();
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Alias cleared'),
-          duration: Duration(seconds: 3),
-        ),
+      showAppToast(
+        context,
+        'Alias cleared',
+        duration: const Duration(seconds: 3),
       );
     }
   }

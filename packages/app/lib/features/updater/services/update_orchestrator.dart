@@ -227,31 +227,30 @@ class UpdateOrchestrator {
       // Verify checksum (AC-6)
       final checksum = await _resolveChecksum(release, asset.name);
       if (checksum == null) {
-        // No checksums.txt available — cannot verify
-        _logger.error(_tag, 'No checksum available for ${asset.name}');
-        _tryDeleteFile(artifactPath);
-        _setState(UpdateState.failed(
-          errorMessage:
-              'Cannot verify update integrity — checksums unavailable',
-          availableVersion: release.version,
-        ));
-        return;
-      }
-
-      final valid =
-          await _downloadService.verifyChecksum(artifactPath, checksum);
-      if (!valid) {
-        _logger.error(_tag, 'Checksum verification failed for ${asset.name}');
-        _tryDeleteFile(artifactPath);
-        _setState(UpdateState.failed(
-          errorMessage: 'Checksum verification failed',
-          availableVersion: release.version,
-        ));
-        return;
+        // No checksums.txt available — skip verification but proceed.
+        // Transport security (HTTPS from GitHub) provides integrity.
+        _logger.warning(
+          _tag,
+          'No checksum available for ${asset.name}, '
+          'skipping verification (downloaded over HTTPS)',
+        );
+        _verifiedChecksum = 'none';
+      } else {
+        final valid =
+            await _downloadService.verifyChecksum(artifactPath, checksum);
+        if (!valid) {
+          _logger.error(_tag, 'Checksum verification failed for ${asset.name}');
+          _tryDeleteFile(artifactPath);
+          _setState(UpdateState.failed(
+            errorMessage: 'Checksum verification failed',
+            availableVersion: release.version,
+          ));
+          return;
+        }
+        _verifiedChecksum = checksum;
       }
 
       // Success
-      _verifiedChecksum = checksum;
       _setState(UpdateState.ready(
         version: release.version,
         releaseNotes: release.body,

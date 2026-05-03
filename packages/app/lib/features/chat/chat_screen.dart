@@ -15,6 +15,7 @@ import '../../core/models/models.dart';
 import '../../core/network/voip_service.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/utils/identity_utils.dart';
+import '../../shared/widgets/app_toast.dart';
 import '../../shared/widgets/compose_bar.dart';
 import '../../shared/widgets/message_list_view.dart';
 import '../call/call_screen.dart';
@@ -437,11 +438,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Could not open file: $e'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'Could not open file: $e',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.error,
         );
       }
     }
@@ -574,12 +575,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
     if (voipService == null) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content:
-                Text('VoIP not available. Connect to signaling server first.'),
-            duration: Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'VoIP not available. Connect to signaling server first.',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.warning,
         );
       }
       return;
@@ -593,11 +593,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to start call: $e'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'Failed to start call: $e',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.error,
         );
       }
     }
@@ -716,11 +716,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       updatedAliases[peer.id] = newName;
       ref.read(peerAliasesProvider.notifier).state = updatedAliases;
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Renamed to $newName'),
-            duration: const Duration(seconds: 3),
-          ),
+        showAppToast(
+          context,
+          'Renamed to $newName',
+          duration: const Duration(seconds: 3),
+          kind: AppToastKind.success,
         );
       }
     }
@@ -1109,11 +1109,10 @@ class _FingerprintVerificationSectionState
   Future<void> _copyToClipboard(String text, String label) async {
     await Clipboard.setData(ClipboardData(text: text));
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$label copied to clipboard'),
-          duration: const Duration(seconds: 2),
-        ),
+      showAppToast(
+        context,
+        '$label copied to clipboard',
+        duration: const Duration(seconds: 2),
       );
     }
   }

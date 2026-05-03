@@ -1,5 +1,8 @@
 name: Cross-App Integration Tests
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main, 'feature/**']

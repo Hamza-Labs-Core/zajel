@@ -63,9 +63,11 @@ class TestChannels:
         # The Create Channel dialog should appear
         helper._find("Create Channel", timeout=5)
 
-        # Find the text fields in the dialog
-        _type_in_field(helper, 0, "Test Channel Alpha")
-        _type_in_field(helper, 1, "A channel for testing")
+        # Type the fields — require both EditTexts to be present before typing
+        # to avoid races where the dialog is mid-build. expected_count=2 waits
+        # until both Channel Name and Description fields are rendered.
+        _type_in_field(helper, 0, "Test Channel Alpha", expected_count=2)
+        _type_in_field(helper, 1, "A channel for testing", expected_count=2)
 
         # Tap the Create button in the dialog
         helper._find("Create", timeout=10, partial=False).click()
@@ -136,8 +138,8 @@ class TestChannels:
         helper._find("Create Channel", timeout=10).click()
         time.sleep(2)
 
-        _type_in_field(helper, 0, "Detail Test Channel")
-        _type_in_field(helper, 1, "Channel description here")
+        _type_in_field(helper, 0, "Detail Test Channel", expected_count=2)
+        _type_in_field(helper, 1, "Channel description here", expected_count=2)
 
         helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
@@ -275,8 +277,8 @@ class TestChannels:
         helper._find("Create Channel", timeout=10).click()
         time.sleep(2)
 
-        _type_in_field(helper, 0, "Info Sheet Channel")
-        _type_in_field(helper, 1, "Sheet description")
+        _type_in_field(helper, 0, "Info Sheet Channel", expected_count=2)
+        _type_in_field(helper, 1, "Sheet description", expected_count=2)
 
         helper._find("Create", timeout=10, partial=False).click()
         time.sleep(3)
@@ -351,12 +353,23 @@ class TestChannels:
 # ── Helpers ──────────────────────────────────────────────────────
 
 
-def _type_in_field(helper, field_index, text):
+def _type_in_field(helper, field_index, text, expected_count=None):
     """Type text into a specific EditText field by index within a dialog.
 
     Flutter dialogs render TextField widgets as android.widget.EditText
     in UiAutomator2. We locate them by index since multiple fields may
     be present (e.g. channel name + description).
+
+    Typing strategy depends on whether the field is already focused:
+    - Focused field (typically the autofocused first one): use send_keys.
+      Calling click() on a focused field causes refocus churn that can
+      rebuild and dismiss the dialog on slow CI emulators.
+    - Unfocused field: click to focus first, then use `mobile: type`
+      which sends keystrokes via the IME. Appium's send_keys on an
+      unfocused Flutter TextField calls Android EditText.setText()
+      directly — this bypasses Flutter's InputConnection and the
+      TextEditingController is NEVER updated, so the field appears
+      typed in the accessibility tree but the controller remains empty.
 
     NOTE: We do NOT dismiss the keyboard here. Flutter AlertDialog content
     is wrapped in SingleChildScrollView, so action buttons remain accessible
@@ -364,12 +377,19 @@ def _type_in_field(helper, field_index, text):
     pressBack() which can dismiss the dialog entirely.
     """
     from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
     from selenium.webdriver.common.by import By
 
-    fields = WebDriverWait(helper.driver, 10).until(
-        lambda d: d.find_elements(By.XPATH, "//android.widget.EditText")
-    )
+    # Wait up to 15s for the expected number of EditTexts to appear. We poll
+    # find_elements (not find_element) so a transient empty result doesn't
+    # immediately fail. This also handles the case where Flutter briefly
+    # rebuilds the dialog after keyboard show.
+    def _fields_ready(d):
+        els = d.find_elements(By.XPATH, "//android.widget.EditText")
+        if expected_count is not None:
+            return els if len(els) >= expected_count else False
+        return els if len(els) > field_index else False
+
+    fields = WebDriverWait(helper.driver, 15).until(_fields_ready)
 
     if len(fields) <= field_index:
         raise ValueError(
@@ -377,10 +397,24 @@ def _type_in_field(helper, field_index, text):
         )
 
     field = fields[field_index]
-    field.click()
-    time.sleep(0.5)
+
+    # Only call click() if the field is NOT already focused. Focused fields
+    # (autofocused or previously tapped) get refocus churn from click(),
+    # which rebuilds the Flutter dialog on slow CI runners.
+    try:
+        is_focused = field.get_attribute('focused') == 'true'
+    except Exception:
+        is_focused = False
+
+    if not is_focused:
+        field.click()
+        time.sleep(0.5)
+
+    # Use mobile: type to send keystrokes via the IME, which goes through
+    # Flutter's InputConnection and properly updates the TextEditingController.
+    # send_keys / setValue calls setText directly which bypasses Flutter.
     helper.driver.execute_script('mobile: type', {'text': text})
-    time.sleep(0.5)
+    time.sleep(0.8)
 
 
 def _type_in_compose_bar(helper, text):

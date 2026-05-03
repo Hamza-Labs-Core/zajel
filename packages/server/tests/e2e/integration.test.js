@@ -209,7 +209,7 @@ describe('Bootstrap Service Integration Tests', () => {
   });
 
   describe('Stale Server Cleanup', () => {
-    it('should automatically remove stale servers after 5 minutes', async () => {
+    it('should automatically remove stale servers past the heartbeat TTL', async () => {
       // Register a server
       await registerServer(serverRegistry, {
         serverId: 'ed25519:stale-test-server',
@@ -222,12 +222,12 @@ describe('Bootstrap Service Integration Tests', () => {
       let result = await listServers(serverRegistry);
       expect(result.servers).toHaveLength(1);
 
-      // Advance time by 4 minutes - should still be present
-      vi.advanceTimersByTime(4 * 60 * 1000);
+      // Within the 2-min TTL — should still be present
+      vi.advanceTimersByTime(1 * 60 * 1000);
       result = await listServers(serverRegistry);
       expect(result.servers).toHaveLength(1);
 
-      // Advance time by 2 more minutes (total 6 minutes) - should be removed
+      // Past the 2-min TTL — should be removed
       vi.advanceTimersByTime(2 * 60 * 1000);
       result = await listServers(serverRegistry);
       expect(result.servers).toHaveLength(0);
@@ -259,8 +259,8 @@ describe('Bootstrap Service Integration Tests', () => {
         publicKey: 'old-key',
       });
 
-      // Advance time by 4 minutes
-      vi.advanceTimersByTime(4 * 60 * 1000);
+      // Advance 1.5 min — old server still within 2-min TTL
+      vi.advanceTimersByTime(90 * 1000);
 
       // Register second server (fresh)
       await registerServer(serverRegistry, {
@@ -269,8 +269,8 @@ describe('Bootstrap Service Integration Tests', () => {
         publicKey: 'new-key',
       });
 
-      // Advance time by 2 more minutes (old server now 6 min, new server 2 min)
-      vi.advanceTimersByTime(2 * 60 * 1000);
+      // Advance 1 more min — old server is 2.5 min (past TTL), new is 1 min (fresh)
+      vi.advanceTimersByTime(60 * 1000);
 
       const result = await listServers(serverRegistry);
       expect(result.servers).toHaveLength(1);

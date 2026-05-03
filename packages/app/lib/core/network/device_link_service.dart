@@ -2,9 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-
 import '../crypto/crypto_service.dart';
+import '../storage/cached_secure_storage.dart';
 import '../logging/logger_service.dart';
 import '../models/linked_device.dart';
 import '../models/peer.dart';
@@ -96,7 +95,7 @@ class LinkTunnelPeerState extends LinkTunnelMessage {
 class DeviceLinkService {
   final CryptoService _cryptoService;
   final WebRTCService _webrtcService;
-  final FlutterSecureStorage _secureStorage;
+  final CachedSecureStorage _secureStorage;
 
   /// Current service state.
   DeviceLinkState _state = DeviceLinkIdle();
@@ -117,10 +116,10 @@ class DeviceLinkService {
   DeviceLinkService({
     required CryptoService cryptoService,
     required WebRTCService webrtcService,
-    FlutterSecureStorage? secureStorage,
+    CachedSecureStorage? secureStorage,
   })  : _cryptoService = cryptoService,
         _webrtcService = webrtcService,
-        _secureStorage = secureStorage ?? const FlutterSecureStorage();
+        _secureStorage = secureStorage ?? CachedSecureStorage();
 
   /// Stream of linked devices list.
   Stream<List<LinkedDevice>> get linkedDevices => _devicesController.stream;
@@ -418,10 +417,7 @@ class DeviceLinkService {
   /// Load linked devices from secure storage.
   Future<void> _loadLinkedDevices() async {
     try {
-      // Timeout protects against libsecret/gnome-keyring hanging on headless
-      // Linux (D-Bus call blocks if keyring daemon is not reachable).
-      final allKeys =
-          await _secureStorage.readAll().timeout(const Duration(seconds: 10));
+      final allKeys = await _secureStorage.readAll();
       for (final entry in allKeys.entries) {
         if (entry.key.startsWith(DeviceLinkConstants.storagePrefix)) {
           try {
