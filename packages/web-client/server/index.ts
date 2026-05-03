@@ -1,6 +1,6 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { readFile, stat } from 'fs/promises';
-import { join, extname, resolve } from 'path';
+import { join, extname, resolve, relative, isAbsolute } from 'path';
 import open from 'open';
 
 const PORT = parseInt(process.env.PORT || '3847', 10);
@@ -48,20 +48,30 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
     return;
   }
 
-  // Security: prevent directory traversal using path resolution
+  // Security: prevent directory traversal using path resolution.
+  //
+  // Two-step check that CodeQL's `js/path-injection` analysis recognizes:
+  //   1. resolve() — collapse `..` and produce an absolute path
+  //   2. relative() — re-express it relative to DIST_RESOLVED; if the
+  //      result starts with `..` or is itself absolute, the original path
+  //      escaped DIST_RESOLVED.
+  // The earlier `startsWith(DIST_RESOLVED + '/')` check is correct in
+  // practice but isn't recognized as a sanitizer by CodeQL.
   const fullPath = resolve(DIST_RESOLVED, '.' + filePath);
-
-  // Verify resolved path is within DIST directory
-  if (!fullPath.startsWith(DIST_RESOLVED + '/') && fullPath !== DIST_RESOLVED) {
+  const rel = relative(DIST_RESOLVED, fullPath);
+  if (rel.startsWith('..') || isAbsolute(rel)) {
     res.writeHead(403, SECURITY_HEADERS);
     res.end('Forbidden');
     return;
   }
+  // safePath is fullPath rebuilt from a verified-relative input, which
+  // CodeQL recognizes as sanitized.
+  const safePath = join(DIST_RESOLVED, rel);
 
   try {
     // Check if file exists
-    await stat(fullPath);
-    const content = await readFile(fullPath);
+    await stat(safePath);
+    const content = await readFile(safePath);
     const ext = extname(filePath).toLowerCase();
     const mimeType = MIME_TYPES[ext] || 'application/octet-stream';
 

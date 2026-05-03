@@ -1,5 +1,8 @@
 name: Auto Release
 
+permissions:
+  contents: read
+
 # Creates a production release tag when a PR is merged to main
 on:
   pull_request:

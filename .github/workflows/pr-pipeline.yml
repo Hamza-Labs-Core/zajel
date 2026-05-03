@@ -41,6 +41,8 @@ jobs:
   determine-version:
     name: Determine Version
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -79,6 +81,8 @@ jobs:
   detect-changes:
     name: Detect Changes
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       server: ${{ steps.filter.outputs.server }}
       server_vps: ${{ steps.filter.outputs.server_vps }}
@@ -129,6 +133,8 @@ jobs:
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -153,6 +159,8 @@ jobs:
   server-tests:
     name: Server Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -180,6 +188,8 @@ jobs:
   headless-client-tests:
     name: Headless Client Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -206,6 +216,8 @@ jobs:
     name: "✓ Phase 1: Tests"
     needs: [unit-tests, server-tests, headless-client-tests]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - run: echo "All tests passed"
 
@@ -253,6 +265,8 @@ jobs:
     name: "✓ Phase 2: Tag"
     needs: [tag-prerelease]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - run: echo "Tag created - ${{ needs.tag-prerelease.outputs.tag }}"
 
@@ -269,6 +283,8 @@ jobs:
     name: Build Android
     needs: [tag-prerelease]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
@@ -385,6 +401,8 @@ jobs:
     name: Build iOS
     needs: [tag-prerelease]
     runs-on: macos-latest
+    permissions:
+      contents: read
     env:
       VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
@@ -495,6 +513,8 @@ jobs:
     name: Build Linux
     needs: [tag-prerelease]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
@@ -640,6 +660,8 @@ jobs:
     name: Build macOS
     needs: [tag-prerelease]
     runs-on: macos-latest
+    permissions:
+      contents: read
     env:
       VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
@@ -758,6 +780,8 @@ jobs:
     name: Build Windows
     needs: [tag-prerelease]
     runs-on: windows-latest
+    permissions:
+      contents: read
     env:
       VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
@@ -965,6 +989,8 @@ jobs:
     name: Build Web
     needs: [tag-prerelease]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
@@ -1108,6 +1134,8 @@ jobs:
       (needs.deploy-cf-diagnostics.result == 'success' || needs.deploy-cf-diagnostics.result == 'skipped') &&
       (needs.deploy-cf-log-processor.result == 'success' || needs.deploy-cf-log-processor.result == 'skipped')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - run: echo "All builds and deployments completed"
 
@@ -1258,6 +1286,8 @@ jobs:
       github.event.inputs.force_build == 'true'
     runs-on: ubuntu-latest
     environment: qa
+    permissions:
+      contents: read
     env:
       VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
@@ -1323,6 +1353,8 @@ jobs:
       github.event.inputs.force_build == 'true'
     runs-on: ubuntu-latest
     environment: qa
+    permissions:
+      contents: read
     env:
       VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
@@ -1402,6 +1434,8 @@ jobs:
       github.event.inputs.force_build == 'true'
     runs-on: ubuntu-latest
     environment: qa
+    permissions:
+      contents: read
     env:
       VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
@@ -1545,6 +1579,8 @@ jobs:
       github.event.inputs.force_build == 'true'
     runs-on: ubuntu-latest
     environment: qa
+    permissions:
+      contents: read
     env:
       VERSION: ${{ needs.tag-prerelease.outputs.version }}
     steps:
@@ -1813,6 +1849,8 @@ jobs:
       needs.detect-changes.outputs.ci == 'true' ||
       github.event.inputs.force_build == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       CRANL_API: https://app.cranl.com/api
       CRANL_PROJECT_ID: ae32b3a6-07e7-4c4d-9c33-6f7f62a3127e
@@ -2183,6 +2221,8 @@ jobs:
       (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true))
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -2571,6 +2611,8 @@ jobs:
       (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true))
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
     env:
       DISPLAY: ':99'
     steps:
@@ -2852,6 +2894,8 @@ jobs:
       (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true))
     runs-on: windows-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -2954,6 +2998,8 @@ jobs:
       (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true))
     runs-on: macos-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -3059,6 +3105,8 @@ jobs:
       always() &&
       (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e != true))
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Check E2E results
         run: |
@@ -3125,6 +3173,8 @@ jobs:
     needs: [detect-changes, phase-1-tests, phase-2-tag, phase-3-build-deploy, phase-5-e2e]
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Generate summary
         run: |

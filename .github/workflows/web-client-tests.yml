@@ -1,5 +1,8 @@
 name: Web Client Tests
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main, 'feature/**']
